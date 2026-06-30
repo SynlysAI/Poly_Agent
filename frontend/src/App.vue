@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Fold, Expand, SwitchButton,
+  Monitor, DataAnalysis, Histogram, ChatLineRound, SetUp, FolderOpened,
 } from '@element-plus/icons-vue'
 
 import { getAuthStatus, getApiErrorMessage, getCurrentUser } from './api/polyAgentApi'
@@ -18,6 +19,8 @@ const isAuthPage = computed(() => route.path === '/login' || route.path === '/re
 const authBootstrapping = ref(true)
 const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
 const APP_VERSION = '0.1.0'
+const BRAND_LOGO_SRC = '/brand/JG-logo.png'
+const BRAND_PARTNER_TEXT = '智储大装置｜嘉庚实验室｜厦门大学｜苏州实验室｜浦江实验室'
 
 const canAccessAdminFeatures = computed(() => !authState.authEnabled || authState.role === 'admin')
 
@@ -52,7 +55,7 @@ const currentBreadcrumbItems = computed(() => {
       { label: title, path: '', isCurrent: true },
     ]
   }
-  const fallbackLabel = title || section || 'PolyAgent'
+  const fallbackLabel = title || section || 'Poly Agent'
   return [{ label: fallbackLabel, path: '', isCurrent: true }]
 })
 
@@ -171,8 +174,8 @@ onBeforeUnmount(() => {
 <template>
   <div v-if="authBootstrapping" class="app-loading-shell">
     <div class="app-loading-card">
-      <div style="font-size:42px;margin-bottom:8px">🧬</div>
-      <div class="app-loading-title">PolyAgent</div>
+      <img :src="BRAND_LOGO_SRC" alt="Poly Agent" class="app-loading-logo" />
+      <div class="app-loading-title">Poly Agent</div>
       <div class="app-loading-text">正在初始化...</div>
     </div>
   </div>
@@ -180,10 +183,10 @@ onBeforeUnmount(() => {
   <el-container v-else class="app-shell">
     <el-aside class="app-sidebar" :class="{ collapsed: sidebarCollapsed }" :width="sidebarCollapsed ? '66px' : '220px'">
       <div class="brand">
-        <div class="brand-logo" style="display:flex;align-items:center;justify-content:center;color:var(--app-sidebar-from);font-weight:700;font-size:20px">P</div>
+        <img class="brand-logo" :src="BRAND_LOGO_SRC" alt="Poly Agent" />
         <div v-if="!sidebarCollapsed" class="brand-text">
-          <div class="brand-title">PolyAgent</div>
-          <div class="brand-subtitle">高分子智能计算平台</div>
+          <div class="brand-title">Poly Agent</div>
+          <div class="brand-subtitle">高分子智能分析平台</div>
         </div>
       </div>
       <div class="sidebar-nav">
@@ -198,27 +201,27 @@ onBeforeUnmount(() => {
           @select="handleMenuSelect"
         >
           <el-menu-item index="/dashboard">
-            <svg class="menu-icon" viewBox="0 0 24 24" style="width:18px;height:18px"><rect x="2" y="3" width="20" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 21h8M12 17v4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            <el-icon><Monitor /></el-icon>
             <span>工作台</span>
           </el-menu-item>
           <el-menu-item index="/tasks/submit">
-            <svg class="menu-icon" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M9 3h-4a2 2 0 00-2 2v4a2 2 0 002 2h4a2 2 0 002-2V5a2 2 0 00-2-2zM19 3h-4a2 2 0 00-2 2v4a2 2 0 002 2h4a2 2 0 002-2V5a2 2 0 00-2-2zM9 13h-4a2 2 0 00-2 2v4a2 2 0 002 2h4a2 2 0 002-2v-4a2 2 0 00-2-2zM19 13h-4a2 2 0 00-2 2v4a2 2 0 002 2h4a2 2 0 002-2v-4a2 2 0 00-2-2z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            <el-icon><DataAnalysis /></el-icon>
             <span>任务提交</span>
           </el-menu-item>
           <el-menu-item index="/tasks/center">
-            <svg class="menu-icon" viewBox="0 0 24 24" style="width:18px;height:18px"><rect x="18" y="3" width="4" height="18" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="11" y="8" width="4" height="13" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="4" y="13" width="4" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            <el-icon><Histogram /></el-icon>
             <span>任务中心</span>
           </el-menu-item>
           <el-menu-item index="/dialogue">
-            <svg class="menu-icon" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            <el-icon><ChatLineRound /></el-icon>
             <span>问答对话</span>
           </el-menu-item>
           <el-menu-item index="/tools">
-            <svg class="menu-icon" viewBox="0 0 24 24" style="width:18px;height:18px"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            <el-icon><SetUp /></el-icon>
             <span>工具服务</span>
           </el-menu-item>
           <el-menu-item v-if="canAccessAdminFeatures" index="/database">
-            <svg class="menu-icon" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            <el-icon><FolderOpened /></el-icon>
             <span>数据库管理</span>
           </el-menu-item>
         </el-menu>
@@ -231,6 +234,10 @@ onBeforeUnmount(() => {
           <div class="sidebar-version-top">
             <span class="sidebar-version-label">版本</span>
             <span class="sidebar-version-badge">v{{ APP_VERSION }}</span>
+          </div>
+          <div class="sidebar-meta-inline">
+            <span class="sidebar-meta-inline-label">合作单位</span>
+            <span class="sidebar-meta-partners">{{ BRAND_PARTNER_TEXT }}</span>
           </div>
         </template>
       </div>

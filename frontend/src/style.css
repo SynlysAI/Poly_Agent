@@ -162,14 +162,14 @@ body {
 
 .sidebar-menu .el-menu-item {
   border-radius: var(--app-radius-md);
-  margin-bottom: 2px;
-  height: 40px;
+  margin-bottom: 6px;
+  height: 44px;
   font-weight: 400;
 }
 
 .sidebar-menu .el-sub-menu .el-menu-item {
-  margin-bottom: 2px;
-  height: 36px;
+  margin-bottom: 4px;
+  height: 38px;
 }
 
 .sidebar-menu .el-sub-menu .el-menu-item.is-active {

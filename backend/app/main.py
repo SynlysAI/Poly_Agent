@@ -112,9 +112,9 @@ def create_app() -> FastAPI:
     APP_LOGGER = get_logger("poly_agent.app")
 
     app = FastAPI(
-        title="PolyAgent Backend",
+        title="Poly Agent Backend",
         version="0.1.0",
-        description="PolyAgent 高分子材料性能预测平台。",
+        description="Poly Agent 高分子材料性能预测平台。",
     )
     app.add_middleware(
         CORSMiddleware,

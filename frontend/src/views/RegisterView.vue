@@ -1,20 +1,22 @@
 <script setup>
-import { ElMessage, ElForm, ElFormItem, ElInput, ElButton } from 'element-plus'
-import { User, Lock, Ticket } from '@element-plus/icons-vue'
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { User, Lock, Ticket, OfficeBuilding, Hide, View } from '@element-plus/icons-vue'
 
 import { registerWithInviteCode, getApiErrorMessage } from '../api/polyAgentApi'
 
 const router = useRouter()
+const BRAND_LOGO_SRC = '/brand/JG-logo.png'
 const formRef = ref(null)
 const loading = ref(false)
+const passwordVisible = ref(false)
+const confirmVisible = ref(false)
 
 const form = reactive({
   invite_code: '',
-  username: '',
-  real_name: '',
   organization: '',
+  username: '',
   password: '',
   confirm_password: '',
 })
@@ -51,7 +53,6 @@ async function handleSubmit() {
     await registerWithInviteCode({
       invite_code: form.invite_code.trim(),
       username: form.username.trim(),
-      real_name: form.real_name.trim() || undefined,
       organization: form.organization.trim() || undefined,
       password: form.password,
     })
@@ -66,40 +67,251 @@ async function handleSubmit() {
 </script>
 
 <template>
-  <div style="min-height:100vh;display:grid;place-items:center;background:linear-gradient(180deg,#f3f7fd 0%,#ecf2fa 100%)">
-    <div style="width:420px;padding:36px 32px;border-radius:var(--app-radius-lg);border:1px solid var(--app-card-border);background:#fff;box-shadow:var(--app-card-shadow)">
-      <div style="text-align:center;margin-bottom:24px">
-        <div style="font-size:20px;font-weight:700;color:var(--app-ink);letter-spacing:-0.3px">邀请码注册</div>
-        <div style="font-size:13px;color:var(--app-ink-muted);margin-top:4px">使用管理员提供的邀请码创建账号</div>
+  <div class="login-page">
+    <div class="login-background"></div>
+    <section class="login-panel" style="width: min(460px, calc(100vw - 32px))">
+      <div class="login-brand">
+        <img :src="BRAND_LOGO_SRC" alt="Poly Agent" class="login-brand-mark" />
+        <div>
+          <div class="login-brand-title">Poly Agent</div>
+          <div class="login-brand-subtitle">高分子智能分析平台</div>
+        </div>
       </div>
-      <el-form ref="formRef" :model="form" :rules="rules" size="large" @submit.prevent="handleSubmit">
-        <el-form-item prop="invite_code">
-          <el-input v-model="form.invite_code" placeholder="邀请码" :prefix-icon="Ticket" />
+
+      <div class="login-heading">
+        <h1>邀请码注册</h1>
+        <p style="margin:10px 0 0;color:#627697;font-size:14px;line-height:1.7">使用管理员提供的邀请码创建账号</p>
+      </div>
+
+      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="login-form">
+        <el-form-item label="邀请码" prop="invite_code">
+          <input v-model="form.invite_code" class="login-native-input" placeholder="请输入管理员提供的邀请码" autocomplete="off" />
         </el-form-item>
-        <el-form-item prop="username">
-          <el-input v-model="form.username" placeholder="用户名" :prefix-icon="User" />
+        <el-form-item label="单位" prop="organization">
+          <input v-model="form.organization" class="login-native-input" placeholder="请输入所在单位名称" autocomplete="off" />
         </el-form-item>
-        <el-form-item prop="real_name">
-          <el-input v-model="form.real_name" placeholder="姓名（选填）" />
+        <el-form-item label="用户名" prop="username">
+          <input v-model="form.username" class="login-native-input" placeholder="3-32 个字符" autocomplete="off" />
         </el-form-item>
-        <el-form-item prop="organization">
-          <el-input v-model="form.organization" placeholder="单位（选填）" />
+        <el-form-item label="密码" prop="password">
+          <div class="login-password-field">
+            <input
+              v-model="form.password"
+              class="login-native-input login-native-input-password"
+              :type="passwordVisible ? 'text' : 'password'"
+              placeholder="至少 6 位密码"
+              autocomplete="new-password"
+            />
+            <button
+              type="button" class="login-password-toggle"
+              :aria-label="passwordVisible ? '隐藏密码' : '显示密码'"
+              @click="passwordVisible = !passwordVisible"
+            >
+              <el-icon><View v-if="passwordVisible" /><Hide v-else /></el-icon>
+            </button>
+          </div>
         </el-form-item>
-        <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" placeholder="密码" :prefix-icon="Lock" show-password />
+        <el-form-item label="确认密码" prop="confirm_password">
+          <div class="login-password-field">
+            <input
+              v-model="form.confirm_password"
+              class="login-native-input login-native-input-password"
+              :type="confirmVisible ? 'text' : 'password'"
+              placeholder="再次输入密码"
+              autocomplete="new-password"
+            />
+            <button
+              type="button" class="login-password-toggle"
+              :aria-label="confirmVisible ? '隐藏密码' : '显示密码'"
+              @click="confirmVisible = !confirmVisible"
+            >
+              <el-icon><View v-if="confirmVisible" /><Hide v-else /></el-icon>
+            </button>
+          </div>
         </el-form-item>
-        <el-form-item prop="confirm_password">
-          <el-input v-model="form.confirm_password" type="password" placeholder="确认密码" :prefix-icon="Lock" show-password />
-        </el-form-item>
-        <el-form-item style="margin-top:8px">
-          <el-button type="primary" :loading="loading" native-type="submit" style="width:100%;height:42px;font-size:15px">
-            注册
-          </el-button>
-        </el-form-item>
+        <el-button type="primary" class="login-submit" :loading="loading" @click="handleSubmit">
+          注册
+        </el-button>
       </el-form>
-      <div style="text-align:center;margin-top:8px">
-        <router-link to="/login" style="color:var(--app-primary);font-size:13px;text-decoration:none">已有账号？返回登录</router-link>
+
+      <div class="login-footer">
+        <span>已有账号？</span>
+        <router-link class="login-link" to="/login">返回登录</router-link>
       </div>
-    </div>
+    </section>
   </div>
 </template>
+
+<style scoped>
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.22), transparent 34%),
+    radial-gradient(circle at right 20%, rgba(14, 165, 233, 0.14), transparent 28%),
+    linear-gradient(160deg, #071c3a 0%, #0a2a56 48%, #f2f7ff 48%, #eef3fb 100%);
+}
+
+.login-background {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 80%);
+}
+
+.login-panel {
+  position: relative;
+  padding: 30px 28px 28px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(20px);
+  box-shadow:
+    0 22px 58px rgba(7, 31, 67, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.login-brand-mark {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  object-fit: cover;
+  box-shadow: 0 14px 28px rgba(21, 94, 239, 0.18);
+}
+
+.login-brand-title {
+  color: #0d2449;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.login-brand-subtitle {
+  margin-top: 4px;
+  color: #6f82a3;
+  font-size: 13px;
+}
+
+.login-heading {
+  margin-top: 28px;
+}
+
+.login-heading h1 {
+  margin: 0;
+  color: #0f2345;
+  font-size: 28px;
+}
+
+.login-form {
+  margin-top: 24px;
+}
+
+.login-native-input {
+  width: 100%;
+  height: 32px;
+  padding: 1px 11px;
+  color: var(--app-ink);
+  font: inherit;
+  font-weight: 500;
+  line-height: 30px;
+  border: none;
+  border-radius: 4px;
+  outline: none;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px var(--app-border) inset;
+  transition: box-shadow 0.2s ease;
+}
+
+.login-native-input:hover {
+  box-shadow: 0 0 0 1px #c0c4cc inset;
+}
+
+.login-native-input:focus {
+  box-shadow: 0 0 0 1px var(--app-primary) inset;
+}
+
+.login-native-input::placeholder {
+  color: var(--app-ink-subtle);
+  font-weight: 400;
+}
+
+.login-password-field {
+  position: relative;
+  width: 100%;
+}
+
+.login-native-input-password {
+  padding-right: 40px;
+}
+
+.login-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: #a8abb2;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.login-password-toggle:hover {
+  color: #606266;
+}
+
+.login-submit {
+  width: 100%;
+  height: 44px;
+  margin-top: 8px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(90deg, #155eef, #0ea5e9);
+  box-shadow: 0 14px 24px rgba(21, 94, 239, 0.22);
+}
+
+.login-footer {
+  margin-top: 18px;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  color: #627697;
+  font-size: 14px;
+}
+
+.login-link {
+  color: #155eef;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  .login-page {
+    align-items: start;
+    padding-top: 72px;
+  }
+  .login-panel {
+    padding: 24px 20px 22px;
+    border-radius: 20px;
+  }
+  .login-heading h1 {
+    font-size: 24px;
+  }
+}
+</style>
