@@ -1,55 +1,118 @@
-# PolyAgent - 高分子研发智能化中枢
+# Poly Agent — 高分子智能分析平台
 
-**PolyAgent** 是 AI4Material 生态系统中的核心高分子研发模块，致力于通过人工智能驱动研发全流程的数字化与自动化。本项目目前处于开发框架搭建阶段，旨在构建一套标准化的模型调度与业务协同接口。
+**Poly Agent** 是 AI4MS 门户下的高分子材料性能预测子应用，与 Spec Agent 同属一个产品线。为用户提供高分子样品性能指标预测、任务管理和实验数据浏览功能。
 
-## 平台定位
+## 技术栈
 
-PolyAgent 作为 AI4Material 门户下的垂直应用，主要负责：
+| 层 | 技术 |
+|---|------|
+| 后端 | Python 3.12 + FastAPI + MongoDB |
+| 前端 | Vue 3 + Element Plus + Vite |
+| 认证 | HMAC-SHA256 令牌，与 AI4MS 门户共享账户体系 |
 
-* **研发目标转化**：将用户的实验目标与配方约束转化为可执行的计算任务。
-* **模型链调度**：封装并调用高分子专用 AI 模型，进行性能预测与方案优化。
-* **闭环协同**：通过标准接口与 `SpecAgent`（谱学分析）及 `SpecLabOS`（自动化实验控制）进行数据联动。
-
-## 核心设计框架 (Architecture Design)
-
-本项目的设计遵循模块化原则，确保后续能无缝接入统一门户：
+## 项目结构
 
 ```text
-poly_agent/
-├── backend/                  # 后端服务 (Python/FastAPI 或 Flask)
+Poly_Agent/
+├── backend/
 │   ├── app/
-│   │   ├── api/              # API 接口路由
-│   │   ├── core/             # 核心业务逻辑 (intent_parser, workflow, task_manager)
-│   │   ├── models/           # 高分子模型工具链接口
-│   │   └── integrations/     # 外部协同接口 (SpecAgent, SpecLabOS)
-│   └── main.py               # 后端入口
-├── frontend/                 # 前端应用 (React/Vue/Next.js)
+│   │   ├── api/v1/                # API 路由 (health, auth, admin)
+│   │   ├── core/                  # 配置、令牌认证、日志
+│   │   ├── infra/                 # MongoDB 连接、数据仓储
+│   │   ├── schemas/               # Pydantic 数据模型
+│   │   ├── services/              # 认证服务 (登录/注册/邀请码)
+│   │   └── main.py                # FastAPI 入口 (托管前端静态文件)
+│   ├── .env.example               # 环境变量模板
+│   └── requirements.txt
+├── frontend/
 │   ├── src/
-│   │   ├── components/       # 通用组件 (实验步骤卡片, 参数输入框)
-│   │   ├── features/         # 业务模块 (需求定义页面, 任务历史看板)
-│   │   ├── services/         # API 请求管理
-│   │   └── store/            # 状态管理
+│   │   ├── api/                   # Axios 客户端与 API 调用
+│   │   ├── auth/                  # 认证状态管理 + 门户 SSO
+│   │   ├── router/                # 路由配置 + 导航守卫
+│   │   ├── views/                 # 页面组件
+│   │   │   ├── DashboardView      # 工作台
+│   │   │   ├── TaskSubmitView     # 任务提交 (性能预测)
+│   │   │   ├── TaskCenterView     # 任务中心
+│   │   │   ├── DialogueView       # 问答对话
+│   │   │   ├── ToolServicesView   # 工具服务
+│   │   │   ├── DatabaseManagementView  # 数据库管理 (管理员)
+│   │   │   ├── LoginView          # 登录
+│   │   │   └── RegisterView       # 邀请码注册
+│   │   ├── App.vue                # 主布局 (侧边栏 + 顶栏)
+│   │   ├── style.css              # 全局样式 (DESIGN.md 规范)
+│   │   └── main.js
+│   ├── public/brand/              # 品牌 Logo
+│   ├── index.html
+│   ├── vite.config.js
 │   └── package.json
-└── docs/                     # API 文档 (Swagger/OpenAPI)
+├── DESIGN.md                      # 前端设计规范文档
+├── ecosystem.config.js            # PM2 部署配置
+└── .gitignore
 ```
 
-## 协同机制与接口定义 (Integration Interface)
+## 快速开始
 
-PolyAgent 将通过以下标准协议与生态内其他组件进行数据交互：
+### 1. 环境准备
 
-* **对 SpecLabOS 的指令**：将方案生成的工艺参数封装为标准实验工作流，通过 `lab_os_client` 下发至自动化系统执行。
-* **数据回流标准**：定义了统一的 `FeedbackSchema`，用于接收实验结果并存入任务历史数据库。
+```bash
+# 创建 conda 环境
+conda create -n poly_agent python=3.12 -y
+conda activate poly_agent
 
-## 开发计划 (Roadmap)
+# 安装后端依赖
+cd backend
+pip install -r requirements.txt
 
-* [ ] **Phase 1: 核心框架搭建**：完成基础项目结构与 `intent_parser` 模块开发。
-* [ ] **Phase 2: 模型工具链接口**：定义标准化模型调用协议，集成初步的性能预测模型。
-* [ ] **Phase 3: 门户接入**：完成与 AI4Material 统一登录与权限体系的对接。
+# 安装前端依赖
+cd ../frontend
+npm install
+```
 
-## 参与贡献
+### 2. 配置环境变量
 
-本项目处于早期开发阶段，欢迎基于现有架构提出功能建议或贡献代码。请在提交 PR 前参考项目的代码风格指南。
+```bash
+cp backend/.env.example backend/.env
+# 编辑 .env，配置 MongoDB 连接信息和 AUTH_SECRET（与 AI4MS 保持一致）
+```
 
-## 建议
+### 3. 开发模式
 
-可以参考SpecAgent项目的前后端框架进行开发：https://github.com/SynlysAI/Spec_Agent
+```bash
+# 终端 1：启动后端
+cd backend
+uvicorn app.main:app --reload --port 8003
+
+# 终端 2：启动前端开发服务器
+cd frontend
+npm run dev
+```
+
+前端开发服务器运行在 `http://localhost:5173`，API 请求自动代理到 `127.0.0.1:8003`。
+
+### 4. 生产部署
+
+```bash
+# 构建前端
+cd frontend && npm run build
+
+# 启动后端（自动托管前端静态文件）
+cd ../backend
+uvicorn app.main:app --host 0.0.0.0 --port 8003
+
+# 或使用 PM2
+pm2 start ecosystem.config.js
+```
+
+生产模式下直接访问 `http://<host>:8003` 即可，后端自动提供前端 SPA 页面。
+
+## 认证体系
+
+- 与 AI4MS 门户共享 `ai4ms` 认证数据库中的 `users` 和 `invite_codes` 集合
+- 支持从已登录的 AI4MS 门户通过 URL hash 传递 token 实现免登录（SSO）
+- 管理员通过邀请码控制用户注册
+- 通过 `AUTH_ENABLED` 环境变量可切换是否需要登录
+
+## 相关项目
+
+- [AI4MS](https://github.com/SynlysAI/AI4MS) — 高分子智能研发门户
+- [Spec Agent](https://github.com/SynlysAI/Spec_Agent) — 谱图智能分析平台
