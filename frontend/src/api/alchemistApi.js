@@ -35,22 +35,22 @@ alchemistClient.interceptors.response.use(
 
 /** 列出所有 Session */
 export function listSessions() {
-  return alchemistClient.get('/sessions/').then(r => r.data)
+  return alchemistClient.get('/sessions').then(r => r.data)
 }
 
 /** 创建新 Session */
 export function createSession() {
-  return alchemistClient.post('/sessions/').then(r => r.data)
+  return alchemistClient.post('/sessions').then(r => r.data)
 }
 
 /** 获取 Session 信息 */
 export function getSession(sessionId) {
-  return alchemistClient.get(`/sessions/${sessionId}/`).then(r => r.data)
+  return alchemistClient.get(`/sessions/${sessionId}`).then(r => r.data)
 }
 
 /** 删除 Session */
 export function deleteSession(sessionId) {
-  return alchemistClient.delete(`/sessions/${sessionId}/`).then(r => r.data)
+  return alchemistClient.delete(`/sessions/${sessionId}`).then(r => r.data)
 }
 
 /** 保存 Session 到服务端磁盘 */
@@ -81,22 +81,22 @@ export function uploadSession(file) {
 
 /** 获取变量列表 */
 export function getVariables(sessionId) {
-  return alchemistClient.get(`/sessions/${sessionId}/variables/`).then(r => r.data)
+  return alchemistClient.get(`/sessions/${sessionId}/variables`).then(r => r.data)
 }
 
 /** 添加变量 */
 export function addVariable(sessionId, variableData) {
-  return alchemistClient.post(`/sessions/${sessionId}/variables/`, variableData).then(r => r.data)
+  return alchemistClient.post(`/sessions/${sessionId}/variables`, variableData).then(r => r.data)
 }
 
 /** 删除变量 */
 export function deleteVariable(sessionId, variableId) {
-  return alchemistClient.delete(`/sessions/${sessionId}/variables/${variableId}/`).then(r => r.data)
+  return alchemistClient.delete(`/sessions/${sessionId}/variables/${variableId}`).then(r => r.data)
 }
 
 /** 更新变量 */
 export function updateVariable(sessionId, variableId, variableData) {
-  return alchemistClient.put(`/sessions/${sessionId}/variables/${variableId}/`, variableData).then(r => r.data)
+  return alchemistClient.put(`/sessions/${sessionId}/variables/${variableId}`, variableData).then(r => r.data)
 }
 
 // ── 实验设计 ──
