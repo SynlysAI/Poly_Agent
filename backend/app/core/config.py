@@ -58,6 +58,11 @@ class Settings:
         self.mongodb_password: str = os.getenv("MONGODB_PASSWORD", "")
         self.mongodb_database: str = os.getenv("MONGODB_DATABASE", "poly_agent")
 
+        # ALchemist 主动学习工具后端地址
+        self.alchemist_backend_url: str = os.getenv(
+            "ALCHEMIST_BACKEND_URL", "http://127.0.0.1:8004/api/v1"
+        )
+
         # 统一认证（AI4MS）数据库配置
         self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "")
         self.auth_database: str = os.getenv("AUTH_MONGODB_DATABASE", "ai4ms")
