@@ -67,7 +67,7 @@ function getColumnNames() {
         </div>
       </div>
 
-      <el-table :data="suggestions" border stripe empty-text="请选好参数后点击"生成建议"" max-height="400">
+      <el-table :data="suggestions" border stripe empty-text="请选好参数后点击【生成建议】" max-height="400">
         <el-table-column type="index" label="序号" width="60" />
         <el-table-column v-for="col in getColumnNames()" :key="col" :prop="col" :label="col" min-width="100" />
       </el-table>

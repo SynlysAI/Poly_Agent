@@ -118,7 +118,7 @@ onMounted(() => { if (props.sessionId) loadVariables() })
       </el-button>
     </div>
     <div class="panel-body">
-      <el-table :data="variables" v-loading="loading" empty-text="暂无变量，请点击"添加变量"开始定义搜索空间">
+      <el-table :data="variables" v-loading="loading" empty-text="暂无变量，请点击【添加变量】开始定义搜索空间">
         <el-table-column prop="name" label="变量名称" min-width="120" />
         <el-table-column label="类型" width="120">
           <template #default="{ row }">
