@@ -42,6 +42,7 @@ const isAuthPublicRoute = computed(() => AUTH_PUBLIC_PATHS.has(route.path))
 const HEADER_SECTION_ROUTE_MAP = {
   '任务提交': '/tasks/submit',
   '任务中心': '/tasks/center',
+  '计算智能': '/tasks/submit',
   '工具服务': '/tools',
   '系统管理': '/database',
 }
@@ -61,6 +62,8 @@ const currentBreadcrumbItems = computed(() => {
 
 const activeMenu = computed(() => {
   const current = route.path
+  if (current.startsWith('/computations/submit')) return '/tasks/submit'
+  if (current.startsWith('/computations/runs')) return '/tasks/center'
   return current
 })
 

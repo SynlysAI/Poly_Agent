@@ -129,3 +129,72 @@ export function createInviteCode(payload) {
 export function disableInviteCode(inviteId) {
   return apiClient.patch(`/admin/invite-codes/${inviteId}/disable`).then(unwrapResponse)
 }
+
+// ── 计算智能 API ──
+
+export function createComputation(payload) {
+  return apiClient.post('/computations', payload).then(unwrapResponse)
+}
+
+export function listComputations(params = {}) {
+  return apiClient.get('/computations', { params }).then(unwrapResponse)
+}
+
+export function getComputation(runId) {
+  return apiClient.get(`/computations/${runId}`).then(unwrapResponse)
+}
+
+export function cancelComputation(runId) {
+  return apiClient.post(`/computations/${runId}/cancel`).then(unwrapResponse)
+}
+
+export function retryComputation(runId) {
+  return apiClient.post(`/computations/${runId}/retry`).then(unwrapResponse)
+}
+
+export function listComputationArtifacts(runId) {
+  return apiClient.get(`/computations/${runId}/artifacts`).then(unwrapResponse)
+}
+
+export function previewArtifact(artifactId) {
+  return apiClient.get(`/artifacts/${artifactId}/preview`).then(unwrapResponse)
+}
+
+export function getArtifactDownloadUrl(artifactId) {
+  const base = resolvedBaseUrl.endsWith('/') ? resolvedBaseUrl.slice(0, -1) : resolvedBaseUrl
+  return `${base}/artifacts/${encodeURIComponent(artifactId)}/download`
+}
+
+// ── 优化闭环 API ──
+
+export function createCampaign(payload) {
+  return apiClient.post('/optimization/campaigns', payload).then(unwrapResponse)
+}
+
+export function listCampaigns(params = {}) {
+  return apiClient.get('/optimization/campaigns', { params }).then(unwrapResponse)
+}
+
+export function getCampaign(campaignId) {
+  return apiClient.get(`/optimization/campaigns/${campaignId}`).then(unwrapResponse)
+}
+
+export function importCampaignCandidates(campaignId, payload) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import`, payload).then(unwrapResponse)
+}
+
+export function generateSuggestion(campaignId, payload = { batch_size: 1 }) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}/suggestions`, payload).then(unwrapResponse)
+}
+
+export function createObservation(campaignId, payload) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}/observations`, payload).then(unwrapResponse)
+}
+
+export function submitSuggestionComputation(suggestionId) {
+  return apiClient.post(`/optimization/suggestions/${suggestionId}/submit-computation`).then(unwrapResponse)
+}
+
+export function getIntegrationStatus() {
+  return apiClient.get('/integrations/status').then(unwrapResponse)
+}
