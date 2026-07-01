@@ -1,38 +1,70 @@
 <script setup>
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { trainModel, getModelStatus } from '../../api/alchemistApi'
+import { trainModel, getModelStatus, getExperimentsSummary } from '../../api/alchemistApi'
 
 const props = defineProps({
   sessionId: { type: String, required: true }
 })
 
 const kernelOptions = [
-  { label: 'Matern 5/2', value: 'matern52' },
-  { label: 'Matern 3/2', value: 'matern32' },
-  { label: 'RBF（径向基函数）', value: 'rbf' },
-  { label: 'IBNN（贝叶斯神经网络核）', value: 'ibnn' },
+  { label: 'Matern 5/2', id: 'matern52', kernel: 'Matern', params: { nu: 2.5 } },
+  { label: 'Matern 3/2', id: 'matern32', kernel: 'Matern', params: { nu: 1.5 } },
+  { label: 'RBF（径向基函数）', id: 'rbf', kernel: 'RBF', params: {} },
+  { label: 'IBNN（贝叶斯神经网络核）', id: 'ibnn', kernel: 'IBNN', params: {} },
 ]
 
 const backendOptions = [
-  { label: 'BoTorch (推荐)', value: 'botorch' },
-  { label: 'scikit-learn', value: 'sklearn' },
+  { label: 'scikit-learn（基础稳定）', value: 'sklearn' },
+  { label: 'BoTorch', value: 'botorch' },
 ]
 
 const selectedKernel = ref('matern52')
-const selectedBackend = ref('botorch')
+const selectedBackend = ref('sklearn')
 const useARD = ref(true)
 const loading = ref(false)
 const modelResult = ref(null)
+
+/** 判断模型结果是否代表已训练成功。 */
+function isModelTrained() {
+  if (!modelResult.value) return false
+  if (typeof modelResult.value.success === 'boolean') return modelResult.value.success
+  return Boolean(modelResult.value.is_trained)
+}
+
+/** 将后端返回的核函数信息转为可读的显示名称。 */
+function getKernelDisplayName(kernel, hyperparameters) {
+  if (!kernel) return '-'
+  if (kernel === 'Matern') {
+    const nu = hyperparameters?.matern_nu
+    if (nu === 2.5) return 'Matern 5/2'
+    if (nu === 1.5) return 'Matern 3/2'
+    return 'Matern'
+  }
+  if (kernel === 'RBF') return 'RBF（径向基函数）'
+  if (kernel === 'IBNN') return 'IBNN（贝叶斯神经网络核）'
+  return kernel
+}
 
 async function handleTrainModel() {
   try {
     loading.value = true
     modelResult.value = null
+    const summary = await getExperimentsSummary(props.sessionId)
+    const nExperiments = summary.n_experiments || 0
+    if (nExperiments < 5) {
+      ElMessage.warning(`当前只有 ${nExperiments} 条实验数据，GP 建模至少需要 5 条带输出值的实验数据`)
+      return
+    }
+    const kernelOption = kernelOptions.find(item => item.id === selectedKernel.value) || kernelOptions[0]
+    if (selectedBackend.value === 'sklearn' && kernelOption.kernel === 'IBNN') {
+      ElMessage.warning('scikit-learn 后端不支持 IBNN 核函数，请选择 Matern/RBF 或切换到 BoTorch')
+      return
+    }
     const config = {
       backend: selectedBackend.value,
-      kernel: selectedKernel.value,
-      kernel_params: useARD.value ? { ard: true } : {},
+      kernel: kernelOption.kernel,
+      kernel_params: kernelOption.params,
     }
     const data = await trainModel(props.sessionId, config)
     modelResult.value = data
@@ -48,9 +80,16 @@ async function handleCheckStatus() {
   try {
     const data = await getModelStatus(props.sessionId)
     if (data.is_trained) {
+      // 查看状态接口不返回 kernel 字段，从超参数推断
+      if (!data.kernel && data.hyperparameters) {
+        if (data.hyperparameters.matern_nu !== undefined) {
+          data.kernel = 'Matern'
+        }
+      }
       ElMessage.success(`模型状态: 已训练 (${data.backend})`)
       modelResult.value = data
     } else {
+      modelResult.value = null
       ElMessage.info('模型状态: 未训练')
     }
   } catch (e) {
@@ -67,7 +106,7 @@ async function handleCheckStatus() {
         <div>
           <div style="font-size:13px;color:var(--app-ink-muted);margin-bottom:4px">核函数</div>
           <el-select v-model="selectedKernel" style="width:220px">
-            <el-option v-for="k in kernelOptions" :key="k.value" :label="k.label" :value="k.value" />
+            <el-option v-for="k in kernelOptions" :key="k.id" :label="k.label" :value="k.id" />
           </el-select>
         </div>
         <div>
@@ -87,9 +126,9 @@ async function handleCheckStatus() {
 
       <div v-if="modelResult" style="margin-top:16px">
         <el-descriptions border :column="2" size="small">
-          <el-descriptions-item label="核函数">{{ modelResult.kernel || selectedKernel }}</el-descriptions-item>
+          <el-descriptions-item label="核函数">{{ getKernelDisplayName(modelResult.kernel, modelResult.hyperparameters) }}</el-descriptions-item>
           <el-descriptions-item label="后端">{{ modelResult.backend || selectedBackend }}</el-descriptions-item>
-          <el-descriptions-item label="训练状态">{{ modelResult.success ? '成功' : '失败' }}</el-descriptions-item>
+          <el-descriptions-item label="训练状态">{{ isModelTrained() ? '已训练' : '未训练' }}</el-descriptions-item>
           <el-descriptions-item label="R²">{{ modelResult.metrics?.r2 || '-' }}</el-descriptions-item>
           <el-descriptions-item label="RMSE">{{ modelResult.metrics?.rmse || '-' }}</el-descriptions-item>
           <el-descriptions-item label="MAE">{{ modelResult.metrics?.mae || '-' }}</el-descriptions-item>

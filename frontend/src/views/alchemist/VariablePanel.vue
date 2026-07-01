@@ -31,6 +31,25 @@ const formData = ref({
   values: '',
 })
 
+/** 获取变量的数值边界。 */
+function getVariableBounds(variable) {
+  if (Array.isArray(variable.bounds)) {
+    return {
+      low: variable.bounds[0],
+      high: variable.bounds[1],
+    }
+  }
+  return {
+    low: variable.min ?? variable.low ?? 0,
+    high: variable.max ?? variable.high ?? 1,
+  }
+}
+
+/** 获取分类或离散变量的可选值列表。 */
+function getVariableValues(variable) {
+  return variable.categories || variable.allowed_values || variable.values || []
+}
+
 async function loadVariables() {
   try {
     loading.value = true
@@ -51,12 +70,14 @@ function openAddDialog() {
 
 function openEditDialog(variable) {
   editingVariable.value = variable
+  const bounds = getVariableBounds(variable)
+  const values = getVariableValues(variable)
   formData.value = {
     name: variable.name,
     type: variable.type,
-    low: variable.low || 0,
-    high: variable.high || 1,
-    values: Array.isArray(variable.values) ? variable.values.join(', ') : (variable.values || ''),
+    low: bounds.low,
+    high: bounds.high,
+    values: Array.isArray(values) ? values.join(', ') : values,
   }
   dialogVisible.value = true
 }
@@ -64,16 +85,22 @@ function openEditDialog(variable) {
 async function handleSave() {
   const payload = { name: formData.value.name, type: formData.value.type }
   if (formData.value.type === 'real' || formData.value.type === 'integer') {
-    payload.low = Number(formData.value.low)
-    payload.high = Number(formData.value.high)
+    payload.min = Number(formData.value.low)
+    payload.max = Number(formData.value.high)
   }
-  if (formData.value.type === 'categorical' || formData.value.type === 'discrete') {
-    payload.values = formData.value.values.split(',').map(s => s.trim()).filter(Boolean)
+  if (formData.value.type === 'categorical') {
+    payload.categories = formData.value.values.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  if (formData.value.type === 'discrete') {
+    payload.allowed_values = formData.value.values
+      .split(',')
+      .map(s => Number(s.trim()))
+      .filter(value => Number.isFinite(value))
   }
 
   try {
     if (editingVariable.value) {
-      await updateVariable(props.sessionId, editingVariable.value.id, payload)
+      await updateVariable(props.sessionId, editingVariable.value.name, payload)
       ElMessage.success('变量更新成功')
     } else {
       await addVariable(props.sessionId, payload)
@@ -89,7 +116,7 @@ async function handleSave() {
 async function handleDelete(variable) {
   try {
     await ElMessageBox.confirm(`确定要删除变量"${variable.name}"吗？`, '删除确认', { type: 'warning' })
-    await deleteVariable(props.sessionId, variable.id)
+    await deleteVariable(props.sessionId, variable.name)
     ElMessage.success('变量已删除')
     await loadVariables()
   } catch (e) {
@@ -127,8 +154,12 @@ onMounted(() => { if (props.sessionId) loadVariables() })
         </el-table-column>
         <el-table-column label="范围/值" min-width="200">
           <template #default="{ row }">
-            <template v-if="row.type === 'real' || row.type === 'integer'">[{{ row.low }}, {{ row.high }}]</template>
-            <template v-else>{{ Array.isArray(row.values) ? row.values.join(', ') : row.values }}</template>
+            <template v-if="row.type === 'real' || row.type === 'integer'">
+              [{{ getVariableBounds(row).low }}, {{ getVariableBounds(row).high }}]
+            </template>
+            <template v-else>
+              {{ Array.isArray(getVariableValues(row)) ? getVariableValues(row).join(', ') : getVariableValues(row) }}
+            </template>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="140" fixed="right">

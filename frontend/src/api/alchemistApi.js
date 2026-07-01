@@ -38,9 +38,9 @@ export function listSessions() {
   return alchemistClient.get('/sessions').then(r => r.data)
 }
 
-/** 创建新 Session */
-export function createSession() {
-  return alchemistClient.post('/sessions').then(r => r.data)
+/** 创建新 Session，可选 name / description / tags */
+export function createSession(data = {}) {
+  return alchemistClient.post('/sessions', data).then(r => r.data)
 }
 
 /** 获取 Session 信息 */
@@ -113,7 +113,27 @@ export function generateInitialDesign(sessionId, designConfig) {
 
 /** 添加实验数据 */
 export function addExperiments(sessionId, experiments) {
-  return alchemistClient.post(`/sessions/${sessionId}/experiments`, experiments).then(r => r.data)
+  return alchemistClient.post(`/sessions/${sessionId}/experiments/batch`, experiments).then(r => r.data)
+}
+
+/** 添加单条实验数据 */
+export function addExperiment(sessionId, experiment, options = {}) {
+  return alchemistClient.post(`/sessions/${sessionId}/experiments`, experiment, { params: options }).then(r => r.data)
+}
+
+/** 获取已完成实验数据 */
+export function getExperiments(sessionId) {
+  return alchemistClient.get(`/sessions/${sessionId}/experiments`).then(r => r.data)
+}
+
+/** 获取实验数据摘要 */
+export function getExperimentsSummary(sessionId) {
+  return alchemistClient.get(`/sessions/${sessionId}/experiments/summary`).then(r => r.data)
+}
+
+/** 暂存待执行实验 */
+export function stageExperiments(sessionId, experiments) {
+  return alchemistClient.post(`/sessions/${sessionId}/experiments/staged/batch`, experiments).then(r => r.data)
 }
 
 // ── GP 建模 ──
@@ -135,16 +155,38 @@ export function suggestNext(sessionId, acquisitionConfig) {
   return alchemistClient.post(`/sessions/${sessionId}/acquisition/suggest`, acquisitionConfig).then(r => r.data)
 }
 
-/** 获取采集结果 */
-export function getAcquisitionResult(sessionId) {
-  return alchemistClient.get(`/sessions/${sessionId}/acquisition/result`).then(r => r.data)
+/** 寻找模型最优点 */
+export function findOptimum(sessionId, config = {}) {
+  return alchemistClient.post(`/sessions/${sessionId}/acquisition/find-optimum`, config).then(r => r.data)
 }
 
 // ── 可视化 ──
 
-/** 获取可视化数据 */
-export function getVisualization(sessionId, vizType) {
-  return alchemistClient.get(`/sessions/${sessionId}/visualizations/${vizType}`).then(r => r.data)
+// ── 可视化 ──
+
+/** 获取 Parity 图数据（实际值 vs 预测值） */
+export function getParityData(sessionId, useCalibrated = false) {
+  return alchemistClient.get(`/sessions/${sessionId}/visualizations/parity`, { params: { use_calibrated: useCalibrated } }).then(r => r.data)
+}
+
+/** 获取 CV 指标随训练量变化数据 */
+export function getMetricsData(sessionId, cvSplits = 5) {
+  return alchemistClient.get(`/sessions/${sessionId}/visualizations/metrics`, { params: { cv_splits: cvSplits } }).then(r => r.data)
+}
+
+/** 获取 Q-Q 图数据 */
+export function getQQPlotData(sessionId, useCalibrated = false) {
+  return alchemistClient.get(`/sessions/${sessionId}/visualizations/qq-plot`, { params: { use_calibrated: useCalibrated } }).then(r => r.data)
+}
+
+/** 获取校准曲线数据 */
+export function getCalibrationCurveData(sessionId, useCalibrated = false) {
+  return alchemistClient.get(`/sessions/${sessionId}/visualizations/calibration-curve`, { params: { use_calibrated: useCalibrated } }).then(r => r.data)
+}
+
+/** 获取模型超参数 */
+export function getHyperparametersData(sessionId) {
+  return alchemistClient.get(`/sessions/${sessionId}/visualizations/hyperparameters`).then(r => r.data)
 }
 
 /** 获取等值线图数据 */
@@ -156,5 +198,5 @@ export function getContourData(sessionId, contourConfig) {
 
 /** LLM 辅助实验建议 */
 export function llmSuggest(sessionId, llmConfig) {
-  return alchemistClient.post(`/sessions/${sessionId}/llm/suggest-effects`, llmConfig).then(r => r.data)
+  return alchemistClient.post(`/llm/suggest-effects/${sessionId}`, llmConfig).then(r => r.data)
 }

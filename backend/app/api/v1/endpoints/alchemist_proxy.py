@@ -12,6 +12,8 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import WebSocket
 from fastapi.responses import JSONResponse
+from fastapi.responses import Response
+from fastapi.responses import StreamingResponse
 
 import httpx
 
@@ -25,6 +27,19 @@ router = APIRouter(tags=["ALchemist 主动学习工具"])
 
 ALCHEMIST_BACKEND_URL = getattr(settings, "alchemist_backend_url", "http://127.0.0.1:8004/api/v1")
 _CLIENT: httpx.AsyncClient | None = None
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "content-encoding",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -40,6 +55,22 @@ def _get_client() -> httpx.AsyncClient:
             timeout=httpx.Timeout(120.0),
         )
     return _CLIENT
+
+
+def _filter_headers(headers: httpx.Headers | dict[str, str]) -> dict[str, str]:
+    """过滤不应由代理透传的逐跳头部。
+
+    Args:
+        headers: 原始请求或响应头。
+
+    Returns:
+        可安全转发的头部字典。
+    """
+    return {
+        key: value
+        for key, value in dict(headers).items()
+        if key.lower() not in HOP_BY_HOP_HEADERS
+    }
 
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
@@ -64,10 +95,7 @@ async def proxy_alchemist_request(
     body = await request.body()
 
     # 构建转发请求头，移除逐跳头部
-    headers = dict(request.headers)
-    headers.pop("host", None)
-    headers.pop("content-length", None)
-    headers.pop("transfer-encoding", None)
+    headers = _filter_headers(request.headers)
 
     logger.info(
         f"代理转发请求: {request.method} /alchemist/{path}",
@@ -79,6 +107,7 @@ async def proxy_alchemist_request(
             method=request.method,
             url=path,
             headers=headers,
+            params=request.query_params,
             content=body,
         )
     except httpx.ConnectError:
@@ -92,13 +121,22 @@ async def proxy_alchemist_request(
         raise HTTPException(status_code=504, detail="ALchemist 服务响应超时")
 
     # 构建返回头，移除逐跳头部
-    response_headers = dict(response.headers)
-    response_headers.pop("content-encoding", None)
-    response_headers.pop("transfer-encoding", None)
-    response_headers.pop("content-length", None)
+    response_headers = _filter_headers(response.headers)
+    content_type = response.headers.get("content-type", "")
 
-    return JSONResponse(
-        content=response.json() if response.content else None,
+    if response.content and "application/json" in content_type:
+        return JSONResponse(
+            content=response.json(),
+            status_code=response.status_code,
+            headers=response_headers,
+        )
+
+    if not response.content:
+        return Response(status_code=response.status_code, headers=response_headers)
+
+    return StreamingResponse(
+        iter([response.content]),
         status_code=response.status_code,
         headers=response_headers,
+        media_type=content_type or None,
     )
