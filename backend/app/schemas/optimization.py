@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
-CampaignStatus = Literal["draft", "active", "paused", "completed"]
+CampaignStatus = Literal["draft", "running", "paused", "completed", "failed", "archived"]
 PlannerType = Literal["fallback"]
 ObjectiveDirection = Literal["max", "min"]
 SuggestionStatus = Literal["suggested", "submitted", "evaluated", "rejected", "failed"]
@@ -64,6 +64,14 @@ class OptimizationCampaign(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_legacy_status(cls, value: str) -> str:
+        """兼容早期 active 状态。"""
+        if value == "active":
+            return "running"
+        return value
 
 
 class CampaignListData(BaseModel):
@@ -193,3 +201,27 @@ class CampaignDetailData(BaseModel):
     candidates: list[OptimizationCandidate]
     suggestions: list[OptimizationSuggestion]
     observations: list[OptimizationObservation]
+
+
+class CampaignHistoryEvent(BaseModel):
+    """优化闭环历史事件。"""
+
+    event_type: str
+    occurred_at: datetime
+    campaign_id: str
+    candidate_id: str | None = None
+    suggestion_id: str | None = None
+    source_run_id: str | None = None
+    summary: dict = Field(default_factory=dict)
+
+
+class CampaignHistoryData(BaseModel):
+    """优化闭环历史响应。"""
+
+    items: list[CampaignHistoryEvent]
+
+
+class CreateObservationFromComputationData(BaseModel):
+    """从计算结果生成 observation 响应。"""
+
+    observation: OptimizationObservation

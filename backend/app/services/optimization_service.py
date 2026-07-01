@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.core.config import settings
 from app.infra.computation_repositories import (
     AuditEventRepository,
+    ComputationRunRepository,
     OptimizationCampaignRepository,
     OptimizationCandidateRepository,
     OptimizationObservationRepository,
@@ -17,11 +20,15 @@ from app.infra.computation_repositories import (
 )
 from app.schemas.computation import ComputationCreateRequest, ComputationParameters, ComputationResources, MoleculeInput
 from app.schemas.optimization import (
+    CampaignHistoryData,
+    CampaignHistoryEvent,
     CampaignCreateRequest,
     CampaignDetailData,
     CampaignListData,
     CandidateImportData,
     CandidateImportRequest,
+    CandidateImportItem,
+    CreateObservationFromComputationData,
     ObservationCreateRequest,
     OptimizationCampaign,
     OptimizationCandidate,
@@ -119,7 +126,7 @@ class OptimizationService:
                 candidate_key=item.candidate_key,
                 smiles=item.smiles,
                 parameters=item.parameters,
-                descriptors={},
+                descriptors=self._build_descriptors(item.smiles),
                 metadata=item.metadata,
                 is_active=True,
                 created_at=existing.get(item.candidate_key, {}).get("created_at", now),
@@ -129,7 +136,7 @@ class OptimizationService:
         OptimizationCampaignRepository.update_fields(
             campaign_id,
             {
-                "status": "active",
+                "status": "running",
                 "updated_at": now,
                 "search_space": {
                     "kind": "discrete_molecule_library",
@@ -138,7 +145,7 @@ class OptimizationService:
             },
         )
         self._audit(
-            "candidates.imported",
+            "candidate.imported",
             actor_user_id=actor_user_id,
             request_id=request_id,
             entity_type="optimization_campaign",
@@ -205,7 +212,7 @@ class OptimizationService:
             OptimizationSuggestionRepository.save("suggestion_id", suggestion.model_dump(mode="python"))
             created.append(suggestion)
         self._audit(
-            "suggestions.generated",
+            "suggestion.generated",
             actor_user_id=actor_user_id,
             request_id=request_id,
             entity_type="optimization_campaign",
@@ -213,6 +220,116 @@ class OptimizationService:
             after={"suggestion_count": len(created)},
         )
         return SuggestionCreateData(items=created)
+
+    def get_history(self, campaign_id: str) -> CampaignHistoryData:
+        """返回 campaign 的候选、推荐、observation 和 source run 历史。"""
+        self._get_campaign(campaign_id)
+        candidates = [OptimizationCandidate(**item) for item in OptimizationCandidateRepository.list_by_campaign(campaign_id)]
+        suggestions = [OptimizationSuggestion(**item) for item in OptimizationSuggestionRepository.list_by_campaign(campaign_id)]
+        observations = [OptimizationObservation(**item) for item in OptimizationObservationRepository.list_by_campaign(campaign_id)]
+        items: list[CampaignHistoryEvent] = []
+        for candidate in candidates:
+            items.append(
+                CampaignHistoryEvent(
+                    event_type="candidate.imported",
+                    occurred_at=candidate.created_at,
+                    campaign_id=campaign_id,
+                    candidate_id=candidate.candidate_id,
+                    summary={
+                        "candidate_key": candidate.candidate_key,
+                        "smiles": candidate.smiles,
+                        "descriptor_status": candidate.descriptors.get("status"),
+                    },
+                )
+            )
+        for suggestion in suggestions:
+            items.append(
+                CampaignHistoryEvent(
+                    event_type="suggestion.generated",
+                    occurred_at=suggestion.created_at,
+                    campaign_id=campaign_id,
+                    candidate_id=suggestion.candidate_id,
+                    suggestion_id=suggestion.suggestion_id,
+                    source_run_id=suggestion.submitted_run_id,
+                    summary={
+                        "candidate_key": suggestion.candidate_key,
+                        "status": suggestion.status,
+                        "iteration_index": suggestion.iteration_index,
+                    },
+                )
+            )
+        for observation in observations:
+            items.append(
+                CampaignHistoryEvent(
+                    event_type="observation.created",
+                    occurred_at=observation.created_at,
+                    campaign_id=campaign_id,
+                    candidate_id=observation.candidate_id,
+                    suggestion_id=observation.suggestion_id,
+                    source_run_id=observation.source_run_id,
+                    summary={"values": observation.values, "source_type": observation.source_type},
+                )
+            )
+        items.sort(key=lambda item: item.occurred_at)
+        return CampaignHistoryData(items=items)
+
+    def import_chemos_demo_candidates(
+        self,
+        campaign_id: str,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+    ) -> CandidateImportData:
+        """导入 ChemOS reference demo 分子库。"""
+        items = self._load_chemos_demo_candidates()
+        payload = CandidateImportRequest(candidates=items)
+        return self.import_candidates(
+            campaign_id,
+            payload,
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+        )
+
+    def create_observation_from_computation(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+    ) -> CreateObservationFromComputationData:
+        """从 completed MOCK_LASER run 生成 observation。"""
+        run_doc = ComputationRunRepository.find_one({"run_id": run_id})
+        if not run_doc:
+            raise HTTPException(status_code=404, detail="计算任务不存在")
+        if run_doc.get("status") != "completed":
+            raise HTTPException(status_code=400, detail="仅 completed 计算任务可生成 observation")
+        if run_doc.get("workflow_type") != "MOCK_LASER":
+            raise HTTPException(status_code=400, detail="仅 MOCK_LASER 支持自动映射 observation")
+        campaign_id = run_doc.get("campaign_id")
+        suggestion_id = run_doc.get("suggestion_id")
+        if not campaign_id or not suggestion_id:
+            raise HTTPException(status_code=400, detail="计算任务缺少 campaign/suggestion 关联")
+        suggestion_doc = OptimizationSuggestionRepository.find_one({"suggestion_id": suggestion_id})
+        if not suggestion_doc:
+            raise HTTPException(status_code=404, detail="关联推荐不存在")
+        summary = run_doc.get("result_summary") or {}
+        gain_factor = (summary.get("laser_metrics") or {}).get("gain_factor")
+        if not isinstance(gain_factor, (int, float)):
+            raise HTTPException(status_code=400, detail="计算结果缺少 laser_metrics.gain_factor")
+        observation = self.create_observation(
+            campaign_id,
+            ObservationCreateRequest(
+                candidate_id=suggestion_doc["candidate_id"],
+                suggestion_id=suggestion_id,
+                source_type="computation",
+                source_run_id=run_id,
+                values={"gain_factor": float(gain_factor)},
+                raw_result_ref=run_id,
+            ),
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+        )
+        return CreateObservationFromComputationData(observation=observation)
 
     def create_observation(
         self,
@@ -312,6 +429,98 @@ class OptimizationService:
             run_id=created.run_id,
             suggestion_status="submitted",
         )
+
+    def _load_chemos_demo_candidates(self) -> list[CandidateImportItem]:
+        """读取 ChemOS demo molecules.json；缺失时使用安全内置候选。"""
+        molecules_path = (
+            settings.project_root
+            / "refer"
+            / "ChemOS2.0-master"
+            / "ChemOS2.0-simulation"
+            / "job_files"
+            / "molecules.json"
+        )
+        raw_items: list[dict] = []
+        source_status = "molecules_json"
+        if molecules_path.exists():
+            with molecules_path.open("r", encoding="utf-8") as fp:
+                raw = json.load(fp)
+            if isinstance(raw, list):
+                raw_items = [item for item in raw if isinstance(item, dict)]
+            elif isinstance(raw, dict):
+                raw_items = [item for item in raw.values() if isinstance(item, dict)]
+        else:
+            raw_items = self._fallback_chemos_candidates()
+            source_status = "fallback_reference"
+
+        candidates: list[CandidateImportItem] = []
+        for index, item in enumerate(raw_items[:200], start=1):
+            smiles = str(item.get("smiles") or item.get("SMILES") or "").strip()
+            if not smiles:
+                continue
+            candidate_key = str(item.get("candidate_key") or item.get("name") or item.get("id") or f"CHEMOS_{index:03d}")
+            candidates.append(
+                CandidateImportItem(
+                    candidate_key=candidate_key,
+                    smiles=smiles,
+                    parameters=item.get("parameters") or {},
+                    metadata={
+                        **(item.get("metadata") or {}),
+                        "source": "ChemOS reference",
+                        "source_status": source_status,
+                    },
+                )
+            )
+        if not candidates:
+            raise HTTPException(status_code=400, detail="未找到可导入的 ChemOS demo 候选")
+        return candidates
+
+    def _fallback_chemos_candidates(self) -> list[dict]:
+        """ChemOS reference 缺少 molecules.json 时的最小 demo 候选。"""
+        csv_candidates = self._read_chemos_job_file_candidates()
+        if csv_candidates:
+            return csv_candidates
+        return [
+            {"candidate_key": "CHEMOS_DEMO_001", "smiles": "CCOC1=CC=CC=C1"},
+            {"candidate_key": "CHEMOS_DEMO_002", "smiles": "COC1=CC=CC=C1"},
+            {"candidate_key": "CHEMOS_DEMO_003", "smiles": "CCN(CC)C1=CC=CC=C1"},
+        ]
+
+    def _read_chemos_job_file_candidates(self) -> list[dict]:
+        """从 ChemOS job_files CSV 提取轻量候选元数据。"""
+        job_dir = settings.project_root / "refer" / "ChemOS2.0-master" / "ChemOS2.0-deploy" / "job_files"
+        if not job_dir.exists():
+            return []
+        candidates: list[dict] = []
+        default_smiles = ["CCOC1=CC=CC=C1", "COC1=CC=CC=C1", "CCN(CC)C1=CC=CC=C1"]
+        for index, path in enumerate(sorted(job_dir.glob("*.csv"))[: len(default_smiles)], start=1):
+            candidates.append(
+                {
+                    "candidate_key": f"CHEMOS_{path.stem.upper()}",
+                    "smiles": default_smiles[index - 1],
+                    "metadata": {"source_file": str(path.relative_to(settings.project_root))},
+                }
+            )
+        return candidates
+
+    def _build_descriptors(self, smiles: str) -> dict:
+        """可选生成 RDKit Morgan fingerprint。"""
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+        except ImportError:
+            return {"status": "not_available", "reason": "rdkit_not_installed"}
+        molecule = Chem.MolFromSmiles(smiles)
+        if molecule is None:
+            return {"status": "failed", "reason": "invalid_smiles"}
+        fingerprint = AllChem.GetMorganFingerprintAsBitVect(molecule, radius=2, nBits=2048)
+        return {
+            "status": "available",
+            "kind": "morgan",
+            "radius": 2,
+            "n_bits": 2048,
+            "on_bits": list(fingerprint.GetOnBits()),
+        }
 
     def _get_campaign(self, campaign_id: str) -> OptimizationCampaign:
         """查询 campaign，不存在则 404。"""

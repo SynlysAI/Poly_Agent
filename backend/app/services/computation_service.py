@@ -19,7 +19,11 @@ from app.infra.computation_repositories import (
     utc_now,
 )
 from app.schemas.computation import (
+    ArtifactStructureData,
+    ArtifactSpectrumData,
     ArtifactPreviewData,
+    AuditEvent,
+    AuditEventListData,
     ComputationArtifact,
     ComputationCreateData,
     ComputationCreateRequest,
@@ -70,6 +74,7 @@ class ComputationService:
             source=payload.source,
             campaign_id=payload.campaign_id,
             suggestion_id=payload.suggestion_id,
+            mock_should_fail=payload.mock_should_fail,
         )
         ComputationRunRepository.save("run_id", run.model_dump(mode="python"))
         self._audit(
@@ -186,6 +191,30 @@ class ComputationService:
             raise HTTPException(status_code=404, detail="artifact 不存在")
         return ComputationArtifact(**artifact)
 
+    def list_audit_events(
+        self,
+        *,
+        entity_type: str | None,
+        entity_id: str | None,
+        event_type: str | None,
+        page: int,
+        page_size: int,
+    ) -> AuditEventListData:
+        """查询审计事件。"""
+        items, total = AuditEventRepository.list_events(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            event_type=event_type,
+            page=page,
+            page_size=page_size,
+        )
+        return AuditEventListData(
+            items=[AuditEvent(**item) for item in items],
+            page=page,
+            page_size=page_size,
+            total=total,
+        )
+
     def preview_artifact(self, artifact_id: str) -> ArtifactPreviewData:
         """预览白名单 artifact。"""
         artifact = self.get_artifact(artifact_id)
@@ -198,6 +227,53 @@ class ComputationService:
         else:
             raise HTTPException(status_code=400, detail="该 artifact 类型不支持预览")
         return ArtifactPreviewData(artifact=artifact, preview=preview)
+
+    def get_artifact_structure(self, artifact_id: str) -> ArtifactStructureData:
+        """读取结构 artifact。"""
+        artifact = self.get_artifact(artifact_id)
+        if artifact.artifact_type != "structure_json":
+            raise HTTPException(status_code=400, detail="该 artifact 不是结构文件")
+        path = self.resolve_artifact_path(artifact)
+        with path.open("r", encoding="utf-8") as fp:
+            structure = json.load(fp)
+        return ArtifactStructureData(artifact=artifact, structure=structure)
+
+    def get_artifact_spectrum(self, artifact_id: str) -> ArtifactSpectrumData:
+        """读取 result artifact 的光谱/指标数据。"""
+        artifact = self.get_artifact(artifact_id)
+        if artifact.artifact_type != "result_json":
+            raise HTTPException(status_code=400, detail="该 artifact 不包含光谱数据")
+        path = self.resolve_artifact_path(artifact)
+        with path.open("r", encoding="utf-8") as fp:
+            result = json.load(fp)
+        spectrum = result.get("spectrum") or {
+            "kind": "mock_metric_sticks",
+            "x_label": "metric",
+            "y_label": "value",
+            "points": [
+                {"x": key, "y": value}
+                for key, value in result.items()
+                if isinstance(value, (int, float))
+            ],
+        }
+        return ArtifactSpectrumData(artifact=artifact, spectrum=spectrum)
+
+    def audit_artifact_download(
+        self,
+        artifact: ComputationArtifact,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+    ) -> None:
+        """记录 artifact 下载审计。"""
+        self._audit(
+            "artifact.downloaded",
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+            entity_type="computation_artifact",
+            entity_id=artifact.artifact_id,
+            related_ids={"run_id": artifact.run_id},
+        )
 
     def resolve_artifact_path(self, artifact: ComputationArtifact) -> Path:
         """解析 artifact 文件路径并限制在 outputs_root 内。"""
@@ -233,11 +309,43 @@ class ComputationService:
                 started_at = run.created_at + timedelta(seconds=1)
                 running_run = run.model_copy(update={"status": "running", "started_at": started_at})
                 self._mark_running(run, started_at)
-                self._complete_mock_run(running_run, now)
+                self._finish_mock_run(running_run, now, worker_id="worker-local-mock")
             elif run.status == "queued" and elapsed >= 1:
                 self._mark_running(run, now)
             elif run.status == "running" and run.started_at and (now - run.started_at).total_seconds() >= 1:
-                self._complete_mock_run(run, now)
+                self._finish_mock_run(run, now, worker_id="worker-local-mock")
+
+    def initialize_acquired_run(self, run: ComputationRun, *, worker_id: str, now: datetime) -> ComputationRun:
+        """初始化已由 worker 领取的 run timeline。"""
+        steps = [
+            ComputationStep(step_key=key, label=label, status="queued")
+            for key, label in MOCK_STEP_LABELS.items()
+        ]
+        steps[0].status = "running"
+        steps[0].started_at = now
+        ComputationRunRepository.update_fields(
+            run.run_id,
+            {
+                "steps": [step.model_dump(mode="python") for step in steps],
+                "updated_at": now,
+                "external_refs": {**run.external_refs, "worker_id": worker_id},
+            },
+        )
+        self._audit(
+            "computation.status_changed",
+            actor_user_id=worker_id,
+            request_id=None,
+            entity_type="computation_run",
+            entity_id=run.run_id,
+            before={"status": "queued"},
+            after={"status": "running"},
+        )
+        return self.get_run(run.run_id)
+
+    def finish_acquired_run(self, run: ComputationRun, *, worker_id: str, now: datetime) -> ComputationRun:
+        """完成或失败一个已领取的 mock run。"""
+        self._finish_mock_run(run, now, worker_id=worker_id)
+        return self.get_run(run.run_id)
 
     def _mark_running(self, run: ComputationRun, now: datetime) -> None:
         """标记 mock 任务运行中。"""
@@ -267,13 +375,20 @@ class ComputationService:
             after={"status": "running"},
         )
 
-    def _complete_mock_run(self, run: ComputationRun, now: datetime) -> None:
+    def _finish_mock_run(self, run: ComputationRun, now: datetime, *, worker_id: str) -> None:
+        """完成或失败 mock run。"""
+        if run.mock_should_fail or run.parameters.method.upper() == "MOCK_FAIL":
+            self._fail_mock_run(run, now, worker_id=worker_id)
+            return
+        self._complete_mock_run(run, now, worker_id=worker_id)
+
+    def _complete_mock_run(self, run: ComputationRun, now: datetime, *, worker_id: str) -> None:
         """完成 mock 任务并生成 artifacts。"""
         existing = ComputationArtifactRepository.list_by_run(run.run_id)
         if existing:
             artifact_ids = [item["artifact_id"] for item in existing]
         else:
-            artifact_ids = self._write_mock_artifacts(run, now)
+            artifact_ids = self._write_mock_artifacts(run, now, worker_id=worker_id)
         steps = []
         step_started = run.started_at or now
         for key, label in MOCK_STEP_LABELS.items():
@@ -299,7 +414,7 @@ class ComputationService:
         )
         self._audit(
             "computation.status_changed",
-            actor_user_id="worker-local-mock",
+            actor_user_id=worker_id,
             request_id=None,
             entity_type="computation_run",
             entity_id=run.run_id,
@@ -307,7 +422,52 @@ class ComputationService:
             after={"status": "completed"},
         )
 
-    def _write_mock_artifacts(self, run: ComputationRun, now: datetime) -> list[str]:
+    def _fail_mock_run(self, run: ComputationRun, now: datetime, *, worker_id: str) -> None:
+        """失败 mock 任务并生成错误 artifact。"""
+        artifact_ids = self._write_mock_error_artifact(run, now, "MOCK_FAILURE_TRIGGERED", worker_id=worker_id)
+        steps = []
+        step_started = run.started_at or now
+        for index, (key, label) in enumerate(MOCK_STEP_LABELS.items()):
+            status = "completed" if index == 0 else "failed"
+            steps.append(
+                ComputationStep(
+                    step_key=key,
+                    label=label,
+                    status=status,
+                    started_at=step_started,
+                    finished_at=now,
+                    error="Mock failure trigger requested" if status == "failed" else None,
+                ).model_dump(mode="python")
+            )
+            if status == "failed":
+                break
+        ComputationRunRepository.update_fields(
+            run.run_id,
+            {
+                "status": "failed",
+                "steps": steps,
+                "artifact_ids": artifact_ids,
+                "result_summary": {},
+                "error": {
+                    "error_code": "MOCK_FAILURE_TRIGGERED",
+                    "message": "Mock failure trigger requested",
+                    "retryable": True,
+                },
+                "updated_at": now,
+                "finished_at": now,
+            },
+        )
+        self._audit(
+            "computation.status_changed",
+            actor_user_id=worker_id,
+            request_id=None,
+            entity_type="computation_run",
+            entity_id=run.run_id,
+            before={"status": run.status},
+            after={"status": "failed"},
+        )
+
+    def _write_mock_artifacts(self, run: ComputationRun, now: datetime, *, worker_id: str) -> list[str]:
         """写入 mock artifacts。"""
         workdir = settings.outputs_root / "computations" / run.run_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -341,14 +501,66 @@ class ComputationService:
             ComputationArtifactRepository.save("artifact_id", artifact.model_dump(mode="python"))
             artifacts.append(artifact)
             self._audit(
-                "artifact.created",
-                actor_user_id="worker-local-mock",
+                "artifact.registered",
+                actor_user_id=worker_id,
                 request_id=None,
                 entity_type="computation_artifact",
                 entity_id=artifact.artifact_id,
                 related_ids={"run_id": run.run_id},
             )
         return [artifact.artifact_id for artifact in artifacts]
+
+    def _write_mock_error_artifact(
+        self,
+        run: ComputationRun,
+        now: datetime,
+        error_code: str,
+        *,
+        worker_id: str,
+    ) -> list[str]:
+        """写入 mock 错误 artifact。"""
+        existing = ComputationArtifactRepository.list_by_run(run.run_id)
+        if existing:
+            return [item["artifact_id"] for item in existing]
+        workdir = settings.outputs_root / "computations" / run.run_id
+        workdir.mkdir(parents=True, exist_ok=True)
+        path = workdir / "worker-error.log"
+        path.write_text(
+            "\n".join(
+                [
+                    f"run_id={run.run_id}",
+                    f"workflow_type={run.workflow_type}",
+                    f"error_code={error_code}",
+                    "message=Mock failure trigger requested",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        artifact = ComputationArtifact(
+            artifact_id=self._new_id("art"),
+            run_id=run.run_id,
+            step_key="MOCK_RESULT",
+            artifact_type="log_text",
+            name="worker-error.log",
+            storage_uri=str(path),
+            mime_type="text/plain",
+            size_bytes=path.stat().st_size,
+            checksum_sha256=self._sha256(path),
+            parser_name="mock_error_parser",
+            parser_version="0.1.0",
+            metadata={"source": "mock", "source_step": "MOCK_RESULT", "error_code": error_code},
+            created_at=now,
+        )
+        ComputationArtifactRepository.save("artifact_id", artifact.model_dump(mode="python"))
+        self._audit(
+            "artifact.registered",
+            actor_user_id=worker_id,
+            request_id=None,
+            entity_type="computation_artifact",
+            entity_id=artifact.artifact_id,
+            related_ids={"run_id": run.run_id},
+        )
+        return [artifact.artifact_id]
 
     def _build_mock_result_summary(self, run: ComputationRun) -> dict:
         """构造确定性的 mock 结果摘要。"""

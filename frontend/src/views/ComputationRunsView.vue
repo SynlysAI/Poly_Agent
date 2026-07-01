@@ -6,6 +6,7 @@ import { Download, Refresh, Search, VideoPause, View } from '@element-plus/icons
 
 import {
   cancelComputation,
+  createObservationFromComputation,
   getApiErrorMessage,
   getArtifactDownloadUrl,
   getComputation,
@@ -29,6 +30,7 @@ const artifactPreview = ref(null)
 const integrations = ref([])
 const integrationLoading = ref(false)
 const pollTimer = ref(null)
+const observationSubmitting = ref(false)
 
 const filters = reactive({
   status: '',
@@ -79,6 +81,15 @@ function formatDate(value) {
 function compactJson(value) {
   if (!value || Object.keys(value).length === 0) return '{}'
   return JSON.stringify(value, null, 2)
+}
+
+function shortChecksum(value) {
+  if (!value) return '-'
+  return String(value).slice(0, 12)
+}
+
+function artifactSourceStep(row) {
+  return row.metadata?.source_step || row.step_key || '-'
 }
 
 async function loadTasks() {
@@ -167,6 +178,20 @@ async function handleRetry(run) {
     await openDetail(data.run_id)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
+  }
+}
+
+async function handleCreateObservationFromRun() {
+  if (!selectedRun.value?.run_id) return
+  observationSubmitting.value = true
+  try {
+    await createObservationFromComputation(selectedRun.value.run_id)
+    ElMessage.success('Observation 已生成')
+    await loadDetail(selectedRun.value.run_id)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    observationSubmitting.value = false
   }
 }
 
@@ -327,6 +352,10 @@ onBeforeUnmount(() => {
             </div>
             <el-tag :type="getStatusTag(selectedRun.status)">{{ selectedRun.status }}</el-tag>
           </div>
+          <div v-if="selectedRun.status === 'completed' && selectedRun.campaign_id && selectedRun.suggestion_id" class="detail-actions">
+            <el-button type="primary" :loading="observationSubmitting" @click="handleCreateObservationFromRun">从计算结果生成 observation</el-button>
+            <el-button @click="$router.push(`/optimization/campaigns/${selectedRun.campaign_id}`)">查看 Campaign</el-button>
+          </div>
 
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="SMILES">{{ selectedRun.molecule?.smiles }}</el-descriptions-item>
@@ -361,6 +390,15 @@ onBeforeUnmount(() => {
           <el-table :data="artifacts" size="small" border>
             <el-table-column prop="name" label="文件" min-width="150" />
             <el-table-column prop="artifact_type" label="类型" min-width="130" />
+            <el-table-column label="Checksum" min-width="120">
+              <template #default="{ row }"><span class="mono-text">{{ shortChecksum(row.checksum_sha256) }}</span></template>
+            </el-table-column>
+            <el-table-column label="Parser" min-width="130">
+              <template #default="{ row }">{{ row.parser_name || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="Source step" min-width="150">
+              <template #default="{ row }">{{ artifactSourceStep(row) }}</template>
+            </el-table-column>
             <el-table-column prop="size_bytes" label="大小" width="100" />
             <el-table-column label="操作" width="170">
               <template #default="{ row }">
@@ -490,6 +528,12 @@ onBeforeUnmount(() => {
   margin-bottom: 16px;
 }
 
+.detail-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
 .detail-heading h3 {
   margin: 0;
   color: var(--app-ink);
@@ -516,6 +560,11 @@ onBeforeUnmount(() => {
 
 .error-text {
   color: #b42318;
+}
+
+.mono-text {
+  font-family: var(--app-mono-font);
+  font-size: 12px;
 }
 
 .result-json {

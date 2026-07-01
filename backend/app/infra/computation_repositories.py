@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pymongo.errors import PyMongoError
+from pymongo import ReturnDocument
 
 from app.infra.demo_store import clone_document, demo_store
 from app.infra.mongo import (
@@ -221,6 +222,54 @@ class ComputationRunRepository(BaseRepository):
 
         return bool(demo_store.mutate(mutate))
 
+    @classmethod
+    def acquire_queued_run(cls, *, worker_id: str, now: datetime) -> dict[str, Any] | None:
+        """原子领取一个 queued run。"""
+        fields = {
+            "status": "running",
+            "started_at": now,
+            "updated_at": now,
+            "external_refs.worker_id": worker_id,
+        }
+        if cls._can_use_mongo():
+            try:
+                doc = cls._collection().find_one_and_update(
+                    {"status": "queued"},
+                    {"$set": fields},
+                    sort=[("created_at", 1)],
+                    projection={"_id": 0},
+                    return_document=ReturnDocument.AFTER,
+                )
+                return _without_mongo_id(doc)
+            except PyMongoError:
+                cls._mark_mongo_unavailable()
+
+        def mutate(data):
+            queued = [
+                item for item in data[cls.collection_name]
+                if item.get("status") == "queued"
+            ]
+            queued = _sort_documents(queued, "created_at", reverse=False)
+            if not queued:
+                return None
+            run_id = queued[0].get("run_id")
+            for item in data[cls.collection_name]:
+                if item.get("run_id") == run_id and item.get("status") == "queued":
+                    external_refs = dict(item.get("external_refs") or {})
+                    external_refs["worker_id"] = worker_id
+                    item.update(
+                        {
+                            "status": "running",
+                            "started_at": now,
+                            "updated_at": now,
+                            "external_refs": external_refs,
+                        }
+                    )
+                    return clone_document(item)
+            return None
+
+        return demo_store.mutate(mutate)
+
 
 class ComputationArtifactRepository(BaseRepository):
     """计算 artifact 仓储。"""
@@ -359,6 +408,26 @@ class AuditEventRepository(BaseRepository):
             return None
 
         demo_store.mutate(mutate)
+
+    @classmethod
+    def list_events(
+        cls,
+        *,
+        entity_type: str | None,
+        entity_id: str | None,
+        event_type: str | None,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询审计事件。"""
+        filters: dict[str, Any] = {}
+        if entity_type:
+            filters["entity_type"] = entity_type
+        if entity_id:
+            filters["entity_id"] = entity_id
+        if event_type:
+            filters["event_type"] = event_type
+        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
 
 
 def utc_now() -> datetime:

@@ -7,11 +7,13 @@ from fastapi import APIRouter, Depends, Query, Request
 from app.core.auth import get_current_user
 from app.schemas.common import ApiResponse
 from app.schemas.optimization import (
+    CampaignHistoryData,
     CampaignCreateRequest,
     CampaignDetailData,
     CampaignListData,
     CandidateImportData,
     CandidateImportRequest,
+    CreateObservationFromComputationData,
     ObservationCreateRequest,
     OptimizationCampaign,
     OptimizationObservation,
@@ -62,6 +64,12 @@ def get_campaign(campaign_id: str) -> ApiResponse[CampaignDetailData]:
     return ApiResponse(code=0, message="ok", data=service.get_detail(campaign_id))
 
 
+@router.get("/campaigns/{campaign_id}/history", response_model=ApiResponse[CampaignHistoryData])
+def get_campaign_history(campaign_id: str) -> ApiResponse[CampaignHistoryData]:
+    """查询 campaign 可追踪历史。"""
+    return ApiResponse(code=0, message="ok", data=service.get_history(campaign_id))
+
+
 @router.post("/campaigns/{campaign_id}/candidates:import", response_model=ApiResponse[CandidateImportData])
 def import_campaign_candidates(
     campaign_id: str,
@@ -73,6 +81,21 @@ def import_campaign_candidates(
     data = service.import_candidates(
         campaign_id,
         payload,
+        actor_user_id=_actor_user_id(current_user),
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/campaigns/{campaign_id}/candidates:import-chemos-demo", response_model=ApiResponse[CandidateImportData])
+def import_chemos_demo_candidates(
+    campaign_id: str,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[CandidateImportData]:
+    """导入 ChemOS reference demo 候选。"""
+    data = service.import_chemos_demo_candidates(
+        campaign_id,
         actor_user_id=_actor_user_id(current_user),
         request_id=_request_id(request),
     )
@@ -113,6 +136,21 @@ def create_observation(
     return ApiResponse(code=0, message="ok", data=data)
 
 
+@router.post("/computations/{run_id}/create-observation", response_model=ApiResponse[CreateObservationFromComputationData])
+def create_observation_from_computation(
+    run_id: str,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[CreateObservationFromComputationData]:
+    """从 completed computation 生成 observation。"""
+    data = service.create_observation_from_computation(
+        run_id,
+        actor_user_id=_actor_user_id(current_user),
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
 @router.post("/suggestions/{suggestion_id}/submit-computation", response_model=ApiResponse[SubmitSuggestionComputationData])
 def submit_suggestion_computation(
     suggestion_id: str,
@@ -126,3 +164,4 @@ def submit_suggestion_computation(
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
+    CreateObservationFromComputationData,

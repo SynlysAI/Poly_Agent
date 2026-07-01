@@ -160,6 +160,18 @@ export function previewArtifact(artifactId) {
   return apiClient.get(`/artifacts/${artifactId}/preview`).then(unwrapResponse)
 }
 
+export function getArtifact(artifactId) {
+  return apiClient.get(`/artifacts/${artifactId}`).then(unwrapResponse)
+}
+
+export function getArtifactStructure(artifactId) {
+  return apiClient.get(`/artifacts/${artifactId}/structure`).then(unwrapResponse)
+}
+
+export function getArtifactSpectrum(artifactId) {
+  return apiClient.get(`/artifacts/${artifactId}/spectrum`).then(unwrapResponse)
+}
+
 export function getArtifactDownloadUrl(artifactId) {
   const base = resolvedBaseUrl.endsWith('/') ? resolvedBaseUrl.slice(0, -1) : resolvedBaseUrl
   return `${base}/artifacts/${encodeURIComponent(artifactId)}/download`
@@ -179,8 +191,16 @@ export function getCampaign(campaignId) {
   return apiClient.get(`/optimization/campaigns/${campaignId}`).then(unwrapResponse)
 }
 
+export function getCampaignHistory(campaignId) {
+  return apiClient.get(`/optimization/campaigns/${campaignId}/history`).then(unwrapResponse)
+}
+
 export function importCampaignCandidates(campaignId, payload) {
   return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import`, payload).then(unwrapResponse)
+}
+
+export function importChemosDemoCandidates(campaignId) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import-chemos-demo`).then(unwrapResponse)
 }
 
 export function generateSuggestion(campaignId, payload = { batch_size: 1 }) {
@@ -189,6 +209,10 @@ export function generateSuggestion(campaignId, payload = { batch_size: 1 }) {
 
 export function createObservation(campaignId, payload) {
   return apiClient.post(`/optimization/campaigns/${campaignId}/observations`, payload).then(unwrapResponse)
+}
+
+export function createObservationFromComputation(runId) {
+  return apiClient.post(`/optimization/computations/${runId}/create-observation`).then(unwrapResponse)
 }
 
 export function submitSuggestionComputation(suggestionId) {

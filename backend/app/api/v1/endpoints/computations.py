@@ -10,6 +10,10 @@ from app.schemas.common import ApiResponse
 from app.schemas.computation import (
     ArtifactListData,
     ArtifactPreviewData,
+    ArtifactStructureData,
+    ArtifactSpectrumData,
+    AuditEventListData,
+    ComputationArtifact,
     ComputationCreateData,
     ComputationCreateRequest,
     ComputationListData,
@@ -98,15 +102,61 @@ def list_computation_artifacts(run_id: str) -> ApiResponse[ArtifactListData]:
     return ApiResponse(code=0, message="ok", data=ArtifactListData(items=service.list_artifacts(run_id)))
 
 
+@router.get("/artifacts/{artifact_id}", response_model=ApiResponse[ComputationArtifact])
+def get_artifact(artifact_id: str) -> ApiResponse[ComputationArtifact]:
+    """查询 artifact 元数据。"""
+    return ApiResponse(code=0, message="ok", data=service.get_artifact(artifact_id))
+
+
 @router.get("/artifacts/{artifact_id}/preview", response_model=ApiResponse[ArtifactPreviewData])
 def preview_artifact(artifact_id: str) -> ApiResponse[ArtifactPreviewData]:
     """预览 artifact。"""
     return ApiResponse(code=0, message="ok", data=service.preview_artifact(artifact_id))
 
 
+@router.get("/artifacts/{artifact_id}/structure", response_model=ApiResponse[ArtifactStructureData])
+def get_artifact_structure(artifact_id: str) -> ApiResponse[ArtifactStructureData]:
+    """读取结构 artifact。"""
+    return ApiResponse(code=0, message="ok", data=service.get_artifact_structure(artifact_id))
+
+
+@router.get("/artifacts/{artifact_id}/spectrum", response_model=ApiResponse[ArtifactSpectrumData])
+def get_artifact_spectrum(artifact_id: str) -> ApiResponse[ArtifactSpectrumData]:
+    """读取光谱/指标 artifact。"""
+    return ApiResponse(code=0, message="ok", data=service.get_artifact_spectrum(artifact_id))
+
+
 @router.get("/artifacts/{artifact_id}/download")
-def download_artifact(artifact_id: str) -> FileResponse:
+def download_artifact(
+    artifact_id: str,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> FileResponse:
     """下载 artifact 文件。"""
     artifact = service.get_artifact(artifact_id)
     path = service.resolve_artifact_path(artifact)
+    service.audit_artifact_download(
+        artifact,
+        actor_user_id=_actor_user_id(current_user),
+        request_id=_request_id(request),
+    )
     return FileResponse(path=path, media_type=artifact.mime_type, filename=artifact.name)
+
+
+@router.get("/audit-events", response_model=ApiResponse[AuditEventListData])
+def list_audit_events(
+    entity_type: str | None = Query(default=None),
+    entity_id: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> ApiResponse[AuditEventListData]:
+    """查询审计事件。"""
+    data = service.list_audit_events(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        event_type=event_type,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)

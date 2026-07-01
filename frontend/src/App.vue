@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Fold, Expand, SwitchButton,
-  Monitor, DataAnalysis, Histogram, ChatLineRound, SetUp, FolderOpened,
+  Monitor, DataAnalysis, Histogram, ChatLineRound, SetUp, FolderOpened, Aim,
 } from '@element-plus/icons-vue'
 
 import { getAuthStatus, getApiErrorMessage, getCurrentUser } from './api/polyAgentApi'
@@ -64,6 +64,7 @@ const activeMenu = computed(() => {
   const current = route.path
   if (current.startsWith('/computations/submit')) return '/tasks/submit'
   if (current.startsWith('/computations/runs')) return '/tasks/center'
+  if (current.startsWith('/optimization/campaigns')) return '/optimization/campaigns'
   return current
 })
 
@@ -214,6 +215,10 @@ onBeforeUnmount(() => {
           <el-menu-item index="/tasks/center">
             <el-icon><Histogram /></el-icon>
             <span>任务中心</span>
+          </el-menu-item>
+          <el-menu-item index="/optimization/campaigns">
+            <el-icon><Aim /></el-icon>
+            <span>优化闭环</span>
           </el-menu-item>
           <el-menu-item index="/dialogue">
             <el-icon><ChatLineRound /></el-icon>

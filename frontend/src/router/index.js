@@ -2,6 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import { authState } from '../auth/authState'
 import DashboardView from '../views/DashboardView.vue'
+import CampaignDetailView from '../views/CampaignDetailView.vue'
+import CampaignsView from '../views/CampaignsView.vue'
 import ComputationRunsView from '../views/ComputationRunsView.vue'
 import ComputationSubmitView from '../views/ComputationSubmitView.vue'
 import DatabaseManagementView from '../views/DatabaseManagementView.vue'
@@ -24,6 +26,8 @@ const routes = [
   { path: '/tasks/center', component: TaskCenterView, meta: { section: '任务中心', title: '全局任务' } },
   { path: '/computations/submit', component: ComputationSubmitView, meta: { section: '计算智能', title: '提交计算任务' } },
   { path: '/computations/runs', component: ComputationRunsView, meta: { section: '计算智能', title: '计算任务中心' } },
+  { path: '/optimization/campaigns', component: CampaignsView, meta: { section: '计算智能', title: 'Optimization Campaigns' } },
+  { path: '/optimization/campaigns/:campaignId', component: CampaignDetailView, meta: { section: '计算智能', title: 'Campaign Detail' } },
   { path: '/dialogue', component: DialogueView, meta: { title: '问答对话' } },
   { path: '/tools', component: ToolServicesView, meta: { section: '工具服务', title: '工具列表' } },
   { path: '/database', component: DatabaseManagementView, meta: { requiresRole: 'admin', section: '系统管理', title: '数据库管理' } },

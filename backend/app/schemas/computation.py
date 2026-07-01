@@ -61,6 +61,7 @@ class ComputationCreateRequest(BaseModel):
     source: str | None = Field(default=None, max_length=80)
     campaign_id: str | None = Field(default=None, max_length=80)
     suggestion_id: str | None = Field(default=None, max_length=80)
+    mock_should_fail: bool = False
 
 
 class ComputationStep(BaseModel):
@@ -98,6 +99,7 @@ class ComputationRun(BaseModel):
     source: str | None = None
     campaign_id: str | None = None
     suggestion_id: str | None = None
+    mock_should_fail: bool = False
 
 
 class ComputationCreateData(BaseModel):
@@ -145,3 +147,43 @@ class ArtifactPreviewData(BaseModel):
 
     artifact: ComputationArtifact
     preview: dict | str
+
+
+class ArtifactStructureData(BaseModel):
+    """结构 artifact 响应。"""
+
+    artifact: ComputationArtifact
+    structure: dict
+
+
+class ArtifactSpectrumData(BaseModel):
+    """光谱/曲线 artifact 响应。"""
+
+    artifact: ComputationArtifact
+    spectrum: dict
+
+
+class AuditEvent(BaseModel):
+    """审计事件记录。"""
+
+    event_id: str
+    event_type: str
+    actor_user_id: str
+    actor_role: str
+    request_id: str | None = None
+    entity_type: str
+    entity_id: str
+    related_ids: dict = Field(default_factory=dict)
+    before: dict = Field(default_factory=dict)
+    after: dict = Field(default_factory=dict)
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+
+
+class AuditEventListData(BaseModel):
+    """审计事件分页响应。"""
+
+    items: list[AuditEvent]
+    page: int
+    page_size: int
+    total: int
