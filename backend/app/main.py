@@ -36,6 +36,10 @@ class SPAStaticFiles(StaticFiles):
         Returns:
             静态资源响应或 index.html 回退响应。
         """
+        # WebSocket 等其他协议不由此中间件处理，直接 404
+        if scope.get("type") != "http":
+            raise StarletteHTTPException(status_code=404)
+
         normalized_path = path.lstrip("/")
         try:
             response = await super().get_response(normalized_path, scope)
