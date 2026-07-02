@@ -9,9 +9,9 @@ from pydantic import BaseModel, Field, field_validator
 
 
 ComputationStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
-WorkflowType = Literal["MOCK_XTB_ONLY", "MOCK_LASER"]
-EngineType = Literal["MOCK"]
-ArtifactType = Literal["result_json", "log_text", "structure_json"]
+WorkflowType = Literal["MOCK_XTB_ONLY", "MOCK_LASER", "LOCAL_STRUCTURE", "LOCAL_XTB"]
+EngineType = Literal["MOCK", "LOCAL", "RDKit", "OPENBABEL", "XTB"]
+ArtifactType = Literal["result_json", "log_text", "structure_json", "input_json", "error_json", "sdf", "xyz"]
 
 
 class MoleculeInput(BaseModel):

@@ -42,6 +42,15 @@ class ComputationServiceTest(ComputationTestCase):
         self.assertEqual(created.status, "queued")
         self.assertEqual(audits.items[0].request_id, "req-service-create")
 
+    def test_create_run_rejects_unsupported_workflow_engine_pair(self) -> None:
+        with self.assertRaises(HTTPException) as caught:
+            self.service.create_run(
+                ComputationCreateRequest(**computation_payload(workflow_type="LOCAL_XTB", engine="MOCK")),
+                actor_user_id="tester",
+                request_id="req-bad-pair",
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+
     def test_cancel_run_moves_non_terminal_run_to_cancelled(self) -> None:
         created = self.service.create_run(
             ComputationCreateRequest(**computation_payload()),

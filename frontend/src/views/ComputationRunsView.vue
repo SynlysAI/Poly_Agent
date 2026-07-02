@@ -55,6 +55,17 @@ const workflowOptions = [
   { label: '全部', value: '' },
   { label: 'MOCK_XTB_ONLY', value: 'MOCK_XTB_ONLY' },
   { label: 'MOCK_LASER', value: 'MOCK_LASER' },
+  { label: 'LOCAL_STRUCTURE', value: 'LOCAL_STRUCTURE' },
+  { label: 'LOCAL_XTB', value: 'LOCAL_XTB' },
+]
+
+const engineOptions = [
+  { label: '全部', value: '' },
+  { label: 'MOCK', value: 'MOCK' },
+  { label: 'LOCAL', value: 'LOCAL' },
+  { label: 'RDKit', value: 'RDKit' },
+  { label: 'OPENBABEL', value: 'OPENBABEL' },
+  { label: 'XTB', value: 'XTB' },
 ]
 
 const statusSummary = computed(() => {
@@ -309,8 +320,7 @@ onBeforeUnmount(() => {
             <el-option v-for="item in workflowOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
           <el-select v-model="filters.engine" placeholder="Engine" clearable style="width:130px" @change="handleSearch">
-            <el-option label="全部" value="" />
-            <el-option label="MOCK" value="MOCK" />
+            <el-option v-for="item in engineOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
           <el-input v-model="filters.keyword" placeholder="run id / 名称 / SMILES" clearable class="keyword-input" @keyup.enter="handleSearch">
             <template #prefix><el-icon><Search /></el-icon></template>

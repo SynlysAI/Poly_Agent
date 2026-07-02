@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Connection, Cpu, MagicStick, Plus, Promotion } from '@element-plus/icons-vue'
@@ -43,11 +43,35 @@ const rules = {
 const workflowOptions = [
   { label: 'Mock xTB 单点', value: 'MOCK_XTB_ONLY' },
   { label: 'Mock Laser 指标', value: 'MOCK_LASER' },
+  { label: 'Local 结构生成', value: 'LOCAL_STRUCTURE' },
+  { label: 'Local xTB', value: 'LOCAL_XTB' },
 ]
 
-const engineOptions = [
-  { label: 'MOCK 本地演示引擎', value: 'MOCK' },
-]
+const engineOptionsByWorkflow = {
+  MOCK_XTB_ONLY: [{ label: 'MOCK 本地演示引擎', value: 'MOCK' }],
+  MOCK_LASER: [{ label: 'MOCK 本地演示引擎', value: 'MOCK' }],
+  LOCAL_STRUCTURE: [
+    { label: 'LOCAL 自动选择', value: 'LOCAL' },
+    { label: 'RDKit', value: 'RDKit' },
+    { label: 'OpenBabel', value: 'OPENBABEL' },
+  ],
+  LOCAL_XTB: [{ label: 'xTB', value: 'XTB' }],
+}
+
+const engineOptions = computed(() => engineOptionsByWorkflow[form.workflow_type] || [])
+
+watch(
+  () => form.workflow_type,
+  (workflowType) => {
+    const options = engineOptionsByWorkflow[workflowType] || []
+    if (!options.some((item) => item.value === form.engine)) {
+      form.engine = options[0]?.value || ''
+    }
+    if (workflowType === 'LOCAL_XTB') {
+      form.method = 'GFN2-xTB'
+    }
+  },
+)
 
 function buildComputationPayload() {
   return {
@@ -79,7 +103,7 @@ async function handleSubmit() {
   try {
     const data = await createComputation(buildComputationPayload())
     ElMessage.success(`计算任务已创建：${data.run_id}`)
-            await router.push({ path: '/computations/runs', query: { run_id: data.run_id } })
+    await router.push({ path: '/computations/runs', query: { run_id: data.run_id } })
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
