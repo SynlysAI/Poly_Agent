@@ -4,911 +4,524 @@
 
 | 字段 | 内容 |
 |---|---|
-| 文档状态 | Draft for implementation planning |
-| 版本 | v0.1 |
-| 日期 | 2026-07-01 |
-| 输入文档 | `doc/chemos-computation-migration-design.md`、`doc/chemos-computation-product-prd.md` |
-| 目标 | 将 PRD 转为可开发、可测试、可审计的工程设计 |
+| 文档状态 | Current architecture design aligned to implemented code |
+| 日期 | 2026-07-02 |
+| 关联文档 | `doc/chemos-computation-product-prd.md`、`doc/chemos-computation-migration-design.md`、`doc/chemos-computation-progress-and-plan.md` |
+| 代码范围 | `backend/app`、`backend/tests`、`frontend/src` |
+
+本文描述当前 ChemOS 计算智能模块在 Poly_Agent 中的实际设计。历史设计中的“新增模块”若已落地，本文按当前实现记录；未落地内容单独列为后续扩展。
 
 ## 2. 设计原则
 
-| 原则 | 说明 |
+| 原则 | 当前实现 |
 |---|---|
-| 业务库保持 MongoDB | 贴合现有 Poly_Agent 架构，不把 AiiDA PostgreSQL 当业务库 |
-| 长任务出 Web 进程 | FastAPI 只创建和查询任务，worker 执行计算和同步状态 |
-| 外部系统引用不复制 | Poly_Agent 保存 AiiDA UUID、SpecLabOS run id、artifact 摘要，不复制完整 provenance |
-| 输入白名单 | workflow、engine、resource、parser、artifact type 均使用白名单 |
-| 每个状态变化可审计 | 用户操作和 worker 自动操作都要有审计事件 |
-| adapter 可替换 | mock、local、AiiDA、Atlas、SpecLabOS 都通过边界接入 |
+| 业务库保持 MongoDB | repository 优先写 MongoDB，不可用时回退 demo JSON store |
+| 外部系统只保存引用 | `external_refs`、`service_integrations.secret_refs` 保存摘要或引用，不保存密钥 |
+| 输入白名单 | workflow/engine/method/solvent/resource/artifact type 均由 schema 或 registry 限定 |
+| adapter 可替换 | `computation_adapters` 定义协议，worker 只负责领取、调用、落库 |
+| artifact 由 service 统一登记 | adapter 只产出 `ArtifactSpec`，service 做路径边界、checksum、审计 |
+| planner 与 service 分层 | optimization service 构造 request，`planner_adapters.py` 派发策略 |
+| 自动化默认可控 | 自动 observation/下一轮 suggestion 由 `planner_config.automation` 显式开启 |
 
 ## 3. 系统上下文
 
 ```text
-Vue Frontend
+Vue frontend
   -> FastAPI /api/v1
-     -> MongoDB business collections
-     -> Artifact store .runtime/outputs first
-     -> Audit events
-     -> Computation worker process
-        -> mock/local adapter
-        -> optional AiiDA profile
-           -> AiiDA PostgreSQL/RabbitMQ/HPC/ORCA/xTB
-     -> Optimizer worker/service
-        -> fallback planner
-        -> optional Atlas/Olympus adapter
-     -> SpecLabOS client
-        -> workflow runs and experiment observations
+      -> auth/admin/health
+      -> computations API
+          -> ComputationService
+          -> ComputationWorker
+              -> adapter registry
+              -> mock/local_structure/local_xtb/orca_chemos_fixture
+          -> artifact preview/download/spectrum/structure
+      -> optimization API
+          -> OptimizationService
+          -> fallback/tanimoto planner adapters
+      -> integrations API
+          -> status probes
+          -> service integration config
+  -> MongoDB or demo JSON store
+  -> .runtime/outputs artifact files
 ```
 
-### 3.1 组件职责
+外部系统边界：
+- RDKit/OpenBabel/xTB 是可选本地依赖，不阻塞应用启动。
+- ORCA/ChemOS 目前支持 fixture/parser；external executor 未实现。
+- AiiDA、SpecLabOS、Atlas/Olympus 仍为后续 adapter，不进入主后端必需依赖。
+
+## 4. 组件职责
 
 | 组件 | 负责 | 不负责 |
 |---|---|---|
-| FastAPI backend | 权限、API、业务对象、审计、状态聚合 | 直接执行 DFT 或解析大文件 |
-| MongoDB | computation、campaign、artifact、audit 索引 | AiiDA provenance 全量存储 |
-| Artifact store | 原始文件、日志、结构和图谱产物 | 权限判断和主元数据查询 |
-| Computation worker | 状态锁定、执行 adapter、登记 artifact、解析结果 | 用户认证和页面交互 |
-| Optimizer service | suggestion 生成和 planner adapter | 计算或实验执行 |
-| SpecLabOS client | workflow 提交、结果拉取 | 仪器调度实现 |
+| FastAPI backend | API、权限入口、业务服务、审计、状态聚合 | 直接接受用户 shell/script |
+| ComputationService | run/artifact/audit 持久化、路径边界、retry/cancel | workflow 内部计算细节 |
+| ComputationWorker | 原子领取 queued run、调用 adapter、状态落库、触发自动闭环 | 用户认证和 UI |
+| ComputationAdapter | workflow 输入校验、执行、产物描述、结果摘要 | 直接写数据库 |
+| OptimizationService | campaign/candidate/suggestion/observation、planner request、automation | 执行计算或实验 |
+| Planner adapters | fallback/tanimoto 推荐策略 | 修改业务状态 |
+| Integration services | 状态探测、配置摘要、安全校验 | 保存明文密钥 |
+| Frontend | 提交、查询、展示、下载、用户操作 | 绕过后端读取本地文件 |
 
-## 4. 数据设计
+## 5. 数据设计
 
-### 4.1 Collection 列表
+### 5.1 Collections
 
-| Collection | 用途 | MVP 必需 |
+| Collection | 用途 | 当前状态 |
 |---|---|---|
-| `computation_runs` | 计算任务主记录 | 是 |
-| `computation_artifacts` | artifact 元数据 | 是 |
-| `optimization_campaigns` | 优化 campaign | 是 |
-| `optimization_candidates` | 候选分子或参数 | 是 |
-| `optimization_suggestions` | 推荐记录 | 是 |
-| `optimization_observations` | 评价结果 | 是 |
-| `service_integrations` | 外部集成配置摘要 | 是 |
-| `audit_events` | 审计事件 | 是 |
-| `worker_heartbeats` | worker 心跳和能力 | P1 |
+| `computation_runs` | 计算任务状态 | 已实现 |
+| `computation_artifacts` | artifact 元数据 | 已实现 |
+| `optimization_campaigns` | 优化 campaign | 已实现 |
+| `optimization_candidates` | 候选分子 | 已实现 |
+| `optimization_suggestions` | 推荐记录 | 已实现 |
+| `optimization_observations` | observation | 已实现 |
+| `service_integrations` | 外部服务配置摘要 | 已实现 |
+| `audit_events` | 审计事件 | 已实现 |
 
-### 4.2 `computation_runs`
+### 5.2 `computation_runs`
 
-关键字段：
+核心字段：
 
 ```json
 {
-  "run_id": "comp_20260701_0001",
+  "run_id": "comp_20260702_xxx",
   "retry_of_run_id": null,
-  "workflow_type": "MOCK_XTB_ONLY",
-  "engine": "MOCK",
+  "workflow_type": "LOCAL_XTB",
+  "engine": "XTB",
   "status": "queued",
-  "molecule": {
-    "smiles": "CCOC1=CC=CC=C1",
-    "name": "candidate_001",
-    "formula": null
-  },
-  "parameters": {
-    "charge": 0,
-    "multiplicity": 1,
-    "method": "GFN2-xTB",
-    "solvent": null
-  },
-  "resources": {
-    "num_cores": 4,
-    "memory_mb": 8192,
-    "max_wallclock_seconds": 3600
-  },
-  "external_refs": {
-    "aiida_process_uuid": null,
-    "aiida_node_pk": null,
-    "scheduler_job_id": null,
-    "speclabos_run_id": null,
-    "worker_id": null
-  },
+  "molecule": {"smiles": "CCO", "name": "ethanol"},
+  "parameters": {"charge": 0, "multiplicity": 1, "method": "GFN2-xTB", "solvent": null},
+  "resources": {"num_cores": 2, "memory_mb": 4096, "max_wallclock_seconds": 1800},
+  "external_refs": {"worker_id": null, "aiida_process_uuid": null, "speclabos_run_id": null},
   "steps": [],
   "artifact_ids": [],
   "result_summary": {},
   "error": null,
   "created_by": "user_id",
-  "created_at": "2026-07-01T00:00:00Z",
-  "updated_at": "2026-07-01T00:00:00Z",
-  "started_at": null,
-  "finished_at": null
+  "campaign_id": null,
+  "suggestion_id": null
 }
 ```
 
-索引建议：
+当前状态枚举：`queued`、`running`、`completed`、`failed`、`cancelled`。
 
-```text
-unique(run_id)
-created_by + created_at desc
-status + updated_at asc
-workflow_type + status
-external_refs.aiida_process_uuid sparse unique
-retry_of_run_id
-```
+### 5.3 Workflow 和 Engine
 
-### 4.3 `computation_artifacts`
+当前支持组合：
 
-关键字段：
+| workflow_type | engine | adapter |
+|---|---|---|
+| `MOCK_XTB_ONLY` | `MOCK` | `MockComputationAdapter` |
+| `MOCK_LASER` | `MOCK` | `MockComputationAdapter` |
+| `LOCAL_STRUCTURE` | `LOCAL`、`RDKit`、`OPENBABEL` | `LocalStructureAdapter` |
+| `LOCAL_XTB` | `XTB` | `LocalXtbAdapter` |
+| `ORCA_CHEMOS_LASER` | `ORCA` | `OrcaChemosLaserAdapter` fixture/parser |
+
+不支持的组合在 create run 时返回 400。
+
+### 5.4 `computation_artifacts`
+
+核心字段：
 
 ```json
 {
-  "artifact_id": "art_001",
-  "run_id": "comp_20260701_0001",
-  "step_key": "MOCK_RESULT",
-  "artifact_type": "spectrum_json",
-  "name": "result.json",
-  "storage_uri": ".runtime/outputs/computations/comp_20260701_0001/result.json",
-  "mime_type": "application/json",
+  "artifact_id": "art_20260702_xxx",
+  "run_id": "comp_20260702_xxx",
+  "step_key": "XTB_RUN",
+  "artifact_type": "log_text",
+  "name": "xtb.stdout.log",
+  "storage_uri": "/abs/path/.runtime/outputs/computations/.../work/xtb.stdout.log",
+  "mime_type": "text/plain",
   "size_bytes": 1234,
-  "checksum_sha256": "sha256...",
-  "parser_name": "mock_parser",
+  "checksum_sha256": "...",
+  "parser_name": "local_xtb_adapter",
   "parser_version": "0.1.0",
-  "metadata": {
-    "source": "mock",
-    "source_step": "MOCK_RESULT"
-  },
-  "created_at": "2026-07-01T00:00:00Z"
+  "metadata": {"source": "local_xtb", "source_step": "XTB_RUN"}
 }
 ```
 
-索引建议：
+当前 artifact type：
+- `result_json`
+- `log_text`
+- `structure_json`
+- `input_json`
+- `error_json`
+- `sdf`
+- `xyz`
+- `spectrum_json`
+- `metrics_json`
 
-```text
-unique(artifact_id)
-run_id + step_key
-artifact_type
-checksum_sha256
-```
+路径安全：登记和读取时都要求文件位于 `settings.outputs_root` 下。
 
-### 4.4 优化集合
+### 5.5 Optimization 对象
 
 `optimization_campaigns`：
-
-```json
-{
-  "campaign_id": "camp_001",
-  "name": "laser molecule screening",
-  "status": "draft",
-  "planner_type": "fallback",
-  "search_space": {
-    "kind": "discrete_molecule_library",
-    "candidate_count": 40
-  },
-  "objectives": [
-    {
-      "name": "gain_factor",
-      "direction": "max",
-      "unit": "cm2_s",
-      "required": true
-    }
-  ],
-  "planner_config": {
-    "batch_size": 1,
-    "descriptor": {
-      "kind": "morgan_fingerprint",
-      "radius": 3,
-      "n_bits": 2048
-    }
-  },
-  "created_by": "user_id",
-  "created_at": "2026-07-01T00:00:00Z",
-  "updated_at": "2026-07-01T00:00:00Z"
-}
-```
+- `campaign_id`
+- `name`
+- `status`
+- `planner_type`: `fallback` 或 `tanimoto`
+- `objectives`
+- `planner_config`
+- `created_by`
 
 `optimization_candidates`：
+- `candidate_id`
+- `candidate_key`
+- `smiles`
+- `parameters`
+- `descriptors`
+- `metadata`
 
-```json
-{
-  "candidate_id": "cand_C039",
-  "campaign_id": "camp_001",
-  "candidate_key": "C039",
-  "smiles": "C(=C/c1cccc...)",
-  "parameters": {},
-  "descriptors": {
-    "morgan_fingerprint": null
-  },
-  "metadata": {
-    "source": "ChemOS molecules.json"
-  },
-  "is_active": true,
-  "created_at": "2026-07-01T00:00:00Z"
-}
-```
+Descriptor schema 当前为 `candidate_descriptor.v1`：
+- RDKit 可用时生成 Morgan fingerprint。
+- RDKit 不可用时使用稳定 SMILES hash fingerprint 兜底。
 
 `optimization_suggestions`：
-
-```json
-{
-  "suggestion_id": "sug_001",
-  "campaign_id": "camp_001",
-  "candidate_id": "cand_C039",
-  "iteration_index": 1,
-  "status": "suggested",
-  "planner_type": "fallback",
-  "planner_payload": {
-    "reason": "first unevaluated active candidate"
-  },
-  "submitted_run_id": null,
-  "submitted_experiment_run_id": null,
-  "created_at": "2026-07-01T00:00:00Z",
-  "updated_at": "2026-07-01T00:00:00Z"
-}
-```
+- `suggestion_id`
+- `candidate_id`
+- `iteration_index`
+- `status`
+- `planner_type`
+- `planner_payload.request`
+- `planner_payload.response`
+- `submitted_run_id`
 
 `optimization_observations`：
+- `candidate_id`
+- `suggestion_id`
+- `source_type`: `computation`、`experiment`、`manual`、`imported`
+- `source_run_id`
+- `values`
+- `raw_result_ref`
+
+### 5.6 `service_integrations`
+
+服务配置摘要，不保存明文密钥：
 
 ```json
 {
-  "observation_id": "obs_001",
-  "campaign_id": "camp_001",
-  "candidate_id": "cand_C039",
-  "suggestion_id": "sug_001",
-  "source_type": "computation",
-  "source_run_id": "comp_20260701_0001",
-  "values": {
-    "gain_factor": 1.2e-16,
-    "s1_energy_ev": 2.35
-  },
-  "uncertainty": {},
-  "raw_result_ref": "art_001",
-  "confirmed_by": "user_id",
-  "created_at": "2026-07-01T00:00:00Z"
+  "service_key": "speclabos",
+  "display_name": "SpecLabOS",
+  "service_type": "experiment",
+  "enabled": false,
+  "endpoint": "https://example.internal",
+  "config_summary": {"timeout_seconds": 10},
+  "secret_refs": {"token": "SPECLABOS_TOKEN"},
+  "last_checked_at": null,
+  "last_status": "unknown",
+  "last_error_summary": null
 }
 ```
 
-索引建议：
+敏感字段名如 `token/password/api_key/secret/private_key/credential` 会被拒绝进入 `config_summary` 或 endpoint query。
 
-```text
-optimization_campaigns: unique(campaign_id), created_by + updated_at desc, status
-optimization_candidates: unique(campaign_id + candidate_key), campaign_id + is_active
-optimization_suggestions: unique(suggestion_id), campaign_id + iteration_index, campaign_id + status
-optimization_observations: unique(observation_id), campaign_id + candidate_id, source_type + source_run_id
-```
+## 6. API 设计
 
-### 4.5 `audit_events`
+### 6.1 Computations
 
-```json
-{
-  "event_id": "audit_001",
-  "event_type": "computation.created",
-  "actor_user_id": "user_id",
-  "actor_role": "user",
-  "request_id": "req_001",
-  "entity_type": "computation_run",
-  "entity_id": "comp_001",
-  "related_ids": {
-    "campaign_id": null,
-    "suggestion_id": null,
-    "artifact_id": null,
-    "external_run_id": null
-  },
-  "before": {},
-  "after": {
-    "status": "queued"
-  },
-  "metadata": {
-    "client_ip": "127.0.0.1",
-    "source": "web"
-  },
-  "created_at": "2026-07-01T00:00:00Z"
-}
-```
-
-索引建议：
-
-```text
-created_at desc
-actor_user_id + created_at desc
-event_type + created_at desc
-entity_type + entity_id + created_at desc
-request_id
-```
-
-## 5. API 设计
-
-所有 API 使用现有统一响应：
-
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {},
-  "request_id": "..."
-}
-```
-
-### 5.1 Computations
-
-创建任务：
-
-```http
-POST /api/v1/computations
-```
-
-请求：
-
-```json
-{
-  "workflow_type": "MOCK_XTB_ONLY",
-  "engine": "MOCK",
-  "molecule": {
-    "smiles": "CCOC1=CC=CC=C1",
-    "name": "candidate_001"
-  },
-  "parameters": {
-    "charge": 0,
-    "multiplicity": 1
-  },
-  "resources": {
-    "num_cores": 4,
-    "memory_mb": 8192,
-    "max_wallclock_seconds": 3600
-  }
-}
-```
-
-响应：
-
-```json
-{
-  "run_id": "comp_20260701_0001",
-  "status": "queued"
-}
-```
-
-列表：
-
-```http
-GET /api/v1/computations?status=queued&page=1&page_size=20
-```
-
-响应数据：
-
-```json
-{
-  "items": [],
-  "page": 1,
-  "page_size": 20,
-  "total": 0
-}
-```
-
-详情和操作：
-
-```http
-GET /api/v1/computations/{run_id}
-GET /api/v1/computations/{run_id}/artifacts
-POST /api/v1/computations/{run_id}/cancel
-POST /api/v1/computations/{run_id}/retry
-```
-
-取消规则：
-
-- `completed`、`failed`、`cancelled` 不允许取消。
-- 如果已提交外部 AiiDA，应先标记 cancel requested，再由 sync worker 确认。
-
-重试规则：
-
-- 默认创建新 run，字段 `retry_of_run_id` 指向原 run。
-- 新 run 复制 molecule、workflow、parameters、resources，不复制 artifact 和 result。
-
-### 5.2 Artifacts
-
-```http
-GET /api/v1/artifacts/{artifact_id}
-GET /api/v1/artifacts/{artifact_id}/download
-GET /api/v1/artifacts/{artifact_id}/preview
-GET /api/v1/artifacts/{artifact_id}/structure
-GET /api/v1/artifacts/{artifact_id}/spectrum
-```
-
-安全规则：
-
-- `storage_uri` 必须解析到配置的 artifact root 内。
-- 下载前按 run 权限校验。
-- `preview` 只返回白名单类型。
-- 原始 ORCA out、npz、pickle 不由前端直接解析。
-
-### 5.3 Optimization
-
-```http
-POST /api/v1/optimization/campaigns
-GET /api/v1/optimization/campaigns
-GET /api/v1/optimization/campaigns/{campaign_id}
-PATCH /api/v1/optimization/campaigns/{campaign_id}
-POST /api/v1/optimization/campaigns/{campaign_id}/candidates:import
-POST /api/v1/optimization/campaigns/{campaign_id}/suggestions
-POST /api/v1/optimization/campaigns/{campaign_id}/observations
-POST /api/v1/optimization/suggestions/{suggestion_id}/submit-computation
-POST /api/v1/optimization/suggestions/{suggestion_id}/submit-experiment
-GET /api/v1/optimization/campaigns/{campaign_id}/history
-GET /api/v1/optimization/campaigns/{campaign_id}/pareto
-```
-
-`submit-computation` 响应：
-
-```json
-{
-  "suggestion_id": "sug_001",
-  "run_id": "comp_20260701_0002",
-  "suggestion_status": "submitted"
-}
-```
-
-幂等规则：
-
-- suggestion 已有 `submitted_run_id` 时，重复请求返回已有 run，不创建第二个 run。
-- suggestion 为 `rejected` 或 `evaluated` 时拒绝提交。
-
-### 5.4 Integrations
-
-```http
-GET /api/v1/integrations/status
-GET /api/v1/integrations/chemos-demo/status
-GET /api/v1/integrations/computation-worker/status
-GET /api/v1/integrations/speclabos/status
-GET /api/v1/integrations/aiida/status
-```
-
-统一状态：
-
-```json
-{
-  "service": "computation-worker",
-  "status": "up",
-  "checked_at": "2026-07-01T00:00:00Z",
-  "details": {
-    "worker_id": "worker-local-1",
-    "capabilities": ["MOCK_XTB_ONLY"]
-  }
-}
-```
-
-## 6. Computation Worker 设计
-
-### 6.1 Worker 循环
-
-```text
-loop:
-  find one queued run with atomic lock
-  set status=running, external_refs.worker_id=worker_id
-  emit audit computation.status_changed
-  create or update steps
-  execute adapter
-  register artifacts
-  parse result summary
-  set status=completed or failed
-  emit audit status and artifact events
-  sleep polling interval
-```
-
-### 6.2 原子锁定
-
-worker 获取任务必须使用 MongoDB 原子更新：
-
-```text
-find_one_and_update(
-  {status: "queued", worker_lock: null or expired},
-  {$set: {worker_lock: {worker_id, locked_at, expires_at}, status: "running"}}
-)
-```
-
-要求：
-
-- 同一个 run 不能被两个 worker 执行。
-- worker crash 后锁过期可被重新获取。
-- 已产生外部 job 的 run 不应重复提交，需要先检查 external refs。
-
-### 6.3 Adapter 分层
-
-| Adapter | workflow_type | 作用 |
+| Method | Path | 说明 |
 |---|---|---|
-| mock | `MOCK_XTB_ONLY`、`MOCK_LASER` | 打通生命周期和前端 |
-| local | `LOCAL_RDKIT_3D`、`LOCAL_XTB_ONLY` | 轻量结构和 xTB |
-| aiida | `AIIDA_XTB_ONLY`、`AIIDA_LASER_DFT` | 外部 AiiDA provenance |
+| POST | `/api/v1/computations` | 创建 run |
+| GET | `/api/v1/computations` | 列表，支持 status/workflow_type/engine/keyword/page/page_size |
+| GET | `/api/v1/computations/{run_id}` | 详情 |
+| POST | `/api/v1/computations/{run_id}/cancel` | 取消非终态 run |
+| POST | `/api/v1/computations/{run_id}/retry` | 从 failed/cancelled 创建 retry run |
+| GET | `/api/v1/computations/{run_id}/artifacts` | artifact 列表 |
 
-adapter 接口：
+当前缺口：列表和详情还需按当前用户 owner/admin 做权限过滤。
 
-```python
-class ComputationAdapter:
-    workflow_type: str
+### 6.2 Artifacts
 
-    def prepare_steps(self, run: ComputationRun) -> list[ComputationStep]:
-        ...
+| Method | Path | 说明 |
+|---|---|---|
+| GET | `/api/v1/artifacts/{artifact_id}` | 元数据 |
+| GET | `/api/v1/artifacts/{artifact_id}/preview` | JSON/text 预览 |
+| GET | `/api/v1/artifacts/{artifact_id}/structure` | 结构 JSON |
+| GET | `/api/v1/artifacts/{artifact_id}/spectrum` | 光谱/指标数据 |
+| GET | `/api/v1/artifacts/{artifact_id}/download` | 下载文件并写审计 |
 
-    def execute(self, run: ComputationRun, workdir: Path) -> AdapterResult:
-        ...
-```
+前端使用 axios blob 下载，不再使用裸 `<a>` 访问。
 
-`AdapterResult` 至少包含：
+### 6.3 Optimization
+
+| Method | Path | 说明 |
+|---|---|---|
+| POST | `/api/v1/optimization/campaigns` | 创建 campaign |
+| GET | `/api/v1/optimization/campaigns` | campaign 列表 |
+| GET | `/api/v1/optimization/campaigns/{campaign_id}` | campaign 详情 |
+| GET | `/api/v1/optimization/campaigns/{campaign_id}/history` | history |
+| POST | `/api/v1/optimization/campaigns/{campaign_id}/candidates:import` | JSON 导入候选 |
+| POST | `/api/v1/optimization/campaigns/{campaign_id}/candidates:import-chemos-demo` | 导入 ChemOS demo 候选 |
+| POST | `/api/v1/optimization/campaigns/{campaign_id}/suggestions` | 生成 suggestion |
+| POST | `/api/v1/optimization/suggestions/{suggestion_id}/submit-computation` | suggestion 转 computation |
+| POST | `/api/v1/optimization/campaigns/{campaign_id}/observations` | 手工写 observation |
+| POST | `/api/v1/optimization/computations/{run_id}/create-observation` | completed run 转 observation |
+
+当前缺口：
+- CSV 导入 endpoint。
+- suggestion reject/failed endpoint。
+- campaign lifecycle endpoint。
+- submit computation preset 配置。
+
+### 6.4 Integrations
+
+| Method | Path | 说明 |
+|---|---|---|
+| GET | `/api/v1/integrations/status` | 状态探测摘要 |
+| GET | `/api/v1/integrations/configs` | 管理员查看配置摘要 |
+| PUT | `/api/v1/integrations/configs/{service_key}` | 管理员 upsert 配置摘要 |
+| POST | `/api/v1/integrations/configs/{service_key}/check` | 管理员触发健康检查 |
+
+当前缺口：前端 Tool Services 页面尚未接入 config CRUD。
+
+## 7. Computation Worker 设计
+
+### 7.1 当前执行流程
 
 ```text
-status
-steps
-artifact_paths
-result_summary
-external_refs
-error
+acquire queued run atomically
+  -> get adapter by workflow/engine
+  -> initialize timeline
+  -> build AdapterContext
+  -> adapter.validate_input()
+  -> adapter.run()
+  -> adapter.collect_artifacts()
+  -> adapter.parse_result()
+  -> service.register_artifacts()
+  -> service.finish_acquired_run()
+  -> if campaign/suggestion and automation enabled: process_completed_computation()
 ```
 
-### 6.4 Step key 白名单
+Mongo 可用时使用 `find_one_and_update` 原子领取；不可用时 demo store 使用进程内锁。
 
-MVP：
+### 7.2 Adapter 接口
 
-```text
-MOCK_VALIDATE_INPUT
-MOCK_GENERATE_STRUCTURE
-MOCK_RESULT
-```
+`backend/app/computation_adapters/base.py` 定义：
+- `ArtifactSpec`
+- `AdapterContext`
+- `AdapterRunResult`
+- `ComputationAdapter` protocol
+- `build_steps`
 
-后续：
+Adapter 不写 repository，只返回产物规格和结果摘要。
 
-```text
-OPENBABEL_3D
-RDKIT_3D
-XTB_CREST
-ORCA_FREQ
-ORCA_SP_NACSOC
-ORCA_OPT
-ORCA_COMB
-SPECTRA_POSTPROCESS
-```
+### 7.3 当前 step keys
 
-### 6.5 错误处理
+Mock:
+- `MOCK_VALIDATE`
+- `MOCK_EXECUTE`
+- `MOCK_RESULT`
 
-错误对象：
+Local structure:
+- `LOCAL_VALIDATE_INPUT`
+- `LOCAL_GENERATE_STRUCTURE`
+- `LOCAL_COLLECT_ARTIFACTS`
+
+Local xTB:
+- `XTB_VALIDATE_INPUT`
+- `XTB_PREPARE_STRUCTURE`
+- `XTB_RUN`
+- `XTB_PARSE_RESULT`
+
+ORCA/ChemOS fixture:
+- `CHEMOS_PREPARE_STRUCTURE`
+- `CHEMOS_XTB_CREST`
+- `CHEMOS_ORCA`
+- `CHEMOS_SPECTRA_PARSE`
+- `CHEMOS_GAIN_PARSE`
+
+### 7.4 错误处理
+
+错误统一写入 run `error`：
 
 ```json
 {
-  "error_code": "ADAPTER_EXECUTION_FAILED",
-  "message": "mock adapter failed",
-  "step_key": "MOCK_RESULT",
-  "retryable": true,
-  "details": {}
+  "error_code": "XTB_NOT_AVAILABLE",
+  "message": "未检测到 xtb 可执行文件",
+  "retryable": true
 }
 ```
 
-错误原则：
+失败 run 应生成 `error_json` 和 `log_text` artifact。未捕获 adapter 异常由 worker 转成 `ADAPTER_UNHANDLED_EXCEPTION`。
 
-- 用户可见 message 不包含 secret、本地敏感路径或完整命令。
-- 详细日志进入 artifact 或 worker log，但下载仍需权限。
-- parser failure 不覆盖原始计算完成状态，run 可进入 `failed` 或 `completed_with_parse_warning`。MVP 为简化不新增该状态，统一按 `failed` 处理并保留 artifact。
+当前缺口：
+- running cancel 不会终止已经启动的 subprocess。
+- worker 崩溃后 running run 缺 stale reclaim。
+- heartbeat 未实现。
 
-## 7. Optimizer 设计
+## 8. Optimizer 设计
 
-### 7.1 Fallback planner
+### 8.1 Planner request/response
 
-MVP planner 规则：
+OptimizationService 在生成 recommendation 前构造 `PlannerRequest`：
+- `schema_version`
+- `campaign_id`
+- `planner_type`
+- `batch_size`
+- `candidates`
+- `observations`
+- `objectives`
+- `constraints`
 
-```text
-1. 读取 campaign active candidates
-2. 排除已有 evaluated observation 的 candidate
-3. 排除已有 suggested/submitted 且未终结的 candidate
-4. 按 candidate_key 排序或随机策略选择 batch_size 个
-5. 写入 optimization_suggestions
-```
+Planner 返回 `PlannerResponse`：
+- `schema_version`
+- `planner_type`
+- `suggestions`
+- `iteration_metadata`
 
-推荐 payload：
+每条 suggestion 保存 request/response 快照，保证推荐可复现。
 
-```json
-{
-  "strategy": "first_unevaluated",
-  "excluded_counts": {
-    "evaluated": 2,
-    "pending": 1
-  },
-  "reason": "first unevaluated active candidate"
-}
-```
-
-### 7.2 Atlas Tanimoto adapter
-
-P2 接入，不进入 MVP 主依赖。
-
-边界：
-
-- Poly_Agent 从 MongoDB 构造临时 optimizer 输入。
-- 不读取外部 pickle。
-- 不使用 `eval(Config)`。
-- Atlas/Olympus 安装在独立 optimizer 环境。
-
-输入：
-
-```text
-campaign objectives
-active candidates with SMILES
-Morgan fingerprints
-observations
-planner_config
-```
-
-输出：
-
-```text
-candidate_id
-score or acquisition value
-planner_payload
-```
-
-### 7.3 Observation 写回
-
-计算结果转 observation 的映射配置应是白名单：
-
-```json
-{
-  "workflow_type": "MOCK_LASER",
-  "mappings": [
-    {
-      "objective_name": "gain_factor",
-      "result_path": "laser_metrics.gain_factor",
-      "required": true
-    }
-  ]
-}
-```
+### 8.2 Fallback planner
 
 规则：
+1. 排除已有 observation 的 candidate。
+2. 排除已有 `suggested/submitted` 且未终结的 candidate。
+3. 按 `candidate_key` 稳定排序。
+4. 取前 `batch_size` 个。
 
-- required objective 缺失时不自动生成 observation。
-- 自动生成 observation 需要记录 `source_type=computation` 和 `source_run_id`。
-- 人工确认后写 `confirmed_by`。
+### 8.3 Tanimoto planner
 
-## 8. 前端设计
+规则：
+1. 找到主 objective 上表现最佳的 observation。
+2. 取对应 candidate descriptor 作为 reference。
+3. 对未评价 candidate 计算 Tanimoto similarity。
+4. 按 score 降序和 candidate_key 升序排序。
 
-### 8.1 API 客户端
+无 observation 或 descriptor 时返回低置信 reason，不伪装为高置信推荐。
 
-在 `frontend/src/api/polyAgentApi.js` 增加：
+### 8.4 Observation 写回
 
-```text
-createComputation
-listComputations
-getComputation
-cancelComputation
-retryComputation
-listComputationArtifacts
-downloadArtifact
-listCampaigns
-createCampaign
-getCampaign
-importCampaignCandidates
-generateSuggestion
-createObservation
-submitSuggestionComputation
-getIntegrationStatus
-```
+当前支持：
+- 手工 observation。
+- `MOCK_LASER` 或 `ORCA_CHEMOS_LASER` completed run 转 computation observation。
+- automation 配置下，worker 完成后自动生成 observation 和下一轮 suggestion。
 
-继续复用：
+当前缺口：
+- 手工 observation 需要按 objectives 校验 required/allowed fields。
+- submit suggestion 当前固定提交 `MOCK_LASER`，需要支持 computation preset。
 
-- `X-Request-Id` request interceptor。
-- `Authorization` header。
-- `unwrapResponse` 统一处理。
+## 9. 前端设计
 
-### 8.2 页面和组件
+### 9.1 API client
 
-| 页面 | 组件 |
-|---|---|
-| TaskSubmitView | `ComputationSubmitForm` |
-| TaskCenterView | `ComputationFilterBar`、`ComputationTable` |
-| ComputationDetailView | `ComputationHeader`、`WorkflowTimeline`、`ArtifactTable`、`ResultSummaryPanel`、`LogPanel` |
-| CampaignDetailView | `ObjectiveTable`、`CandidateTable`、`SuggestionQueue`、`ObservationTable`、`CampaignHistoryChart` |
-| ToolServicesView | `IntegrationStatusList` |
+`frontend/src/api/polyAgentApi.js` 已封装：
+- auth/admin
+- computation create/list/detail/cancel/retry/artifact/preview/structure/spectrum/download
+- optimization campaign/candidate/suggestion/observation/history
+- integration status
 
-### 8.3 轮询策略
+待补：
+- integration config API。
+- CSV import API。
+- suggestion reject/failed API。
 
-详情页：
+### 9.2 页面
 
-```text
-if status in queued/submitted/running/parsing:
-  poll every 3s
-else:
-  stop polling
-```
+| 页面 | 文件 | 当前能力 |
+|---|---|---|
+| Computation submit | `ComputationSubmitView.vue` | workflow/engine/method 表单 |
+| Computation runs | `ComputationRunsView.vue` | 列表、筛选、轮询、drawer、timeline、artifact、spectrum SVG、blob 下载 |
+| Campaigns | `CampaignsView.vue` | 创建、导入 demo、生成建议 |
+| Campaign detail | `CampaignDetailView.vue` | candidates/suggestions/observations/history、submit/create observation |
+| Tool services | `ToolServicesView.vue` | integration status 展示 |
 
-列表页：
-
-```text
-manual refresh button
-optional 10s refresh when active filters include non-terminal status
-```
-
-## 9. SpecLabOS 集成设计
-
-### 9.1 配置
-
-后端配置项：
-
-```text
-POLY_AGENT_SPECLABOS_ENABLED
-POLY_AGENT_SPECLABOS_BASE_URL
-POLY_AGENT_SPECLABOS_TOKEN
-POLY_AGENT_SPECLABOS_TIMEOUT_SECONDS
-```
-
-### 9.2 提交流程
-
-```text
-POST /optimization/suggestions/{id}/submit-experiment
-  -> load suggestion, campaign, candidate
-  -> validate status=suggested
-  -> call SpecLabOS workflow run API
-  -> save workflow_run_id
-  -> status=submitted
-  -> audit experiment.submitted
-```
-
-### 9.3 结果同步
-
-MVP 后采用 polling：
-
-```text
-find submitted suggestions with submitted_experiment_run_id
-  -> GET /api/workflow-runs/{run_id}
-  -> if completed, parse outputs
-  -> create observation(source_type=experiment)
-  -> set suggestion.status=evaluated
-```
+当前缺口：
+- 结构 viewer 仍轻量。
+- integration config 管理未接。
+- Playwright/e2e 未建立。
 
 ## 10. 安全和审计设计
 
 ### 10.1 输入白名单
 
-| 输入 | 白名单来源 |
+| 输入 | 控制点 |
 |---|---|
-| workflow_type | 后端枚举 |
-| engine | 后端枚举 |
-| step_key | 后端枚举 |
-| artifact_type | 后端枚举 |
-| parser_name | parser registry |
-| resource 上限 | settings |
-| SpecLabOS protocol | integration config |
+| workflow/engine | `supported_workflow_engine_pairs()` |
+| method/solvent | `ComputationParameters` 白名单 |
+| molecule | Pydantic 长度和控制字符校验 |
+| resources | Pydantic 上下限 |
+| artifact path | `settings.outputs_root` 边界校验 |
+| integration config | 敏感字段拒绝，endpoint 禁止凭据 |
 
 禁止：
-
-- 前端传任意 shell command。
-- 前端传任意本地路径。
-- 反序列化外部 pickle。
-- 使用 `eval` 解析 planner config。
-- 把 ORCA license、HPC key、SpecLabOS token 写入业务日志。
+- 前端传 shell command。
+- 前端传本地 file path。
+- `config_summary` 保存 token/password/api_key/secret/private_key。
+- xTB adapter 拼接 shell 字符串。
 
 ### 10.2 权限检查点
 
-| API | 权限检查 |
-|---|---|
-| create computation | 登录用户，feature enabled |
-| list computations | 本人或管理员，后续按 project |
-| get computation | run owner、project member 或管理员 |
-| download artifact | 对应 run 可见 |
-| cancel/retry | owner、计算管理员或管理员 |
-| create campaign | 登录用户 |
-| modify campaign | owner、负责人或管理员 |
-| submit experiment | 负责人、计算管理员或管理员 |
-| manage integration | 管理员 |
+当前仍需补齐 owner/admin 权限过滤：
+- computation list/detail/cancel/retry。
+- artifact metadata/preview/download。
+- campaign list/detail/mutation。
+- audit event list。
 
-### 10.3 审计写入位置
+### 10.3 审计写入
 
-建议在 service 层写审计：
+当前主要在 service 层写审计：
+- ComputationService
+- OptimizationService
+- IntegrationConfigService
 
-```text
-endpoint
-  -> auth dependency resolves actor
-  -> service performs validation and mutation
-  -> audit service records event in same logical operation
-```
-
-对 MongoDB 无事务的 MVP：
-
-- 主操作成功后写审计。
-- 审计失败要写应用 error log。
-- 对高风险操作如 artifact download，如果审计失败，应拒绝下载或降级由配置控制。默认拒绝。
+待改进：
+- 审计 actor role 统一从 current user/worker/system 解析。
+- 记录 client ip、user agent/source。
+- integration endpoints 统一使用 `request.state.request_id`。
 
 ## 11. 配置设计
 
-`backend/app/core/config.py` 增加：
+当前配置来源：`backend/app/core/config.py`。
 
-```text
-POLY_AGENT_COMPUTATION_ENABLED=true
-POLY_AGENT_COMPUTATION_WORKER_MODE=mock
-POLY_AGENT_COMPUTATION_POLL_INTERVAL_SECONDS=3
-POLY_AGENT_ARTIFACT_ROOT=.runtime/outputs
-POLY_AGENT_MAX_COMPUTATION_CORES=16
-POLY_AGENT_MAX_COMPUTATION_MEMORY_MB=65536
-POLY_AGENT_MAX_COMPUTATION_WALLCLOCK_SECONDS=86400
-POLY_AGENT_OPTIMIZER_ENABLED=true
-POLY_AGENT_SPECLABOS_ENABLED=false
-POLY_AGENT_SPECLABOS_BASE_URL=
-POLY_AGENT_SPECLABOS_TOKEN=
-POLY_AGENT_AIIDA_ENABLED=false
-POLY_AGENT_AIIDA_PROFILE=
-POLY_AGENT_AIIDA_COMPUTER=
-```
+| 配置 | 默认 | 用途 |
+|---|---|---|
+| `POLY_AGENT_RUNTIME_ROOT` | `.runtime` | runtime 根目录 |
+| `POLY_AGENT_OUTPUT_ROOT` | `.runtime/outputs` | artifact 输出 |
+| `AUTH_ENABLED` | `false` | 是否启用登录鉴权 |
+| `MONGODB_HOST/PORT/...` | localhost | 主业务 Mongo |
+| `ORCA_CHEMOS_EXECUTION_MODE` | `disabled` | `disabled/fixture/external` |
+| `ORCA_LICENSE_AVAILABLE` | `false` | ORCA external 前置检查 |
+| `HPC_QUEUE_AVAILABLE` | `false` | HPC external 前置检查 |
+| `HPC_QUEUE_NAME` | `default` | 队列名摘要 |
 
-注意：
+## 12. 验证设计
 
-- secret 只放 `.env`，不进入前端构建。
-- AiiDA profile/computer 由 worker 环境配置，不允许前端覆盖。
-- ORCA/xTB/CREST 路径不进入业务 API。
-
-## 12. 实施计划
-
-### 12.1 MVP 任务拆分
-
-| 顺序 | 任务 | 主要文件 | 验证 |
-|---|---|---|---|
-| 1 | 新增 computation schemas 和 repository | `backend/app/schemas/computation.py`、`backend/app/infra/computation_repositories.py` | 单元测试 repository CRUD |
-| 2 | 新增 computation service/API | `backend/app/services/computation_service.py`、`backend/app/api/v1/endpoints/computations.py` | API 创建、列表、详情 |
-| 3 | 新增 audit collection/service | `backend/app/schemas/audit.py`、`backend/app/services/audit_service.py` | P0 事件写入 |
-| 4 | 新增 artifact schema/API | `artifact.py`、`artifacts.py` | checksum、路径归一化、下载 |
-| 5 | mock worker | `backend/app/workers/computation_worker.py` | queued 到 completed |
-| 6 | 前端任务提交和任务中心改造 | `TaskSubmitView.vue`、`TaskCenterView.vue`、`polyAgentApi.js` | 手工端到端 |
-| 7 | 计算详情页 | `ComputationDetailView.vue`、router | timeline 和 artifacts 展示 |
-| 8 | optimization P0 backend | optimization schemas/repositories/services/endpoints | campaign、candidate、suggestion、observation |
-| 9 | Campaign 基础页面 | campaign views/components | 创建和查看 |
-| 10 | integration status | integrations endpoint、ToolServicesView | 状态展示 |
-
-### 12.2 验证命令
-
-以后端当前结构为准：
+当前后端测试：
 
 ```bash
-cd backend
-python -m pytest
-uvicorn app.main:app --host 127.0.0.1 --port 8003
+PYTHONPATH=backend python -m unittest \
+  backend.tests.test_computation_mvp \
+  backend.tests.test_computation_service \
+  backend.tests.test_local_structure_adapter \
+  backend.tests.test_local_xtb_adapter \
+  backend.tests.test_orca_chemos_laser_workflow \
+  backend.tests.test_optimization_service \
+  backend.tests.test_integration_config_service
 ```
 
-前端：
+建议新增：
+- 权限隔离测试。
+- CSV import/report 测试。
+- suggestion reject/failed 状态机测试。
+- worker heartbeat/cancel/stale reclaim 测试。
+- 前端 Playwright 冒烟测试。
 
-```bash
-cd frontend
-npm run build
-npm run dev -- --host 127.0.0.1
-```
-
-如果测试框架尚未建立，MVP 开发任务应同时补齐 pytest 基础设施。
-
-## 13. 可审计验收清单
-
-每个开发 PR 或阶段验收需要回答：
-
-| 检查项 | 证据 |
-|---|---|
-| 需求 ID 是否覆盖 | PR 描述列出 COMP/ART/OPT/AUD 编号 |
-| API 是否有 schema 校验 | Pydantic schema 和 422 测试 |
-| 状态变更是否受控 | 状态迁移测试 |
-| 审计事件是否写入 | audit_events 查询截图或测试断言 |
-| artifact 是否有 checksum | artifact record 和文件 hash 对比 |
-| 是否避免 secret 泄露 | 日志样例和 `.env.example` 审查 |
-| 是否能端到端复现 | 创建任务到 completed 的 run_id |
-| 是否保留外部引用 | AiiDA/SpecLabOS/mock external refs |
-
-## 14. 风险和缓解
+## 13. 风险和缓解
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| MongoDB 无事务导致主记录和审计不一致 | 审计缺口 | service 层顺序写入，关键操作审计失败则拒绝 |
-| worker 重复执行 | 外部计算浪费 | 原子锁、external refs 幂等检查 |
-| artifact 路径穿越 | 文件泄露 | root 内归一化校验 |
-| parser 结果不稳定 | observation 错误 | parser version、checksum、required mapping |
-| Atlas/Olympus 依赖失败 | 推荐不可用 | fallback planner 可独立工作 |
-| AiiDA/ORCA 部署复杂 | DFT 延期 | MVP 不依赖，使用 adapter 分阶段接入 |
-| SpecLabOS 上游不可用 | 实验提交失败 | 状态页、超时、重试和失败审计 |
+| AUTH 开启后缺 owner 过滤 | 数据泄露 | Phase A 优先补齐权限 |
+| worker 崩溃后 run 卡 running | 用户无法恢复任务 | heartbeat/stale reclaim |
+| running cancel 不杀子进程 | 资源泄露 | local adapter cancel hook |
+| ORCA external 执行器未实现 | 真实 ChemOS laser 不能跑 | 先实现 fake executor 边界 |
+| artifact 绝对路径暴露 | 部署信息泄露 | 后续改 storage scheme |
+| Atlas/Olympus 依赖复杂 | 优化能力受限 | 轻量 tanimoto 保底，Atlas 独立 adapter |
 
-## 15. ADR 记录建议
+## 14. ADR 建议
 
-建议后续在 `doc/` 或 `doc/decisions/` 追加 ADR：
-
-| ADR | 决策 |
-|---|---|
-| ADR-001 | Poly_Agent 业务库继续使用 MongoDB |
-| ADR-002 | AiiDA 作为外部计算环境独立部署 |
-| ADR-003 | Computation worker 使用 MongoDB polling 作为 MVP 队列 |
-| ADR-004 | Atlas/Olympus 不进入主后端依赖 |
-| ADR-005 | Artifact store 从本地 `.runtime/outputs` 起步，后续迁移对象存储 |
-
-## 16. 与 PRD 的验收映射
-
-| PRD 需求 | 设计实现 |
-|---|---|
-| COMP-001 至 COMP-006 | API 5.1、Worker 6、数据 4.2 |
-| ART-001 至 ART-003 | API 5.2、数据 4.3、安全 10 |
-| OPT-001 至 OPT-005 | API 5.3、数据 4.4、Optimizer 7 |
-| INT-001 | API 5.4、配置 11 |
-| AUD-001 至 AUD-004 | 数据 4.5、安全审计 10、验收清单 13 |
+当前代码已经体现但尚未正式写 ADR 的决策：
+- ADR-001: computation adapter 不直接写 repository。
+- ADR-002: AiiDA 作为外部计算/provenance 系统，不进入业务库。
+- ADR-003: Mongo polling + demo JSON store 作为 MVP 队列和本地兜底。
+- ADR-004: Atlas/Olympus 不进入主后端依赖。
+- ADR-005: artifact 文件本地存储，metadata/checksum 进入业务库。
