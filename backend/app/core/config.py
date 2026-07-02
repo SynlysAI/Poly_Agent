@@ -63,6 +63,11 @@ class Settings:
             "ALCHEMIST_BACKEND_URL", "http://127.0.0.1:8004/api/v1"
         )
 
+        # LLM 配置（仅从环境变量读取，无默认值）
+        self.llm_api_key: str = os.getenv("LLM_API_KEY", "")
+        self.llm_base_url: str = os.getenv("LLM_BASE_URL", "")
+        self.llm_model: str = os.getenv("LLM_MODEL", "")
+
         # 统一认证（AI4MS）数据库配置
         self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "")
         self.auth_database: str = os.getenv("AUTH_MONGODB_DATABASE", "ai4ms")

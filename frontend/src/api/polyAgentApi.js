@@ -129,3 +129,15 @@ export function createInviteCode(payload) {
 export function disableInviteCode(inviteId) {
   return apiClient.patch(`/admin/invite-codes/${inviteId}/disable`).then(unwrapResponse)
 }
+
+// ── LLM API ──
+
+/** 通用对话接口 */
+export function chatWithLLM(messages) {
+  return apiClient.post('/llm/chat', { messages }).then(r => r.data)
+}
+
+/** LLM 辅助实验建议 */
+export function suggestExperiments(payload) {
+  return apiClient.post('/llm/suggest-experiments', payload).then(r => r.data)
+}

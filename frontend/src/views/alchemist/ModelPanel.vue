@@ -32,18 +32,9 @@ function isModelTrained() {
   return Boolean(modelResult.value.is_trained)
 }
 
-/** 将后端返回的核函数信息转为可读的显示名称。 */
-function getKernelDisplayName(kernel, hyperparameters) {
-  if (!kernel) return '-'
-  if (kernel === 'Matern') {
-    const nu = hyperparameters?.matern_nu
-    if (nu === 2.5) return 'Matern 5/2'
-    if (nu === 1.5) return 'Matern 3/2'
-    return 'Matern'
-  }
-  if (kernel === 'RBF') return 'RBF（径向基函数）'
-  if (kernel === 'IBNN') return 'IBNN（贝叶斯神经网络核）'
-  return kernel
+/** 核函数显示名称 — 直接返回后端值，未训练或无法获取时回退到前端所选。 */
+function getKernelDisplayName(kernel) {
+  return kernel || selectedKernel.value
 }
 
 async function handleTrainModel() {
@@ -80,12 +71,6 @@ async function handleCheckStatus() {
   try {
     const data = await getModelStatus(props.sessionId)
     if (data.is_trained) {
-      // 查看状态接口不返回 kernel 字段，从超参数推断
-      if (!data.kernel && data.hyperparameters) {
-        if (data.hyperparameters.matern_nu !== undefined) {
-          data.kernel = 'Matern'
-        }
-      }
       ElMessage.success(`模型状态: 已训练 (${data.backend})`)
       modelResult.value = data
     } else {
@@ -126,7 +111,7 @@ async function handleCheckStatus() {
 
       <div v-if="modelResult" style="margin-top:16px">
         <el-descriptions border :column="2" size="small">
-          <el-descriptions-item label="核函数">{{ getKernelDisplayName(modelResult.kernel, modelResult.hyperparameters) }}</el-descriptions-item>
+          <el-descriptions-item label="核函数">{{ getKernelDisplayName(modelResult.kernel) }}</el-descriptions-item>
           <el-descriptions-item label="后端">{{ modelResult.backend || selectedBackend }}</el-descriptions-item>
           <el-descriptions-item label="训练状态">{{ isModelTrained() ? '已训练' : '未训练' }}</el-descriptions-item>
           <el-descriptions-item label="R²">{{ modelResult.metrics?.r2 || '-' }}</el-descriptions-item>

@@ -1,5 +1,7 @@
 <script setup>
 import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { chatWithLLM } from '../api/polyAgentApi'
 
 const messages = ref([
   { role: 'assistant', content: '你好！我是 PolyAgent 智能助手，可以帮你解答高分子材料相关的问题。' },
@@ -8,16 +10,20 @@ const messages = ref([
 const inputText = ref('')
 const sending = ref(false)
 
-function sendMessage() {
+async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text) return
+  if (!text || sending.value) return
   messages.value.push({ role: 'user', content: text })
   inputText.value = ''
   sending.value = true
-  setTimeout(() => {
-    messages.value.push({ role: 'assistant', content: '问答功能开发中，后续将接入大语言模型提供专业的高分子材料知识问答。敬请期待。' })
+  try {
+    const data = await chatWithLLM(messages.value)
+    messages.value.push({ role: 'assistant', content: data.content })
+  } catch (e) {
+    ElMessage.error(`对话失败: ${e.message}`)
+  } finally {
     sending.value = false
-  }, 800)
+  }
 }
 </script>
 

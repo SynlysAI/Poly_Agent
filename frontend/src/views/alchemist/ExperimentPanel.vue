@@ -4,9 +4,11 @@ import { ElMessage } from 'element-plus'
 import {
   addExperiment,
   generateInitialDesign,
+  getExperiments,
   getExperimentsSummary,
   getVariables,
 } from '../../api/alchemistApi'
+import { suggestExperiments } from '../../api/polyAgentApi'
 
 const props = defineProps({
   sessionId: { type: String, required: true }
@@ -120,6 +122,47 @@ async function handleAddMeasuredExperiments() {
   }
 }
 
+/** LLM 建议相关状态 */
+const llmLoading = ref(false)
+const llmSuggestions = ref([])
+const llmReasoning = ref('')
+
+/** 调用 LLM 辅助生成实验建议。 */
+async function handleLlmSuggest() {
+  if (variables.value.length === 0) {
+    ElMessage.warning('请先在"变量定义"中添加变量')
+    return
+  }
+  try {
+    llmLoading.value = true
+    llmSuggestions.value = []
+    llmReasoning.value = ''
+    // 获取完整实验数据
+    let experiments = []
+    try {
+      const expData = await getExperiments(props.sessionId)
+      experiments = expData.experiments || []
+    } catch { /* 无实验数据则传空 */ }
+    const data = await suggestExperiments({
+      variables: variables.value,
+      experiments: experiments,
+      n_suggestions: 3,
+    })
+    if (data.suggestions && data.suggestions.length > 0) {
+      designMatrix.value = data.suggestions
+      experimentOutputs.value = data.suggestions.map(() => '')
+      experimentNoises.value = data.suggestions.map(() => '')
+      ElMessage.success(`LLM 建议了 ${data.suggestions.length} 组实验条件`)
+    }
+    llmSuggestions.value = data.suggestions || []
+    llmReasoning.value = data.reasoning || ''
+  } catch (e) {
+    ElMessage.error(`LLM 建议失败: ${e.message}`)
+  } finally {
+    llmLoading.value = false
+  }
+}
+
 /** 判断当前设计方法是否需要手动指定实验点数量。 */
 function needsPointCount() {
   return ['random', 'lhs', 'sobol', 'halton', 'hammersly'].includes(selectedMethod.value)
@@ -177,8 +220,13 @@ onMounted(() => {
         <div>
           <el-button type="primary" @click="handleGenerateDesign" :loading="loading">生成实验设计</el-button>
           <el-button type="success" @click="handleAddMeasuredExperiments" :disabled="designMatrix.length === 0" :loading="loading">添加为实验数据</el-button>
+          <el-button @click="handleLlmSuggest" :loading="llmLoading" type="warning" plain>LLM 建议</el-button>
         </div>
       </div>
+
+      <el-alert v-if="llmReasoning" type="success" :closable="true" show-icon style="margin-bottom:12px">
+        <template #title>LLM 建议理由：{{ llmReasoning }}</template>
+      </el-alert>
 
       <el-alert
         type="info"

@@ -1,7 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Setting } from '@element-plus/icons-vue'
 import { createSession, deleteSession, importSession, exportSession, listSessions } from '../api/alchemistApi'
 import VariablePanel from './alchemist/VariablePanel.vue'
 import ExperimentPanel from './alchemist/ExperimentPanel.vue'
@@ -9,7 +8,6 @@ import ExperimentDataPanel from './alchemist/ExperimentDataPanel.vue'
 import ModelPanel from './alchemist/ModelPanel.vue'
 import AcquisitionPanel from './alchemist/AcquisitionPanel.vue'
 import VisualizationPanel from './alchemist/VisualizationPanel.vue'
-import LlmConfigDialog from './alchemist/components/LlmConfigDialog.vue'
 
 /** 当前步骤索引（0-5） */
 const activeStep = ref(0)
@@ -19,9 +17,6 @@ const currentSessionId = ref(null)
 
 /** Session 加载状态 */
 const loading = ref(false)
-
-/** LLM 配置弹窗 */
-const llmDialogVisible = ref(false)
 
 /** 步骤列表 */
 const steps = [
@@ -181,10 +176,6 @@ onMounted(() => {
         <el-button @click="handleImportSession">导入</el-button>
         <el-button @click="handleExportSession" :disabled="!currentSessionId">导出</el-button>
         <el-button @click="handleDeleteSession" :disabled="!currentSessionId" type="danger" plain>删除</el-button>
-        <el-button @click="llmDialogVisible = true">
-          <el-icon style="margin-right:4px"><Setting /></el-icon>
-          LLM 配置
-        </el-button>
       </div>
     </div>
 
@@ -224,9 +215,6 @@ onMounted(() => {
         </div>
       </div>
     </div>
-
-    <!-- LLM 配置弹窗 -->
-    <LlmConfigDialog v-model:visible="llmDialogVisible" />
 
     <!-- 新建 Session 弹窗 -->
     <el-dialog v-model="createDialogVisible" title="新建 Session" width="480px">
