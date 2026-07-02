@@ -23,7 +23,7 @@ const routes = [
   { path: '/tasks/center', component: TaskCenterView, meta: { section: '任务中心', title: '任务列表' } },
   { path: '/dialogue', component: DialogueView, meta: { title: '问答对话' } },
   { path: '/tools', component: ToolServicesView, meta: { section: '工具服务', title: '工具列表' } },
-  { path: '/tools/alchemist', component: AlchemistToolView, meta: { section: '工具服务', title: '主动学习优化' } },
+  { path: '/tools/alchemist', component: AlchemistToolView, meta: { section: '工具服务', title: '实验设计与优化' } },
   { path: '/database', component: DatabaseManagementView, meta: { requiresRole: 'admin', section: '系统管理', title: '数据库管理' } },
   { path: '/:pathMatch(.*)*', component: NotFoundView, meta: { public: true, title: '页面不存在' } },
 ]

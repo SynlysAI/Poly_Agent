@@ -1,4 +1,4 @@
-"""ALchemist 主动学习工具代理路由。
+"""ALchemist 实验设计与优化工具代理路由。
 
 将 /api/v1/alchemist/* 的请求通过 httpx 转发到 ALchemist 后端（127.0.0.1:8004）。
 转发前通过 Poly_Agent 认证校验，确保只有已登录用户可访问。

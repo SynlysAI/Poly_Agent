@@ -1,5 +1,5 @@
 /**
- * ALchemist 主动学习工具 — API 调用封装。
+ * ALchemist 实验设计与优化工具 — API 调用封装。
  *
  * 所有请求通过 Poly_Agent 的代理路由 /api/v1/alchemist/* 转发到 ALchemist 后端。
  * 认证拦截器与 polyAgentApi.js 共用同一套 auth state。

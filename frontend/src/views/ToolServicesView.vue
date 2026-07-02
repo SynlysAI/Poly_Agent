@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 const tools = [
-  { name: '主动学习优化', desc: '基于贝叶斯优化的实验设计与材料性能优化，支持多目标优化、高斯过程建模和 LLM 辅助实验设计', status: 'active', route: '/tools/alchemist' },
+  { name: '实验设计与优化', desc: '实验设计、数据管理、GP 建模、贝叶斯采集优化与可视化诊断，支持 LLM 辅助建议', status: 'active', route: '/tools/alchemist' },
   { name: '分子量预测', desc: '基于分子结构预测聚合物的数均/重均分子量及多分散性指数', status: 'coming' },
   { name: '热稳定性预测', desc: '预测聚合物的玻璃化转变温度、熔融温度和热分解温度', status: 'coming' },
   { name: '力学性能预测', desc: '预测拉伸强度、弹性模量、断裂伸长率等力学指标', status: 'coming' },

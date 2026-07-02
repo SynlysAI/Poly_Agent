@@ -206,7 +206,7 @@ onMounted(() => {
       <!-- 右侧内容区 -->
       <div style="flex:1;min-width:0">
         <div v-if="!currentSessionId" class="panel" style="padding:60px;text-align:center">
-          <p style="color:var(--app-ink-muted);font-size:15px">请先创建或选择一个 Session 以开始使用主动学习优化工具</p>
+          <p style="color:var(--app-ink-muted);font-size:15px">请先创建或选择一个 Session 以开始使用实验设计与优化工具</p>
         </div>
         <div v-else>
           <keep-alive>
