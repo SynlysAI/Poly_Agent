@@ -237,6 +237,34 @@
 
 ### Phase 2: 本地真实计算 adapter
 
+本阶段目标不是一次性接入完整 ChemOS/AiiDA，而是先把当前 mock worker 重构成可替换执行模型，并交付一条本地、可审计、可失败重试的真实计算链路。
+
+**架构决策：**
+- adapter 负责 workflow 内部细节，worker 只负责领取 run、选择 adapter、执行状态落库和审计。
+- service 保留 run/artifact/audit 的持久化职责，但不再直接拼 mock 计算细节。
+- 每个 run 使用独立执行目录：`settings.outputs_root/computations/{run_id}/work`，最终登记的 artifact 可以来自 workdir 或同级归档目录，但路径仍必须通过 `resolve_artifact_path` 边界校验。
+- 本地依赖全部按 optional integration 处理。缺 RDKit/OpenBabel/xTB 时不影响应用启动，任务进入 `failed`，并生成 error artifact。
+- `MOCK_XTB_ONLY` 继续保留用于回归测试；新增真实 workflow 优先使用 `LOCAL_STRUCTURE`、`LOCAL_XTB`，避免 mock 语义和真实语义混淆。
+
+**依赖顺序：**
+
+```text
+ComputationAdapter 协议
+  -> Adapter registry / workflow 到 adapter 映射
+  -> Mock adapter 迁移
+  -> Local structure adapter
+  -> Local xTB adapter
+  -> 前端 workflow/engine 选项展示
+```
+
+**建议文件边界：**
+- `backend/app/services/computation_service.py`：保留 run/artifact/audit 操作，删除直接 workflow 细节。
+- `backend/app/workers/computation_worker.py`：只做领取、adapter 选择、执行、状态转换。
+- `backend/app/computation_adapters/`：新增 adapter 协议、registry、mock/local structure/local xtb 实现。
+- `backend/app/schemas/computation.py`：扩展 `WorkflowType`、`EngineType`、`ArtifactType` 和必要 result/error 契约。
+- `backend/app/services/integration_status_service.py`：补充 RDKit/OpenBabel/xTB 探测摘要。
+- `backend/tests/test_computation_adapters.py`、`backend/tests/test_computation_worker.py`：新增 focused tests。
+
 #### Step 2.1 定义 computation adapter 接口
 
 **目标：** 把 mock 执行逻辑从 service 中抽离，形成可替换 adapter。
@@ -245,6 +273,33 @@
 - 定义 `ComputationAdapter` 协议：`validate_input`、`run`、`collect_artifacts`、`parse_result`。
 - mock adapter 使用同一接口实现。
 - worker 不直接知道具体 workflow 内部细节。
+
+**实现计划：**
+- 新增 `backend/app/computation_adapters/base.py`，定义协议和通用数据对象：
+  - `AdapterContext`：`run`、`worker_id`、`workdir`、`started_at`、`timeout_seconds`。
+  - `AdapterExecution`：`status`、`steps`、`artifact_specs`、`result_summary`、`error`。
+  - `ArtifactSpec`：`step_key`、`artifact_type`、`name`、`path`、`mime_type`、`parser_name`、`parser_version`、`metadata`。
+- 新增 `backend/app/computation_adapters/registry.py`，用 `(workflow_type, engine)` 选择 adapter；未知组合在创建 run 或 worker 执行前给出明确错误。
+- 将现有 `MOCK_STEP_LABELS`、`_build_mock_structure`、`_build_mock_result_summary`、`_build_mock_log`、mock failure 逻辑迁移到 `MockComputationAdapter`。
+- service 新增或保留一个统一 artifact 登记方法，例如 `register_artifacts(run, artifact_specs, actor_worker_id)`，由 worker 调用，不让 adapter 直接写 repository。
+- worker 流程收敛为：acquire queued run -> mark running -> adapter.validate_input -> adapter.run -> adapter.collect_artifacts -> adapter.parse_result -> service.finish_run。
+
+**验收补充：**
+- mock 成功、mock 失败、retry 的现有 smoke test 继续通过。
+- worker 单测可用 fake adapter 验证：worker 不引用 `MOCK_STEP_LABELS`，不调用 mock 私有方法。
+- adapter registry 单测覆盖未知 workflow/engine、mock workflow、后续 local workflow。
+
+**预计改动：**
+- `backend/app/computation_adapters/base.py`
+- `backend/app/computation_adapters/registry.py`
+- `backend/app/computation_adapters/mock.py`
+- `backend/app/services/computation_service.py`
+- `backend/app/workers/computation_worker.py`
+- `backend/tests/test_computation_adapters.py`
+- `backend/tests/test_computation_service.py`
+- `backend/tests/test_computation_mvp.py`
+
+**Dependencies:** Phase 0 测试基线应先稳定；本 step 是 Step 2.2 和 Step 2.3 的前置条件。
 
 #### Step 2.2 接入 RDKit/OpenBabel 结构生成
 
@@ -255,6 +310,49 @@
 - SMILES 可生成 SDF/XYZ/structure JSON artifact。
 - 无 RDKit/OpenBabel 时返回明确 integration status 和错误 artifact。
 
+**建议 workflow 契约：**
+- `workflow_type = "LOCAL_STRUCTURE"`
+- `engine = "RDKit"`、`"OPENBABEL"` 或 `"LOCAL"`。如果暂时不想扩大前端选择，可先用 `"LOCAL"`，adapter 内按可用依赖选择 RDKit 优先、OpenBabel 兜底。
+- 输入仍使用现有 `molecule.smiles`、`parameters.charge`、`parameters.multiplicity`，避免为结构生成引入新请求模型。
+
+**输出 artifact：**
+- `input_json`：规范化后的输入、adapter 版本、依赖探测结果。
+- `structure_json`：统一结构 JSON，至少包含 atoms、bonds、coordinates、source、charge、multiplicity。
+- `sdf`：RDKit 可用时输出。
+- `xyz`：RDKit 或 OpenBabel 可用时输出。
+- `log_text`：结构生成日志和 warning。
+- `error_json`：缺依赖或 SMILES 无法解析时输出。
+
+**实现计划：**
+- 扩展 `ArtifactType`，加入 `input_json`、`sdf`、`xyz`、`error_json`，并确认 preview/download 白名单。
+- 新增 `LocalStructureAdapter`：
+  - `validate_input` 做 SMILES 非空、长度、禁控制字符之外的 chemistry-level 校验。
+  - RDKit 路径：MolFromSmiles -> AddHs -> EmbedMolecule/ETKDG -> UFF/MMFF 优化 -> 写 SDF/XYZ/JSON。
+  - OpenBabel 路径：使用 `shutil.which("obabel")` 和子进程从 SMILES 生成 3D SDF/XYZ。
+  - 两者都不可用时返回 `failed`，`error_code = "LOCAL_STRUCTURE_DEPENDENCY_MISSING"`，`retryable = True`。
+- integration status 增加 `rdkit`、`openbabel`：
+  - installed/version/path。
+  - last_error。
+  - capabilities：`smiles_to_3d`、`sdf_export`、`xyz_export`。
+- 前端 computation submit 页面增加 local structure workflow 选项；如果集成状态不可用，显示禁用/提示，但仍以后端校验为准。
+
+**测试矩阵：**
+- 无 RDKit/OpenBabel 环境：任务 failed，存在 `error_json` 和 `log_text`，error retryable。
+- 使用 monkeypatch/fake adapter 模拟 RDKit 可用：生成 `structure_json`、`sdf`、`xyz` 三类 artifact。
+- invalid SMILES：failed，错误码区别于缺依赖，例如 `LOCAL_STRUCTURE_INVALID_SMILES`。
+- artifact preview/download 对新增类型不越界、不误判 mime type。
+
+**预计改动：**
+- `backend/app/computation_adapters/local_structure.py`
+- `backend/app/schemas/computation.py`
+- `backend/app/services/integration_status_service.py`
+- `backend/app/api/v1/endpoints/computations.py`
+- `backend/tests/test_local_structure_adapter.py`
+- `frontend/src/views/ComputationSubmitView.vue`
+- `frontend/src/views/ComputationRunsView.vue`
+
+**Dependencies:** Step 2.1 完成；前端选项可后置，但后端 API 和 tests 必须先可用。
+
 #### Step 2.3 接入 xTB local adapter
 
 **目标：** 形成第一条非 mock 计算链路。
@@ -263,6 +361,69 @@
 - worker 在子进程或隔离执行目录运行 xTB。
 - stdout/stderr、输入文件、输出文件均登记 artifact。
 - 超时、失败码、缺依赖能进入 failed 状态并可重试。
+
+**建议 workflow 契约：**
+- `workflow_type = "LOCAL_XTB"`
+- `engine = "XTB"`
+- 初始只支持单分子 geometry optimization / single point 摘要，先不接 CREST conformer search。
+- `parameters.method` 限定白名单：`GFN2-xTB`、`GFN1-xTB`、`GFN0-xTB`。
+- `resources.max_wallclock_seconds` 作为 subprocess timeout，上限沿用现有资源模型。
+
+**执行目录约定：**
+- workdir：`settings.outputs_root/computations/{run_id}/work`
+- 输入文件：`input.sdf` 或 `input.xyz`、`run_config.json`
+- 命令日志：`xtb.stdout.log`、`xtb.stderr.log`
+- 输出文件：按 xTB 实际产物登记，例如 `xtbopt.xyz`、`xtb.out`、`charges`、`wbo`
+- 解析结果：`result.json`，至少包含 `energy_hartree`、`normal_termination`、`method`、`runtime_seconds`、`xtb_version`
+
+**实现计划：**
+- 新增 `LocalXtbAdapter`：
+  - 先复用 `LocalStructureAdapter` 生成输入结构，或要求 run 已有结构输入。推荐第一版在 adapter 内调用共享 structure builder，保持单 run 闭环。
+  - 用 `subprocess.run(..., cwd=workdir, timeout=...)` 执行，不拼接 shell 字符串。
+  - 所有命令参数由白名单模型生成：charge、multiplicity、method、solvent、cores。
+  - 捕获 stdout/stderr 到文件，即使失败也登记。
+  - 解析 stdout 或 `xtbopt.xyz` 得到最小 result summary；解析失败不吞掉原始文件。
+- 缺依赖处理：
+  - `shutil.which("xtb")` 不存在时，任务 failed。
+  - `error_code = "XTB_NOT_AVAILABLE"`，`retryable = True`。
+  - artifact 包含 `error.json` 和 `worker.log`。
+- 失败码处理：
+  - returncode 非 0：`error_code = "XTB_FAILED"`，`retryable = True`。
+  - timeout：`error_code = "XTB_TIMEOUT"`，`retryable = True`。
+  - parse error：如果 xTB 正常结束但结果不可解析，`error_code = "XTB_RESULT_PARSE_FAILED"`，是否 retryable 由日志判断，第一版可设为 `False`。
+
+**安全约束：**
+- 不允许前端传本地路径、shell fragment、额外命令行参数。
+- 子进程 cwd 必须是 run 专属 workdir。
+- 所有登记 artifact 必须位于 `settings.outputs_root` 下。
+- 输出文件大小第一版应设置软限制，避免错误日志过大拖垮 preview。
+
+**测试矩阵：**
+- monkeypatch `shutil.which("xtb")` 为 `None`：failed + error artifact + 可 retry。
+- fake xtb 脚本返回 0：completed + stdout/stderr/input/output/result artifacts。
+- fake xtb 脚本返回非 0：failed + stdout/stderr artifacts + error_code。
+- fake xtb 脚本 sleep 超时：failed + timeout error_code。
+- retry failed LOCAL_XTB：创建新 run，继承 workflow/engine/molecule/parameters/resources。
+
+**预计改动：**
+- `backend/app/computation_adapters/local_xtb.py`
+- `backend/app/computation_adapters/local_structure.py`
+- `backend/app/schemas/computation.py`
+- `backend/app/services/integration_status_service.py`
+- `backend/tests/test_local_xtb_adapter.py`
+- `backend/tests/test_computation_worker.py`
+- `frontend/src/views/ComputationSubmitView.vue`
+- `frontend/src/views/ComputationRunsView.vue`
+
+**Dependencies:** Step 2.1 和 Step 2.2 完成；xTB adapter 可以依赖 local structure 的共享 builder，但不要依赖前端先提交一个结构 run。
+
+#### Checkpoint: Phase 2 完成条件
+
+- `python -m unittest backend.tests.test_computation_mvp backend.tests.test_computation_service` 通过。
+- 新增 adapter/worker/local structure/local xTB 单测通过。
+- 在无 RDKit/OpenBabel/xTB 的本地环境中，应用仍可启动，local workflow 能进入 failed 并生成可下载错误 artifact。
+- 在有 fake xtb 的测试环境中，LOCAL_XTB 从 queued 到 completed/failed 的状态流转完全由 worker 驱动。
+- 前端可提交 mock、local structure、local xTB 三类 workflow，并能查看新增 artifact 类型和失败原因。
 
 ### Phase 3: 优化能力增强
 

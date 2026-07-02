@@ -164,4 +164,3 @@ def submit_suggestion_computation(
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
-    CreateObservationFromComputationData,

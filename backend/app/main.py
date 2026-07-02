@@ -122,12 +122,14 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Content-Disposition", "X-Request-Id"],
     )
 
     @app.middleware("http")
     async def access_log_middleware(request: Request, call_next):
         """记录请求访问日志。"""
         request_id = _resolve_request_id(request)
+        request.state.request_id = request_id
         started_at = time.perf_counter()
         APP_LOGGER.info(
             f"request started: {request.method} {request.url.path}",

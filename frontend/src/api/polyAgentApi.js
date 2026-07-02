@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-import { authState, clearAuthSession, getAuthorizationHeader } from '../auth/authState'
+import { clearAuthSession, getAuthorizationHeader } from '../auth/authState'
 
 const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
 
@@ -69,6 +69,22 @@ function unwrapResponse(response) {
     throw err
   }
   return payload.data
+}
+
+function parseDownloadFilename(contentDisposition, fallbackName) {
+  if (!contentDisposition) {
+    return fallbackName
+  }
+  const encodedMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1])
+    } catch {
+      return encodedMatch[1]
+    }
+  }
+  const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
+  return filenameMatch?.[1] || fallbackName
 }
 
 export function getApiErrorMessage(error) {
@@ -172,9 +188,14 @@ export function getArtifactSpectrum(artifactId) {
   return apiClient.get(`/artifacts/${artifactId}/spectrum`).then(unwrapResponse)
 }
 
-export function getArtifactDownloadUrl(artifactId) {
-  const base = resolvedBaseUrl.endsWith('/') ? resolvedBaseUrl.slice(0, -1) : resolvedBaseUrl
-  return `${base}/artifacts/${encodeURIComponent(artifactId)}/download`
+export function downloadArtifact(artifactId) {
+  return apiClient
+    .get(`/artifacts/${encodeURIComponent(artifactId)}/download`, { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], `${artifactId}.dat`),
+      contentType: response.headers['content-type'] || 'application/octet-stream',
+    }))
 }
 
 // ── 优化闭环 API ──

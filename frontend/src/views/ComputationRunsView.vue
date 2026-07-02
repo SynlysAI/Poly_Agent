@@ -7,8 +7,8 @@ import { Download, Refresh, Search, VideoPause, View } from '@element-plus/icons
 import {
   cancelComputation,
   createObservationFromComputation,
+  downloadArtifact,
   getApiErrorMessage,
-  getArtifactDownloadUrl,
   getComputation,
   getIntegrationStatus,
   listComputationArtifacts,
@@ -31,6 +31,7 @@ const integrations = ref([])
 const integrationLoading = ref(false)
 const pollTimer = ref(null)
 const observationSubmitting = ref(false)
+const downloadingArtifactId = ref('')
 
 const filters = reactive({
   status: '',
@@ -154,6 +155,26 @@ async function handlePreviewArtifact(artifactId) {
     artifactPreview.value = await previewArtifact(artifactId)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
+  }
+}
+
+async function handleDownloadArtifact(row) {
+  downloadingArtifactId.value = row.artifact_id
+  try {
+    const data = await downloadArtifact(row.artifact_id)
+    const blob = data.blob instanceof Blob ? data.blob : new Blob([data.blob], { type: data.contentType })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = data.filename || row.name || `${row.artifact_id}.dat`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (error) {
+    ElMessage.error(`下载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    downloadingArtifactId.value = ''
   }
 }
 
@@ -403,7 +424,7 @@ onBeforeUnmount(() => {
             <el-table-column label="操作" width="170">
               <template #default="{ row }">
                 <el-button text type="primary" size="small" @click="handlePreviewArtifact(row.artifact_id)">预览</el-button>
-                <el-button text type="primary" size="small" :icon="Download" tag="a" :href="getArtifactDownloadUrl(row.artifact_id)" target="_blank">下载</el-button>
+                <el-button text type="primary" size="small" :icon="Download" :loading="downloadingArtifactId === row.artifact_id" @click="handleDownloadArtifact(row)">下载</el-button>
               </template>
             </el-table-column>
           </el-table>
