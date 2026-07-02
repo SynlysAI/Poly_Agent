@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 from fastapi import Depends
-from fastapi import Header
+from fastapi import Request
 
 from app.core.auth import get_current_user
 from app.core.auth import require_admin
@@ -20,6 +20,11 @@ from app.services.integration_status_service import IntegrationStatusService
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 service = IntegrationStatusService()
 config_service = IntegrationConfigService()
+
+
+def _request_id(request: Request) -> str | None:
+    """读取请求追踪 ID。"""
+    return getattr(request.state, "request_id", None) or request.headers.get("x-request-id")
 
 
 @router.get("/status", response_model=ApiResponse[dict])
@@ -46,15 +51,15 @@ def list_integration_configs() -> ApiResponse[ServiceIntegrationListData]:
 def upsert_integration_config(
     service_key: str,
     payload: ServiceIntegrationUpsertRequest,
+    request: Request,
     current_user: dict[str, str] | None = Depends(get_current_user),
-    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> ApiResponse[ServiceIntegrationConfig]:
     """管理员创建或更新外部集成配置摘要。"""
     data = config_service.upsert_config(
         service_key,
         payload,
         actor_user_id=current_user["user_id"] if current_user else "system",
-        request_id=request_id,
+        request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
 
@@ -66,13 +71,13 @@ def upsert_integration_config(
 )
 def check_integration_config(
     service_key: str,
+    request: Request,
     current_user: dict[str, str] | None = Depends(get_current_user),
-    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> ApiResponse[ServiceIntegrationCheckData]:
     """管理员按持久化配置执行一次健康检查。"""
     data = config_service.check_config(
         service_key,
         actor_user_id=current_user["user_id"] if current_user else "system",
-        request_id=request_id,
+        request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)

@@ -216,8 +216,34 @@ export function getCampaignHistory(campaignId) {
   return apiClient.get(`/optimization/campaigns/${campaignId}/history`).then(unwrapResponse)
 }
 
+export function pauseCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:pause`, payload).then(unwrapResponse)
+}
+
+export function resumeCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:resume`, payload).then(unwrapResponse)
+}
+
+export function archiveCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:archive`, payload).then(unwrapResponse)
+}
+
+export function completeCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:complete`, payload).then(unwrapResponse)
+}
+
+export function failCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:fail`, payload).then(unwrapResponse)
+}
+
 export function importCampaignCandidates(campaignId, payload) {
   return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import`, payload).then(unwrapResponse)
+}
+
+export function importCampaignCandidatesCsv(campaignId, csvText) {
+  const formData = new FormData()
+  formData.append('csv_text', csvText)
+  return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import-csv`, formData).then(unwrapResponse)
 }
 
 export function importChemosDemoCandidates(campaignId) {
@@ -240,6 +266,26 @@ export function submitSuggestionComputation(suggestionId) {
   return apiClient.post(`/optimization/suggestions/${suggestionId}/submit-computation`).then(unwrapResponse)
 }
 
+export function rejectSuggestion(suggestionId, payload) {
+  return apiClient.post(`/optimization/suggestions/${suggestionId}/reject`, payload).then(unwrapResponse)
+}
+
+export function markSuggestionFailed(suggestionId, payload) {
+  return apiClient.post(`/optimization/suggestions/${suggestionId}/failed`, payload).then(unwrapResponse)
+}
+
 export function getIntegrationStatus() {
   return apiClient.get('/integrations/status').then(unwrapResponse)
+}
+
+export function listIntegrationConfigs() {
+  return apiClient.get('/integrations/configs').then(unwrapResponse)
+}
+
+export function upsertIntegrationConfig(serviceKey, payload) {
+  return apiClient.put(`/integrations/configs/${serviceKey}`, payload).then(unwrapResponse)
+}
+
+export function checkIntegrationConfig(serviceKey) {
+  return apiClient.post(`/integrations/configs/${serviceKey}/check`).then(unwrapResponse)
 }

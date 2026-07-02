@@ -27,12 +27,18 @@ class OrcaChemosLaserWorkflowTest(ComputationTestCase):
         self.original_orca_mode = settings.orca_chemos_execution_mode
         self.original_orca_license = settings.orca_license_available
         self.original_hpc_queue = settings.hpc_queue_available
+        self.original_hpc_queue_name = settings.hpc_queue_name
+        self.original_external_executor = getattr(settings, "orca_chemos_external_executor", "fake")
+        self.original_fake_outcome = getattr(settings, "orca_chemos_fake_external_outcome", "success")
         self.service = ComputationService()
 
     def tearDown(self) -> None:
         settings.orca_chemos_execution_mode = self.original_orca_mode
         settings.orca_license_available = self.original_orca_license
         settings.hpc_queue_available = self.original_hpc_queue
+        settings.hpc_queue_name = self.original_hpc_queue_name
+        settings.orca_chemos_external_executor = self.original_external_executor
+        settings.orca_chemos_fake_external_outcome = self.original_fake_outcome
         super().tearDown()
 
     def test_orca_chemos_request_rejects_shell_command_and_local_path_parameters(self) -> None:
@@ -154,3 +160,153 @@ class OrcaChemosLaserWorkflowTest(ComputationTestCase):
 
         self.assertIn("gain_factor", observation.values)
         self.assertEqual(observation.source_run_id, created.run_id)
+
+    def test_orca_chemos_external_fake_executor_success_records_refs_and_parser_outputs(self) -> None:
+        settings.orca_chemos_execution_mode = "external"
+        settings.orca_license_available = True
+        settings.hpc_queue_available = True
+        settings.hpc_queue_name = "gpu-debug"
+        settings.orca_chemos_external_executor = "fake"
+        settings.orca_chemos_fake_external_outcome = "success"
+        created = self.service.create_run(
+            ComputationCreateRequest(
+                workflow_type="ORCA_CHEMOS_LASER",
+                engine="ORCA",
+                molecule={"smiles": "CCOC1=CC=CC=C1", "name": "external-success"},
+                parameters={"method": "ORCA_B3LYP_DEF2_SVP", "solvent": "TOLUENE"},
+            ),
+            actor_user_id="tester",
+            request_id="req-orca-external-success",
+        )
+
+        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        detail = self.service.get_run(created.run_id)
+        artifacts = self.service.list_artifacts(created.run_id)
+        names = {artifact.name for artifact in artifacts}
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(detail.external_refs["orca_chemos_job_id"], f"fake-orca-{created.run_id}")
+        self.assertEqual(detail.external_refs["queue"], "gpu-debug")
+        self.assertIsNotNone(detail.external_refs["submitted_at"])
+        self.assertIsNotNone(detail.external_refs["polled_at"])
+        self.assertEqual(detail.external_refs["executor"], "fake")
+        self.assertIn("job_spec.json", names)
+        self.assertIn("spectra.raw.csv", names)
+        self.assertIn("gain.raw.json", names)
+        self.assertEqual(detail.result_summary["schema_version"], "chemos_laser_result.v1")
+
+    def test_orca_chemos_external_fake_executor_failure_keeps_error_artifact(self) -> None:
+        settings.orca_chemos_execution_mode = "external"
+        settings.orca_license_available = True
+        settings.hpc_queue_available = True
+        settings.orca_chemos_external_executor = "fake"
+        settings.orca_chemos_fake_external_outcome = "failed"
+        created = self.service.create_run(
+            ComputationCreateRequest(
+                workflow_type="ORCA_CHEMOS_LASER",
+                engine="ORCA",
+                molecule={"smiles": "CCO"},
+                parameters={"method": "ORCA_B3LYP_DEF2_SVP"},
+            ),
+            actor_user_id="tester",
+            request_id="req-orca-external-fail",
+        )
+
+        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        detail = self.service.get_run(created.run_id)
+        artifact_types = {artifact.artifact_type for artifact in self.service.list_artifacts(created.run_id)}
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(detail.error["error_code"], "ORCA_EXTERNAL_JOB_FAILED")
+        self.assertEqual(detail.external_refs["orca_chemos_job_id"], f"fake-orca-{created.run_id}")
+        self.assertIn("error_json", artifact_types)
+
+    def test_orca_chemos_external_fake_executor_timeout_is_retryable(self) -> None:
+        settings.orca_chemos_execution_mode = "external"
+        settings.orca_license_available = True
+        settings.hpc_queue_available = True
+        settings.orca_chemos_external_executor = "fake"
+        settings.orca_chemos_fake_external_outcome = "timeout"
+        created = self.service.create_run(
+            ComputationCreateRequest(
+                workflow_type="ORCA_CHEMOS_LASER",
+                engine="ORCA",
+                molecule={"smiles": "CCO"},
+                parameters={"method": "ORCA_B3LYP_DEF2_SVP"},
+            ),
+            actor_user_id="tester",
+            request_id="req-orca-external-timeout",
+        )
+
+        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        detail = self.service.get_run(created.run_id)
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(detail.error["error_code"], "ORCA_EXTERNAL_JOB_TIMEOUT")
+        self.assertTrue(detail.error["retryable"])
+
+    def test_orca_chemos_external_missing_queue_keeps_failed_error_artifact(self) -> None:
+        settings.orca_chemos_execution_mode = "external"
+        settings.orca_license_available = True
+        settings.hpc_queue_available = False
+        created = self.service.create_run(
+            ComputationCreateRequest(
+                workflow_type="ORCA_CHEMOS_LASER",
+                engine="ORCA",
+                molecule={"smiles": "CCO"},
+                parameters={"method": "ORCA_B3LYP_DEF2_SVP"},
+            ),
+            actor_user_id="tester",
+            request_id="req-orca-external-no-queue",
+        )
+
+        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        detail = self.service.get_run(created.run_id)
+        artifact_types = {artifact.artifact_type for artifact in self.service.list_artifacts(created.run_id)}
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(detail.error["error_code"], "HPC_QUEUE_UNAVAILABLE")
+        self.assertIn("error_json", artifact_types)
+
+    def test_orca_chemos_external_fake_executor_cancel_keeps_run_cancelled(self) -> None:
+        settings.orca_chemos_execution_mode = "external"
+        settings.orca_license_available = True
+        settings.hpc_queue_available = True
+        settings.orca_chemos_external_executor = "fake"
+        settings.orca_chemos_fake_external_outcome = "success"
+        created = self.service.create_run(
+            ComputationCreateRequest(
+                workflow_type="ORCA_CHEMOS_LASER",
+                engine="ORCA",
+                molecule={"smiles": "CCO"},
+                parameters={"method": "ORCA_B3LYP_DEF2_SVP"},
+            ),
+            actor_user_id="tester",
+            request_id="req-orca-external-cancel",
+        )
+        original_poll = __import__(
+            "app.computation_adapters.orca_chemos_laser",
+            fromlist=["FakeOrcaChemosExternalExecutor"],
+        ).FakeOrcaChemosExternalExecutor.poll
+
+        def cancelling_poll(executor, job_id):
+            self.service.cancel_run(
+                created.run_id,
+                actor_user_id="tester",
+                request_id="req-orca-external-cancel",
+            )
+            return original_poll(executor, job_id)
+
+        import app.computation_adapters.orca_chemos_laser as adapter_module
+
+        adapter_module.FakeOrcaChemosExternalExecutor.poll = cancelling_poll
+        try:
+            result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        finally:
+            adapter_module.FakeOrcaChemosExternalExecutor.poll = original_poll
+        detail = self.service.get_run(created.run_id)
+
+        self.assertEqual(result.status, "cancelled")
+        self.assertEqual(detail.status, "cancelled")
+        self.assertEqual(detail.error["error_code"], "USER_CANCELLED")
+        self.assertEqual(detail.external_refs["external_cancelled"], True)

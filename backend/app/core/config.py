@@ -31,6 +31,11 @@ class Settings:
             os.getenv("POLY_AGENT_LOG_ROOT", str(self.runtime_root / "logs"))
         )
         self.orca_chemos_execution_mode: str = os.getenv("ORCA_CHEMOS_EXECUTION_MODE", "disabled").strip().lower()
+        self.orca_chemos_external_executor: str = os.getenv("ORCA_CHEMOS_EXTERNAL_EXECUTOR", "fake").strip().lower()
+        self.orca_chemos_fake_external_outcome: str = os.getenv(
+            "ORCA_CHEMOS_FAKE_EXTERNAL_OUTCOME",
+            "success",
+        ).strip().lower()
         self.orca_license_available: bool = os.getenv("ORCA_LICENSE_AVAILABLE", "false").strip().lower() in {
             "1",
             "true",

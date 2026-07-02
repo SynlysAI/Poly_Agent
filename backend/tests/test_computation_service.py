@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from fastapi import HTTPException
 
+from app.computation_adapters.base import AdapterContext
+from app.computation_adapters.base import AdapterRunResult
+from app.computation_adapters.base import build_steps
 from app.infra.computation_repositories import ComputationArtifactRepository
+from app.infra.computation_repositories import ComputationRunRepository
+from app.infra.computation_repositories import utc_now
 from app.schemas.computation import ComputationArtifact
 from app.schemas.computation import ComputationCreateRequest
 from app.services.computation_service import ComputationService
@@ -122,3 +132,145 @@ class ComputationServiceTest(ComputationTestCase):
         with self.assertRaises(HTTPException) as caught:
             self.service.resolve_artifact_path(artifact)
         self.assertEqual(caught.exception.status_code, 400)
+
+    def test_user_scoped_run_and_artifact_access_denies_other_owner(self) -> None:
+        created = self.service.create_run(
+            ComputationCreateRequest(**computation_payload()),
+            actor_user_id="user-a",
+            request_id="req-owner",
+        )
+        ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        artifacts = self.service.list_artifacts(created.run_id, actor_user_id="user-a", is_admin=False)
+
+        runs_for_a = self.service.list_runs(
+            status=None,
+            workflow_type=None,
+            engine=None,
+            keyword=None,
+            page=1,
+            page_size=20,
+            actor_user_id="user-a",
+            is_admin=False,
+        )
+        runs_for_b = self.service.list_runs(
+            status=None,
+            workflow_type=None,
+            engine=None,
+            keyword=None,
+            page=1,
+            page_size=20,
+            actor_user_id="user-b",
+            is_admin=False,
+        )
+
+        self.assertEqual(runs_for_a.total, 1)
+        self.assertEqual(runs_for_b.total, 0)
+        with self.assertRaises(HTTPException) as run_denied:
+            self.service.get_run(created.run_id, actor_user_id="user-b", is_admin=False)
+        with self.assertRaises(HTTPException) as artifact_denied:
+            self.service.get_artifact(artifacts[0].artifact_id, actor_user_id="user-b", is_admin=False)
+        self.assertEqual(run_denied.exception.status_code, 403)
+        self.assertEqual(artifact_denied.exception.status_code, 403)
+
+    def test_admin_can_list_all_user_runs(self) -> None:
+        self.service.create_run(
+            ComputationCreateRequest(**computation_payload(molecule={"smiles": "CCO", "name": "a"})),
+            actor_user_id="user-a",
+            request_id="req-a",
+        )
+        self.service.create_run(
+            ComputationCreateRequest(**computation_payload(molecule={"smiles": "CCC", "name": "b"})),
+            actor_user_id="user-b",
+            request_id="req-b",
+        )
+
+        data = self.service.list_runs(
+            status=None,
+            workflow_type=None,
+            engine=None,
+            keyword=None,
+            page=1,
+            page_size=20,
+            actor_user_id="admin",
+            is_admin=True,
+        )
+
+        self.assertEqual(data.total, 2)
+
+    def test_worker_records_heartbeat_and_does_not_overwrite_cancelled_run(self) -> None:
+        created = self.service.create_run(
+            ComputationCreateRequest(**computation_payload()),
+            actor_user_id="tester",
+            request_id="req-worker-cancel",
+        )
+        original_get_adapter = __import__("app.workers.computation_worker", fromlist=["get_adapter"]).get_adapter
+
+        class CancellingAdapter:
+            step_labels = {"FAKE_WAIT": "Fake wait"}
+
+            def validate_input(self, context: AdapterContext) -> None:
+                return None
+
+            def run(self, context: AdapterContext) -> AdapterRunResult:
+                ComputationService().heartbeat_run(context.run.run_id, worker_id=context.worker_id, now=utc_now())
+                ComputationService().cancel_run(
+                    context.run.run_id,
+                    actor_user_id="tester",
+                    request_id="req-worker-cancel",
+                )
+                return AdapterRunResult(
+                    status="completed",
+                    steps=build_steps(
+                        self.step_labels,
+                        status="completed",
+                        started_at=context.started_at,
+                        finished_at=utc_now(),
+                    ),
+                    result_summary={"ok": True},
+                )
+
+            def collect_artifacts(self, context: AdapterContext, result: AdapterRunResult) -> list:
+                return []
+
+            def parse_result(self, context: AdapterContext, result: AdapterRunResult) -> dict:
+                return result.result_summary
+
+        import app.workers.computation_worker as worker_module
+
+        worker_module.get_adapter = lambda workflow_type, engine: CancellingAdapter()
+        try:
+            result = ComputationWorker(worker_id="worker-cancel").acquire_and_run_one()
+        finally:
+            worker_module.get_adapter = original_get_adapter
+        detail = self.service.get_run(created.run_id)
+
+        self.assertEqual(result.status, "cancelled")
+        self.assertEqual(detail.status, "cancelled")
+        self.assertEqual(detail.error["error_code"], "USER_CANCELLED")
+        self.assertEqual(detail.external_refs["worker_id"], "worker-cancel")
+        self.assertIsNotNone(detail.external_refs["claimed_at"])
+        self.assertIsNotNone(detail.external_refs["heartbeat_at"])
+
+    def test_stale_running_run_can_be_marked_failed(self) -> None:
+        created = self.service.create_run(
+            ComputationCreateRequest(**computation_payload()),
+            actor_user_id="tester",
+            request_id="req-stale",
+        )
+        now = utc_now()
+        ComputationRunRepository.update_fields(
+            created.run_id,
+            {
+                "status": "running",
+                "external_refs.worker_id": "worker-dead",
+                "external_refs.claimed_at": now,
+                "external_refs.heartbeat_at": now,
+            },
+        )
+
+        reclaimed = self.service.fail_stale_running_runs(stale_before=utc_now(), actor_user_id="worker-monitor")
+        detail = self.service.get_run(created.run_id)
+
+        self.assertEqual(reclaimed, [created.run_id])
+        self.assertEqual(detail.status, "failed")
+        self.assertEqual(detail.error["error_code"], "WORKER_HEARTBEAT_STALE")

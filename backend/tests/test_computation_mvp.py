@@ -93,8 +93,6 @@ class ComputationMvpSmokeTest(ComputationTestCase):
         self.assertEqual(create_audits[0]["request_id"], response_request_id)
 
     def test_artifact_download_works_with_auth_and_records_actor(self) -> None:
-        run_id, result_id = self._create_completed_run_artifact()
-
         settings.auth_enabled = True
         app.dependency_overrides[get_current_user] = lambda: {
             "user_id": "user_auth_download",
@@ -103,6 +101,19 @@ class ComputationMvpSmokeTest(ComputationTestCase):
             "status": "active",
         }
         try:
+            run_response = self.client.post(
+                "/api/v1/computations",
+                json={
+                    "workflow_type": "MOCK_LASER",
+                    "engine": "MOCK",
+                    "molecule": {"smiles": "CCO", "name": "auth-owned"},
+                },
+            )
+            self.assertEqual(run_response.status_code, 200)
+            run_id = run_response.json()["data"]["run_id"]
+            ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+            artifacts = self.client.get(f"/api/v1/computations/{run_id}/artifacts").json()["data"]["items"]
+            result_id = next(item["artifact_id"] for item in artifacts if item["artifact_type"] == "result_json")
             download = self.client.get(f"/api/v1/artifacts/{result_id}/download")
         finally:
             app.dependency_overrides.pop(get_current_user, None)
@@ -117,6 +128,81 @@ class ComputationMvpSmokeTest(ComputationTestCase):
         self.assertEqual(audits[0]["actor_user_id"], "user_auth_download")
         self.assertEqual(audits[0]["request_id"], download_request_id)
         self.assertEqual(audits[0]["related_ids"]["run_id"], run_id)
+
+    def test_auth_enabled_scopes_runs_artifacts_campaigns_and_audit(self) -> None:
+        def as_user(user_id: str, role: str = "user"):
+            return lambda: {
+                "user_id": user_id,
+                "username": user_id,
+                "role": role,
+                "status": "active",
+            }
+
+        settings.auth_enabled = True
+        app.dependency_overrides[get_current_user] = as_user("user-a")
+        try:
+            run_response = self.client.post(
+                "/api/v1/computations",
+                json={
+                    "workflow_type": "MOCK_LASER",
+                    "engine": "MOCK",
+                    "molecule": {"smiles": "CCO", "name": "owned"},
+                },
+            )
+            campaign_response = self.client.post(
+                "/api/v1/optimization/campaigns",
+                json={
+                    "name": "owned-campaign",
+                    "objectives": [{"name": "gain_factor", "direction": "max"}],
+                },
+            )
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+        self.assertEqual(run_response.status_code, 200)
+        self.assertEqual(campaign_response.status_code, 200)
+        run_id = run_response.json()["data"]["run_id"]
+        campaign_id = campaign_response.json()["data"]["campaign_id"]
+        ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+
+        app.dependency_overrides[get_current_user] = as_user("user-a")
+        artifacts = self.client.get(f"/api/v1/computations/{run_id}/artifacts")
+        artifact_id = artifacts.json()["data"]["items"][0]["artifact_id"]
+        app.dependency_overrides[get_current_user] = as_user("user-b")
+        try:
+            list_runs = self.client.get("/api/v1/computations")
+            get_run = self.client.get(f"/api/v1/computations/{run_id}")
+            get_artifact = self.client.get(f"/api/v1/artifacts/{artifact_id}")
+            download_artifact = self.client.get(f"/api/v1/artifacts/{artifact_id}/download")
+            list_campaigns = self.client.get("/api/v1/optimization/campaigns")
+            get_campaign = self.client.get(f"/api/v1/optimization/campaigns/{campaign_id}")
+            audits = self.client.get("/api/v1/audit-events", params={"page_size": 50})
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+            settings.auth_enabled = False
+
+        self.assertEqual(list_runs.status_code, 200)
+        self.assertEqual(list_runs.json()["data"]["total"], 0)
+        self.assertEqual(get_run.status_code, 403)
+        self.assertEqual(get_artifact.status_code, 403)
+        self.assertEqual(download_artifact.status_code, 403)
+        self.assertEqual(list_campaigns.status_code, 200)
+        self.assertEqual(list_campaigns.json()["data"]["total"], 0)
+        self.assertEqual(get_campaign.status_code, 403)
+        self.assertEqual(audits.status_code, 200)
+        self.assertEqual(audits.json()["data"]["items"], [])
+
+        settings.auth_enabled = True
+        app.dependency_overrides[get_current_user] = as_user("admin", role="admin")
+        try:
+            admin_runs = self.client.get("/api/v1/computations")
+            admin_campaign = self.client.get(f"/api/v1/optimization/campaigns/{campaign_id}")
+            admin_audits = self.client.get("/api/v1/audit-events", params={"page_size": 50})
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+            settings.auth_enabled = False
+        self.assertEqual(admin_runs.json()["data"]["total"], 1)
+        self.assertEqual(admin_campaign.status_code, 200)
+        self.assertGreater(len(admin_audits.json()["data"]["items"]), 0)
 
     def test_failed_run_can_retry(self) -> None:
         response = self.client.post(

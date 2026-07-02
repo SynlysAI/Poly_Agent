@@ -36,6 +36,8 @@ from app.schemas.computation import (
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+TEXT_PREVIEW_LIMIT_BYTES = 8000
+JSON_PREVIEW_LIMIT_BYTES = 256 * 1024
 
 
 class ComputationService:
@@ -99,6 +101,8 @@ class ComputationService:
         keyword: str | None,
         page: int,
         page_size: int,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
     ) -> ComputationListData:
         """分页查询计算任务。"""
         items, total = ComputationRunRepository.list_runs(
@@ -106,6 +110,7 @@ class ComputationService:
             workflow_type=workflow_type,
             engine=engine,
             keyword=keyword,
+            created_by=None if is_admin else actor_user_id,
             page=page,
             page_size=page_size,
         )
@@ -116,16 +121,30 @@ class ComputationService:
             total=total,
         )
 
-    def get_run(self, run_id: str) -> ComputationRun:
+    def get_run(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ComputationRun:
         """查询计算任务详情。"""
         run = ComputationRunRepository.find_one({"run_id": run_id})
         if not run:
             raise HTTPException(status_code=404, detail="计算任务不存在")
+        self._ensure_run_access(run, actor_user_id=actor_user_id, is_admin=is_admin)
         return ComputationRun(**run)
 
-    def cancel_run(self, run_id: str, *, actor_user_id: str, request_id: str | None) -> ComputationRun:
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+        is_admin: bool = False,
+    ) -> ComputationRun:
         """取消计算任务。"""
-        run = self.get_run(run_id)
+        run = self.get_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
         if run.status in TERMINAL_STATUSES:
             raise HTTPException(status_code=400, detail="终态计算任务不能取消")
         now = utc_now()
@@ -151,11 +170,18 @@ class ComputationService:
             before={"status": run.status},
             after={"status": "cancelled"},
         )
-        return self.get_run(run_id)
+        return self.get_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
 
-    def retry_run(self, run_id: str, *, actor_user_id: str, request_id: str | None) -> ComputationCreateData:
+    def retry_run(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+        is_admin: bool = False,
+    ) -> ComputationCreateData:
         """重试 failed/cancelled 计算任务。"""
-        run = self.get_run(run_id)
+        run = self.get_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
         if run.status not in {"failed", "cancelled"}:
             raise HTTPException(status_code=400, detail="仅 failed/cancelled 任务允许重试")
         payload = ComputationCreateRequest(
@@ -179,16 +205,29 @@ class ComputationService:
         )
         return created
 
-    def list_artifacts(self, run_id: str) -> list[ComputationArtifact]:
+    def list_artifacts(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> list[ComputationArtifact]:
         """查询任务 artifacts。"""
-        self.get_run(run_id)
+        self.get_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
         return [ComputationArtifact(**item) for item in ComputationArtifactRepository.list_by_run(run_id)]
 
-    def get_artifact(self, artifact_id: str) -> ComputationArtifact:
+    def get_artifact(
+        self,
+        artifact_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ComputationArtifact:
         """查询 artifact 元数据。"""
         artifact = ComputationArtifactRepository.find_one({"artifact_id": artifact_id})
         if not artifact:
             raise HTTPException(status_code=404, detail="artifact 不存在")
+        self.get_run(str(artifact["run_id"]), actor_user_id=actor_user_id, is_admin=is_admin)
         return ComputationArtifact(**artifact)
 
     def list_audit_events(
@@ -199,15 +238,31 @@ class ComputationService:
         event_type: str | None,
         page: int,
         page_size: int,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
     ) -> AuditEventListData:
         """查询审计事件。"""
+        lookup_page = page
+        lookup_size = page_size
+        if actor_user_id and not is_admin:
+            lookup_page = 1
+            lookup_size = 10000
         items, total = AuditEventRepository.list_events(
             entity_type=entity_type,
             entity_id=entity_id,
             event_type=event_type,
-            page=page,
-            page_size=page_size,
+            page=lookup_page,
+            page_size=lookup_size,
         )
+        if actor_user_id and not is_admin:
+            items = [
+                item
+                for item in items
+                if self._is_audit_event_visible_to_user(item, actor_user_id=actor_user_id)
+            ]
+            total = len(items)
+            start = (page - 1) * page_size
+            items = items[start : start + page_size]
         return AuditEventListData(
             items=[AuditEvent(**item) for item in items],
             page=page,
@@ -215,22 +270,48 @@ class ComputationService:
             total=total,
         )
 
-    def preview_artifact(self, artifact_id: str) -> ArtifactPreviewData:
+    def preview_artifact(
+        self,
+        artifact_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ArtifactPreviewData:
         """预览白名单 artifact。"""
-        artifact = self.get_artifact(artifact_id)
+        artifact = self.get_artifact(artifact_id, actor_user_id=actor_user_id, is_admin=is_admin)
         path = self.resolve_artifact_path(artifact)
         if artifact.artifact_type in {"result_json", "structure_json", "input_json", "error_json", "spectrum_json", "metrics_json"}:
+            size_bytes = path.stat().st_size
+            if size_bytes > JSON_PREVIEW_LIMIT_BYTES:
+                preview = {
+                    "truncated": True,
+                    "size_bytes": size_bytes,
+                    "limit_bytes": JSON_PREVIEW_LIMIT_BYTES,
+                    "message": "preview truncated: JSON artifact exceeds preview limit",
+                }
+                return ArtifactPreviewData(artifact=artifact, preview=preview)
             with path.open("r", encoding="utf-8") as fp:
                 preview = json.load(fp)
         elif artifact.artifact_type in {"log_text", "xyz", "sdf"}:
-            preview = path.read_text(encoding="utf-8")[:8000]
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if len(text) > TEXT_PREVIEW_LIMIT_BYTES:
+                marker = f"\n\n[preview truncated at {TEXT_PREVIEW_LIMIT_BYTES} characters]"
+                preview = f"{text[: max(TEXT_PREVIEW_LIMIT_BYTES - len(marker), 0)]}{marker}"
+            else:
+                preview = text
         else:
             raise HTTPException(status_code=400, detail="该 artifact 类型不支持预览")
         return ArtifactPreviewData(artifact=artifact, preview=preview)
 
-    def get_artifact_structure(self, artifact_id: str) -> ArtifactStructureData:
+    def get_artifact_structure(
+        self,
+        artifact_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ArtifactStructureData:
         """读取结构 artifact。"""
-        artifact = self.get_artifact(artifact_id)
+        artifact = self.get_artifact(artifact_id, actor_user_id=actor_user_id, is_admin=is_admin)
         if artifact.artifact_type != "structure_json":
             raise HTTPException(status_code=400, detail="该 artifact 不是结构文件")
         path = self.resolve_artifact_path(artifact)
@@ -238,9 +319,15 @@ class ComputationService:
             structure = json.load(fp)
         return ArtifactStructureData(artifact=artifact, structure=structure)
 
-    def get_artifact_spectrum(self, artifact_id: str) -> ArtifactSpectrumData:
+    def get_artifact_spectrum(
+        self,
+        artifact_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ArtifactSpectrumData:
         """读取 result artifact 的光谱/指标数据。"""
-        artifact = self.get_artifact(artifact_id)
+        artifact = self.get_artifact(artifact_id, actor_user_id=actor_user_id, is_admin=is_admin)
         if artifact.artifact_type not in {"result_json", "spectrum_json"}:
             raise HTTPException(status_code=400, detail="该 artifact 不包含光谱数据")
         path = self.resolve_artifact_path(artifact)
@@ -313,7 +400,12 @@ class ComputationService:
             {
                 "steps": [step.model_dump(mode="python") for step in steps],
                 "updated_at": now,
-                "external_refs": {**run.external_refs, "worker_id": worker_id},
+                "external_refs": {
+                    **run.external_refs,
+                    "worker_id": worker_id,
+                    "claimed_at": run.external_refs.get("claimed_at") or now,
+                    "heartbeat_at": now,
+                },
             },
         )
         self._audit(
@@ -327,6 +419,67 @@ class ComputationService:
         )
         return self.get_run(run.run_id)
 
+    def heartbeat_run(self, run_id: str, *, worker_id: str, now: datetime | None = None) -> ComputationRun:
+        """记录 running run 的 worker heartbeat。"""
+        run = self.get_run(run_id)
+        if run.status != "running":
+            return run
+        if run.external_refs.get("worker_id") != worker_id:
+            raise HTTPException(status_code=409, detail="worker 未持有该计算任务")
+        timestamp = now or utc_now()
+        ComputationRunRepository.update_fields(
+            run_id,
+            {
+                "external_refs.heartbeat_at": timestamp,
+                "updated_at": timestamp,
+            },
+        )
+        return self.get_run(run_id)
+
+    def update_external_refs(self, run_id: str, refs: dict, *, worker_id: str | None = None) -> ComputationRun:
+        """Merge backend-owned external references into a running computation."""
+        run = self.get_run(run_id)
+        if worker_id and run.external_refs.get("worker_id") != worker_id:
+            raise HTTPException(status_code=409, detail="worker 未持有该计算任务")
+        update = {f"external_refs.{key}": value for key, value in refs.items()}
+        update["updated_at"] = utc_now()
+        ComputationRunRepository.update_fields(run_id, update)
+        return self.get_run(run_id)
+
+    def fail_stale_running_runs(self, *, stale_before: datetime, actor_user_id: str) -> list[str]:
+        """将 heartbeat 过期的 running run 标记为 failed。"""
+        stale_runs = ComputationRunRepository.list_stale_running(stale_before=stale_before)
+        failed_run_ids: list[str] = []
+        now = utc_now()
+        for run_doc in stale_runs:
+            run_id = str(run_doc["run_id"])
+            updated = ComputationRunRepository.update_fields(
+                run_id,
+                {
+                    "status": "failed",
+                    "updated_at": now,
+                    "finished_at": now,
+                    "error": {
+                        "error_code": "WORKER_HEARTBEAT_STALE",
+                        "message": "worker heartbeat 已过期",
+                        "retryable": True,
+                    },
+                },
+            )
+            if not updated:
+                continue
+            failed_run_ids.append(run_id)
+            self._audit(
+                "computation.stale_failed",
+                actor_user_id=actor_user_id,
+                request_id=None,
+                entity_type="computation_run",
+                entity_id=run_id,
+                before={"status": "running"},
+                after={"status": "failed", "error_code": "WORKER_HEARTBEAT_STALE"},
+            )
+        return failed_run_ids
+
     def finish_acquired_run(
         self,
         run: ComputationRun,
@@ -336,6 +489,9 @@ class ComputationService:
         adapter_result: AdapterRunResult,
     ) -> ComputationRun:
         """完成或失败一个已领取的 run。"""
+        current = self.get_run(run.run_id)
+        if current.status == "cancelled":
+            return current
         artifact_ids = self.register_artifacts(
             run,
             artifact_specs=adapter_result.artifact_specs,
@@ -416,6 +572,51 @@ class ComputationService:
         if not resolved.exists() or not resolved.is_file():
             raise HTTPException(status_code=404, detail="adapter artifact 文件不存在")
         return resolved
+
+    def _ensure_run_access(
+        self,
+        run: dict,
+        *,
+        actor_user_id: str | None,
+        is_admin: bool,
+    ) -> None:
+        """检查当前用户是否可访问 run。"""
+        if not actor_user_id or is_admin:
+            return
+        if run.get("created_by") != actor_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问该计算任务")
+
+    def _is_audit_event_visible_to_user(self, event: dict, *, actor_user_id: str) -> bool:
+        """判断审计事件是否属于当前用户相关实体。"""
+        if event.get("actor_user_id") == actor_user_id:
+            return True
+        entity_type = event.get("entity_type")
+        entity_id = event.get("entity_id")
+        if entity_type == "computation_run":
+            run = ComputationRunRepository.find_one({"run_id": entity_id})
+            return bool(run and run.get("created_by") == actor_user_id)
+        if entity_type == "computation_artifact":
+            artifact = ComputationArtifactRepository.find_one({"artifact_id": entity_id})
+            if not artifact:
+                return False
+            run = ComputationRunRepository.find_one({"run_id": artifact.get("run_id")})
+            return bool(run and run.get("created_by") == actor_user_id)
+        related_ids = event.get("related_ids") or {}
+        run_id = related_ids.get("run_id")
+        if run_id:
+            run = ComputationRunRepository.find_one({"run_id": run_id})
+            if run and run.get("created_by") == actor_user_id:
+                return True
+        campaign_id = related_ids.get("campaign_id") or (
+            entity_id if entity_type == "optimization_campaign" else None
+        )
+        if campaign_id:
+            from app.infra.computation_repositories import OptimizationCampaignRepository
+
+            campaign = OptimizationCampaignRepository.find_one({"campaign_id": campaign_id})
+            if campaign and campaign.get("created_by") == actor_user_id:
+                return True
+        return False
 
     def _audit(
         self,

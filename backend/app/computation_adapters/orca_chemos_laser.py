@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from dataclasses import dataclass
+from pathlib import Path
 
 from app.computation_adapters.base import AdapterContext
 from app.computation_adapters.base import AdapterRunResult
@@ -30,6 +31,48 @@ CHEMOS_LASER_STEP_LABELS = {
     "CHEMOS_SPECTRA_PARSE": "spectra parser",
     "CHEMOS_GAIN_PARSE": "gain parser",
 }
+
+
+@dataclass(frozen=True)
+class ExternalJobStatus:
+    """Status returned by a controlled ORCA/ChemOS executor."""
+
+    status: str
+    message: str | None = None
+    raw_output_dir: Path | None = None
+
+
+class FakeOrcaChemosExternalExecutor:
+    """Deterministic external executor used to validate submit/poll boundaries."""
+
+    def __init__(self, *, outcome: str) -> None:
+        self.outcome = outcome
+
+    def submit(self, context: AdapterContext, job_spec: dict, output_dir: Path) -> dict:
+        """Submit a fake job and return backend-owned job references."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "job_id": f"fake-orca-{context.run.run_id}",
+            "queue": job_spec["queue"],
+            "submitted_at": utc_now(),
+            "executor": "fake",
+        }
+
+    def poll(self, job_id: str) -> ExternalJobStatus:
+        """Return the configured terminal fake outcome."""
+        if self.outcome == "failed":
+            return ExternalJobStatus(status="failed", message=f"fake ORCA job failed: {job_id}")
+        if self.outcome == "timeout":
+            return ExternalJobStatus(status="timeout", message=f"fake ORCA job timed out: {job_id}")
+        return ExternalJobStatus(status="completed")
+
+    def collect(self, context: AdapterContext, output_dir: Path) -> tuple[Path, Path]:
+        """Write deterministic raw outputs as if they were collected from HPC."""
+        return build_fixture_raw_outputs(context.run, output_dir)
+
+    def cancel(self, job_id: str) -> None:
+        """Cancel fake external job."""
+        return None
 
 
 class OrcaChemosLaserAdapter:
@@ -82,12 +125,12 @@ class OrcaChemosLaserAdapter:
                 retryable=True,
                 specs=[],
             )
-        if mode == "external":
+        if mode == "external" and settings.orca_chemos_external_executor != "fake":
             return self._failed_result(
                 context,
                 step_key="CHEMOS_ORCA",
-                error_code="ORCA_EXTERNAL_EXECUTOR_NOT_IMPLEMENTED",
-                message="ORCA 外部执行器尚未接入；当前仅支持 fixture parser 验证模式",
+                error_code="ORCA_EXTERNAL_EXECUTOR_UNSUPPORTED",
+                message=f"不支持的 ORCA external executor：{settings.orca_chemos_external_executor}",
                 retryable=False,
                 specs=[],
             )
@@ -95,6 +138,8 @@ class OrcaChemosLaserAdapter:
 
     def run(self, context: AdapterContext) -> AdapterRunResult:
         """Execute fixture mode and parse ChemOS laser outputs."""
+        if settings.orca_chemos_execution_mode == "external":
+            return self._run_external(context)
         context.workdir.mkdir(parents=True, exist_ok=True)
         specs: list[ArtifactSpec] = []
         config_path = context.workdir / "workflow_config.json"
@@ -147,6 +192,184 @@ class OrcaChemosLaserAdapter:
         )
 
         spectra_raw_path, gain_raw_path = build_fixture_raw_outputs(context.run, context.workdir)
+        specs.extend(
+            [
+                self._artifact("CHEMOS_SPECTRA_PARSE", "log_text", "spectra.raw.csv", spectra_raw_path, "text/csv"),
+                self._artifact("CHEMOS_GAIN_PARSE", "log_text", "gain.raw.json", gain_raw_path, "application/json"),
+            ]
+        )
+        try:
+            parsed = parse_chemos_laser_outputs(
+                context.run,
+                spectra_raw_path=spectra_raw_path,
+                gain_raw_path=gain_raw_path,
+            )
+        except ValueError as exc:
+            return self._failed_result(
+                context,
+                step_key="CHEMOS_SPECTRA_PARSE",
+                error_code="CHEMOS_LASER_PARSE_FAILED",
+                message=str(exc),
+                retryable=False,
+                specs=specs,
+            )
+
+        spectrum_path = context.workdir / "spectrum.json"
+        gain_path = context.workdir / "gain.json"
+        result_path = context.workdir / "result.json"
+        write_json(spectrum_path, parsed.spectrum)
+        write_json(gain_path, parsed.gain)
+        write_json(result_path, parsed.result_summary)
+        specs.extend(
+            [
+                self._artifact(
+                    "CHEMOS_SPECTRA_PARSE",
+                    "spectrum_json",
+                    "spectrum.json",
+                    spectrum_path,
+                    "application/json",
+                    metadata={
+                        "output_schema": SPECTRUM_SCHEMA_VERSION,
+                        "input_checksums": parsed.input_checksums,
+                    },
+                ),
+                self._artifact(
+                    "CHEMOS_GAIN_PARSE",
+                    "metrics_json",
+                    "gain.json",
+                    gain_path,
+                    "application/json",
+                    metadata={
+                        "output_schema": GAIN_SCHEMA_VERSION,
+                        "input_checksums": parsed.input_checksums,
+                    },
+                ),
+                self._artifact(
+                    "CHEMOS_GAIN_PARSE",
+                    "result_json",
+                    "result.json",
+                    result_path,
+                    "application/json",
+                    metadata={
+                        "output_schema": RESULT_SCHEMA_VERSION,
+                        "input_checksums": parsed.input_checksums,
+                    },
+                ),
+            ]
+        )
+        finished_at = utc_now()
+        return AdapterRunResult(
+            status="completed",
+            steps=build_steps(
+                self.step_labels,
+                status="completed",
+                started_at=context.started_at,
+                finished_at=finished_at,
+            ),
+            artifact_specs=specs,
+            result_summary=parsed.result_summary,
+        )
+
+    def _run_external(self, context: AdapterContext) -> AdapterRunResult:
+        """Submit, poll, collect and parse an external ORCA/ChemOS job."""
+        from app.services.computation_service import ComputationService
+
+        service = ComputationService()
+        context.workdir.mkdir(parents=True, exist_ok=True)
+        specs: list[ArtifactSpec] = []
+        config_path = context.workdir / "workflow_config.json"
+        job_spec_path = context.workdir / "job_spec.json"
+        raw_output_dir = context.workdir / "external_raw"
+        config = self._workflow_config(context)
+        write_json(config_path, config)
+        specs.append(
+            self._artifact(
+                "CHEMOS_PREPARE_STRUCTURE",
+                "input_json",
+                "workflow_config.json",
+                config_path,
+                "application/json",
+                metadata={"output_schema": "orca_chemos_workflow_config.v1"},
+            )
+        )
+        job_spec = {
+            "schema_version": "orca_chemos_external_job.v1",
+            "run_id": context.run.run_id,
+            "workflow_type": context.run.workflow_type,
+            "engine": context.run.engine,
+            "method": context.run.parameters.method,
+            "queue": settings.hpc_queue_name,
+            "resources": context.run.resources.model_dump(mode="python"),
+            "molecule": context.run.molecule.model_dump(mode="python"),
+            "output_dir": "external_raw",
+        }
+        write_json(job_spec_path, job_spec)
+        specs.append(
+            self._artifact(
+                "CHEMOS_PREPARE_STRUCTURE",
+                "input_json",
+                "job_spec.json",
+                job_spec_path,
+                "application/json",
+                metadata={"output_schema": "orca_chemos_external_job.v1"},
+            )
+        )
+
+        executor = FakeOrcaChemosExternalExecutor(outcome=settings.orca_chemos_fake_external_outcome)
+        submitted = executor.submit(context, job_spec, raw_output_dir)
+        job_id = submitted["job_id"]
+        service.update_external_refs(
+            context.run.run_id,
+            {
+                "orca_chemos_job_id": job_id,
+                "queue": submitted["queue"],
+                "submitted_at": submitted["submitted_at"],
+                "executor": submitted["executor"],
+            },
+            worker_id=context.worker_id,
+        )
+        polled = executor.poll(job_id)
+        service.update_external_refs(
+            context.run.run_id,
+            {"polled_at": utc_now(), "external_status": polled.status},
+            worker_id=context.worker_id,
+        )
+        current = service.get_run(context.run.run_id)
+        if current.status == "cancelled":
+            executor.cancel(job_id)
+            service.update_external_refs(
+                context.run.run_id,
+                {"external_cancelled": True, "external_status": "cancelled"},
+                worker_id=context.worker_id,
+            )
+            return self._failed_result(
+                context,
+                step_key="CHEMOS_ORCA",
+                error_code="ORCA_EXTERNAL_JOB_CANCELLED",
+                message="ORCA/ChemOS external job 已取消",
+                retryable=True,
+                specs=specs,
+            )
+        if polled.status == "failed":
+            return self._failed_result(
+                context,
+                step_key="CHEMOS_ORCA",
+                error_code="ORCA_EXTERNAL_JOB_FAILED",
+                message=polled.message or "ORCA/ChemOS external job failed",
+                retryable=True,
+                specs=specs,
+            )
+        if polled.status == "timeout":
+            return self._failed_result(
+                context,
+                step_key="CHEMOS_ORCA",
+                error_code="ORCA_EXTERNAL_JOB_TIMEOUT",
+                message=polled.message or "ORCA/ChemOS external job timed out",
+                retryable=True,
+                specs=specs,
+            )
+
+        spectra_raw_path, gain_raw_path = executor.collect(context, raw_output_dir)
         specs.extend(
             [
                 self._artifact("CHEMOS_SPECTRA_PARSE", "log_text", "spectra.raw.csv", spectra_raw_path, "text/csv"),
@@ -302,6 +525,21 @@ class OrcaChemosLaserAdapter:
             parser_version=PARSER_VERSION,
             metadata={"source": "orca_chemos_laser", "source_step": step_key, **(metadata or {})},
         )
+
+    def _workflow_config(self, context: AdapterContext) -> dict:
+        return {
+            "schema_version": "orca_chemos_workflow_config.v1",
+            "run_id": context.run.run_id,
+            "workflow_type": context.run.workflow_type,
+            "engine": context.run.engine,
+            "execution_mode": settings.orca_chemos_execution_mode,
+            "allowed_method": context.run.parameters.method,
+            "charge": context.run.parameters.charge,
+            "multiplicity": context.run.parameters.multiplicity,
+            "solvent": context.run.parameters.solvent,
+            "resources": context.run.resources.model_dump(mode="python"),
+            "hpc_queue": settings.hpc_queue_name,
+        }
 
     def _fixture_structure(self, context: AdapterContext) -> dict:
         return {

@@ -68,11 +68,58 @@ class LocalXtbAdapterTest(ComputationTestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(detail.status, "completed")
         self.assertEqual(detail.result_summary["energy_hartree"], -5.4321)
+        self.assertEqual(detail.result_summary["xtb_version"], "6.6.1")
+        self.assertEqual(detail.result_summary["runtime_seconds"], 12.34)
+        self.assertTrue(detail.result_summary["normal_termination"])
         self.assertIn("input.xyz", artifact_names)
         self.assertIn("xtb.stdout.log", artifact_names)
         self.assertIn("xtb.stderr.log", artifact_names)
         self.assertIn("xtbopt.xyz", artifact_names)
         self.assertIn("result_json", artifact_types)
+
+    def test_local_xtb_large_log_preview_is_truncated(self) -> None:
+        fake_bin = self._prepare_fake_toolchain(xtb_mode="large-log")
+        original_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{fake_bin}{os.pathsep}{original_path}"
+        try:
+            created = self.service.create_run(
+                ComputationCreateRequest(**computation_payload(workflow_type="LOCAL_XTB", engine="XTB")),
+                actor_user_id="tester",
+                request_id="req-xtb-large-log",
+            )
+            with patch("app.computation_adapters.local_structure._rdkit_available", return_value=False):
+                ComputationWorker(worker_id="worker-xtb-test").acquire_and_run_one()
+        finally:
+            os.environ["PATH"] = original_path
+
+        stdout_artifact = next(
+            artifact for artifact in self.service.list_artifacts(created.run_id) if artifact.name == "xtb.stdout.log"
+        )
+        preview = self.service.preview_artifact(stdout_artifact.artifact_id)
+
+        self.assertLessEqual(len(preview.preview), 8000)
+        self.assertIn("preview truncated", preview.preview)
+
+    def test_local_xtb_reads_summary_fields_from_xtb_out(self) -> None:
+        fake_bin = self._prepare_fake_toolchain(xtb_mode="xtb-out-summary")
+        original_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{fake_bin}{os.pathsep}{original_path}"
+        try:
+            created = self.service.create_run(
+                ComputationCreateRequest(**computation_payload(workflow_type="LOCAL_XTB", engine="XTB")),
+                actor_user_id="tester",
+                request_id="req-xtb-out-summary",
+            )
+            with patch("app.computation_adapters.local_structure._rdkit_available", return_value=False):
+                ComputationWorker(worker_id="worker-xtb-test").acquire_and_run_one()
+        finally:
+            os.environ["PATH"] = original_path
+
+        detail = self.service.get_run(created.run_id)
+
+        self.assertEqual(detail.result_summary["xtb_version"], "6.7.0")
+        self.assertEqual(detail.result_summary["runtime_seconds"], 3.21)
+        self.assertTrue(detail.result_summary["normal_termination"])
 
     def test_local_xtb_nonzero_exit_fails_and_keeps_logs(self) -> None:
         fake_bin = self._prepare_fake_toolchain(xtb_mode="fail")
@@ -101,7 +148,6 @@ class LocalXtbAdapterTest(ComputationTestCase):
     def test_local_xtb_timeout_fails_and_can_retry(self) -> None:
         fake_bin = self._prepare_fake_toolchain(xtb_mode="success")
         original_path = os.environ.get("PATH", "")
-        original_run = subprocess.run
         os.environ["PATH"] = f"{fake_bin}{os.pathsep}{original_path}"
         try:
             created = self.service.create_run(
@@ -110,14 +156,9 @@ class LocalXtbAdapterTest(ComputationTestCase):
                 request_id="req-xtb-timeout",
             )
 
-            def timeout_only_for_xtb(command, *args, **kwargs):
-                if command and Path(command[0]).name == "xtb":
-                    raise subprocess.TimeoutExpired(cmd=command, timeout=60, output="partial", stderr="timeout")
-                return original_run(command, *args, **kwargs)
-
             with patch("app.computation_adapters.local_structure._rdkit_available", return_value=False), patch(
-                "app.computation_adapters.local_xtb.subprocess.run",
-                side_effect=timeout_only_for_xtb,
+                "app.computation_adapters.local_xtb.LocalXtbAdapter._run_subprocess_with_heartbeat",
+                side_effect=subprocess.TimeoutExpired(cmd=["xtb"], timeout=60),
             ):
                 result = ComputationWorker(worker_id="worker-xtb-test").acquire_and_run_one()
         finally:
@@ -161,6 +202,26 @@ sys.stdout.write("fake obabel ok\\n")
             body = """#!/usr/bin/env python3
 from pathlib import Path
 Path("xtbopt.xyz").write_text("2\\nfake xtb opt\\nC 0.0 0.0 0.0\\nO 1.1 0.0 0.0\\n", encoding="utf-8")
+print("xtb version 6.6.1")
+print("TOTAL ENERGY     -5.4321")
+print("normal termination of xtb")
+print("runtime_seconds: 12.34")
+"""
+        elif mode == "large-log":
+            body = """#!/usr/bin/env python3
+from pathlib import Path
+Path("xtbopt.xyz").write_text("2\\nfake xtb opt\\nC 0.0 0.0 0.0\\nO 1.1 0.0 0.0\\n", encoding="utf-8")
+print("xtb version 6.6.1")
+print("TOTAL ENERGY     -5.4321")
+print("normal termination of xtb")
+print("runtime_seconds: 12.34")
+print("x" * 20000)
+"""
+        elif mode == "xtb-out-summary":
+            body = """#!/usr/bin/env python3
+from pathlib import Path
+Path("xtbopt.xyz").write_text("2\\nfake xtb opt\\nC 0.0 0.0 0.0\\nO 1.1 0.0 0.0\\n", encoding="utf-8")
+Path("xtb.out").write_text("xtb version 6.7.0\\nnormal termination of xtb\\nruntime_seconds: 3.21\\n", encoding="utf-8")
 print("TOTAL ENERGY     -5.4321")
 """
         else:

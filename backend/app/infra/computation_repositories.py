@@ -66,6 +66,40 @@ def _sort_documents(documents: list[dict[str, Any]], field: str, reverse: bool =
     return sorted(documents, key=lambda item: str(item.get(field, "")), reverse=reverse)
 
 
+def _set_dotted_field(document: dict[str, Any], key: str, value: Any) -> None:
+    """Apply Mongo-style dotted updates to demo-store documents."""
+    parts = key.split(".")
+    current = document
+    for part in parts[:-1]:
+        nested = current.get(part)
+        if not isinstance(nested, dict):
+            nested = {}
+            current[part] = nested
+        current = nested
+    current[parts[-1]] = clone_document(value)
+
+
+def _apply_update_fields(document: dict[str, Any], fields: dict[str, Any]) -> None:
+    """Apply update fields while honoring dotted keys in demo storage."""
+    for key, value in fields.items():
+        if "." in key:
+            _set_dotted_field(document, key, value)
+        else:
+            document[key] = clone_document(value)
+
+
+def _coerce_datetime(value: Any) -> datetime | None:
+    """Convert demo-store datetime strings back to datetime for comparisons."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 class BaseRepository:
     """Mongo 优先、本地 JSON 兜底的仓储基类。"""
 
@@ -167,11 +201,14 @@ class ComputationRunRepository(BaseRepository):
         workflow_type: str | None,
         engine: str | None,
         keyword: str | None,
+        created_by: str | None = None,
         page: int,
         page_size: int,
     ) -> tuple[list[dict[str, Any]], int]:
         """分页查询计算任务。"""
         filters: dict[str, Any] = {}
+        if created_by:
+            filters["created_by"] = created_by
         if status:
             filters["status"] = status
         if workflow_type:
@@ -217,7 +254,7 @@ class ComputationRunRepository(BaseRepository):
         def mutate(data):
             for item in data[cls.collection_name]:
                 if item.get("run_id") == run_id:
-                    item.update(clone_document(fields))
+                    _apply_update_fields(item, fields)
                     return True
             return False
 
@@ -231,6 +268,8 @@ class ComputationRunRepository(BaseRepository):
             "started_at": now,
             "updated_at": now,
             "external_refs.worker_id": worker_id,
+            "external_refs.claimed_at": now,
+            "external_refs.heartbeat_at": now,
         }
         if cls._can_use_mongo():
             try:
@@ -258,6 +297,8 @@ class ComputationRunRepository(BaseRepository):
                 if item.get("run_id") == run_id and item.get("status") == "queued":
                     external_refs = dict(item.get("external_refs") or {})
                     external_refs["worker_id"] = worker_id
+                    external_refs["claimed_at"] = now
+                    external_refs["heartbeat_at"] = now
                     item.update(
                         {
                             "status": "running",
@@ -270,6 +311,26 @@ class ComputationRunRepository(BaseRepository):
             return None
 
         return demo_store.mutate(mutate)
+
+    @classmethod
+    def list_stale_running(cls, *, stale_before: datetime) -> list[dict[str, Any]]:
+        """List running runs whose worker heartbeat is stale."""
+        filters = {"status": "running", "external_refs.heartbeat_at": {"$lt": stale_before}}
+        if cls._can_use_mongo():
+            try:
+                cursor = cls._collection().find(filters, {"_id": 0}).sort([("updated_at", 1)])
+                return [dict(item) for item in cursor]
+            except PyMongoError:
+                cls._mark_mongo_unavailable()
+        data = demo_store.load()
+        rows: list[dict[str, Any]] = []
+        for item in data[cls.collection_name]:
+            if item.get("status") != "running":
+                continue
+            heartbeat_at = _coerce_datetime((item.get("external_refs") or {}).get("heartbeat_at"))
+            if heartbeat_at and heartbeat_at < stale_before:
+                rows.append(clone_document(item))
+        return _sort_documents(rows, "updated_at", reverse=False)
 
 
 class ComputationArtifactRepository(BaseRepository):
@@ -310,7 +371,7 @@ class OptimizationCampaignRepository(BaseRepository):
         def mutate(data):
             for item in data[cls.collection_name]:
                 if item.get("campaign_id") == campaign_id:
-                    item.update(clone_document(fields))
+                    _apply_update_fields(item, fields)
                     return True
             return False
 
@@ -361,7 +422,7 @@ class OptimizationSuggestionRepository(BaseRepository):
         def mutate(data):
             for item in data[cls.collection_name]:
                 if item.get("suggestion_id") == suggestion_id:
-                    item.update(clone_document(fields))
+                    _apply_update_fields(item, fields)
                     return True
             return False
 

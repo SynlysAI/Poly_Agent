@@ -12,7 +12,7 @@ const path = require("path");
 const PROJECT_ROOT = process.env.POLY_AGENT_PROJECT_ROOT || __dirname;
 const BACKEND_CWD = path.join(PROJECT_ROOT, "backend");
 
-const UVICORN_BIN = process.env.POLY_AGENT_UVICORN_BIN || "uvicorn";
+const PYTHON_BIN = process.env.POLY_AGENT_PYTHON_BIN || "python";
 
 const BACKEND_PORT = process.env.POLY_AGENT_BACKEND_PORT || "8003";
 
@@ -21,8 +21,8 @@ module.exports = {
     {
       name: "poly-agent-backend",
       cwd: BACKEND_CWD,
-      script: UVICORN_BIN,
-      args: `app.main:app --host 0.0.0.0 --port ${BACKEND_PORT}`,
+      script: PYTHON_BIN,
+      args: `-m uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT}`,
       interpreter: "none",
       watch: false,
       autorestart: true,

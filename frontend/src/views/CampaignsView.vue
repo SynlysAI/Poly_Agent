@@ -1,15 +1,20 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { MagicStick, Plus, Refresh, Upload } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { CloseBold, MagicStick, Plus, Refresh, SwitchButton, Upload, VideoPause } from '@element-plus/icons-vue'
 
 import {
+  archiveCampaign,
+  completeCampaign,
   createCampaign,
+  failCampaign,
   generateSuggestion,
   getApiErrorMessage,
   importChemosDemoCandidates,
   listCampaigns,
+  pauseCampaign,
+  resumeCampaign,
 } from '../api/polyAgentApi'
 
 const router = useRouter()
@@ -28,7 +33,14 @@ const filters = reactive({
 const form = reactive({
   name: `Mock laser campaign ${new Date().toISOString().slice(0, 10)}`,
   objective: 'gain_factor',
+  computationPreset: 'mock_laser',
 })
+
+const computationPresetOptions = [
+  { value: 'mock_laser', label: 'Mock laser' },
+  { value: 'orca_fixture', label: 'ORCA fixture' },
+  { value: 'orca_external_fake', label: 'ORCA fake external' },
+]
 
 function formatDate(value) {
   if (!value) return '-'
@@ -40,6 +52,49 @@ function formatDate(value) {
 function statusTag(status) {
   const map = { draft: 'info', running: 'warning', paused: 'info', completed: 'success', failed: 'danger', archived: 'info' }
   return map[status] || 'info'
+}
+
+function computationPresetLabel(row) {
+  const raw = row?.planner_config?.computation_preset || 'mock_laser'
+  const key = typeof raw === 'string' ? raw : raw?.preset_key
+  return computationPresetOptions.find((item) => item.value === key)?.label || key || 'Mock laser'
+}
+
+function canImport(row) {
+  return ['draft', 'running'].includes(row.status)
+}
+
+function canGenerate(row) {
+  return row.status === 'running'
+}
+
+function statusActions(row) {
+  if (row.status === 'running') {
+    return [
+      { label: 'Pause', action: 'pause', icon: VideoPause },
+      { label: 'Complete', action: 'complete', icon: SwitchButton },
+      { label: 'Fail', action: 'fail', icon: CloseBold },
+      { label: 'Archive', action: 'archive', icon: CloseBold },
+    ]
+  }
+  if (row.status === 'paused') {
+    return [
+      { label: 'Resume', action: 'resume', icon: SwitchButton },
+      { label: 'Complete', action: 'complete', icon: SwitchButton },
+      { label: 'Fail', action: 'fail', icon: CloseBold },
+      { label: 'Archive', action: 'archive', icon: CloseBold },
+    ]
+  }
+  if (row.status === 'draft') {
+    return [
+      { label: 'Archive', action: 'archive', icon: CloseBold },
+      { label: 'Fail', action: 'fail', icon: CloseBold },
+    ]
+  }
+  if (['completed', 'failed'].includes(row.status)) {
+    return [{ label: 'Archive', action: 'archive', icon: CloseBold }]
+  }
+  return []
 }
 
 async function loadCampaigns() {
@@ -55,6 +110,32 @@ async function loadCampaigns() {
   }
 }
 
+async function handleStatusAction(campaign, action) {
+  const actionMap = {
+    pause: pauseCampaign,
+    resume: resumeCampaign,
+    archive: archiveCampaign,
+    complete: completeCampaign,
+    fail: failCampaign,
+  }
+  try {
+    const { value } = await ElMessageBox.prompt('请输入状态变更原因', `Campaign ${action}`, {
+      confirmButtonText: action,
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+    })
+    actionLoadingId.value = `${campaign.campaign_id}:${action}`
+    await actionMap[action](campaign.campaign_id, { reason: value?.trim() || null })
+    ElMessage.success(`Campaign 已${action}`)
+    await loadCampaigns()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    actionLoadingId.value = ''
+  }
+}
+
 async function handleCreateCampaign() {
   creating.value = true
   try {
@@ -62,7 +143,7 @@ async function handleCreateCampaign() {
       name: form.name,
       planner_type: 'fallback',
       objectives: [{ name: form.objective, direction: 'max', required: true }],
-      planner_config: { batch_size: 1 },
+      planner_config: { batch_size: 1, computation_preset: form.computationPreset },
     })
     ElMessage.success(`Campaign 已创建：${campaign.campaign_id}`)
     createVisible.value = false
@@ -76,7 +157,7 @@ async function handleCreateCampaign() {
 }
 
 async function handleImportChemos(campaign) {
-  actionLoadingId.value = campaign.campaign_id
+    actionLoadingId.value = `${campaign.campaign_id}:import`
   try {
     const data = await importChemosDemoCandidates(campaign.campaign_id)
     ElMessage.success(`已导入 ${data.imported_count} 个 ChemOS demo 候选`)
@@ -89,7 +170,7 @@ async function handleImportChemos(campaign) {
 }
 
 async function handleGenerateSuggestion(campaign) {
-  actionLoadingId.value = campaign.campaign_id
+    actionLoadingId.value = `${campaign.campaign_id}:suggest`
   try {
     const data = await generateSuggestion(campaign.campaign_id, { batch_size: 1 })
     ElMessage.success(`已生成 ${data.items?.length || 0} 个 suggestion`)
@@ -131,6 +212,9 @@ onMounted(loadCampaigns)
               <span>{{ row.objectives?.map((item) => item.name).join(', ') || '-' }}</span>
             </template>
           </el-table-column>
+          <el-table-column label="Preset" min-width="150">
+            <template #default="{ row }">{{ computationPresetLabel(row) }}</template>
+          </el-table-column>
           <el-table-column label="候选数" width="100">
             <template #default="{ row }">{{ row.search_space?.candidate_count || 0 }}</template>
           </el-table-column>
@@ -140,8 +224,24 @@ onMounted(loadCampaigns)
           <el-table-column label="操作" min-width="300" fixed="right">
             <template #default="{ row }">
               <el-button text type="primary" size="small" @click="$router.push(`/optimization/campaigns/${row.campaign_id}`)">详情</el-button>
-              <el-button text type="primary" size="small" :icon="Upload" :loading="actionLoadingId === row.campaign_id" @click="handleImportChemos(row)">导入 ChemOS</el-button>
-              <el-button text type="primary" size="small" :icon="MagicStick" :loading="actionLoadingId === row.campaign_id" @click="handleGenerateSuggestion(row)">生成推荐</el-button>
+              <el-button text type="primary" size="small" :icon="Upload" :disabled="!canImport(row)" :loading="actionLoadingId === `${row.campaign_id}:import`" @click="handleImportChemos(row)">导入 ChemOS</el-button>
+              <el-button text type="primary" size="small" :icon="MagicStick" :disabled="!canGenerate(row)" :loading="actionLoadingId === `${row.campaign_id}:suggest`" @click="handleGenerateSuggestion(row)">生成推荐</el-button>
+              <el-dropdown v-if="statusActions(row).length" trigger="click">
+                <el-button text type="primary" size="small">状态</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-for="item in statusActions(row)"
+                      :key="item.action"
+                      :icon="item.icon"
+                      :disabled="actionLoadingId === `${row.campaign_id}:${item.action}`"
+                      @click="handleStatusAction(row, item.action)"
+                    >
+                      {{ item.label }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </template>
           </el-table-column>
         </el-table>
@@ -165,6 +265,16 @@ onMounted(loadCampaigns)
         </el-form-item>
         <el-form-item label="目标">
           <el-input v-model="form.objective" />
+        </el-form-item>
+        <el-form-item label="计算 preset">
+          <el-select v-model="form.computationPreset">
+            <el-option
+              v-for="item in computationPresetOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>

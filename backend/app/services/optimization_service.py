@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import hashlib
+import math
 from datetime import datetime
 from uuid import uuid4
 
@@ -26,7 +29,12 @@ from app.schemas.optimization import (
     CampaignCreateRequest,
     CampaignDetailData,
     CampaignListData,
+    CampaignStatus,
+    CampaignStatusChangeRequest,
     CandidateImportData,
+    CandidateImportCsvRequest,
+    CandidateImportDuplicateRow,
+    CandidateImportFailedRow,
     CandidateImportRequest,
     CandidateImportItem,
     CreateObservationFromComputationData,
@@ -36,14 +44,51 @@ from app.schemas.optimization import (
     OptimizationObservation,
     OptimizationSuggestion,
     PlannerCandidate,
+    PlannerConstraints,
     PlannerObservation,
     PlannerRequest,
     SubmitSuggestionComputationData,
+    SuggestionFailureRequest,
+    SuggestionRejectRequest,
     SuggestionCreateData,
     SuggestionCreateRequest,
 )
 from app.services.computation_service import ComputationService
 from app.services.planner_adapters import run_planner
+
+
+COMPUTATION_PRESETS: dict[str, dict] = {
+    "mock_laser": {
+        "workflow_type": "MOCK_LASER",
+        "engine": "MOCK",
+        "method": "GFN2-xTB",
+        "resources": {"num_cores": 2, "memory_mb": 4096, "max_wallclock_seconds": 1800},
+    },
+    "orca_fixture": {
+        "workflow_type": "ORCA_CHEMOS_LASER",
+        "engine": "ORCA",
+        "method": "ORCA_B3LYP_DEF2_SVP",
+        "resources": {"num_cores": 4, "memory_mb": 8192, "max_wallclock_seconds": 7200},
+    },
+    "orca_external_fake": {
+        "workflow_type": "ORCA_CHEMOS_LASER",
+        "engine": "ORCA",
+        "method": "ORCA_B3LYP_DEF2_SVP",
+        "resources": {"num_cores": 4, "memory_mb": 8192, "max_wallclock_seconds": 7200},
+    },
+}
+ORCA_PRESET_METHODS = {"ORCA_B3LYP_DEF2_SVP", "ORCA_PBE0_DEF2_SVP"}
+ACTIVE_CAMPAIGN_STATUSES = {"running"}
+IMPORTABLE_CAMPAIGN_STATUSES = {"draft", "running"}
+BLOCKED_CAMPAIGN_STATUSES = {"paused", "completed", "failed", "archived"}
+CAMPAIGN_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"running", "paused", "archived", "failed"},
+    "running": {"paused", "completed", "failed", "archived"},
+    "paused": {"running", "completed", "failed", "archived"},
+    "completed": {"archived"},
+    "failed": {"archived"},
+    "archived": set(),
+}
 
 
 class OptimizationService:
@@ -61,6 +106,7 @@ class OptimizationService:
     ) -> OptimizationCampaign:
         """创建 campaign。"""
         now = utc_now()
+        planner_config = self._normalize_planner_config(payload.planner_config)
         campaign = OptimizationCampaign(
             campaign_id=self._new_id("camp"),
             name=payload.name,
@@ -68,7 +114,7 @@ class OptimizationService:
             planner_type=payload.planner_type,
             search_space={"kind": "discrete_molecule_library", "candidate_count": 0},
             objectives=payload.objectives,
-            planner_config=payload.planner_config,
+            planner_config=planner_config,
             created_by=actor_user_id,
             created_at=now,
             updated_at=now,
@@ -84,9 +130,17 @@ class OptimizationService:
         )
         return campaign
 
-    def list_campaigns(self, *, page: int, page_size: int) -> CampaignListData:
+    def list_campaigns(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> CampaignListData:
         """分页查询 campaign。"""
-        items, total = OptimizationCampaignRepository.list_all(page=page, page_size=page_size)
+        filters = {} if is_admin or not actor_user_id else {"created_by": actor_user_id}
+        items, total = OptimizationCampaignRepository.list_all(filters, page=page, page_size=page_size)
         return CampaignListData(
             items=[OptimizationCampaign(**item) for item in items],
             page=page,
@@ -94,9 +148,15 @@ class OptimizationService:
             total=total,
         )
 
-    def get_detail(self, campaign_id: str) -> CampaignDetailData:
+    def get_detail(
+        self,
+        campaign_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> CampaignDetailData:
         """查询 campaign 详情。"""
-        campaign = self._get_campaign(campaign_id)
+        campaign = self._get_campaign(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
         candidates = [OptimizationCandidate(**item) for item in OptimizationCandidateRepository.list_by_campaign(campaign_id)]
         suggestions = [OptimizationSuggestion(**item) for item in OptimizationSuggestionRepository.list_by_campaign(campaign_id)]
         observations = [OptimizationObservation(**item) for item in OptimizationObservationRepository.list_by_campaign(campaign_id)]
@@ -107,6 +167,42 @@ class OptimizationService:
             observations=observations,
         )
 
+    def change_campaign_status(
+        self,
+        campaign_id: str,
+        target_status: CampaignStatus,
+        payload: CampaignStatusChangeRequest,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+        is_admin: bool = False,
+    ) -> OptimizationCampaign:
+        """变更 campaign lifecycle 状态。"""
+        campaign = self._get_campaign(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        if campaign.status == target_status:
+            return campaign
+        allowed = CAMPAIGN_STATUS_TRANSITIONS.get(campaign.status, set())
+        if target_status not in allowed:
+            raise HTTPException(status_code=400, detail=f"Campaign 不能从 {campaign.status} 切换到 {target_status}")
+        now = utc_now()
+        OptimizationCampaignRepository.update_fields(
+            campaign_id,
+            {
+                "status": target_status,
+                "updated_at": now,
+            },
+        )
+        self._audit(
+            "campaign.status_changed",
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+            entity_type="optimization_campaign",
+            entity_id=campaign_id,
+            before={"status": campaign.status},
+            after={"status": target_status, "reason": payload.reason},
+        )
+        return OptimizationCampaign(**OptimizationCampaignRepository.find_one({"campaign_id": campaign_id}))
+
     def import_candidates(
         self,
         campaign_id: str,
@@ -114,17 +210,34 @@ class OptimizationService:
         *,
         actor_user_id: str,
         request_id: str | None,
+        is_admin: bool = False,
     ) -> CandidateImportData:
         """导入候选分子。"""
-        self._get_campaign(campaign_id)
+        campaign = self._get_campaign(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        self._ensure_campaign_importable(campaign)
         now = utc_now()
         existing = {
             item["candidate_key"]: item
             for item in OptimizationCandidateRepository.list_by_campaign(campaign_id)
         }
         imported: list[OptimizationCandidate] = []
-        for item in payload.candidates:
-            candidate_id = existing.get(item.candidate_key, {}).get("candidate_id") or self._new_id("cand")
+        imported_count = 0
+        updated_count = 0
+        duplicate_rows: list[CandidateImportDuplicateRow] = []
+        seen_keys: set[str] = set()
+        for row_number, item in enumerate(payload.candidates, start=1):
+            if item.candidate_key in seen_keys:
+                duplicate_rows.append(
+                    CandidateImportDuplicateRow(
+                        row_number=row_number,
+                        candidate_key=item.candidate_key,
+                        reason="candidate_key 在本次导入中重复",
+                    )
+                )
+                continue
+            seen_keys.add(item.candidate_key)
+            existing_item = existing.get(item.candidate_key)
+            candidate_id = existing_item.get("candidate_id") if existing_item else self._new_id("cand")
             candidate = OptimizationCandidate(
                 candidate_id=candidate_id,
                 campaign_id=campaign_id,
@@ -134,14 +247,18 @@ class OptimizationService:
                 descriptors=self._build_descriptors(item.smiles),
                 metadata=item.metadata,
                 is_active=True,
-                created_at=existing.get(item.candidate_key, {}).get("created_at", now),
+                created_at=existing_item.get("created_at", now) if existing_item else now,
             )
             OptimizationCandidateRepository.save("candidate_id", candidate.model_dump(mode="python"))
             imported.append(candidate)
+            if existing_item:
+                updated_count += 1
+            else:
+                imported_count += 1
         OptimizationCampaignRepository.update_fields(
             campaign_id,
             {
-                "status": "running",
+                "status": "running" if campaign.status == "draft" else campaign.status,
                 "updated_at": now,
                 "search_space": {
                     "kind": "discrete_molecule_library",
@@ -155,9 +272,65 @@ class OptimizationService:
             request_id=request_id,
             entity_type="optimization_campaign",
             entity_id=campaign_id,
-            after={"imported_count": len(imported)},
+            after={
+                "imported_count": imported_count,
+                "updated_count": updated_count,
+                "failed_count": 0,
+                "duplicate_count": len(duplicate_rows),
+            },
         )
-        return CandidateImportData(imported_count=len(imported), items=imported)
+        return CandidateImportData(
+            imported_count=imported_count,
+            updated_count=updated_count,
+            failed_rows=[],
+            duplicate_rows=duplicate_rows,
+            items=imported,
+        )
+
+    def import_candidates_csv(
+        self,
+        campaign_id: str,
+        payload: CandidateImportCsvRequest,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+        is_admin: bool = False,
+    ) -> CandidateImportData:
+        """从 CSV 文本导入候选分子。"""
+        items, failed_rows, duplicate_rows = self._parse_candidate_csv(payload.csv_text)
+        if items:
+            report = self.import_candidates(
+                campaign_id,
+                CandidateImportRequest(candidates=items),
+                actor_user_id=actor_user_id,
+                request_id=request_id,
+                is_admin=is_admin,
+            )
+        else:
+            self._get_campaign(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
+            report = CandidateImportData(imported_count=0, updated_count=0, items=[])
+        duplicate_rows.extend(report.duplicate_rows)
+        self._audit(
+            "candidate.import_reported",
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+            entity_type="optimization_campaign",
+            entity_id=campaign_id,
+            after={
+                "source": "csv",
+                "imported_count": report.imported_count,
+                "updated_count": report.updated_count,
+                "failed_count": len(failed_rows),
+                "duplicate_count": len(duplicate_rows),
+            },
+        )
+        return CandidateImportData(
+            imported_count=report.imported_count,
+            updated_count=report.updated_count,
+            failed_rows=failed_rows,
+            duplicate_rows=duplicate_rows,
+            items=report.items,
+        )
 
     def generate_suggestions(
         self,
@@ -166,9 +339,11 @@ class OptimizationService:
         *,
         actor_user_id: str,
         request_id: str | None,
+        is_admin: bool = False,
     ) -> SuggestionCreateData:
         """使用配置的 planner 生成推荐。"""
-        campaign = self._get_campaign(campaign_id)
+        campaign = self._get_campaign(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        self._ensure_campaign_active(campaign, action="生成新 suggestion")
         candidates = [OptimizationCandidate(**item) for item in OptimizationCandidateRepository.list_by_campaign(campaign_id)]
         suggestions = [OptimizationSuggestion(**item) for item in OptimizationSuggestionRepository.list_by_campaign(campaign_id)]
         observations = [OptimizationObservation(**item) for item in OptimizationObservationRepository.list_by_campaign(campaign_id)]
@@ -222,10 +397,14 @@ class OptimizationService:
                 status="suggested",
                 planner_type=campaign.planner_type,
                 planner_payload={
+                    "snapshot_schema_version": "suggestion_planner_snapshot.v1",
+                    "request_schema_version": planner_request.schema_version,
+                    "response_schema_version": planner_response.schema_version,
                     "request": planner_request.model_dump(mode="json"),
                     "response": planner_response.model_dump(mode="json"),
                     "score": planner_item.score,
                     "reason": planner_item.reason,
+                    "confidence": planner_item.confidence,
                     "iteration_metadata": planner_response.iteration_metadata,
                 },
                 created_at=now,
@@ -245,13 +424,39 @@ class OptimizationService:
         )
         return SuggestionCreateData(items=created)
 
-    def get_history(self, campaign_id: str) -> CampaignHistoryData:
+    def get_history(
+        self,
+        campaign_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> CampaignHistoryData:
         """返回 campaign 的候选、推荐、observation 和 source run 历史。"""
-        self._get_campaign(campaign_id)
+        self._get_campaign(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
         candidates = [OptimizationCandidate(**item) for item in OptimizationCandidateRepository.list_by_campaign(campaign_id)]
         suggestions = [OptimizationSuggestion(**item) for item in OptimizationSuggestionRepository.list_by_campaign(campaign_id)]
         observations = [OptimizationObservation(**item) for item in OptimizationObservationRepository.list_by_campaign(campaign_id)]
+        audit_events, _ = AuditEventRepository.list_events(
+            entity_type="optimization_campaign",
+            entity_id=campaign_id,
+            event_type="campaign.status_changed",
+            page=1,
+            page_size=200,
+        )
         items: list[CampaignHistoryEvent] = []
+        for event in audit_events:
+            items.append(
+                CampaignHistoryEvent(
+                    event_type="campaign.status_changed",
+                    occurred_at=event["created_at"],
+                    campaign_id=campaign_id,
+                    summary={
+                        "from_status": (event.get("before") or {}).get("status"),
+                        "to_status": (event.get("after") or {}).get("status"),
+                        "reason": (event.get("after") or {}).get("reason"),
+                    },
+                )
+            )
         for candidate in candidates:
             items.append(
                 CampaignHistoryEvent(
@@ -282,6 +487,23 @@ class OptimizationService:
                     },
                 )
             )
+            if suggestion.status != "suggested":
+                items.append(
+                    CampaignHistoryEvent(
+                        event_type=f"suggestion.{suggestion.status}",
+                        occurred_at=suggestion.updated_at,
+                        campaign_id=campaign_id,
+                        candidate_id=suggestion.candidate_id,
+                        suggestion_id=suggestion.suggestion_id,
+                        source_run_id=suggestion.submitted_run_id,
+                        summary={
+                            "candidate_key": suggestion.candidate_key,
+                            "status": suggestion.status,
+                            "reason": (suggestion.planner_payload.get("rejection") or suggestion.planner_payload.get("failure") or {}).get("reason"),
+                            "error_code": (suggestion.planner_payload.get("failure") or {}).get("error_code"),
+                        },
+                    )
+                )
         for observation in observations:
             items.append(
                 CampaignHistoryEvent(
@@ -303,6 +525,7 @@ class OptimizationService:
         *,
         actor_user_id: str,
         request_id: str | None,
+        is_admin: bool = False,
     ) -> CandidateImportData:
         """导入 ChemOS reference demo 分子库。"""
         items = self._load_chemos_demo_candidates()
@@ -312,6 +535,7 @@ class OptimizationService:
             payload,
             actor_user_id=actor_user_id,
             request_id=request_id,
+            is_admin=is_admin,
         )
 
     def create_observation_from_computation(
@@ -320,6 +544,7 @@ class OptimizationService:
         *,
         actor_user_id: str,
         request_id: str | None,
+        is_admin: bool = False,
     ) -> CreateObservationFromComputationData:
         """从 completed laser run 生成 observation。"""
         run_doc = ComputationRunRepository.find_one({"run_id": run_id})
@@ -333,6 +558,7 @@ class OptimizationService:
         suggestion_id = run_doc.get("suggestion_id")
         if not campaign_id or not suggestion_id:
             raise HTTPException(status_code=400, detail="计算任务缺少 campaign/suggestion 关联")
+        self._ensure_campaign_access(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
         suggestion_doc = OptimizationSuggestionRepository.find_one({"suggestion_id": suggestion_id})
         if not suggestion_doc:
             raise HTTPException(status_code=404, detail="关联推荐不存在")
@@ -353,6 +579,7 @@ class OptimizationService:
             ),
             actor_user_id=actor_user_id,
             request_id=request_id,
+            is_admin=is_admin,
         )
         return CreateObservationFromComputationData(observation=observation)
 
@@ -441,14 +668,16 @@ class OptimizationService:
         *,
         actor_user_id: str,
         request_id: str | None,
+        is_admin: bool = False,
     ) -> OptimizationObservation:
         """写入 observation。"""
-        self._get_campaign(campaign_id)
+        campaign = self._get_campaign(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
         candidate = OptimizationCandidateRepository.find_one(
             {"campaign_id": campaign_id, "candidate_id": payload.candidate_id}
         )
         if not candidate:
             raise HTTPException(status_code=404, detail="候选不存在")
+        self._validate_observation_values(campaign, payload.values)
         now = utc_now()
         observation = OptimizationObservation(
             observation_id=self._new_id("obs"),
@@ -485,32 +714,27 @@ class OptimizationService:
         *,
         actor_user_id: str,
         request_id: str | None,
+        is_admin: bool = False,
     ) -> SubmitSuggestionComputationData:
         """将 suggestion 转为计算任务。"""
         suggestion_doc = OptimizationSuggestionRepository.find_one({"suggestion_id": suggestion_id})
         if not suggestion_doc:
             raise HTTPException(status_code=404, detail="推荐不存在")
         suggestion = OptimizationSuggestion(**suggestion_doc)
+        self._ensure_campaign_access(suggestion.campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        if suggestion.status in {"evaluated", "rejected", "failed"}:
+            raise HTTPException(status_code=400, detail="当前推荐状态不允许提交计算")
         if suggestion.submitted_run_id:
             return SubmitSuggestionComputationData(
                 suggestion_id=suggestion_id,
                 run_id=suggestion.submitted_run_id,
                 suggestion_status=suggestion.status,
             )
-        if suggestion.status in {"evaluated", "rejected"}:
-            raise HTTPException(status_code=400, detail="当前推荐状态不允许提交计算")
-        payload = ComputationCreateRequest(
-            workflow_type="MOCK_LASER",
-            engine="MOCK",
-            molecule=MoleculeInput(smiles=suggestion.smiles, name=suggestion.candidate_key),
-            parameters=ComputationParameters(charge=0, multiplicity=1, method="GFN2-xTB"),
-            resources=ComputationResources(num_cores=2, memory_mb=4096, max_wallclock_seconds=1800),
-            source="optimization_suggestion",
-            campaign_id=suggestion.campaign_id,
-            suggestion_id=suggestion.suggestion_id,
-        )
+        campaign = self._get_campaign(suggestion.campaign_id)
+        self._ensure_campaign_active(campaign, action="提交新 computation")
+        computation_payload = self._build_suggestion_computation_payload(suggestion, campaign)
         created = self.computation_service.create_run(
-            payload,
+            computation_payload,
             actor_user_id=actor_user_id,
             request_id=request_id,
         )
@@ -526,12 +750,175 @@ class OptimizationService:
             entity_type="optimization_suggestion",
             entity_id=suggestion_id,
             related_ids={"campaign_id": suggestion.campaign_id, "run_id": created.run_id},
+            after={"computation_preset": computation_payload.source},
         )
         return SubmitSuggestionComputationData(
             suggestion_id=suggestion_id,
             run_id=created.run_id,
             suggestion_status="submitted",
         )
+
+    def _build_suggestion_computation_payload(
+        self,
+        suggestion: OptimizationSuggestion,
+        campaign: OptimizationCampaign,
+    ) -> ComputationCreateRequest:
+        """Build a computation request from the campaign-owned preset."""
+        preset_key, preset = self._resolve_computation_preset(campaign.planner_config)
+        method = self._resolve_preset_method(preset_key, preset, campaign.planner_config)
+        resources = self._resolve_preset_resources(preset, campaign.planner_config)
+        return ComputationCreateRequest(
+            workflow_type=preset["workflow_type"],
+            engine=preset["engine"],
+            molecule=MoleculeInput(smiles=suggestion.smiles, name=suggestion.candidate_key),
+            parameters=ComputationParameters(charge=0, multiplicity=1, method=method),
+            resources=resources,
+            source=f"optimization_suggestion:{preset_key}",
+            campaign_id=suggestion.campaign_id,
+            suggestion_id=suggestion.suggestion_id,
+        )
+
+    def _normalize_planner_config(self, planner_config: dict) -> dict:
+        """Validate and normalize backend-owned computation preset config."""
+        config = dict(planner_config or {})
+        preset_key, _ = self._resolve_computation_preset(config)
+        try:
+            constraints = PlannerConstraints(**(config.get("constraints") or {}))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"planner_config.constraints 无效：{exc}") from exc
+        config["constraints"] = constraints.model_dump(mode="json", exclude_none=True)
+        preset_config = config.get("computation_preset")
+        if isinstance(preset_config, dict):
+            allowed_keys = {"preset_key", "method", "resources"}
+            unexpected = set(preset_config) - allowed_keys
+            if unexpected:
+                raise HTTPException(status_code=400, detail="computation_preset 只能包含 preset_key/method/resources")
+        else:
+            config["computation_preset"] = preset_key
+        return config
+
+    def _resolve_computation_preset(self, planner_config: dict) -> tuple[str, dict]:
+        raw = (planner_config or {}).get("computation_preset", "mock_laser")
+        if isinstance(raw, str):
+            preset_key = raw.strip() or "mock_laser"
+        elif isinstance(raw, dict):
+            preset_key = str(raw.get("preset_key") or raw.get("key") or "").strip()
+        else:
+            raise HTTPException(status_code=400, detail="computation_preset 必须是后端白名单 preset")
+        if preset_key not in COMPUTATION_PRESETS:
+            raise HTTPException(status_code=400, detail=f"不支持的 computation_preset：{preset_key}")
+        return preset_key, COMPUTATION_PRESETS[preset_key]
+
+    def _resolve_preset_method(self, preset_key: str, preset: dict, planner_config: dict) -> str:
+        raw = (planner_config or {}).get("computation_preset")
+        method = preset["method"]
+        if isinstance(raw, dict) and raw.get("method"):
+            method = str(raw["method"]).strip()
+        if preset_key.startswith("orca_") and method not in ORCA_PRESET_METHODS:
+            raise HTTPException(status_code=400, detail="ORCA preset method 必须来自后端白名单")
+        if preset_key == "mock_laser" and method != "GFN2-xTB":
+            raise HTTPException(status_code=400, detail="mock_laser preset 不支持覆盖 method")
+        return method
+
+    def _resolve_preset_resources(self, preset: dict, planner_config: dict) -> ComputationResources:
+        raw = (planner_config or {}).get("computation_preset")
+        resource_payload = dict(preset["resources"])
+        if isinstance(raw, dict) and isinstance(raw.get("resources"), dict):
+            allowed_keys = {"num_cores", "memory_mb", "max_wallclock_seconds"}
+            unexpected = set(raw["resources"]) - allowed_keys
+            if unexpected:
+                raise HTTPException(status_code=400, detail="resources 只能包含 num_cores/memory_mb/max_wallclock_seconds")
+            resource_payload.update(raw["resources"])
+        try:
+            return ComputationResources(**resource_payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"computation_preset resources 无效：{exc}") from exc
+
+    def reject_suggestion(
+        self,
+        suggestion_id: str,
+        payload: SuggestionRejectRequest,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+        is_admin: bool = False,
+    ) -> OptimizationSuggestion:
+        """拒绝 suggested/submitted suggestion。"""
+        suggestion = self._get_suggestion_for_update(
+            suggestion_id,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
+        if suggestion.status in {"evaluated", "rejected", "failed"}:
+            raise HTTPException(status_code=400, detail="当前推荐状态不允许拒绝")
+        now = utc_now()
+        planner_payload = {
+            **suggestion.planner_payload,
+            "rejection": {
+                "reason": payload.reason,
+                "rejected_by": actor_user_id,
+                "rejected_at": now.isoformat(),
+            },
+        }
+        OptimizationSuggestionRepository.update_fields(
+            suggestion_id,
+            {"status": "rejected", "planner_payload": planner_payload, "updated_at": now},
+        )
+        self._audit(
+            "suggestion.rejected",
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+            entity_type="optimization_suggestion",
+            entity_id=suggestion_id,
+            related_ids={"campaign_id": suggestion.campaign_id, "run_id": suggestion.submitted_run_id},
+            before={"status": suggestion.status},
+            after={"status": "rejected", "reason": payload.reason},
+        )
+        return OptimizationSuggestion(**OptimizationSuggestionRepository.find_one({"suggestion_id": suggestion_id}))
+
+    def mark_suggestion_failed(
+        self,
+        suggestion_id: str,
+        payload: SuggestionFailureRequest,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+        is_admin: bool = False,
+    ) -> OptimizationSuggestion:
+        """标记 submitted/suggested suggestion 失败。"""
+        suggestion = self._get_suggestion_for_update(
+            suggestion_id,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
+        if suggestion.status in {"evaluated", "rejected", "failed"}:
+            raise HTTPException(status_code=400, detail="当前推荐状态不允许标记失败")
+        now = utc_now()
+        planner_payload = {
+            **suggestion.planner_payload,
+            "failure": {
+                "reason": payload.reason,
+                "run_id": payload.run_id,
+                "error_code": payload.error_code,
+                "failed_by": actor_user_id,
+                "failed_at": now.isoformat(),
+            },
+        }
+        update_fields = {"status": "failed", "planner_payload": planner_payload, "updated_at": now}
+        if payload.run_id and not suggestion.submitted_run_id:
+            update_fields["submitted_run_id"] = payload.run_id
+        OptimizationSuggestionRepository.update_fields(suggestion_id, update_fields)
+        self._audit(
+            "suggestion.failed",
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+            entity_type="optimization_suggestion",
+            entity_id=suggestion_id,
+            related_ids={"campaign_id": suggestion.campaign_id, "run_id": payload.run_id or suggestion.submitted_run_id},
+            before={"status": suggestion.status},
+            after={"status": "failed", "reason": payload.reason, "error_code": payload.error_code},
+        )
+        return OptimizationSuggestion(**OptimizationSuggestionRepository.find_one({"suggestion_id": suggestion_id}))
 
     def _load_chemos_demo_candidates(self) -> list[CandidateImportItem]:
         """读取 ChemOS demo molecules.json；缺失时使用安全内置候选。"""
@@ -697,7 +1084,7 @@ class OptimizationService:
                 for item in observations
             ],
             objectives=campaign.objectives,
-            constraints=constraints,
+            constraints=PlannerConstraints(**constraints),
         )
 
     def _map_computation_observation_values(self, run_doc: dict, campaign: OptimizationCampaign) -> dict[str, float]:
@@ -716,6 +1103,108 @@ class OptimizationService:
             raise HTTPException(status_code=400, detail=f"计算结果缺少必需 observation 指标：{', '.join(missing)}")
         return values
 
+    def _parse_candidate_csv(
+        self,
+        csv_text: str,
+    ) -> tuple[list[CandidateImportItem], list[CandidateImportFailedRow], list[CandidateImportDuplicateRow]]:
+        """解析候选 CSV，保留行级失败报告。"""
+        try:
+            reader = csv.DictReader(io.StringIO(csv_text))
+        except csv.Error as exc:
+            raise HTTPException(status_code=400, detail=f"CSV 无法解析：{exc}") from exc
+        fieldnames = set(reader.fieldnames or [])
+        required_fields = {"candidate_key", "smiles"}
+        if not required_fields.issubset(fieldnames):
+            raise HTTPException(status_code=400, detail="CSV 缺少必需字段：candidate_key, smiles")
+        items: list[CandidateImportItem] = []
+        failed_rows: list[CandidateImportFailedRow] = []
+        duplicate_rows: list[CandidateImportDuplicateRow] = []
+        seen_keys: set[str] = set()
+        for row_number, row in enumerate(reader, start=2):
+            candidate_key = str(row.get("candidate_key") or "").strip()
+            smiles = str(row.get("smiles") or "").strip()
+            if not candidate_key or not smiles:
+                failed_rows.append(
+                    CandidateImportFailedRow(
+                        row_number=row_number,
+                        candidate_key=candidate_key or None,
+                        smiles=smiles or None,
+                        reason="candidate_key 和 smiles 均不能为空",
+                    )
+                )
+                continue
+            if candidate_key in seen_keys:
+                duplicate_rows.append(
+                    CandidateImportDuplicateRow(
+                        row_number=row_number,
+                        candidate_key=candidate_key,
+                        reason="candidate_key 在本次 CSV 中重复",
+                    )
+                )
+                continue
+            seen_keys.add(candidate_key)
+            parameters = self._parse_json_cell(row.get("parameters"), default={})
+            metadata = self._parse_json_cell(row.get("metadata"), default={})
+            if parameters is None or metadata is None:
+                failed_rows.append(
+                    CandidateImportFailedRow(
+                        row_number=row_number,
+                        candidate_key=candidate_key,
+                        smiles=smiles,
+                        reason="parameters 或 metadata 不是合法 JSON object",
+                    )
+                )
+                continue
+            items.append(
+                CandidateImportItem(
+                    candidate_key=candidate_key,
+                    smiles=smiles,
+                    parameters=parameters,
+                    metadata=metadata,
+                )
+            )
+        if not items and not failed_rows and not duplicate_rows:
+            raise HTTPException(status_code=400, detail="CSV 未包含候选数据行")
+        return items, failed_rows, duplicate_rows
+
+    def _parse_json_cell(self, value: str | None, *, default: dict) -> dict | None:
+        """解析 CSV 中可选 JSON object 单元格。"""
+        if value is None or not str(value).strip():
+            return default
+        try:
+            parsed = json.loads(str(value))
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _validate_observation_values(self, campaign: OptimizationCampaign, values: dict[str, float]) -> None:
+        """校验 observation values 符合 campaign objective schema。"""
+        objective_names = {objective.name for objective in campaign.objectives}
+        unknown = sorted(set(values) - objective_names)
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"Observation 包含未知目标字段：{', '.join(unknown)}")
+        required_names = {objective.name for objective in campaign.objectives if objective.required}
+        missing = sorted(required_names - set(values))
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Observation 缺少必需目标字段：{', '.join(missing)}")
+        non_finite = [
+            key
+            for key, value in values.items()
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value))
+        ]
+        if non_finite:
+            raise HTTPException(status_code=400, detail=f"Observation 数值必须是有限数字：{', '.join(sorted(non_finite))}")
+
+    def _ensure_campaign_importable(self, campaign: OptimizationCampaign) -> None:
+        """确保 campaign 可导入候选。"""
+        if campaign.status not in IMPORTABLE_CAMPAIGN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"{campaign.status} campaign 不允许导入候选")
+
+    def _ensure_campaign_active(self, campaign: OptimizationCampaign, *, action: str) -> None:
+        """确保 campaign 可继续闭环动作。"""
+        if campaign.status not in ACTIVE_CAMPAIGN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"{campaign.status} campaign 不允许{action}")
+
     def _dig(self, payload: dict, dotted_path: str):
         """读取 result_summary 中的点分路径。"""
         current = payload
@@ -725,12 +1214,44 @@ class OptimizationService:
             current = current.get(part)
         return current
 
-    def _get_campaign(self, campaign_id: str) -> OptimizationCampaign:
+    def _get_campaign(
+        self,
+        campaign_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> OptimizationCampaign:
         """查询 campaign，不存在则 404。"""
         campaign = OptimizationCampaignRepository.find_one({"campaign_id": campaign_id})
         if not campaign:
             raise HTTPException(status_code=404, detail="campaign 不存在")
+        if (
+            actor_user_id
+            and not is_admin
+            and not actor_user_id.startswith("worker-")
+            and campaign.get("created_by") != actor_user_id
+        ):
+            raise HTTPException(status_code=403, detail="无权限访问该 campaign")
         return OptimizationCampaign(**campaign)
+
+    def _ensure_campaign_access(self, campaign_id: str, *, actor_user_id: str | None, is_admin: bool) -> None:
+        """检查 campaign 数据权限。"""
+        self._get_campaign(campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
+
+    def _get_suggestion_for_update(
+        self,
+        suggestion_id: str,
+        *,
+        actor_user_id: str | None,
+        is_admin: bool,
+    ) -> OptimizationSuggestion:
+        """查询 suggestion 并校验所属 campaign 权限。"""
+        suggestion_doc = OptimizationSuggestionRepository.find_one({"suggestion_id": suggestion_id})
+        if not suggestion_doc:
+            raise HTTPException(status_code=404, detail="推荐不存在")
+        suggestion = OptimizationSuggestion(**suggestion_doc)
+        self._ensure_campaign_access(suggestion.campaign_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        return suggestion
 
     def _audit(
         self,

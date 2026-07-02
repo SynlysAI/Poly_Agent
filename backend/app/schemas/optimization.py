@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 CampaignStatus = Literal["draft", "running", "paused", "completed", "failed", "archived"]
@@ -13,6 +13,7 @@ PlannerType = Literal["fallback", "tanimoto"]
 ObjectiveDirection = Literal["max", "min"]
 SuggestionStatus = Literal["suggested", "submitted", "evaluated", "rejected", "failed"]
 ObservationSourceType = Literal["computation", "experiment", "manual", "imported"]
+PlannerSuggestionConfidence = Literal["high", "low"]
 
 
 class OptimizationObjective(BaseModel):
@@ -49,6 +50,21 @@ class CampaignCreateRequest(BaseModel):
         if not normalized:
             raise ValueError("Campaign 名称不能为空")
         return normalized
+
+
+class CampaignStatusChangeRequest(BaseModel):
+    """Campaign 状态变更请求。"""
+
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        """规范化状态变更原因。"""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class OptimizationCampaign(BaseModel):
@@ -107,6 +123,29 @@ class CandidateImportRequest(BaseModel):
     candidates: list[CandidateImportItem] = Field(min_length=1, max_length=200)
 
 
+class CandidateImportCsvRequest(BaseModel):
+    """候选分子 CSV 导入请求。"""
+
+    csv_text: str = Field(min_length=1)
+
+
+class CandidateImportFailedRow(BaseModel):
+    """候选导入失败行报告。"""
+
+    row_number: int
+    candidate_key: str | None = None
+    smiles: str | None = None
+    reason: str
+
+
+class CandidateImportDuplicateRow(BaseModel):
+    """候选导入重复行报告。"""
+
+    row_number: int
+    candidate_key: str
+    reason: str
+
+
 class OptimizationCandidate(BaseModel):
     """优化候选记录。"""
 
@@ -143,6 +182,49 @@ class PlannerObservation(BaseModel):
     source_run_id: str | None = None
 
 
+class PlannerConstraints(BaseModel):
+    """planner 约束 schema。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    allowed_candidate_ids: list[str] | None = None
+    excluded_candidate_ids: list[str] = Field(default_factory=list)
+    excluded_counts: dict[str, int] = Field(default_factory=dict)
+    require_descriptor: bool = False
+    minimum_similarity: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_low_confidence_suggestions: int = Field(default=1, ge=0, le=20)
+
+    @field_validator("allowed_candidate_ids", "excluded_candidate_ids")
+    @classmethod
+    def normalize_candidate_ids(cls, value: list[str] | None) -> list[str] | None:
+        """去重并规范化 candidate id 列表。"""
+        if value is None:
+            return None
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            candidate_id = str(item).strip()
+            if not candidate_id or candidate_id in seen:
+                continue
+            seen.add(candidate_id)
+            normalized.append(candidate_id)
+        return normalized
+
+    @field_validator("excluded_counts")
+    @classmethod
+    def validate_excluded_counts(cls, value: dict[str, int]) -> dict[str, int]:
+        """校验排除计数。"""
+        normalized: dict[str, int] = {}
+        for key, count in value.items():
+            normalized_key = str(key).strip()
+            if not normalized_key:
+                raise ValueError("excluded_counts key 不能为空")
+            if int(count) < 0:
+                raise ValueError("excluded_counts 不能为负数")
+            normalized[normalized_key] = int(count)
+        return normalized
+
+
 class PlannerRequest(BaseModel):
     """planner 标准输入。"""
 
@@ -153,7 +235,7 @@ class PlannerRequest(BaseModel):
     candidates: list[PlannerCandidate]
     observations: list[PlannerObservation]
     objectives: list[OptimizationObjective]
-    constraints: dict = Field(default_factory=dict)
+    constraints: PlannerConstraints = Field(default_factory=PlannerConstraints)
 
 
 class PlannerSuggestionItem(BaseModel):
@@ -163,6 +245,17 @@ class PlannerSuggestionItem(BaseModel):
     candidate_key: str
     score: float
     reason: str
+    confidence: PlannerSuggestionConfidence = "high"
+    metadata: dict = Field(default_factory=dict)
+
+
+class PlannerSkippedItem(BaseModel):
+    """planner 跳过候选说明。"""
+
+    candidate_id: str | None = None
+    candidate_key: str | None = None
+    reason: str
+    code: str
     metadata: dict = Field(default_factory=dict)
 
 
@@ -172,6 +265,7 @@ class PlannerResponse(BaseModel):
     schema_version: str = "planner_response.v1"
     planner_type: PlannerType
     suggestions: list[PlannerSuggestionItem]
+    skipped: list[PlannerSkippedItem] = Field(default_factory=list)
     iteration_metadata: dict = Field(default_factory=dict)
 
 
@@ -179,6 +273,9 @@ class CandidateImportData(BaseModel):
     """候选导入响应。"""
 
     imported_count: int
+    updated_count: int = 0
+    failed_rows: list[CandidateImportFailedRow] = Field(default_factory=list)
+    duplicate_rows: list[CandidateImportDuplicateRow] = Field(default_factory=list)
     items: list[OptimizationCandidate]
 
 
@@ -210,6 +307,38 @@ class SuggestionCreateData(BaseModel):
     """生成推荐响应。"""
 
     items: list[OptimizationSuggestion]
+
+
+class SuggestionRejectRequest(BaseModel):
+    """拒绝推荐请求。"""
+
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        """规范化原因。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("reason 不能为空")
+        return normalized
+
+
+class SuggestionFailureRequest(BaseModel):
+    """标记推荐失败请求。"""
+
+    reason: str = Field(min_length=1, max_length=1000)
+    run_id: str | None = Field(default=None, max_length=80)
+    error_code: str | None = Field(default=None, max_length=120)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        """规范化原因。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("reason 不能为空")
+        return normalized
 
 
 class ObservationCreateRequest(BaseModel):

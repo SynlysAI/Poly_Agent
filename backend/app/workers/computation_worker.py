@@ -53,6 +53,7 @@ class ComputationWorker:
             now=now,
             step_labels=adapter.step_labels,
         )
+        self.service.heartbeat_run(running.run_id, worker_id=self.worker_id, now=utc_now())
         workdir = settings.outputs_root / "computations" / running.run_id / "work"
         context = AdapterContext(
             run=running,
@@ -63,7 +64,9 @@ class ComputationWorker:
         )
         try:
             validation_result = adapter.validate_input(context)
+            self.service.heartbeat_run(running.run_id, worker_id=self.worker_id, now=utc_now())
             adapter_result = validation_result or adapter.run(context)
+            self.service.heartbeat_run(running.run_id, worker_id=self.worker_id, now=utc_now())
             adapter_result.artifact_specs = adapter.collect_artifacts(context, adapter_result)
             adapter_result.result_summary = adapter.parse_result(context, adapter_result)
         except Exception as exc:

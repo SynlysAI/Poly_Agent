@@ -23,6 +23,7 @@ LOCAL_STRUCTURE_STEP_LABELS = {
     "LOCAL_GENERATE_STRUCTURE": "生成本地结构",
     "LOCAL_COLLECT_ARTIFACTS": "收集结构产物",
 }
+MAX_LOCAL_TEXT_ARTIFACT_BYTES = 512 * 1024
 
 
 @dataclass
@@ -176,6 +177,7 @@ def build_local_structure(
             log_lines.append("structure_backend=rdkit")
             log_path.write_text("\n".join(log_lines), encoding="utf-8")
             specs.extend(_structure_success_specs(step_key, structure, workdir, xyz_path, sdf_path, log_path, "rdkit"))
+            _truncate_text_artifacts(specs)
             return _success_output(specs, structure, xyz_path, sdf_path, "rdkit")
         except ValueError as exc:
             return _failed_output(
@@ -374,6 +376,7 @@ def _generate_with_openbabel(
     log_lines.extend(["structure_backend=openbabel", *stdout_chunks, *stderr_chunks])
     log_path.write_text("\n".join(line for line in log_lines if line), encoding="utf-8")
     specs.extend(_structure_success_specs(step_key, structure, workdir, xyz_path, sdf_path if sdf_path.exists() else None, log_path, "openbabel"))
+    _truncate_text_artifacts(specs)
     return _success_output(specs, structure, xyz_path, sdf_path if sdf_path.exists() else None, "openbabel")
 
 
@@ -474,6 +477,7 @@ def _failed_output(
             _artifact_spec(step_key, "log_text", "structure.log", log_path, "text/plain", "local_structure"),
         ]
     )
+    _truncate_text_artifacts(specs)
     return StructureBuildOutput(
         status="failed",
         artifact_specs=specs,
@@ -501,6 +505,27 @@ def _artifact_spec(
         parser_version="0.1.0",
         metadata={"source": source, "source_step": step_key},
     )
+
+
+def _truncate_text_artifacts(specs: list[ArtifactSpec]) -> None:
+    for spec in specs:
+        if spec.artifact_type not in {"log_text", "xyz", "sdf"}:
+            continue
+        truncated = _truncate_text_file(spec.path, MAX_LOCAL_TEXT_ARTIFACT_BYTES)
+        if truncated:
+            spec.metadata["truncated"] = True
+            spec.metadata["max_bytes"] = MAX_LOCAL_TEXT_ARTIFACT_BYTES
+
+
+def _truncate_text_file(path: Path, max_bytes: int) -> bool:
+    if not path.exists() or path.stat().st_size <= max_bytes:
+        return False
+    marker = f"\n\n[artifact truncated at {max_bytes} bytes]\n".encode("utf-8")
+    keep_bytes = max(max_bytes - len(marker), 0)
+    with path.open("rb") as fp:
+        head = fp.read(keep_bytes)
+    path.write_bytes(head + marker)
+    return True
 
 
 def _rdkit_available() -> bool:

@@ -173,19 +173,27 @@ class IntegrationStatusService:
         }
 
     def _rdkit_status(self, checked_at: str) -> dict:
-        available = importlib.util.find_spec("rdkit") is not None
+        spec = importlib.util.find_spec("rdkit")
+        available = spec is not None
         version = None
+        path = None
+        reason = None
         if available:
+            path = str(spec.origin or next(iter(spec.submodule_search_locations or []), "")) or None
             try:
                 version = importlib.metadata.version("rdkit")
             except importlib.metadata.PackageNotFoundError:
                 version = "unknown"
+        else:
+            reason = "python package rdkit is not importable"
         return {
             "service": "rdkit",
             "status": "available" if available else "not_available",
             "checked_at": checked_at,
             "details": {
+                "path": path,
                 "version": version,
+                "reason": reason,
                 "capabilities": ["smiles_to_3d", "sdf_export", "xyz_export"] if available else [],
             },
         }
@@ -193,6 +201,7 @@ class IntegrationStatusService:
     def _openbabel_status(self, checked_at: str) -> dict:
         obabel_path = shutil.which("obabel")
         version = None
+        reason = None
         if obabel_path:
             try:
                 completed = subprocess.run(
@@ -203,8 +212,16 @@ class IntegrationStatusService:
                     check=False,
                 )
                 version = (completed.stdout or completed.stderr).strip()[:200] or "unknown"
-            except (OSError, subprocess.TimeoutExpired):
+                if completed.returncode != 0:
+                    reason = f"obabel -V returned {completed.returncode}"
+            except subprocess.TimeoutExpired:
                 version = "unknown"
+                reason = "obabel -V timed out"
+            except OSError as exc:
+                version = "unknown"
+                reason = str(exc)
+        else:
+            reason = "obabel executable not found on PATH"
         return {
             "service": "openbabel",
             "status": "available" if obabel_path else "not_available",
@@ -212,6 +229,7 @@ class IntegrationStatusService:
             "details": {
                 "path": obabel_path,
                 "version": version,
+                "reason": reason,
                 "capabilities": ["smiles_to_3d", "sdf_export", "xyz_export"] if obabel_path else [],
             },
         }
@@ -219,6 +237,7 @@ class IntegrationStatusService:
     def _xtb_status(self, checked_at: str) -> dict:
         xtb_path = shutil.which("xtb")
         version = None
+        reason = None
         if xtb_path:
             try:
                 completed = subprocess.run(
@@ -229,8 +248,16 @@ class IntegrationStatusService:
                     check=False,
                 )
                 version = (completed.stdout or completed.stderr).strip()[:200] or "unknown"
-            except (OSError, subprocess.TimeoutExpired):
+                if completed.returncode != 0:
+                    reason = f"xtb --version returned {completed.returncode}"
+            except subprocess.TimeoutExpired:
                 version = "unknown"
+                reason = "xtb --version timed out"
+            except OSError as exc:
+                version = "unknown"
+                reason = str(exc)
+        else:
+            reason = "xtb executable not found on PATH"
         return {
             "service": "xtb",
             "status": "available" if xtb_path else "not_available",
@@ -238,6 +265,7 @@ class IntegrationStatusService:
             "details": {
                 "path": xtb_path,
                 "version": version,
+                "reason": reason,
                 "capabilities": ["geometry_optimization", "single_point"] if xtb_path else [],
             },
         }

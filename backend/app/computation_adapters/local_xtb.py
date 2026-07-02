@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from app.computation_adapters.base import AdapterContext
@@ -28,6 +29,8 @@ XTB_METHOD_TO_GFN = {
     "GFN1-XTB": "1",
     "GFN0-XTB": "0",
 }
+
+MAX_LOCAL_TEXT_ARTIFACT_BYTES = 512 * 1024
 
 
 class LocalXtbAdapter:
@@ -138,19 +141,10 @@ class LocalXtbAdapter:
         stdout_path = context.workdir / "xtb.stdout.log"
         stderr_path = context.workdir / "xtb.stderr.log"
         try:
-            completed = subprocess.run(
-                command,
-                cwd=str(context.workdir),
-                text=True,
-                capture_output=True,
-                timeout=context.timeout_seconds,
-                check=False,
-            )
-            stdout_path.write_text(completed.stdout or "", encoding="utf-8")
-            stderr_path.write_text(completed.stderr or "", encoding="utf-8")
-        except subprocess.TimeoutExpired as exc:
-            stdout_path.write_text(_coerce_process_text(exc.stdout), encoding="utf-8")
-            stderr_path.write_text(_coerce_process_text(exc.stderr), encoding="utf-8")
+            returncode, cancelled = self._run_subprocess_with_heartbeat(context, command, stdout_path, stderr_path)
+        except subprocess.TimeoutExpired:
+            stdout_path.touch(exist_ok=True)
+            stderr_path.touch(exist_ok=True)
             specs.extend(_xtb_log_specs(stdout_path, stderr_path))
             return self._failed_result(
                 context,
@@ -175,12 +169,21 @@ class LocalXtbAdapter:
 
         specs.extend(_xtb_log_specs(stdout_path, stderr_path))
         specs.extend(_xtb_output_specs(context.workdir))
-        if completed.returncode != 0:
+        if cancelled:
+            return self._failed_result(
+                context,
+                step_key="XTB_RUN",
+                error_code="XTB_CANCELLED",
+                message="xTB 执行已取消",
+                retryable=True,
+                specs=specs,
+            )
+        if returncode != 0:
             return self._failed_result(
                 context,
                 step_key="XTB_RUN",
                 error_code="XTB_FAILED",
-                message=f"xTB 执行失败，returncode={completed.returncode}",
+                message=f"xTB 执行失败，returncode={returncode}",
                 retryable=True,
                 specs=specs,
             )
@@ -188,6 +191,7 @@ class LocalXtbAdapter:
         try:
             summary = self._parse_summary(context, stdout_path)
         except ValueError as exc:
+            _truncate_text_artifacts(specs)
             return self._failed_result(
                 context,
                 step_key="XTB_PARSE_RESULT",
@@ -210,6 +214,7 @@ class LocalXtbAdapter:
                 metadata={"source": "local_xtb", "source_step": "XTB_PARSE_RESULT"},
             )
         )
+        _truncate_text_artifacts(specs)
         finished_at = utc_now()
         return AdapterRunResult(
             status="completed",
@@ -233,6 +238,49 @@ class LocalXtbAdapter:
             return {}
         return result.result_summary
 
+    def _run_subprocess_with_heartbeat(
+        self,
+        context: AdapterContext,
+        command: list[str],
+        stdout_path: Path,
+        stderr_path: Path,
+    ) -> tuple[int, bool]:
+        """Run xTB while refreshing heartbeat and honoring user cancellation."""
+        from app.services.computation_service import ComputationService
+
+        service = ComputationService()
+        started = time.monotonic()
+        with stdout_path.open("w", encoding="utf-8") as stdout_fp, stderr_path.open("w", encoding="utf-8") as stderr_fp:
+            process = subprocess.Popen(
+                command,
+                cwd=str(context.workdir),
+                text=True,
+                stdout=stdout_fp,
+                stderr=stderr_fp,
+            )
+            last_heartbeat = 0.0
+            while True:
+                returncode = process.poll()
+                if returncode is not None:
+                    return returncode, False
+                now = time.monotonic()
+                if now - started > context.timeout_seconds:
+                    process.kill()
+                    process.wait(timeout=5)
+                    raise subprocess.TimeoutExpired(command, context.timeout_seconds)
+                if now - last_heartbeat >= 5:
+                    run = service.heartbeat_run(context.run.run_id, worker_id=context.worker_id)
+                    last_heartbeat = now
+                    if run.status == "cancelled":
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
+                        return process.returncode or -15, True
+                time.sleep(1)
+
     def _build_command(self, context: AdapterContext, xtb_path: str, input_xyz: Path) -> list[str]:
         method_key = context.run.parameters.method.upper()
         command = [
@@ -253,21 +301,27 @@ class LocalXtbAdapter:
 
     def _parse_summary(self, context: AdapterContext, stdout_path: Path) -> dict:
         text = stdout_path.read_text(encoding="utf-8")
+        summary_text = text
         energy = _parse_energy_hartree(text)
-        if energy is None:
-            xtb_out = context.workdir / "xtb.out"
-            if xtb_out.exists():
-                energy = _parse_energy_hartree(xtb_out.read_text(encoding="utf-8"))
+        xtb_out = context.workdir / "xtb.out"
+        if xtb_out.exists():
+            xtb_out_text = xtb_out.read_text(encoding="utf-8", errors="replace")
+            summary_text = f"{text}\n{xtb_out_text}"
+            if energy is None:
+                energy = _parse_energy_hartree(xtb_out_text)
         if energy is None:
             raise ValueError("无法从 xTB 输出解析 total energy")
+        runtime_seconds = _parse_runtime_seconds(summary_text)
+        xtb_version = _parse_xtb_version(summary_text)
+        normal_termination = _parse_normal_termination(summary_text)
         return {
             "engine": context.run.engine,
             "workflow_type": context.run.workflow_type,
             "method": context.run.parameters.method,
             "energy_hartree": energy,
-            "normal_termination": True,
-            "runtime_seconds": None,
-            "xtb_version": "unknown",
+            "normal_termination": normal_termination,
+            "runtime_seconds": runtime_seconds,
+            "xtb_version": xtb_version,
         }
 
     def _failed_result(
@@ -281,6 +335,7 @@ class LocalXtbAdapter:
         specs: list[ArtifactSpec],
     ) -> AdapterRunResult:
         context.workdir.mkdir(parents=True, exist_ok=True)
+        _truncate_text_artifacts(specs)
         error = {"error_code": error_code, "message": message, "retryable": retryable}
         error_path = context.workdir / "xtb-error.json"
         worker_log_path = context.workdir / "worker.log"
@@ -349,12 +404,65 @@ def _parse_energy_hartree(text: str) -> float | None:
     return None
 
 
-def _coerce_process_text(value: bytes | str | None) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value
+def _parse_xtb_version(text: str) -> str:
+    patterns = [
+        r"\bxtb\s+version\s+([0-9A-Za-z_.+\-]+)",
+        r"\bxTB\s+version\s+([0-9A-Za-z_.+\-]+)",
+        r"\bversion\s*[:=]\s*([0-9A-Za-z_.+\-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return "unknown"
+
+
+def _parse_runtime_seconds(text: str) -> float | None:
+    direct = re.search(r"\bruntime_seconds\s*[:=]\s*(\d+(?:\.\d+)?)", text, flags=re.IGNORECASE)
+    if direct:
+        return round(float(direct.group(1)), 3)
+    wall_time = re.search(
+        r"wall[-\s]?time\s*[:=]\s*(?:(\d+)\s*d[, ]*)?(?:(\d+)\s*h[, ]*)?(?:(\d+)\s*min[, ]*)?(\d+(?:\.\d+)?)\s*s",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if wall_time:
+        days = int(wall_time.group(1) or 0)
+        hours = int(wall_time.group(2) or 0)
+        minutes = int(wall_time.group(3) or 0)
+        seconds = float(wall_time.group(4))
+        return round(days * 86400 + hours * 3600 + minutes * 60 + seconds, 3)
+    return None
+
+
+def _parse_normal_termination(text: str) -> bool:
+    lowered = text.lower()
+    if "abnormal termination" in lowered:
+        return False
+    if "normal termination" in lowered:
+        return True
+    return True
+
+
+def _truncate_text_artifacts(specs: list[ArtifactSpec]) -> None:
+    for spec in specs:
+        if spec.artifact_type not in {"log_text", "xyz", "sdf"}:
+            continue
+        truncated = _truncate_text_file(spec.path, MAX_LOCAL_TEXT_ARTIFACT_BYTES)
+        if truncated:
+            spec.metadata["truncated"] = True
+            spec.metadata["max_bytes"] = MAX_LOCAL_TEXT_ARTIFACT_BYTES
+
+
+def _truncate_text_file(path: Path, max_bytes: int) -> bool:
+    if not path.exists() or path.stat().st_size <= max_bytes:
+        return False
+    marker = f"\n\n[artifact truncated at {max_bytes} bytes]\n".encode("utf-8")
+    keep_bytes = max(max_bytes - len(marker), 0)
+    with path.open("rb") as fp:
+        head = fp.read(keep_bytes)
+    path.write_bytes(head + marker)
+    return True
 
 
 def _xtb_log_specs(stdout_path: Path, stderr_path: Path) -> list[ArtifactSpec]:

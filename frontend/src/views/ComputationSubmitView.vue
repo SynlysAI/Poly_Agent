@@ -154,7 +154,7 @@ async function handleCreateOptimizationDemo() {
       objectives: [
         { name: 'gain_factor', direction: 'max', unit: 'cm2_s', required: true },
       ],
-      planner_config: { batch_size: 1 },
+      planner_config: { batch_size: 1, computation_preset: 'mock_laser' },
     })
     await importCampaignCandidates(campaign.campaign_id, {
       candidates: [
