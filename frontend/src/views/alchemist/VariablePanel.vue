@@ -29,6 +29,8 @@ const formData = ref({
   low: 0,
   high: 1,
   values: '',
+  unit: '',
+  description: '',
 })
 
 /** 获取变量的数值边界。 */
@@ -64,7 +66,7 @@ async function loadVariables() {
 
 function openAddDialog() {
   editingVariable.value = null
-  formData.value = { name: '', type: 'real', low: 0, high: 1, values: '' }
+  formData.value = { name: '', type: 'real', low: 0, high: 1, values: '', unit: '', description: '' }
   dialogVisible.value = true
 }
 
@@ -78,12 +80,19 @@ function openEditDialog(variable) {
     low: bounds.low,
     high: bounds.high,
     values: Array.isArray(values) ? values.join(', ') : values,
+    unit: variable.unit || '',
+    description: variable.description || '',
   }
   dialogVisible.value = true
 }
 
 async function handleSave() {
-  const payload = { name: formData.value.name, type: formData.value.type }
+  const payload = {
+    name: formData.value.name,
+    type: formData.value.type,
+    unit: formData.value.unit?.trim() || null,
+    description: formData.value.description?.trim() || null,
+  }
   if (formData.value.type === 'real' || formData.value.type === 'integer') {
     payload.min = Number(formData.value.low)
     payload.max = Number(formData.value.high)
@@ -162,6 +171,8 @@ onMounted(() => { if (props.sessionId) loadVariables() })
             </template>
           </template>
         </el-table-column>
+        <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column prop="description" label="描述" min-width="140" show-overflow-tooltip />
         <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEditDialog(row)"><el-icon><Edit /></el-icon></el-button>
@@ -188,6 +199,8 @@ onMounted(() => { if (props.sessionId) loadVariables() })
         <template v-else>
           <el-form-item label="可选值"><el-input v-model="formData.values" placeholder="用逗号分隔，如: A, B, C" /></el-form-item>
         </template>
+        <el-form-item label="单位"><el-input v-model="formData.unit" placeholder="可选，如 °C、MPa、mol/L" /></el-form-item>
+        <el-form-item label="描述"><el-input v-model="formData.description" placeholder="可选，简要说明该变量的含义" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>

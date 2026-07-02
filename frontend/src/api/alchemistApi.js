@@ -194,9 +194,67 @@ export function getContourData(sessionId, contourConfig) {
   return alchemistClient.post(`/sessions/${sessionId}/visualizations/contour`, contourConfig).then(r => r.data)
 }
 
+// ── 最优实验设计 (OED) ──
+
+/** 预览最优设计模型项信息（干运行，不执行交换算法） */
+export function getOptimalDesignInfo(sessionId, config) {
+  return alchemistClient.post(`/sessions/${sessionId}/optimal-design/info`, config).then(r => r.data)
+}
+
+/** 生成最优实验设计（D/A/I-optimal） */
+export function generateOptimalDesign(sessionId, config) {
+  return alchemistClient.post(`/sessions/${sessionId}/optimal-design`, config).then(r => r.data)
+}
+
 // ── LLM ──
 
 /** LLM 辅助实验建议 */
 export function llmSuggest(sessionId, llmConfig) {
   return alchemistClient.post(`/llm/suggest-effects/${sessionId}`, llmConfig).then(r => r.data)
+}
+
+/** SSE 流式 LLM 效应建议（最优设计用） */
+export function llmSuggestEffectsSSE(sessionId, config, onEvent, onError, onComplete) {
+  const baseUrl = getApiBaseUrl()
+  const url = `${baseUrl}/alchemist/llm/suggest-effects/${sessionId}`
+  const authHeader = getAuthorizationHeader()
+
+  fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authHeader ? { 'Authorization': authHeader } : {}),
+    },
+    body: JSON.stringify(config),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const text = await response.text()
+        onError(new Error(text))
+        return
+      }
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              onEvent(data)
+            } catch {
+              // 忽略解析失败的行
+            }
+          }
+        }
+      }
+      onComplete()
+    })
+    .catch((err) => onError(err))
 }
