@@ -490,6 +490,28 @@ ComputationAdapter 协议
 
 **目标：** 让集成状态从临时探测升级为可管理配置。
 
+**实施拆分：**
+- Step 4.1.1 数据模型：
+  - 新增 `service_integrations` 集合，主键 `service_key`。
+  - 保存 `service_key`、`display_name`、`service_type`、`enabled`、`endpoint`、`config_summary`、`secret_refs`、`last_checked_at`、`last_status`、`last_error_summary`、`updated_by`、`created_at`、`updated_at`。
+  - `config_summary` 只保存非敏感摘要，例如 protocol、timeout、profile、workflow template、capabilities；`secret_refs` 只保存密钥引用名或环境变量名。
+  - 禁止保存 `token`、`password`、`api_key`、`secret`、`private_key` 等明文字段。
+- Step 4.1.2 API：
+  - `GET /api/v1/integrations/configs`：管理员查看配置摘要和最后检查结果。
+  - `PUT /api/v1/integrations/configs/{service_key}`：管理员创建或更新配置摘要。
+  - `POST /api/v1/integrations/configs/{service_key}/check`：按持久化配置触发一次健康检查并写回 `last_*` 字段。
+  - 保留现有 `GET /api/v1/integrations/status`，但结果合并持久化配置状态。
+- Step 4.1.3 审计与安全：
+  - 配置新增、启用/停用、endpoint/config 摘要变更、健康检查结果变更写 `audit_events`。
+  - 审计 `before/after` 必须使用脱敏后的配置摘要。
+  - 非管理员不能写配置；后端校验 endpoint 格式和 service key 白名单。
+- Step 4.1.4 前端：
+  - Tool Services 页面展示 enabled、endpoint、last_checked_at、last_status、last_error_summary。
+  - 第一版只提供启用/停用、endpoint/config 摘要编辑和手动检查，不提供密钥录入。
+- Step 4.1.5 测试：
+  - 单测覆盖密钥字段被拒绝或脱敏、配置 upsert、审计事件、Mongo 不可用时 demo store 兜底。
+  - API 测试覆盖管理员权限和响应不包含明文密钥。
+
 **验收标准：**
 - MongoDB 保存 integration config 摘要，不保存明文密钥。
 - 管理员可查看启用状态、endpoint、最后检查时间和错误摘要。
@@ -498,6 +520,27 @@ ComputationAdapter 协议
 #### Step 4.2 SpecLabOS workflow 提交
 
 **目标：** suggestion 可转实验验证。
+
+**实施拆分：**
+- Step 4.2.1 数据契约：
+  - `optimization_suggestions.submitted_experiment_run_id` 保存 SpecLabOS `workflow_run_id`。
+  - suggestion 增加 `experiment_status` 或 `external_refs.speclabos` 摘要，记录 submitted/running/completed/failed/cancelled 和最后同步时间。
+  - `optimization_observations.source_type="experiment"` 与计算 observation 共用集合，通过 `source_run_id` 区分来源。
+- Step 4.2.2 SpecLabOS client：
+  - 使用 `service_integrations` 中的 `speclabos` 配置读取 endpoint、protocol/template 摘要；密钥只从环境变量或 secret manager 引用读取。
+  - 最小能力只实现 submit、get run status、get result summary。
+  - 上游 HTTP 超时、4xx、5xx 映射为受控错误，不暴露 token 或完整响应体。
+- Step 4.2.3 API 和状态机：
+  - `POST /api/v1/optimization/suggestions/{suggestion_id}/submit-experiment` 创建 SpecLabOS workflow run。
+  - 重复提交返回已有 `submitted_experiment_run_id`，不重复创建上游 workflow。
+  - 上游提交失败时 suggestion 进入 `failed` 或保持 `suggested` 并记录失败审计；不能进入 `evaluated`。
+  - `sync-speclabos` worker 将上游 completed 结果解析为 experiment observation；failed 映射到 suggestion failed。
+- Step 4.2.4 审计与产物：
+  - 提交、同步、失败、observation 创建均写审计。
+  - 仅保存实验结果摘要、checksum、可下载 artifact 引用，不复制完整仪器日志。
+- Step 4.2.5 测试：
+  - fake SpecLabOS client 覆盖提交成功、提交失败、重复提交、同步完成生成 experiment observation。
+  - 验证 computation observation 与 experiment observation 可同时存在于同一 campaign/suggestion 历史中。
 
 **验收标准：**
 - `suggestion -> SpecLabOS workflow_run_id` 关系可追踪。
@@ -508,12 +551,43 @@ ComputationAdapter 协议
 
 **目标：** 引入真实 provenance 引用，但不把 AiiDA 数据库混入业务库。
 
+**实施拆分：**
+- Step 4.3.1 数据契约：
+  - `computation_runs.external_refs.aiida_process_uuid` 保存 AiiDA process UUID。
+  - `external_refs.aiida_status` 保存 queued/running/finished/failed/excepted/killed 的同步摘要。
+  - `external_refs.aiida_synced_at` 和 `external_refs.aiida_profile` 仅保存摘要；profile/computer 由 worker 环境控制，前端不可覆盖。
+- Step 4.3.2 adapter/worker：
+  - 新增 `AIIDA_XTB_ONLY` adapter，负责提交 AiiDA process 并返回 process UUID。
+  - 新增同步 worker：按 Poly_Agent running runs 查询 AiiDA 状态，映射到 `completed/failed/cancelled`。
+  - AiiDA 不可用时只影响 AIIDA workflow，不影响 mock/local workflow。
+- Step 4.3.3 状态映射：
+  - AiiDA created/waiting/running -> Poly_Agent running。
+  - AiiDA finished_ok -> completed。
+  - AiiDA excepted/failed -> failed，并保存错误摘要。
+  - AiiDA killed -> cancelled 或 failed，按 cancel request 来源区分。
+- Step 4.3.4 artifact parser：
+  - parser 从 AiiDA retrieved/output nodes 提取摘要，生成 artifact metadata。
+  - 业务库只保存 `summary`、`checksum_sha256`、`storage_uri`、`parser_name/version` 和必要 external ref。
+  - 不复制 AiiDA node 全量 provenance，不把 AiiDA PostgreSQL 表同步进 MongoDB。
+- Step 4.3.5 测试：
+  - fake AiiDA client 覆盖 submit、finished_ok、failed、excepted、killed。
+  - 测试 process UUID 落库、状态映射、artifact 摘要保存和错误审计。
+
 **验收标准：**
 - computation run 保存 `aiida_process_uuid` 和同步状态。
 - AiiDA 失败/完成映射到 Poly_Agent 状态机。
 - artifact parser 只保存摘要、checksum 和可下载产物。
 
 ### Phase 5: ORCA/ChemOS laser workflow
+
+**当前执行进展（2026-07-02）：**
+
+- 已新增 `ORCA_CHEMOS_LASER` / `ORCA` workflow-engine 组合，worker 侧固定为五段受控步骤：`CHEMOS_PREPARE_STRUCTURE`、`CHEMOS_XTB_CREST`、`CHEMOS_ORCA`、`CHEMOS_SPECTRA_PARSE`、`CHEMOS_GAIN_PARSE`。
+- 已将 computation create 参数改为白名单模型：`parameters`/`resources`/`molecule`/request body 拒绝未知字段，`method`、`solvent` 只接受后端枚举值；前端提交页也改为枚举控件，不提供 shell command 或本地路径输入。
+- 已新增 ORCA/ChemOS 后端配置项：`ORCA_CHEMOS_EXECUTION_MODE`、`ORCA_LICENSE_AVAILABLE`、`HPC_QUEUE_AVAILABLE`、`HPC_QUEUE_NAME`。默认 `disabled`，worker 会把未配置、license、队列错误写入 run error、step error 和 error artifact。
+- 已新增 `chemos_laser_parser`，输出 `chemos_spectrum.v1`、`chemos_gain.v1`、`chemos_laser_result.v1`，artifact metadata 包含 parser version 和输入 checksum。
+- 已扩展 `/artifacts/{artifact_id}/spectrum` 支持 `spectrum_json`，前端任务详情可直接绘制光谱折线图。
+- `laser_metrics.gain_factor` 已可从 `ORCA_CHEMOS_LASER` completed run 映射到 optimization observation。
 
 #### Step 5.1 ORCA workflow 配置化
 

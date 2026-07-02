@@ -45,6 +45,7 @@ const workflowOptions = [
   { label: 'Mock Laser 指标', value: 'MOCK_LASER' },
   { label: 'Local 结构生成', value: 'LOCAL_STRUCTURE' },
   { label: 'Local xTB', value: 'LOCAL_XTB' },
+  { label: 'ORCA/ChemOS Laser', value: 'ORCA_CHEMOS_LASER' },
 ]
 
 const engineOptionsByWorkflow = {
@@ -56,9 +57,40 @@ const engineOptionsByWorkflow = {
     { label: 'OpenBabel', value: 'OPENBABEL' },
   ],
   LOCAL_XTB: [{ label: 'xTB', value: 'XTB' }],
+  ORCA_CHEMOS_LASER: [{ label: 'ORCA 受控工作流', value: 'ORCA' }],
 }
 
+const methodOptionsByWorkflow = {
+  MOCK_XTB_ONLY: [{ label: 'GFN2-xTB', value: 'GFN2-xTB' }],
+  MOCK_LASER: [{ label: 'GFN2-xTB', value: 'GFN2-xTB' }],
+  LOCAL_STRUCTURE: [
+    { label: 'GFN2-xTB', value: 'GFN2-xTB' },
+    { label: 'GFN1-xTB', value: 'GFN1-xTB' },
+  ],
+  LOCAL_XTB: [
+    { label: 'GFN2-xTB', value: 'GFN2-xTB' },
+    { label: 'GFN1-xTB', value: 'GFN1-xTB' },
+    { label: 'GFN0-xTB', value: 'GFN0-xTB' },
+  ],
+  ORCA_CHEMOS_LASER: [
+    { label: 'B3LYP / def2-SVP', value: 'ORCA_B3LYP_DEF2_SVP' },
+    { label: 'PBE0 / def2-SVP', value: 'ORCA_PBE0_DEF2_SVP' },
+  ],
+}
+
+const solventOptions = [
+  { label: '不使用', value: '' },
+  { label: 'Water', value: 'WATER' },
+  { label: 'Acetonitrile', value: 'ACETONITRILE' },
+  { label: 'Toluene', value: 'TOLUENE' },
+  { label: 'Ethanol', value: 'ETHANOL' },
+  { label: 'Methanol', value: 'METHANOL' },
+  { label: 'DCM', value: 'DCM' },
+  { label: 'THF', value: 'THF' },
+]
+
 const engineOptions = computed(() => engineOptionsByWorkflow[form.workflow_type] || [])
+const methodOptions = computed(() => methodOptionsByWorkflow[form.workflow_type] || methodOptionsByWorkflow.MOCK_XTB_ONLY)
 
 watch(
   () => form.workflow_type,
@@ -67,8 +99,9 @@ watch(
     if (!options.some((item) => item.value === form.engine)) {
       form.engine = options[0]?.value || ''
     }
-    if (workflowType === 'LOCAL_XTB') {
-      form.method = 'GFN2-xTB'
+    const methodOptions = methodOptionsByWorkflow[workflowType] || []
+    if (!methodOptions.some((item) => item.value === form.method)) {
+      form.method = methodOptions[0]?.value || 'GFN2-xTB'
     }
   },
 )
@@ -192,10 +225,14 @@ async function handleCreateOptimizationDemo() {
             </el-form-item>
           </div>
           <el-form-item label="Method">
-            <el-input v-model="form.method" />
+            <el-select v-model="form.method" style="width:100%">
+              <el-option v-for="item in methodOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
           </el-form-item>
           <el-form-item label="Solvent">
-            <el-input v-model="form.solvent" placeholder="可选" />
+            <el-select v-model="form.solvent" clearable style="width:100%">
+              <el-option v-for="item in solventOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
           </el-form-item>
           <el-form-item label="Wallclock">
             <el-input-number v-model="form.max_wallclock_seconds" :min="60" :max="172800" :step="60" controls-position="right" style="width:100%" />

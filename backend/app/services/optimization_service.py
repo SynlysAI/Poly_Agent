@@ -321,14 +321,14 @@ class OptimizationService:
         actor_user_id: str,
         request_id: str | None,
     ) -> CreateObservationFromComputationData:
-        """从 completed MOCK_LASER run 生成 observation。"""
+        """从 completed laser run 生成 observation。"""
         run_doc = ComputationRunRepository.find_one({"run_id": run_id})
         if not run_doc:
             raise HTTPException(status_code=404, detail="计算任务不存在")
         if run_doc.get("status") != "completed":
             raise HTTPException(status_code=400, detail="仅 completed 计算任务可生成 observation")
-        if run_doc.get("workflow_type") != "MOCK_LASER":
-            raise HTTPException(status_code=400, detail="仅 MOCK_LASER 支持自动映射 observation")
+        if run_doc.get("workflow_type") not in {"MOCK_LASER", "ORCA_CHEMOS_LASER"}:
+            raise HTTPException(status_code=400, detail="仅 laser workflow 支持自动映射 observation")
         campaign_id = run_doc.get("campaign_id")
         suggestion_id = run_doc.get("suggestion_id")
         if not campaign_id or not suggestion_id:

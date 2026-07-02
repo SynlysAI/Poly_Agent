@@ -17,6 +17,7 @@ from app.infra.mongo import (
     get_optimization_candidates_collection,
     get_optimization_observations_collection,
     get_optimization_suggestions_collection,
+    get_service_integrations_collection,
 )
 
 _mongo_unavailable = False
@@ -381,6 +382,41 @@ class OptimizationObservationRepository(BaseRepository):
         """查询 campaign 下的 observation。"""
         items, _ = cls.list_all({"campaign_id": campaign_id}, sort_field="created_at", reverse=False, page=1, page_size=1000)
         return items
+
+
+class ServiceIntegrationRepository(BaseRepository):
+    """外部服务集成配置仓储。"""
+
+    collection_name = "service_integrations"
+
+    @classmethod
+    def _collection(cls):
+        return get_service_integrations_collection()
+
+    @classmethod
+    def list_configs(cls) -> list[dict[str, Any]]:
+        """查询全部服务集成配置。"""
+        items, _ = cls.list_all({}, sort_field="service_key", reverse=False, page=1, page_size=200)
+        return items
+
+    @classmethod
+    def update_fields(cls, service_key: str, fields: dict[str, Any]) -> bool:
+        """更新集成配置字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one({"service_key": service_key}, {"$set": fields})
+                return result.matched_count > 0
+            except PyMongoError:
+                cls._mark_mongo_unavailable()
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("service_key") == service_key:
+                    item.update(clone_document(fields))
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
 
 
 class AuditEventRepository(BaseRepository):

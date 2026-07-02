@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -191,7 +192,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "message": "validation failed",
             "data": {
                 "detail": "request validation failed",
-                "errors": exc.errors(),
+                "errors": jsonable_encoder(exc.errors()),
                 "path": str(request.url.path),
             },
             "request_id": request_id,

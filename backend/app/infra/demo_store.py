@@ -22,6 +22,7 @@ COLLECTION_NAMES = [
     "optimization_candidates",
     "optimization_suggestions",
     "optimization_observations",
+    "service_integrations",
     "audit_events",
 ]
 

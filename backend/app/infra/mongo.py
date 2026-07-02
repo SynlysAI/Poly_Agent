@@ -82,6 +82,11 @@ def get_optimization_observations_collection() -> Collection:
     return get_database()["optimization_observations"]
 
 
+def get_service_integrations_collection() -> Collection:
+    """获取 service_integrations 集合。"""
+    return get_database()["service_integrations"]
+
+
 def get_audit_events_collection() -> Collection:
     """获取 audit_events 集合。"""
     return get_database()["audit_events"]

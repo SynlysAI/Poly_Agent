@@ -5,17 +5,46 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 ComputationStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
-WorkflowType = Literal["MOCK_XTB_ONLY", "MOCK_LASER", "LOCAL_STRUCTURE", "LOCAL_XTB"]
-EngineType = Literal["MOCK", "LOCAL", "RDKit", "OPENBABEL", "XTB"]
-ArtifactType = Literal["result_json", "log_text", "structure_json", "input_json", "error_json", "sdf", "xyz"]
+WorkflowType = Literal["MOCK_XTB_ONLY", "MOCK_LASER", "LOCAL_STRUCTURE", "LOCAL_XTB", "ORCA_CHEMOS_LASER"]
+EngineType = Literal["MOCK", "LOCAL", "RDKit", "OPENBABEL", "XTB", "ORCA"]
+ArtifactType = Literal[
+    "result_json",
+    "log_text",
+    "structure_json",
+    "input_json",
+    "error_json",
+    "sdf",
+    "xyz",
+    "spectrum_json",
+    "metrics_json",
+]
+
+ALLOWED_METHODS = {
+    "GFN2-XTB": "GFN2-xTB",
+    "GFN1-XTB": "GFN1-xTB",
+    "GFN0-XTB": "GFN0-xTB",
+    "ORCA_B3LYP_DEF2_SVP": "ORCA_B3LYP_DEF2_SVP",
+    "ORCA_PBE0_DEF2_SVP": "ORCA_PBE0_DEF2_SVP",
+}
+ALLOWED_SOLVENTS = {
+    "WATER": "WATER",
+    "ACETONITRILE": "ACETONITRILE",
+    "TOLUENE": "TOLUENE",
+    "ETHANOL": "ETHANOL",
+    "METHANOL": "METHANOL",
+    "DCM": "DCM",
+    "THF": "THF",
+}
 
 
 class MoleculeInput(BaseModel):
     """计算任务分子输入。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     smiles: str = Field(min_length=1, max_length=512)
     name: str | None = Field(default=None, max_length=120)
@@ -36,14 +65,39 @@ class MoleculeInput(BaseModel):
 class ComputationParameters(BaseModel):
     """计算参数。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     charge: int = Field(default=0, ge=-5, le=5)
     multiplicity: int = Field(default=1, ge=1, le=6)
     method: str = Field(default="GFN2-xTB", max_length=80)
     solvent: str | None = Field(default=None, max_length=80)
 
+    @field_validator("method")
+    @classmethod
+    def validate_method(cls, value: str) -> str:
+        """Restrict methods to backend-owned presets."""
+        normalized = value.strip().replace("_XTB", "-XTB")
+        key = normalized.upper()
+        if key not in ALLOWED_METHODS:
+            raise ValueError("method 必须来自后端白名单")
+        return ALLOWED_METHODS[key]
+
+    @field_validator("solvent")
+    @classmethod
+    def validate_solvent(cls, value: str | None) -> str | None:
+        """Restrict solvents to backend-owned presets."""
+        if value is None or not value.strip():
+            return None
+        key = value.strip().upper()
+        if key not in ALLOWED_SOLVENTS:
+            raise ValueError("solvent 必须来自后端白名单")
+        return ALLOWED_SOLVENTS[key]
+
 
 class ComputationResources(BaseModel):
     """计算资源上限。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     num_cores: int = Field(default=2, ge=1, le=32)
     memory_mb: int = Field(default=4096, ge=512, le=131072)
@@ -52,6 +106,8 @@ class ComputationResources(BaseModel):
 
 class ComputationCreateRequest(BaseModel):
     """创建计算任务请求。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     workflow_type: WorkflowType = "MOCK_XTB_ONLY"
     engine: EngineType = "MOCK"

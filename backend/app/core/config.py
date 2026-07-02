@@ -30,6 +30,20 @@ class Settings:
         self.logs_root: Path = self._resolve_project_path(
             os.getenv("POLY_AGENT_LOG_ROOT", str(self.runtime_root / "logs"))
         )
+        self.orca_chemos_execution_mode: str = os.getenv("ORCA_CHEMOS_EXECUTION_MODE", "disabled").strip().lower()
+        self.orca_license_available: bool = os.getenv("ORCA_LICENSE_AVAILABLE", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.hpc_queue_available: bool = os.getenv("HPC_QUEUE_AVAILABLE", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.hpc_queue_name: str = os.getenv("HPC_QUEUE_NAME", "default")
         self.max_upload_size_mb: int = 100
         self.api_prefix: str = "/api/v1"
         self.app_env: str = os.getenv("APP_ENV", "dev")

@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.core.config import settings
+from app.services.integration_config_service import IntegrationConfigService
 
 
 class IntegrationStatusService:
@@ -19,22 +20,50 @@ class IntegrationStatusService:
     def get_status(self) -> dict:
         """返回集成状态列表。"""
         checked_at = datetime.utcnow().isoformat()
+        config_map = {
+            item.service_key: item
+            for item in IntegrationConfigService().list_configs().items
+        }
+        items = [
+            self._worker_status(checked_at),
+            self._artifact_status(checked_at),
+            self._chemos_status(checked_at),
+            self._port_status("chemos-streamlit", "127.0.0.1", 8501, checked_at),
+            self._port_status("chemos-sila", "127.0.0.1", 65001, checked_at),
+            self._port_status("atlas", "127.0.0.1", 65100, checked_at),
+            self._aiida_status(checked_at),
+            self._speclabos_status(checked_at),
+            self._rdkit_status(checked_at),
+            self._openbabel_status(checked_at),
+            self._xtb_status(checked_at),
+            self._docker_status(checked_at),
+        ]
         return {
             "items": [
-                self._worker_status(checked_at),
-                self._artifact_status(checked_at),
-                self._chemos_status(checked_at),
-                self._port_status("chemos-streamlit", "127.0.0.1", 8501, checked_at),
-                self._port_status("chemos-sila", "127.0.0.1", 65001, checked_at),
-                self._port_status("atlas", "127.0.0.1", 65100, checked_at),
-                self._aiida_status(checked_at),
-                self._speclabos_status(checked_at),
-                self._rdkit_status(checked_at),
-                self._openbabel_status(checked_at),
-                self._xtb_status(checked_at),
-                self._docker_status(checked_at),
+                self._merge_persisted_config(item, config_map)
+                for item in items
             ]
         }
+
+    def _merge_persisted_config(self, item: dict, config_map: dict) -> dict:
+        """合并持久化配置摘要和最后检查结果。"""
+        service_key = item["service"]
+        config = config_map.get(service_key)
+        if not config:
+            return item
+        details = dict(item.get("details") or {})
+        details.update(
+            {
+                "configured": bool(config.endpoint or config.config_summary or config.secret_refs),
+                "enabled": config.enabled,
+                "last_error_summary": config.last_error_summary,
+            }
+        )
+        item["details"] = details
+        if config.last_checked_at:
+            item["status"] = config.last_status
+            item["checked_at"] = config.last_checked_at.isoformat()
+        return item
 
     def _worker_status(self, checked_at: str) -> dict:
         return {
@@ -43,7 +72,13 @@ class IntegrationStatusService:
             "checked_at": checked_at,
             "details": {
                 "worker_id": "worker-local-mock",
-                "capabilities": ["MOCK_XTB_ONLY", "MOCK_LASER", "LOCAL_STRUCTURE", "LOCAL_XTB"],
+                "capabilities": [
+                    "MOCK_XTB_ONLY",
+                    "MOCK_LASER",
+                    "LOCAL_STRUCTURE",
+                    "LOCAL_XTB",
+                    "ORCA_CHEMOS_LASER",
+                ],
             },
         }
 

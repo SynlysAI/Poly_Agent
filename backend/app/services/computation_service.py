@@ -219,7 +219,7 @@ class ComputationService:
         """预览白名单 artifact。"""
         artifact = self.get_artifact(artifact_id)
         path = self.resolve_artifact_path(artifact)
-        if artifact.artifact_type in {"result_json", "structure_json", "input_json", "error_json"}:
+        if artifact.artifact_type in {"result_json", "structure_json", "input_json", "error_json", "spectrum_json", "metrics_json"}:
             with path.open("r", encoding="utf-8") as fp:
                 preview = json.load(fp)
         elif artifact.artifact_type in {"log_text", "xyz", "sdf"}:
@@ -241,21 +241,24 @@ class ComputationService:
     def get_artifact_spectrum(self, artifact_id: str) -> ArtifactSpectrumData:
         """读取 result artifact 的光谱/指标数据。"""
         artifact = self.get_artifact(artifact_id)
-        if artifact.artifact_type != "result_json":
+        if artifact.artifact_type not in {"result_json", "spectrum_json"}:
             raise HTTPException(status_code=400, detail="该 artifact 不包含光谱数据")
         path = self.resolve_artifact_path(artifact)
         with path.open("r", encoding="utf-8") as fp:
             result = json.load(fp)
-        spectrum = result.get("spectrum") or {
-            "kind": "mock_metric_sticks",
-            "x_label": "metric",
-            "y_label": "value",
-            "points": [
-                {"x": key, "y": value}
-                for key, value in result.items()
-                if isinstance(value, (int, float))
-            ],
-        }
+        if artifact.artifact_type == "spectrum_json":
+            spectrum = result
+        else:
+            spectrum = result.get("spectrum") or result.get("spectra", {}).get("spectrum") or {
+                "kind": "mock_metric_sticks",
+                "x_label": "metric",
+                "y_label": "value",
+                "points": [
+                    {"x": key, "y": value}
+                    for key, value in result.items()
+                    if isinstance(value, (int, float))
+                ],
+            }
         return ArtifactSpectrumData(artifact=artifact, spectrum=spectrum)
 
     def audit_artifact_download(

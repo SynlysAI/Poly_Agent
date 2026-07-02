@@ -10,6 +10,7 @@ import {
   downloadArtifact,
   getApiErrorMessage,
   getComputation,
+  getArtifactSpectrum,
   getIntegrationStatus,
   listComputationArtifacts,
   listComputations,
@@ -27,11 +28,13 @@ const detailVisible = ref(false)
 const selectedRun = ref(null)
 const artifacts = ref([])
 const artifactPreview = ref(null)
+const artifactSpectrum = ref(null)
 const integrations = ref([])
 const integrationLoading = ref(false)
 const pollTimer = ref(null)
 const observationSubmitting = ref(false)
 const downloadingArtifactId = ref('')
+const spectrumLoadingArtifactId = ref('')
 
 const filters = reactive({
   status: '',
@@ -57,6 +60,7 @@ const workflowOptions = [
   { label: 'MOCK_LASER', value: 'MOCK_LASER' },
   { label: 'LOCAL_STRUCTURE', value: 'LOCAL_STRUCTURE' },
   { label: 'LOCAL_XTB', value: 'LOCAL_XTB' },
+  { label: 'ORCA_CHEMOS_LASER', value: 'ORCA_CHEMOS_LASER' },
 ]
 
 const engineOptions = [
@@ -66,6 +70,7 @@ const engineOptions = [
   { label: 'RDKit', value: 'RDKit' },
   { label: 'OPENBABEL', value: 'OPENBABEL' },
   { label: 'XTB', value: 'XTB' },
+  { label: 'ORCA', value: 'ORCA' },
 ]
 
 const statusSummary = computed(() => {
@@ -77,6 +82,36 @@ const statusSummary = computed(() => {
 })
 
 const hasActiveRuns = computed(() => tasks.value.some((item) => ['queued', 'running'].includes(item.status)))
+const selectedSpectrumPoints = computed(() => {
+  const payload = artifactSpectrum.value?.spectrum
+  const points = payload?.spectrum?.points || payload?.points || []
+  return points
+    .map((point) => ({ x: Number(point.x), y: Number(point.y) }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+})
+
+const selectedSpectrumPolyline = computed(() => {
+  const points = selectedSpectrumPoints.value
+  if (!points.length) return ''
+  const minX = Math.min(...points.map((point) => point.x))
+  const maxX = Math.max(...points.map((point) => point.x))
+  const minY = Math.min(...points.map((point) => point.y))
+  const maxY = Math.max(...points.map((point) => point.y))
+  const xRange = maxX - minX || 1
+  const yRange = maxY - minY || 1
+  return points
+    .map((point) => {
+      const x = 44 + ((point.x - minX) / xRange) * 432
+      const y = 188 - ((point.y - minY) / yRange) * 152
+      return `${x.toFixed(2)},${y.toFixed(2)}`
+    })
+    .join(' ')
+})
+
+const selectedSpectrumSummary = computed(() => {
+  const payload = artifactSpectrum.value?.spectrum
+  return payload?.summary || payload?.spectra || {}
+})
 
 function getStatusTag(status) {
   const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info' }
@@ -102,6 +137,15 @@ function shortChecksum(value) {
 
 function artifactSourceStep(row) {
   return row.metadata?.source_step || row.step_key || '-'
+}
+
+function artifactParserLabel(row) {
+  if (!row.parser_name) return '-'
+  return row.parser_version ? `${row.parser_name}@${row.parser_version}` : row.parser_name
+}
+
+function canRenderSpectrum(row) {
+  return ['spectrum_json', 'result_json'].includes(row.artifact_type)
 }
 
 async function loadTasks() {
@@ -141,6 +185,7 @@ async function loadIntegrations() {
 async function openDetail(runId) {
   detailVisible.value = true
   artifactPreview.value = null
+  artifactSpectrum.value = null
   await loadDetail(runId)
   router.replace({ path: '/computations/runs', query: { ...route.query, run_id: runId } })
 }
@@ -166,6 +211,17 @@ async function handlePreviewArtifact(artifactId) {
     artifactPreview.value = await previewArtifact(artifactId)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
+  }
+}
+
+async function handleViewSpectrum(row) {
+  spectrumLoadingArtifactId.value = row.artifact_id
+  try {
+    artifactSpectrum.value = await getArtifactSpectrum(row.artifact_id)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    spectrumLoadingArtifactId.value = ''
   }
 }
 
@@ -261,6 +317,7 @@ watch(detailVisible, (visible) => {
   if (!visible) {
     selectedRun.value = null
     artifactPreview.value = null
+    artifactSpectrum.value = null
     const nextQuery = { ...route.query }
     delete nextQuery.run_id
     router.replace({ path: '/computations/runs', query: nextQuery })
@@ -397,6 +454,16 @@ onBeforeUnmount(() => {
             <el-descriptions-item label="Suggestion">{{ selectedRun.suggestion_id || '-' }}</el-descriptions-item>
           </el-descriptions>
 
+          <el-alert
+            v-if="selectedRun.error"
+            class="run-error-alert"
+            type="error"
+            :closable="false"
+            :title="selectedRun.error.error_code || 'WORKFLOW_ERROR'"
+            :description="selectedRun.error.message"
+            show-icon
+          />
+
           <h4 class="detail-section-title">Workflow timeline</h4>
           <el-timeline>
             <el-timeline-item
@@ -425,19 +492,50 @@ onBeforeUnmount(() => {
               <template #default="{ row }"><span class="mono-text">{{ shortChecksum(row.checksum_sha256) }}</span></template>
             </el-table-column>
             <el-table-column label="Parser" min-width="130">
-              <template #default="{ row }">{{ row.parser_name || '-' }}</template>
+              <template #default="{ row }">{{ artifactParserLabel(row) }}</template>
             </el-table-column>
             <el-table-column label="Source step" min-width="150">
               <template #default="{ row }">{{ artifactSourceStep(row) }}</template>
             </el-table-column>
             <el-table-column prop="size_bytes" label="大小" width="100" />
-            <el-table-column label="操作" width="170">
+            <el-table-column label="操作" width="220">
               <template #default="{ row }">
+                <el-button
+                  v-if="canRenderSpectrum(row)"
+                  text
+                  type="primary"
+                  size="small"
+                  :loading="spectrumLoadingArtifactId === row.artifact_id"
+                  @click="handleViewSpectrum(row)"
+                >
+                  图谱
+                </el-button>
                 <el-button text type="primary" size="small" @click="handlePreviewArtifact(row.artifact_id)">预览</el-button>
                 <el-button text type="primary" size="small" :icon="Download" :loading="downloadingArtifactId === row.artifact_id" @click="handleDownloadArtifact(row)">下载</el-button>
               </template>
             </el-table-column>
           </el-table>
+
+          <div v-if="artifactSpectrum" class="spectrum-preview">
+            <div class="spectrum-header">
+              <div>
+                <h4 class="detail-section-title">Spectrum · {{ artifactSpectrum.artifact.name }}</h4>
+                <p class="spectrum-meta">
+                  {{ artifactSpectrum.spectrum.schema_version || 'spectrum' }}
+                  · {{ artifactSpectrum.artifact.parser_name || '-' }}@{{ artifactSpectrum.artifact.parser_version || '-' }}
+                </p>
+              </div>
+              <div class="spectrum-summary">
+                <span v-if="selectedSpectrumSummary.absorption_peak_nm">Peak {{ selectedSpectrumSummary.absorption_peak_nm }} nm</span>
+                <span>{{ selectedSpectrumPoints.length }} points</span>
+              </div>
+            </div>
+            <svg class="spectrum-chart" viewBox="0 0 520 220" role="img" aria-label="Spectrum preview">
+              <line x1="44" y1="188" x2="486" y2="188" class="chart-axis" />
+              <line x1="44" y1="28" x2="44" y2="188" class="chart-axis" />
+              <polyline v-if="selectedSpectrumPolyline" :points="selectedSpectrumPolyline" class="chart-line" />
+            </svg>
+          </div>
 
           <div v-if="artifactPreview" class="artifact-preview">
             <h4 class="detail-section-title">Artifact preview · {{ artifactPreview.artifact.name }}</h4>
@@ -583,6 +681,10 @@ onBeforeUnmount(() => {
   font-size: 14px;
 }
 
+.run-error-alert {
+  margin-top: 14px;
+}
+
 .timeline-step {
   display: flex;
   align-items: center;
@@ -604,6 +706,58 @@ onBeforeUnmount(() => {
 
 .artifact-preview {
   margin-top: 12px;
+}
+
+.spectrum-preview {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.spectrum-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.spectrum-header .detail-section-title {
+  margin-top: 0;
+}
+
+.spectrum-meta,
+.spectrum-summary {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.spectrum-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.spectrum-chart {
+  width: 100%;
+  height: 220px;
+  margin-top: 8px;
+}
+
+.chart-axis {
+  stroke: #c9d6e6;
+  stroke-width: 1;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--app-primary);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 @media (max-width: 1000px) {
