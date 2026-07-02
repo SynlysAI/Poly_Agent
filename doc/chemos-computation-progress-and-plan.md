@@ -431,28 +431,58 @@ ComputationAdapter 协议
 
 **目标：** 为 Atlas/Tanimoto 或自研 planner 做接口准备。
 
+**拆解：**
+- 定义 `candidate_descriptor.v1`，统一包含 `schema_version`、`status`、`generator`、`parameters`、`values`、`generated_at`。
+- descriptor 生成优先使用 RDKit Morgan fingerprint；RDKit 不可用时使用轻量 SMILES hash fingerprint，保证 planner 不被重依赖阻塞。
+- 定义 `planner_request.v1`，由 service 在生成 suggestion 前构造，字段包含 `campaign_id`、`planner_type`、`batch_size`、`candidates`、`observations`、`objectives`、`constraints`。
+- 定义 `planner_response.v1`，字段包含 `planner_type`、`suggestions[]`、`score`、`reason`、`iteration_metadata`。
+- suggestion 的 `planner_payload` 固化保存 request/response 快照，用于复现每轮推荐依据。
+
 **验收标准：**
 - candidate descriptors 有版本、参数、生成状态。
 - planner request 明确包含 candidates、observations、objectives、constraints。
 - planner response 明确包含 suggestion、score/reason、iteration metadata。
+- fallback planner 仍可用，旧的 campaign/suggestion API 响应保持兼容。
 
 #### Step 3.2 Atlas/Tanimoto adapter 或轻量替代实现
 
 **目标：** 在离散分子库上引入真实推荐策略。
 
+**拆解：**
+- 扩展 `planner_type`：保留 `fallback`，新增轻量 `tanimoto`。
+- 新增 planner adapter 边界：主 service 只构造标准 request 并派发 adapter，不把 Atlas/Olympus 作为 FastAPI 必需依赖。
+- `fallback` 策略继续按稳定 key 顺序选择未评价候选。
+- `tanimoto` 策略在已有 observation 时寻找主 objective 最优 observation，以该 candidate descriptor 为参考，对未评价候选计算 Tanimoto similarity 并排序。
+- 没有可用 observation/descriptor 时，`tanimoto` 返回明确 reason，不静默伪装为高置信推荐。
+- 每条 suggestion 记录 planner type、score、reason、request/response payload。
+
 **验收标准：**
 - fallback planner 保留。
 - 新 planner 不进入主 FastAPI 重依赖路径，可独立服务或可选依赖。
 - campaign 可选择 planner type，并在 suggestion 记录 planner payload。
+- 至少有 service test 覆盖 `tanimoto` 根据 best observation 推荐相似候选。
 
 #### Step 3.3 自动 observation 和下一轮 recommendation
 
 **目标：** 从手动点击生成 observation 过渡到可配置自动闭环。
 
+**拆解：**
+- 在 `planner_config.automation` 中配置自动行为，默认关闭：
+  - `auto_create_observation`
+  - `auto_generate_suggestion`
+  - `suggestion_batch_size`
+  - `observation_mapping`
+- worker 完成 computation 后，如果 run 绑定了 campaign/suggestion，则调用 optimization service 自动化入口。
+- 自动 observation 仅从白名单 mapping 中提取数值字段；required objective 缺失时失败并审计，不写入半成品 observation。
+- observation 以 `source_type=computation`、`source_run_id=run_id` 写入，并对同一个 run 做幂等保护。
+- 自动 observation 成功后，如配置开启，触发下一轮 suggestion；没有候选时记录 skipped 审计事件。
+- 保留手动 `create-observation` API，便于人工确认和关闭自动闭环后的操作。
+
 **验收标准：**
 - completed computation 可根据 campaign config 自动生成 observation。
 - observation 创建后可按配置自动触发下一轮 suggestion。
 - 自动行为必须有审计事件，并允许关闭。
+- worker 自动化失败不能把已完成 computation 反向改成 failed。
 
 ### Phase 4: 外部系统集成
 

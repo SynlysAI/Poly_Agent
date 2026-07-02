@@ -74,6 +74,13 @@ class ComputationWorker:
             now=utc_now(),
             adapter_result=adapter_result,
         )
+        if finished.status == "completed" and finished.campaign_id and finished.suggestion_id:
+            from app.services.optimization_service import OptimizationService
+
+            OptimizationService().process_completed_computation(
+                finished.run_id,
+                actor_user_id=self.worker_id,
+            )
         return WorkerResult(claimed=True, run_id=finished.run_id, status=finished.status)
 
     def _build_unhandled_failure(

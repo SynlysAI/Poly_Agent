@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 CampaignStatus = Literal["draft", "running", "paused", "completed", "failed", "archived"]
-PlannerType = Literal["fallback"]
+PlannerType = Literal["fallback", "tanimoto"]
 ObjectiveDirection = Literal["max", "min"]
 SuggestionStatus = Literal["suggested", "submitted", "evaluated", "rejected", "failed"]
 ObservationSourceType = Literal["computation", "experiment", "manual", "imported"]
@@ -119,6 +119,60 @@ class OptimizationCandidate(BaseModel):
     metadata: dict = Field(default_factory=dict)
     is_active: bool = True
     created_at: datetime
+
+
+class PlannerCandidate(BaseModel):
+    """planner 输入候选契约。"""
+
+    candidate_id: str
+    candidate_key: str
+    smiles: str
+    parameters: dict = Field(default_factory=dict)
+    descriptors: dict = Field(default_factory=dict)
+
+
+class PlannerObservation(BaseModel):
+    """planner 输入 observation 契约。"""
+
+    observation_id: str
+    candidate_id: str
+    suggestion_id: str | None = None
+    values: dict[str, float]
+    uncertainty: dict = Field(default_factory=dict)
+    source_type: ObservationSourceType
+    source_run_id: str | None = None
+
+
+class PlannerRequest(BaseModel):
+    """planner 标准输入。"""
+
+    schema_version: str = "planner_request.v1"
+    campaign_id: str
+    planner_type: PlannerType
+    batch_size: int = Field(ge=1, le=20)
+    candidates: list[PlannerCandidate]
+    observations: list[PlannerObservation]
+    objectives: list[OptimizationObjective]
+    constraints: dict = Field(default_factory=dict)
+
+
+class PlannerSuggestionItem(BaseModel):
+    """planner 标准输出中的单条推荐。"""
+
+    candidate_id: str
+    candidate_key: str
+    score: float
+    reason: str
+    metadata: dict = Field(default_factory=dict)
+
+
+class PlannerResponse(BaseModel):
+    """planner 标准输出。"""
+
+    schema_version: str = "planner_response.v1"
+    planner_type: PlannerType
+    suggestions: list[PlannerSuggestionItem]
+    iteration_metadata: dict = Field(default_factory=dict)
 
 
 class CandidateImportData(BaseModel):

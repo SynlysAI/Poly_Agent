@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime
 from uuid import uuid4
 
@@ -34,11 +35,15 @@ from app.schemas.optimization import (
     OptimizationCandidate,
     OptimizationObservation,
     OptimizationSuggestion,
+    PlannerCandidate,
+    PlannerObservation,
+    PlannerRequest,
     SubmitSuggestionComputationData,
     SuggestionCreateData,
     SuggestionCreateRequest,
 )
 from app.services.computation_service import ComputationService
+from app.services.planner_adapters import run_planner
 
 
 class OptimizationService:
@@ -162,10 +167,8 @@ class OptimizationService:
         actor_user_id: str,
         request_id: str | None,
     ) -> SuggestionCreateData:
-        """使用 fallback planner 生成推荐。"""
+        """使用配置的 planner 生成推荐。"""
         campaign = self._get_campaign(campaign_id)
-        if campaign.planner_type != "fallback":
-            raise HTTPException(status_code=400, detail="MVP 仅支持 fallback planner")
         candidates = [OptimizationCandidate(**item) for item in OptimizationCandidateRepository.list_by_campaign(campaign_id)]
         suggestions = [OptimizationSuggestion(**item) for item in OptimizationSuggestionRepository.list_by_campaign(campaign_id)]
         observations = [OptimizationObservation(**item) for item in OptimizationObservationRepository.list_by_campaign(campaign_id)]
@@ -175,20 +178,40 @@ class OptimizationService:
             for item in suggestions
             if item.status in {"suggested", "submitted"}
         }
-        eligible = [
+        active_candidates = [
             item
             for item in candidates
             if item.is_active
-            and item.candidate_id not in evaluated_candidate_ids
-            and item.candidate_id not in pending_candidate_ids
         ]
-        eligible.sort(key=lambda item: item.candidate_key)
-        if not eligible:
+        excluded_candidate_ids = sorted(evaluated_candidate_ids | pending_candidate_ids)
+        eligible_count = len([item for item in active_candidates if item.candidate_id not in excluded_candidate_ids])
+        if not eligible_count:
             raise HTTPException(status_code=400, detail="没有可推荐的未评价候选")
+        planner_request = self._build_planner_request(
+            campaign,
+            candidates=active_candidates,
+            observations=observations,
+            batch_size=payload.batch_size,
+            constraints={
+                **(campaign.planner_config.get("constraints") or {}),
+                "excluded_candidate_ids": excluded_candidate_ids,
+                "excluded_counts": {
+                    "evaluated": len(evaluated_candidate_ids),
+                    "pending": len(pending_candidate_ids),
+                },
+            },
+        )
+        planner_response = run_planner(planner_request)
+        if not planner_response.suggestions:
+            raise HTTPException(status_code=400, detail="planner 未返回可推荐候选")
         now = utc_now()
         next_iteration = (max((item.iteration_index for item in suggestions), default=0) + 1)
         created: list[OptimizationSuggestion] = []
-        for offset, candidate in enumerate(eligible[: payload.batch_size]):
+        candidate_by_id = {item.candidate_id: item for item in candidates}
+        for offset, planner_item in enumerate(planner_response.suggestions):
+            candidate = candidate_by_id.get(planner_item.candidate_id)
+            if not candidate:
+                continue
             suggestion = OptimizationSuggestion(
                 suggestion_id=self._new_id("sug"),
                 campaign_id=campaign_id,
@@ -197,20 +220,21 @@ class OptimizationService:
                 smiles=candidate.smiles,
                 iteration_index=next_iteration + offset,
                 status="suggested",
-                planner_type="fallback",
+                planner_type=campaign.planner_type,
                 planner_payload={
-                    "strategy": "first_unevaluated",
-                    "reason": "first unevaluated active candidate",
-                    "excluded_counts": {
-                        "evaluated": len(evaluated_candidate_ids),
-                        "pending": len(pending_candidate_ids),
-                    },
+                    "request": planner_request.model_dump(mode="json"),
+                    "response": planner_response.model_dump(mode="json"),
+                    "score": planner_item.score,
+                    "reason": planner_item.reason,
+                    "iteration_metadata": planner_response.iteration_metadata,
                 },
                 created_at=now,
                 updated_at=now,
             )
             OptimizationSuggestionRepository.save("suggestion_id", suggestion.model_dump(mode="python"))
             created.append(suggestion)
+        if not created:
+            raise HTTPException(status_code=400, detail="planner 返回候选不存在")
         self._audit(
             "suggestion.generated",
             actor_user_id=actor_user_id,
@@ -312,10 +336,11 @@ class OptimizationService:
         suggestion_doc = OptimizationSuggestionRepository.find_one({"suggestion_id": suggestion_id})
         if not suggestion_doc:
             raise HTTPException(status_code=404, detail="关联推荐不存在")
-        summary = run_doc.get("result_summary") or {}
-        gain_factor = (summary.get("laser_metrics") or {}).get("gain_factor")
-        if not isinstance(gain_factor, (int, float)):
-            raise HTTPException(status_code=400, detail="计算结果缺少 laser_metrics.gain_factor")
+        existing = OptimizationObservationRepository.find_one({"source_type": "computation", "source_run_id": run_id})
+        if existing:
+            return CreateObservationFromComputationData(observation=OptimizationObservation(**existing))
+        campaign = self._get_campaign(campaign_id)
+        values = self._map_computation_observation_values(run_doc, campaign)
         observation = self.create_observation(
             campaign_id,
             ObservationCreateRequest(
@@ -323,13 +348,91 @@ class OptimizationService:
                 suggestion_id=suggestion_id,
                 source_type="computation",
                 source_run_id=run_id,
-                values={"gain_factor": float(gain_factor)},
+                values=values,
                 raw_result_ref=run_id,
             ),
             actor_user_id=actor_user_id,
             request_id=request_id,
         )
         return CreateObservationFromComputationData(observation=observation)
+
+    def process_completed_computation(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str,
+        request_id: str | None = None,
+    ) -> CreateObservationFromComputationData | None:
+        """按 campaign 自动化配置处理 completed computation。"""
+        run_doc = ComputationRunRepository.find_one({"run_id": run_id})
+        if not run_doc or run_doc.get("status") != "completed":
+            return None
+        campaign_id = run_doc.get("campaign_id")
+        if not campaign_id:
+            return None
+        campaign = self._get_campaign(campaign_id)
+        automation = campaign.planner_config.get("automation") or {}
+        if not automation.get("auto_create_observation", False):
+            return None
+        try:
+            data = self.create_observation_from_computation(
+                run_id,
+                actor_user_id=actor_user_id,
+                request_id=request_id,
+            )
+        except HTTPException as exc:
+            self._audit(
+                "automation.observation_failed",
+                actor_user_id=actor_user_id,
+                request_id=request_id,
+                entity_type="optimization_campaign",
+                entity_id=campaign_id,
+                related_ids={"run_id": run_id, "suggestion_id": run_doc.get("suggestion_id")},
+                after={"reason": str(exc.detail)},
+            )
+            return None
+        self._audit(
+            "automation.observation_created",
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+            entity_type="optimization_observation",
+            entity_id=data.observation.observation_id,
+            related_ids={
+                "campaign_id": campaign_id,
+                "suggestion_id": data.observation.suggestion_id,
+                "run_id": run_id,
+            },
+            after={"values": data.observation.values},
+        )
+        if automation.get("auto_generate_suggestion", False):
+            try:
+                suggestions = self.generate_suggestions(
+                    campaign_id,
+                    SuggestionCreateRequest(batch_size=int(automation.get("suggestion_batch_size") or 1)),
+                    actor_user_id=actor_user_id,
+                    request_id=request_id,
+                )
+            except HTTPException as exc:
+                self._audit(
+                    "automation.suggestion_skipped",
+                    actor_user_id=actor_user_id,
+                    request_id=request_id,
+                    entity_type="optimization_campaign",
+                    entity_id=campaign_id,
+                    related_ids={"run_id": run_id},
+                    after={"reason": str(exc.detail)},
+                )
+            else:
+                self._audit(
+                    "automation.suggestion_triggered",
+                    actor_user_id=actor_user_id,
+                    request_id=request_id,
+                    entity_type="optimization_campaign",
+                    entity_id=campaign_id,
+                    related_ids={"run_id": run_id},
+                    after={"suggestion_count": len(suggestions.items)},
+                )
+        return data
 
     def create_observation(
         self,
@@ -504,23 +607,123 @@ class OptimizationService:
         return candidates
 
     def _build_descriptors(self, smiles: str) -> dict:
-        """可选生成 RDKit Morgan fingerprint。"""
+        """生成标准 candidate descriptor；RDKit 缺失时使用轻量 hash fingerprint。"""
+        generated_at = utc_now().isoformat()
+        parameters = {"kind": "morgan", "radius": 2, "n_bits": 2048}
         try:
             from rdkit import Chem
             from rdkit.Chem import AllChem
         except ImportError:
-            return {"status": "not_available", "reason": "rdkit_not_installed"}
+            on_bits = self._build_smiles_hash_bits(smiles, n_bits=2048)
+            return {
+                "schema_version": "candidate_descriptor.v1",
+                "status": "available",
+                "generator": {"name": "smiles_hash_fingerprint", "version": "0.1.0"},
+                "parameters": {"kind": "smiles_hash", "n_bits": 2048, "ngram_sizes": [1, 2, 3]},
+                "values": {"on_bits": on_bits},
+                "generated_at": generated_at,
+            }
         molecule = Chem.MolFromSmiles(smiles)
         if molecule is None:
-            return {"status": "failed", "reason": "invalid_smiles"}
+            return {
+                "schema_version": "candidate_descriptor.v1",
+                "status": "failed",
+                "generator": {"name": "rdkit_morgan", "version": getattr(Chem, "__version__", "unknown")},
+                "parameters": parameters,
+                "values": {"on_bits": []},
+                "reason": "invalid_smiles",
+                "generated_at": generated_at,
+            }
         fingerprint = AllChem.GetMorganFingerprintAsBitVect(molecule, radius=2, nBits=2048)
         return {
+            "schema_version": "candidate_descriptor.v1",
             "status": "available",
-            "kind": "morgan",
-            "radius": 2,
-            "n_bits": 2048,
-            "on_bits": list(fingerprint.GetOnBits()),
+            "generator": {"name": "rdkit_morgan", "version": getattr(Chem, "__version__", "unknown")},
+            "parameters": parameters,
+            "values": {"on_bits": list(fingerprint.GetOnBits())},
+            "generated_at": generated_at,
         }
+
+    def _build_smiles_hash_bits(self, smiles: str, *, n_bits: int) -> list[int]:
+        """构造稳定的轻量 SMILES 指纹，供无 RDKit 环境的 Tanimoto planner 使用。"""
+        normalized = smiles.strip()
+        if not normalized:
+            return []
+        tokens: set[str] = set()
+        for size in (1, 2, 3):
+            for index in range(0, max(len(normalized) - size + 1, 0)):
+                tokens.add(normalized[index : index + size])
+        if not tokens:
+            tokens.add(normalized)
+        return sorted(
+            int(hashlib.sha256(token.encode("utf-8")).hexdigest()[:8], 16) % n_bits
+            for token in tokens
+        )
+
+    def _build_planner_request(
+        self,
+        campaign: OptimizationCampaign,
+        *,
+        candidates: list[OptimizationCandidate],
+        observations: list[OptimizationObservation],
+        batch_size: int,
+        constraints: dict,
+    ) -> PlannerRequest:
+        """构造标准 planner 输入。"""
+        return PlannerRequest(
+            campaign_id=campaign.campaign_id,
+            planner_type=campaign.planner_type,
+            batch_size=batch_size,
+            candidates=[
+                PlannerCandidate(
+                    candidate_id=item.candidate_id,
+                    candidate_key=item.candidate_key,
+                    smiles=item.smiles,
+                    parameters=item.parameters,
+                    descriptors=item.descriptors,
+                )
+                for item in candidates
+            ],
+            observations=[
+                PlannerObservation(
+                    observation_id=item.observation_id,
+                    candidate_id=item.candidate_id,
+                    suggestion_id=item.suggestion_id,
+                    values=item.values,
+                    uncertainty=item.uncertainty,
+                    source_type=item.source_type,
+                    source_run_id=item.source_run_id,
+                )
+                for item in observations
+            ],
+            objectives=campaign.objectives,
+            constraints=constraints,
+        )
+
+    def _map_computation_observation_values(self, run_doc: dict, campaign: OptimizationCampaign) -> dict[str, float]:
+        """按 campaign 白名单配置从 computation result_summary 提取 observation values。"""
+        automation = campaign.planner_config.get("automation") or {}
+        mapping = automation.get("observation_mapping") or {"gain_factor": "laser_metrics.gain_factor"}
+        summary = run_doc.get("result_summary") or {}
+        values: dict[str, float] = {}
+        for target_name, source_path in mapping.items():
+            raw_value = self._dig(summary, str(source_path))
+            if isinstance(raw_value, (int, float)):
+                values[str(target_name)] = float(raw_value)
+        required_names = {objective.name for objective in campaign.objectives if objective.required}
+        missing = sorted(required_names - set(values))
+        if missing:
+            raise HTTPException(status_code=400, detail=f"计算结果缺少必需 observation 指标：{', '.join(missing)}")
+        return values
+
+    def _dig(self, payload: dict, dotted_path: str):
+        """读取 result_summary 中的点分路径。"""
+        current = payload
+        for part in dotted_path.split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+        return current
 
     def _get_campaign(self, campaign_id: str) -> OptimizationCampaign:
         """查询 campaign，不存在则 404。"""
