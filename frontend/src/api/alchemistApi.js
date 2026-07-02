@@ -136,6 +136,22 @@ export function stageExperiments(sessionId, experiments) {
   return alchemistClient.post(`/sessions/${sessionId}/experiments/staged/batch`, experiments).then(r => r.data)
 }
 
+/** 预览 CSV 文件列信息（检查目标列） */
+export function previewCSV(sessionId, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return alchemistClient.post(`/sessions/${sessionId}/experiments/preview`, formData).then(r => r.data)
+}
+
+/** 从 CSV 文件上传实验数据 */
+export function uploadCSV(sessionId, file, targetColumns = 'Output') {
+  const formData = new FormData()
+  formData.append('file', file)
+  return alchemistClient.post(`/sessions/${sessionId}/experiments/upload`, formData, {
+    params: { target_columns: targetColumns },
+  }).then(r => r.data)
+}
+
 // ── GP 建模 ──
 
 /** 训练 GP 模型 */

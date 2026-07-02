@@ -1,7 +1,15 @@
 <script setup>
 import { onMounted, onActivated, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { addExperiment, getExperiments, getExperimentsSummary, getVariables } from '../../api/alchemistApi'
+import { UploadFilled } from '@element-plus/icons-vue'
+import {
+  addExperiment,
+  getExperiments,
+  getExperimentsSummary,
+  getVariables,
+  previewCSV,
+  uploadCSV,
+} from '../../api/alchemistApi'
 
 const props = defineProps({
   sessionId: { type: String, required: true }
@@ -45,6 +53,60 @@ async function loadVariables() {
     variables.value = data.variables || []
   } catch (e) {
     variables.value = []
+  }
+}
+
+// ── CSV 导入 ──
+const csvImportVisible = ref(false)
+const csvPreviewData = ref(null)
+const csvTargetColumn = ref('Output')
+const csvImporting = ref(false)
+const csvFileRef = ref(null)
+
+function openCsvImport() {
+  csvTargetColumn.value = 'Output'
+  csvPreviewData.value = null
+  csvImportVisible.value = true
+}
+
+/** 选择文件后自动预览 */
+async function handleCsvFileSelected(event) {
+  const file = event.target.files[0]
+  if (!file) return
+  try {
+    const data = await previewCSV(props.sessionId, file)
+    csvPreviewData.value = { ...data, _file: file }
+    if (!data.has_output && data.recommended_target) {
+      csvTargetColumn.value = data.recommended_target
+    }
+  } catch (e) {
+    ElMessage.error(`CSV 预览失败: ${e.message}`)
+    csvPreviewData.value = null
+  }
+}
+
+/** 确认导入 */
+async function handleCsvUpload() {
+  if (!csvPreviewData.value || !csvPreviewData.value._file) {
+    ElMessage.warning('请先选择 CSV 文件')
+    return
+  }
+  const fileName = csvPreviewData.value._file.name
+  const nRows = csvPreviewData.value.n_rows || '?'
+
+  try {
+    csvImporting.value = true
+    const data = await uploadCSV(props.sessionId, csvPreviewData.value._file, csvTargetColumn.value)
+    ElMessage.success(`已从 CSV 导入 ${data.n_experiments} 条实验数据（文件: ${fileName}，${nRows} 行）`)
+    csvImportVisible.value = false
+    csvPreviewData.value = null
+    await loadExperimentData()
+    // 清空 file input 以便同一文件可重新选择
+    if (csvFileRef.value) csvFileRef.value.value = ''
+  } catch (e) {
+    ElMessage.error(`CSV 导入失败: ${e.message}`)
+  } finally {
+    csvImporting.value = false
   }
 }
 
@@ -181,6 +243,10 @@ onActivated(() => {
       <h3 class="panel-title">实验数据</h3>
       <div style="display:flex;gap:8px">
         <el-button type="primary" size="small" @click="openAddDialog">新增实验数据</el-button>
+        <el-button size="small" @click="openCsvImport">
+          <el-icon><UploadFilled /></el-icon>
+          导入 CSV
+        </el-button>
         <el-button size="small" @click="loadExperimentData" :loading="loading">刷新</el-button>
       </div>
     </div>
@@ -231,6 +297,63 @@ onActivated(() => {
         </el-table-column>
       </el-table>
     </div>
+
+    <!-- CSV 导入对话框 -->
+    <el-dialog v-model="csvImportVisible" title="从 CSV 导入实验数据" width="560px">
+      <div v-if="!csvPreviewData">
+        <div style="text-align:center;padding:20px">
+          <div style="font-size:13px;color:var(--app-ink-muted);margin-bottom:12px">
+            CSV 应包含与变量名称匹配的列，加上目标列（如 "Output"）和可选的 "Noise" 列。
+          </div>
+          <input
+            ref="csvFileRef"
+            type="file"
+            accept=".csv"
+            style="display:none"
+            @change="handleCsvFileSelected"
+          />
+          <el-button type="primary" @click="() => csvFileRef && csvFileRef.click()">
+            <el-icon><UploadFilled /></el-icon>
+            选择 CSV 文件
+          </el-button>
+        </div>
+      </div>
+
+      <div v-else>
+        <el-descriptions border :column="2" size="small" style="margin-bottom:16px">
+          <el-descriptions-item label="文件名">{{ csvPreviewData._file.name }}</el-descriptions-item>
+          <el-descriptions-item label="数据行数">{{ csvPreviewData.n_rows }}</el-descriptions-item>
+          <el-descriptions-item label="CSV 列">
+            <span style="font-size:12px">{{ (csvPreviewData.columns || []).join(', ') }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="Output 列">
+            <el-tag v-if="csvPreviewData.has_output" type="success" size="small">已存在</el-tag>
+            <span v-else style="color:#dc2626;font-size:12px">未找到</span>
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <div v-if="!csvPreviewData.has_output" style="margin-bottom:12px">
+          <div style="font-size:13px;color:var(--app-ink-muted);margin-bottom:6px">
+            CSV 中没有 "Output" 列，请选择作为目标值的列：
+          </div>
+          <el-select v-model="csvTargetColumn" style="width:100%">
+            <el-option
+              v-for="col in (csvPreviewData.available_targets || csvPreviewData.columns || [])"
+              :key="col"
+              :label="col"
+              :value="col"
+            />
+          </el-select>
+        </div>
+
+        <div style="text-align:right;margin-top:8px">
+          <el-button @click="csvPreviewData = null; csvTargetColumn = 'Output'">重新选择</el-button>
+          <el-button type="primary" @click="handleCsvUpload" :loading="csvImporting">
+            确认导入
+          </el-button>
+        </div>
+      </div>
+    </el-dialog>
 
     <el-dialog v-model="dialogVisible" title="新增实验数据" width="640px">
       <el-alert
