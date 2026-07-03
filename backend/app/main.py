@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -36,6 +37,10 @@ class SPAStaticFiles(StaticFiles):
         Returns:
             静态资源响应或 index.html 回退响应。
         """
+        # WebSocket 等其他协议不由此中间件处理，直接 404
+        if scope.get("type") != "http":
+            raise StarletteHTTPException(status_code=404)
+
         normalized_path = path.lstrip("/")
         try:
             response = await super().get_response(normalized_path, scope)
@@ -122,12 +127,14 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Content-Disposition", "X-Request-Id"],
     )
 
     @app.middleware("http")
     async def access_log_middleware(request: Request, call_next):
         """记录请求访问日志。"""
         request_id = _resolve_request_id(request)
+        request.state.request_id = request_id
         started_at = time.perf_counter()
         APP_LOGGER.info(
             f"request started: {request.method} {request.url.path}",
@@ -189,7 +196,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "message": "validation failed",
             "data": {
                 "detail": "request validation failed",
-                "errors": exc.errors(),
+                "errors": jsonable_encoder(exc.errors()),
                 "path": str(request.url.path),
             },
             "request_id": request_id,

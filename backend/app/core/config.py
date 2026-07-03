@@ -30,6 +30,27 @@ class Settings:
         self.logs_root: Path = self._resolve_project_path(
             os.getenv("POLY_AGENT_LOG_ROOT", str(self.runtime_root / "logs"))
         )
+        self.orca_execution_mode: str = os.getenv(
+            "ORCA_EXECUTION_MODE",
+            os.getenv("ORCA_CHEMOS_EXECUTION_MODE", "disabled"),
+        ).strip().lower()
+        self.orca_chemos_execution_mode: str = self.orca_execution_mode
+        self.orca_license_available: bool = os.getenv("ORCA_LICENSE_AVAILABLE", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.hpc_queue_available: bool = os.getenv("HPC_QUEUE_AVAILABLE", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.hpc_queue_name: str = os.getenv("HPC_QUEUE_NAME", "default")
+        self.crest_executable: str = os.getenv("CREST_EXECUTABLE", "crest").strip() or "crest"
+        self.xtb_executable: str = os.getenv("XTB_EXECUTABLE", "xtb").strip() or "xtb"
+        self.orca_executable: str = os.getenv("ORCA_EXECUTABLE", "orca").strip() or "orca"
         self.max_upload_size_mb: int = 100
         self.api_prefix: str = "/api/v1"
         self.app_env: str = os.getenv("APP_ENV", "dev")
@@ -57,6 +78,23 @@ class Settings:
         self.mongodb_username: str = os.getenv("MONGODB_USERNAME", "")
         self.mongodb_password: str = os.getenv("MONGODB_PASSWORD", "")
         self.mongodb_database: str = os.getenv("MONGODB_DATABASE", "poly_agent")
+        self.mongodb_auth_source: str = os.getenv("MONGODB_AUTH_SOURCE", "admin")
+        self.require_mongodb: bool = os.getenv("REQUIRE_MONGODB", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+        # ALchemist 主动学习工具后端地址
+        self.alchemist_backend_url: str = os.getenv(
+            "ALCHEMIST_BACKEND_URL", "http://127.0.0.1:8004/api/v1"
+        )
+
+        # LLM 配置（仅从环境变量读取，无默认值）
+        self.llm_api_key: str = os.getenv("LLM_API_KEY", "")
+        self.llm_base_url: str = os.getenv("LLM_BASE_URL", "")
+        self.llm_model: str = os.getenv("LLM_MODEL", "")
 
         # 统一认证（AI4MS）数据库配置
         self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "")
@@ -89,7 +127,10 @@ class Settings:
             if self.mongodb_password:
                 credential = f"{credential}:{self.mongodb_password}"
             credential = f"{credential}@"
-        return f"mongodb://{credential}{self.mongodb_host}:{self.mongodb_port}"
+        uri = f"mongodb://{credential}{self.mongodb_host}:{self.mongodb_port}"
+        if self.mongodb_auth_source:
+            uri = f"{uri}/?authSource={self.mongodb_auth_source}"
+        return uri
 
 
 settings = Settings()

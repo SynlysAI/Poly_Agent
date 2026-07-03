@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-import { authState, clearAuthSession, getAuthorizationHeader } from '../auth/authState'
+import { clearAuthSession, getAuthorizationHeader } from '../auth/authState'
 
 const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
 
@@ -71,6 +71,22 @@ function unwrapResponse(response) {
   return payload.data
 }
 
+function parseDownloadFilename(contentDisposition, fallbackName) {
+  if (!contentDisposition) {
+    return fallbackName
+  }
+  const encodedMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1])
+    } catch {
+      return encodedMatch[1]
+    }
+  }
+  const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
+  return filenameMatch?.[1] || fallbackName
+}
+
 export function getApiErrorMessage(error) {
   if (!error) return '未知错误'
   if (error.isApiError) {
@@ -79,7 +95,16 @@ export function getApiErrorMessage(error) {
     if (error.kind === 'canceled') return '请求已取消'
     const statusMsgMap = { 400: '参数有误', 401: '登录已过期', 403: '无权限', 404: '资源未找到', 422: '参数校验失败', 500: '服务器内部错误', 502: '上游服务异常', 504: '上游服务超时' }
     if (error.status && statusMsgMap[error.status]) {
-      return `${statusMsgMap[error.status]}：${error.message || ''}`
+      const genericMessages = new Set([
+        'internal error',
+        'invalid parameter',
+        'validation failed',
+        'resource not found',
+        'upstream service error',
+        'upstream timeout',
+      ])
+      const message = error.detail && genericMessages.has(error.message) ? error.detail : (error.message || error.detail || '')
+      return `${statusMsgMap[error.status]}：${message}`
     }
     return error.message || '服务异常'
   }
@@ -128,4 +153,156 @@ export function createInviteCode(payload) {
 
 export function disableInviteCode(inviteId) {
   return apiClient.patch(`/admin/invite-codes/${inviteId}/disable`).then(unwrapResponse)
+}
+
+// ── 计算智能 API ──
+
+export function createComputation(payload) {
+  return apiClient.post('/computations', payload).then(unwrapResponse)
+}
+
+export function listComputations(params = {}) {
+  return apiClient.get('/computations', { params }).then(unwrapResponse)
+}
+
+export function getComputation(runId) {
+  return apiClient.get(`/computations/${runId}`).then(unwrapResponse)
+}
+
+export function cancelComputation(runId) {
+  return apiClient.post(`/computations/${runId}/cancel`).then(unwrapResponse)
+}
+
+export function retryComputation(runId) {
+  return apiClient.post(`/computations/${runId}/retry`).then(unwrapResponse)
+}
+
+export function listComputationArtifacts(runId) {
+  return apiClient.get(`/computations/${runId}/artifacts`).then(unwrapResponse)
+}
+
+export function previewArtifact(artifactId) {
+  return apiClient.get(`/artifacts/${artifactId}/preview`).then(unwrapResponse)
+}
+
+export function getArtifact(artifactId) {
+  return apiClient.get(`/artifacts/${artifactId}`).then(unwrapResponse)
+}
+
+export function getArtifactStructure(artifactId) {
+  return apiClient.get(`/artifacts/${artifactId}/structure`).then(unwrapResponse)
+}
+
+export function getArtifactSpectrum(artifactId) {
+  return apiClient.get(`/artifacts/${artifactId}/spectrum`).then(unwrapResponse)
+}
+
+export function downloadArtifact(artifactId) {
+  return apiClient
+    .get(`/artifacts/${encodeURIComponent(artifactId)}/download`, { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], `${artifactId}.dat`),
+      contentType: response.headers['content-type'] || 'application/octet-stream',
+    }))
+}
+
+// ── 优化闭环 API ──
+
+export function createCampaign(payload) {
+  return apiClient.post('/optimization/campaigns', payload).then(unwrapResponse)
+}
+
+export function listCampaigns(params = {}) {
+  return apiClient.get('/optimization/campaigns', { params }).then(unwrapResponse)
+}
+
+export function getCampaign(campaignId) {
+  return apiClient.get(`/optimization/campaigns/${campaignId}`).then(unwrapResponse)
+}
+
+export function getCampaignHistory(campaignId) {
+  return apiClient.get(`/optimization/campaigns/${campaignId}/history`).then(unwrapResponse)
+}
+
+export function pauseCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:pause`, payload).then(unwrapResponse)
+}
+
+export function resumeCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:resume`, payload).then(unwrapResponse)
+}
+
+export function archiveCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:archive`, payload).then(unwrapResponse)
+}
+
+export function completeCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:complete`, payload).then(unwrapResponse)
+}
+
+export function failCampaign(campaignId, payload = {}) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}:fail`, payload).then(unwrapResponse)
+}
+
+export function importCampaignCandidates(campaignId, payload) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import`, payload).then(unwrapResponse)
+}
+
+export function importCampaignCandidatesCsv(campaignId, csvText) {
+  const formData = new FormData()
+  formData.append('csv_text', csvText)
+  return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import-csv`, formData).then(unwrapResponse)
+}
+
+export function generateSuggestion(campaignId, payload = { batch_size: 1 }) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}/suggestions`, payload).then(unwrapResponse)
+}
+
+export function createObservation(campaignId, payload) {
+  return apiClient.post(`/optimization/campaigns/${campaignId}/observations`, payload).then(unwrapResponse)
+}
+
+export function createObservationFromComputation(runId) {
+  return apiClient.post(`/optimization/computations/${runId}/create-observation`).then(unwrapResponse)
+}
+
+export function submitSuggestionComputation(suggestionId) {
+  return apiClient.post(`/optimization/suggestions/${suggestionId}/submit-computation`).then(unwrapResponse)
+}
+
+export function rejectSuggestion(suggestionId, payload) {
+  return apiClient.post(`/optimization/suggestions/${suggestionId}/reject`, payload).then(unwrapResponse)
+}
+
+export function markSuggestionFailed(suggestionId, payload) {
+  return apiClient.post(`/optimization/suggestions/${suggestionId}/failed`, payload).then(unwrapResponse)
+}
+
+export function getIntegrationStatus() {
+  return apiClient.get('/integrations/status').then(unwrapResponse)
+}
+
+export function listIntegrationConfigs() {
+  return apiClient.get('/integrations/configs').then(unwrapResponse)
+}
+
+export function upsertIntegrationConfig(serviceKey, payload) {
+  return apiClient.put(`/integrations/configs/${serviceKey}`, payload).then(unwrapResponse)
+}
+
+export function checkIntegrationConfig(serviceKey) {
+  return apiClient.post(`/integrations/configs/${serviceKey}/check`).then(unwrapResponse)
+}
+
+// ── LLM API ──
+
+/** 通用对话接口 */
+export function chatWithLLM(messages) {
+  return apiClient.post('/llm/chat', { messages }).then(r => r.data)
+}
+
+/** LLM 辅助实验建议 */
+export function suggestExperiments(payload) {
+  return apiClient.post('/llm/suggest-experiments', payload).then(r => r.data)
 }

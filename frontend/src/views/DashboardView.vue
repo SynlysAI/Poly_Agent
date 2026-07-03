@@ -51,7 +51,7 @@ onMounted(() => {
         <div class="panel-body">
           <el-table :data="recentTasks" stripe style="width:100%">
             <el-table-column prop="id" label="任务编号" min-width="160" />
-            <el-table-column prop="type" label="预测类型" min-width="120" />
+            <el-table-column prop="type" label="任务类型" min-width="120" />
             <el-table-column prop="status" label="状态" min-width="100">
               <template #default="{ row }">
                 <el-tag :type="row.status === 'completed' ? 'success' : row.status === 'running' ? 'warning' : 'info'" size="small">
@@ -69,8 +69,8 @@ onMounted(() => {
           <h3 class="panel-title">快捷操作</h3>
         </div>
         <div class="panel-body" style="display:flex;flex-direction:column;gap:10px">
-          <el-button type="primary" @click="$router.push('/tasks/submit')" style="width:100%">新建预测任务</el-button>
-          <el-button @click="$router.push('/tasks/center')" style="width:100%">查看任务列表</el-button>
+          <el-button type="primary" @click="$router.push('/tasks/submit')" style="width:100%">新建任务</el-button>
+          <el-button @click="$router.push('/tasks/center')" style="width:100%">查看任务中心</el-button>
           <el-button @click="$router.push('/dialogue')" style="width:100%">问答对话</el-button>
           <el-button @click="$router.push('/tools')" style="width:100%">工具服务</el-button>
         </div>
