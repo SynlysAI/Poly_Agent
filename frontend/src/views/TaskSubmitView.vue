@@ -1,79 +1,380 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { CircleCheck, Clock, Search, View } from '@element-plus/icons-vue'
 
-const formRef = ref(null)
-const submitting = ref(false)
+import { getApiErrorMessage, getIntegrationStatus, listComputations } from '../api/polyAgentApi'
+import { TASK_CATEGORIES, TASK_MODULES, getTaskStatusTagType } from '../tasks/taskModules'
 
-const form = reactive({
-  sample_name: '',
-  material_type: '',
-  prediction_type: '',
-  description: '',
+const router = useRouter()
+const keyword = ref('')
+const category = ref('全部')
+const recentRuns = ref([])
+const integrations = ref([])
+const loading = ref(false)
+
+const filteredModules = computed(() => {
+  const normalizedKeyword = keyword.value.trim().toLowerCase()
+  return TASK_MODULES.filter((module) => {
+    const matchesCategory = category.value === '全部' || module.category === category.value
+    const haystack = `${module.name} ${module.category} ${module.description}`.toLowerCase()
+    const matchesKeyword = !normalizedKeyword || haystack.includes(normalizedKeyword)
+    return matchesCategory && matchesKeyword
+  })
 })
 
-const rules = {
-  sample_name: [{ required: true, message: '请输入样品名称', trigger: 'blur' }],
-  material_type: [{ required: true, message: '请选择材料类型', trigger: 'change' }],
-  prediction_type: [{ required: true, message: '请选择预测指标', trigger: 'change' }],
+const onlineModules = computed(() => TASK_MODULES.filter((module) => module.status === 'online' || module.status === 'preview'))
+
+const serviceStatusText = computed(() => {
+  const worker = integrations.value.find((item) => item.service === 'computation-worker')
+  if (!worker) return '未检查'
+  if (worker.status === 'up') return '计算 worker 在线'
+  return `计算 worker ${worker.status}`
+})
+
+function openModule(module) {
+  if (module.routes?.submit) {
+    router.push(module.routes.submit)
+    return
+  }
+  ElMessage.info(`${module.name} 正在接入中`)
 }
 
-const materialOptions = [
-  { label: '聚乙烯 (PE)', value: 'PE' },
-  { label: '聚丙烯 (PP)', value: 'PP' },
-  { label: '聚苯乙烯 (PS)', value: 'PS' },
-  { label: '聚氯乙烯 (PVC)', value: 'PVC' },
-  { label: '聚对苯二甲酸乙二醇酯 (PET)', value: 'PET' },
-  { label: '其他', value: 'other' },
-]
+function openModuleCenter(module) {
+  if (module.routes?.center) {
+    router.push(module.routes.center)
+    return
+  }
+  ElMessage.info(`${module.name} 暂无可用任务中心`)
+}
 
-const predictionOptions = [
-  { label: '分子量分布 (Mn, Mw, PDI)', value: 'molecular_weight' },
-  { label: '热稳定性 (Tg, Tm, Td)', value: 'thermal' },
-  { label: '力学性能 (拉伸强度, 模量)', value: 'mechanical' },
-  { label: '流变性能', value: 'rheological' },
-]
-
-async function handleSubmit() {
-  const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid) return
-  submitting.value = true
+async function loadDockData() {
+  loading.value = true
   try {
-    ElMessage.success('任务提交功能开发中，敬请期待')
+    const [runs, status] = await Promise.all([
+      listComputations({ page: 1, page_size: 5 }).catch(() => ({ items: [] })),
+      getIntegrationStatus().catch(() => ({ items: [] })),
+    ])
+    recentRuns.value = runs.items || []
+    integrations.value = status.items || []
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
   } finally {
-    submitting.value = false
+    loading.value = false
   }
 }
+
+function formatDate(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+onMounted(() => {
+  loadDockData()
+})
 </script>
 
 <template>
-  <div class="panel">
-    <div class="panel-header">
-      <h3 class="panel-title">高分子性能指标预测</h3>
-    </div>
-    <div class="panel-body">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" style="max-width:640px">
-        <el-form-item label="样品名称" prop="sample_name">
-          <el-input v-model="form.sample_name" placeholder="请输入样品编号或名称" />
-        </el-form-item>
-        <el-form-item label="材料类型" prop="material_type">
-          <el-select v-model="form.material_type" placeholder="请选择高分子材料类型" style="width:100%">
-            <el-option v-for="item in materialOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="预测指标" prop="prediction_type">
-          <el-select v-model="form.prediction_type" placeholder="请选择需要预测的性能指标" style="width:100%">
-            <el-option v-for="item in predictionOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="补充描述">
-          <el-input v-model="form.description" type="textarea" :rows="3" placeholder="可补充样品制备条件、测试环境等额外信息" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="submitting" @click="handleSubmit">提交预测任务</el-button>
-          <el-button @click="$router.push('/tasks/center')">查看历史任务</el-button>
-        </el-form-item>
-      </el-form>
-    </div>
+  <div class="task-launcher">
+    <section class="panel task-catalog">
+      <div class="panel-header launcher-header">
+        <div>
+          <h3 class="panel-title">任务提交</h3>
+          <p class="panel-subtitle">选择要启动的任务类型。计算智能、湿实验优化和垂类预测都从这里进入。</p>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="launcher-toolbar">
+          <el-input v-model="keyword" class="launcher-search" clearable placeholder="搜索任务类型、模块或能力">
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+          <el-segmented v-model="category" :options="TASK_CATEGORIES" />
+        </div>
+
+        <div class="module-grid">
+          <article v-for="module in filteredModules" :key="module.id" class="module-card">
+            <div class="module-card-top">
+              <div class="module-icon">
+                <el-icon><component :is="module.icon" /></el-icon>
+              </div>
+              <el-tag size="small" :type="getTaskStatusTagType(module.status)">{{ module.statusText }}</el-tag>
+            </div>
+            <div class="module-category">{{ module.category }}</div>
+            <h4>{{ module.name }}</h4>
+            <p>{{ module.description }}</p>
+            <div class="module-actions">
+              <el-button type="primary" size="small" @click="openModule(module)">{{ module.primaryActionText }}</el-button>
+              <el-button size="small" @click="openModuleCenter(module)">{{ module.centerActionText }}</el-button>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <aside class="launcher-dock">
+      <section class="panel">
+        <div class="panel-header dock-header">
+          <h3 class="panel-title">在线任务</h3>
+          <el-button text :loading="loading" @click="loadDockData">刷新</el-button>
+        </div>
+        <div class="panel-body dock-list">
+          <button v-for="module in onlineModules" :key="module.id" type="button" class="dock-module" @click="openModule(module)">
+            <span class="dock-module-icon"><el-icon><component :is="module.icon" /></el-icon></span>
+            <span>
+              <strong>{{ module.name }}</strong>
+              <small>{{ module.statusText }}</small>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h3 class="panel-title">服务状态</h3>
+        </div>
+        <div class="panel-body">
+          <div class="status-line">
+            <el-icon><CircleCheck /></el-icon>
+            <span>{{ serviceStatusText }}</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h3 class="panel-title">最近计算任务</h3>
+        </div>
+        <div class="panel-body recent-list">
+          <button
+            v-for="run in recentRuns"
+            :key="run.run_id"
+            type="button"
+            class="recent-item"
+            @click="$router.push({ path: '/computations/runs', query: { run_id: run.run_id } })"
+          >
+            <span>
+              <strong>{{ run.molecule?.name || run.run_id }}</strong>
+              <small>{{ run.status }} · {{ formatDate(run.created_at) }}</small>
+            </span>
+            <el-icon><View /></el-icon>
+          </button>
+          <div v-if="!recentRuns.length" class="empty-inline">
+            <el-icon><Clock /></el-icon>
+            <span>暂无计算任务</span>
+          </div>
+        </div>
+      </section>
+    </aside>
   </div>
 </template>
+
+<style scoped>
+.task-launcher {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.panel-subtitle {
+  margin: 6px 0 0;
+  color: var(--app-ink-muted);
+  font-size: 13px;
+}
+
+.launcher-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.launcher-search {
+  max-width: 360px;
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.module-card {
+  min-height: 220px;
+  padding: 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+}
+
+.module-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.module-icon,
+.dock-module-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--app-radius-sm);
+  background: var(--app-primary-light);
+  color: var(--app-primary-active);
+}
+
+.module-icon {
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
+}
+
+.module-category {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.module-card h4 {
+  margin: 8px 0;
+  color: var(--app-ink);
+  font-size: 16px;
+}
+
+.module-card p {
+  flex: 1;
+  margin: 0;
+  color: var(--app-ink-body);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.module-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.launcher-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 74px;
+}
+
+.dock-header {
+  min-height: 58px;
+}
+
+.dock-list,
+.recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dock-module,
+.recent-item {
+  width: 100%;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+  color: var(--app-ink);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  text-align: left;
+}
+
+.dock-module {
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 10px;
+}
+
+.dock-module-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.dock-module strong,
+.recent-item strong {
+  display: block;
+  font-size: 13px;
+}
+
+.dock-module small,
+.recent-item small {
+  display: block;
+  margin-top: 2px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-ink-body);
+  font-weight: 600;
+}
+
+.status-line .el-icon {
+  color: #16a34a;
+}
+
+.recent-item {
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 58px;
+  padding: 8px 10px;
+}
+
+.empty-inline {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-ink-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 1200px) {
+  .task-launcher {
+    grid-template-columns: 1fr;
+  }
+
+  .launcher-dock {
+    position: static;
+  }
+}
+
+@media (max-width: 960px) {
+  .module-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .launcher-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .launcher-search {
+    max-width: none;
+  }
+
+  .module-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
