@@ -4,12 +4,13 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search, View } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, listComputations } from '../api/polyAgentApi'
-import { TASK_MODULES, getTaskModule, mapComputationRunToGlobalTask } from '../tasks/taskModules'
+import { getApiErrorMessage, listCampaigns, listComputations } from '../api/polyAgentApi'
+import { TASK_MODULES, getTaskModule, mapCampaignToGlobalTask, mapComputationRunToGlobalTask } from '../tasks/taskModules'
 
 const router = useRouter()
 const loading = ref(false)
 const computationRows = ref([])
+const campaignRows = ref([])
 const total = ref(0)
 
 const filters = reactive({
@@ -32,10 +33,16 @@ const statusOptions = [
   { label: 'Completed', value: 'completed' },
   { label: 'Failed', value: 'failed' },
   { label: 'Cancelled', value: 'cancelled' },
+  { label: 'Draft', value: 'draft' },
+  { label: 'Paused', value: 'paused' },
+  { label: 'Archived', value: 'archived' },
 ]
 
 const taskRows = computed(() => {
-  const rows = computationRows.value.map(mapComputationRunToGlobalTask)
+  const rows = [
+    ...computationRows.value.map(mapComputationRunToGlobalTask),
+    ...campaignRows.value.map(mapCampaignToGlobalTask),
+  ].sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
   const normalizedKeyword = filters.keyword.trim().toLowerCase()
   return rows.filter((row) => {
     const matchesModule = !filters.module_id || row.module_id === filters.module_id
@@ -46,7 +53,7 @@ const taskRows = computed(() => {
   })
 })
 
-const unavailableModules = computed(() => TASK_MODULES.filter((item) => item.id !== 'computation'))
+const unavailableModules = computed(() => TASK_MODULES.filter((item) => !item.routes?.center && item.status === 'coming'))
 
 const summary = computed(() => {
   const counts = { total: taskRows.value.length, running: 0, completed: 0, pending: 0 }
@@ -59,7 +66,7 @@ const summary = computed(() => {
 })
 
 function getStatusTag(status) {
-  const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info' }
+  const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', draft: 'info', paused: 'info', archived: 'info' }
   return map[status] || 'info'
 }
 
@@ -73,9 +80,13 @@ function formatDate(value) {
 async function loadTasks() {
   loading.value = true
   try {
-    const data = await listComputations({ page: filters.page, page_size: filters.page_size })
-    computationRows.value = data.items || []
-    total.value = data.total || 0
+    const [computations, campaigns] = await Promise.all([
+      listComputations({ page: filters.page, page_size: filters.page_size }),
+      listCampaigns({ page: filters.page, page_size: filters.page_size }),
+    ])
+    computationRows.value = computations.items || []
+    campaignRows.value = campaigns.items || []
+    total.value = (computations.total || 0) + (campaigns.total || 0)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {

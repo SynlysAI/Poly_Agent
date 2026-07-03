@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.infra.computation_repositories import AuditEventRepository
 from app.infra.computation_repositories import ServiceIntegrationRepository
 from app.schemas.integrations import ServiceIntegrationUpsertRequest
@@ -126,3 +127,19 @@ class IntegrationConfigServiceTest(ComputationTestCase):
         self.assertEqual(by_service["xtb"]["details"]["reason"], "xtb executable not found on PATH")
         self.assertEqual(by_service["openbabel"]["details"]["path"], None)
         self.assertEqual(by_service["xtb"]["details"]["path"], None)
+
+    def test_status_includes_alchemist_backend_without_requiring_service(self) -> None:
+        original_url = settings.alchemist_backend_url
+        settings.alchemist_backend_url = "http://127.0.0.1:8004/api/v1"
+        try:
+            with patch.object(IntegrationStatusService, "_can_connect", return_value=False):
+                items = IntegrationStatusService().get_status()["items"]
+        finally:
+            settings.alchemist_backend_url = original_url
+
+        by_service = {item["service"]: item for item in items}
+
+        self.assertIn("alchemist-backend", by_service)
+        self.assertEqual(by_service["alchemist-backend"]["status"], "not_configured")
+        self.assertEqual(by_service["alchemist-backend"]["details"]["host"], "127.0.0.1")
+        self.assertEqual(by_service["alchemist-backend"]["details"]["port"], 8004)

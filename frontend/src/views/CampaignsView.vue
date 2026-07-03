@@ -190,7 +190,7 @@ onMounted(loadCampaigns)
     <section class="panel">
       <div class="panel-header task-header">
         <div>
-          <h3 class="panel-title">Optimization Campaigns</h3>
+          <h3 class="panel-title">Campaign 闭环管理</h3>
           <p class="panel-subtitle">管理候选库、推荐、计算回填 observation 和闭环历史。</p>
         </div>
         <div class="header-actions">

@@ -243,7 +243,7 @@ onMounted(loadDetail)
     <section class="panel">
       <div class="panel-header detail-header">
         <div>
-          <h3 class="panel-title">{{ campaign?.name || 'Campaign Detail' }}</h3>
+          <h3 class="panel-title">{{ campaign?.name || 'Campaign 详情' }}</h3>
           <p class="panel-subtitle">{{ campaignId }}</p>
         </div>
         <div class="header-actions">

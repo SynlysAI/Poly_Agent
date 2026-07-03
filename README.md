@@ -55,17 +55,11 @@ Poly_Agent/
 ### 1. 环境准备
 
 ```bash
-# 创建 conda 环境
-conda create -n poly_agent python=3.12 -y
+# 一次性创建 / 更新项目 conda 环境（Python 3.12 + Node.js 22）
+bash scripts/setup_poly_agent_env.sh
+
+# 手动激活环境
 conda activate poly_agent
-
-# 安装后端依赖
-cd backend
-pip install -r requirements.txt
-
-# 安装前端依赖
-cd ../frontend
-npm install
 ```
 
 ### 2. 配置环境变量
@@ -78,16 +72,19 @@ cp backend/.env.example backend/.env
 ### 3. 开发模式
 
 ```bash
-# 终端 1：启动后端
-cd backend
-uvicorn app.main:app --reload --port 8003
+# 推荐：一条命令重启前后端
+bash scripts/restart_poly_agent_services.sh
 
-# 终端 2：启动前端开发服务器
-cd frontend
-npm run dev
+# 停止前后端
+bash scripts/stop_poly_agent_services.sh
 ```
 
-前端开发服务器运行在 `http://localhost:5173`，API 请求自动代理到 `127.0.0.1:8003`。
+默认开发端口：
+
+- 前端：`http://127.0.0.1:5100`
+- 后端：`http://127.0.0.1:5101`
+
+前端开发服务器会自动把 `/api` 和 `/static` 代理到后端。
 
 ### 4. 生产部署
 
@@ -95,15 +92,15 @@ npm run dev
 # 构建前端
 cd frontend && npm run build
 
-# 启动后端（自动托管前端静态文件）
+# 启动后端（自动托管前端静态文件，默认端口 5100）
 cd ../backend
-uvicorn app.main:app --host 0.0.0.0 --port 8003
+conda run -n poly_agent python -m uvicorn app.main:app --host 0.0.0.0 --port 5100
 
 # 或使用 PM2
 pm2 start ecosystem.config.js
 ```
 
-生产模式下直接访问 `http://<host>:8003` 即可，后端自动提供前端 SPA 页面。
+生产模式下直接访问 `http://<host>:5100` 即可，后端自动提供前端 SPA 页面。
 
 ## 认证体系
 

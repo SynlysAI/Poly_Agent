@@ -4,13 +4,13 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CircleCheck, Clock, Search, View } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, getIntegrationStatus, listComputations } from '../api/polyAgentApi'
-import { TASK_CATEGORIES, TASK_MODULES, getTaskStatusTagType } from '../tasks/taskModules'
+import { getApiErrorMessage, getIntegrationStatus, listCampaigns, listComputations } from '../api/polyAgentApi'
+import { TASK_CATEGORIES, TASK_MODULES, getTaskStatusTagType, mapCampaignToGlobalTask, mapComputationRunToGlobalTask } from '../tasks/taskModules'
 
 const router = useRouter()
 const keyword = ref('')
 const category = ref('全部')
-const recentRuns = ref([])
+const recentTasks = ref([])
 const integrations = ref([])
 const loading = ref(false)
 
@@ -26,11 +26,13 @@ const filteredModules = computed(() => {
 
 const onlineModules = computed(() => TASK_MODULES.filter((module) => module.status === 'online' || module.status === 'preview'))
 
-const serviceStatusText = computed(() => {
+const serviceStatusLines = computed(() => {
   const worker = integrations.value.find((item) => item.service === 'computation-worker')
-  if (!worker) return '未检查'
-  if (worker.status === 'up') return '计算 worker 在线'
-  return `计算 worker ${worker.status}`
+  const alchemist = integrations.value.find((item) => item.service === 'alchemist-backend')
+  return [
+    worker?.status === 'up' ? '计算 worker 在线' : `计算 worker ${worker?.status || '未检查'}`,
+    alchemist?.status === 'up' ? 'Alchemist 后端在线' : `Alchemist 后端 ${alchemist?.status || '未检查'}`,
+  ]
 })
 
 function openModule(module) {
@@ -52,11 +54,17 @@ function openModuleCenter(module) {
 async function loadDockData() {
   loading.value = true
   try {
-    const [runs, status] = await Promise.all([
+    const [runs, campaigns, status] = await Promise.all([
       listComputations({ page: 1, page_size: 5 }).catch(() => ({ items: [] })),
+      listCampaigns({ page: 1, page_size: 5 }).catch(() => ({ items: [] })),
       getIntegrationStatus().catch(() => ({ items: [] })),
     ])
-    recentRuns.value = runs.items || []
+    recentTasks.value = [
+      ...(runs.items || []).map(mapComputationRunToGlobalTask),
+      ...(campaigns.items || []).map(mapCampaignToGlobalTask),
+    ]
+      .sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
+      .slice(0, 5)
     integrations.value = status.items || []
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -137,33 +145,35 @@ onMounted(() => {
         </div>
         <div class="panel-body">
           <div class="status-line">
-            <el-icon><CircleCheck /></el-icon>
-            <span>{{ serviceStatusText }}</span>
+            <div v-for="line in serviceStatusLines" :key="line" class="status-line-item">
+              <el-icon><CircleCheck /></el-icon>
+              <span>{{ line }}</span>
+            </div>
           </div>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel-header">
-          <h3 class="panel-title">最近计算任务</h3>
+          <h3 class="panel-title">最近任务</h3>
         </div>
         <div class="panel-body recent-list">
           <button
-            v-for="run in recentRuns"
-            :key="run.run_id"
+            v-for="task in recentTasks"
+            :key="task.task_id"
             type="button"
             class="recent-item"
-            @click="$router.push({ path: '/computations/runs', query: { run_id: run.run_id } })"
+            @click="$router.push(task.route)"
           >
             <span>
-              <strong>{{ run.molecule?.name || run.run_id }}</strong>
-              <small>{{ run.status }} · {{ formatDate(run.created_at) }}</small>
+              <strong>{{ task.title }}</strong>
+              <small>{{ task.module_name }} · {{ task.status_text }} · {{ formatDate(task.created_at) }}</small>
             </span>
             <el-icon><View /></el-icon>
           </button>
-          <div v-if="!recentRuns.length" class="empty-inline">
+          <div v-if="!recentTasks.length" class="empty-inline">
             <el-icon><Clock /></el-icon>
-            <span>暂无计算任务</span>
+            <span>暂无任务</span>
           </div>
         </div>
       </section>
@@ -311,15 +321,28 @@ onMounted(() => {
   font-size: 13px;
 }
 
+.recent-item span {
+  min-width: 0;
+}
+
 .dock-module small,
 .recent-item small {
   display: block;
   margin-top: 2px;
   color: var(--app-ink-muted);
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-line {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.status-line-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -327,7 +350,7 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.status-line .el-icon {
+.status-line-item .el-icon {
   color: #16a34a;
 }
 

@@ -26,13 +26,16 @@ export const TASK_MODULES = [
     id: 'wetlab-bayes',
     name: '湿实验贝叶斯优化',
     category: '实验闭环',
-    status: 'coming',
-    statusText: '即将上线',
+    status: 'online',
+    statusText: '在线',
     icon: SetUp,
-    description: '面向湿实验 campaign 的候选推荐、实验观察值回写和下一轮策略生成。',
-    primaryActionText: '查看规划',
+    description: '统一进入湿实验优化、贝叶斯 campaign 和 Alchemist 实验设计链路。',
+    primaryActionText: '进入优化',
     centerActionText: '任务管理',
-    routes: {},
+    routes: {
+      submit: '/optimization',
+      center: '/optimization/campaigns',
+    },
   },
   {
     id: 'vertical-prediction',
@@ -107,5 +110,24 @@ export function mapComputationRunToGlobalTask(run) {
       query: { run_id: run.run_id },
     },
     raw: run,
+  }
+}
+
+export function mapCampaignToGlobalTask(campaign) {
+  return {
+    task_id: campaign.campaign_id,
+    task_type: '湿实验优化',
+    module_id: 'wetlab-bayes',
+    module_name: '湿实验贝叶斯优化',
+    title: campaign.name || campaign.campaign_id,
+    summary: campaign.objectives?.map((item) => item.name).join(', ') || '-',
+    status: campaign.status,
+    status_text: campaign.status,
+    created_at: campaign.created_at,
+    updated_at: campaign.updated_at,
+    route: {
+      path: `/optimization/campaigns/${campaign.campaign_id}`,
+    },
+    raw: campaign,
   }
 }

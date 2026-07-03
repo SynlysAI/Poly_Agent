@@ -9,6 +9,7 @@ import importlib.metadata
 import importlib.util
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.services.integration_config_service import IntegrationConfigService
@@ -31,6 +32,7 @@ class IntegrationStatusService:
             self._port_status("chemos-streamlit", "127.0.0.1", 8501, checked_at),
             self._port_status("chemos-sila", "127.0.0.1", 65001, checked_at),
             self._port_status("atlas", "127.0.0.1", 65100, checked_at),
+            self._alchemist_status(checked_at),
             self._aiida_status(checked_at),
             self._speclabos_status(checked_at),
             self._rdkit_status(checked_at),
@@ -147,6 +149,27 @@ class IntegrationStatusService:
                 return True
         except OSError:
             return False
+
+    def _alchemist_status(self, checked_at: str) -> dict:
+        parsed = urlparse(settings.alchemist_backend_url)
+        host = parsed.hostname or "127.0.0.1"
+        if parsed.port:
+            port = parsed.port
+        elif parsed.scheme == "https":
+            port = 443
+        else:
+            port = 80
+        available = self._can_connect(host, port)
+        return {
+            "service": "alchemist-backend",
+            "status": "up" if available else "not_configured",
+            "checked_at": checked_at,
+            "details": {
+                "url": settings.alchemist_backend_url,
+                "host": host,
+                "port": port,
+            },
+        }
 
     def _aiida_status(self, checked_at: str) -> dict:
         return {

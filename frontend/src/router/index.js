@@ -10,6 +10,7 @@ import DatabaseManagementView from '../views/DatabaseManagementView.vue'
 import DialogueView from '../views/DialogueView.vue'
 import LoginView from '../views/LoginView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
+import OptimizationHomeView from '../views/OptimizationHomeView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import TaskCenterView from '../views/TaskCenterView.vue'
 import TaskSubmitView from '../views/TaskSubmitView.vue'
@@ -27,8 +28,10 @@ const routes = [
   { path: '/tasks/center', component: TaskCenterView, meta: { section: '任务中心', title: '全局任务' } },
   { path: '/computations/submit', component: ComputationSubmitView, meta: { section: '计算智能', title: '提交计算任务' } },
   { path: '/computations/runs', component: ComputationRunsView, meta: { section: '计算智能', title: '计算任务中心' } },
-  { path: '/optimization/campaigns', component: CampaignsView, meta: { section: '计算智能', title: 'Optimization Campaigns' } },
-  { path: '/optimization/campaigns/:campaignId', component: CampaignDetailView, meta: { section: '计算智能', title: 'Campaign Detail' } },
+  { path: '/optimization', component: OptimizationHomeView, meta: { section: '湿实验优化', title: '业务入口' } },
+  { path: '/optimization/campaigns', component: CampaignsView, meta: { section: '湿实验优化', title: 'Campaign 闭环管理' } },
+  { path: '/optimization/campaigns/:campaignId', component: CampaignDetailView, meta: { section: '湿实验优化', title: 'Campaign Detail' } },
+  { path: '/optimization/alchemist', component: AlchemistToolView, meta: { section: '湿实验优化', title: 'Alchemist 实验设计' } },
   { path: '/dialogue', component: DialogueView, meta: { title: '问答对话' } },
   { path: '/tools', component: ToolServicesView, meta: { section: '工具服务', title: '工具列表' } },
   { path: '/tools/alchemist', component: AlchemistToolView, meta: { section: '工具服务', title: '实验设计与优化' } },
