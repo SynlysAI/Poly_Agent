@@ -13,7 +13,19 @@
 
 ## 2. 总体判断
 
-当前代码已经超过上一版文档描述的 MVP 原型阶段。原计划中的 Phase 0 修复、computation adapter 抽象、本地结构生成、本地 xTB、轻量 planner、自动 observation、service integration 持久化配置等能力已经有实现和测试。
+当前版本已经不是单点原型，而是一个“可演示的计算智能闭环系统”。它能把任务提交、计算执行、结果产物、优化推荐、observation 回填和 campaign 生命周期串起来，但还没有完全接入真实生产计算平台和真实实验系统。
+
+现在已经做到的事情，可以用一句话概括：
+- 能跑通计算智能主流程：创建 computation、worker 执行、登记 artifact、创建 campaign、导入候选、生成 suggestion、提交计算、生成 observation、继续下一轮推荐。
+- 能支撑演示和内测：有任务列表/详情、取消/重试、artifact 预览/下载、campaign 状态管理、审计和 history。
+- 能按受控边界接入不同执行方式：mock、local structure、local xTB、ORCA fixture、ORCA fake external 都已经有代码路径和测试。
+
+真实接入的程度，需要分开看：
+- `RDKit / OpenBabel / xTB`：代码已经接入，本地 adapter 已经写好；如果运行环境装好依赖，就可以产出真实结构和真实 xTB 结果。
+- 当前仓库运行环境里，这些本地依赖默认还是 `not_available`，所以默认仍以 mock/fake/fixture 演示为主。
+- `ORCA / ChemOS`：现在已经有受控 preset、parser、artifact 流程和 fake external executor，但还没有真正连到 ORCA、HPC 队列或 AiiDA。
+- `SpecLabOS`：目前只有字段和 integration config 基础，还没有真实实验提交能力。
+- `MongoDB`：不可用时会回退到本地 demo JSON store，所以系统能演示，但不等于已经具备稳定的生产级数据持久化。
 
 当前可跑通的主流程：
 
@@ -43,7 +55,7 @@
 | Phase 1 可演示计算智能模块 | 约 82%-85% | mock/local/fixture/fake external 演示能力已较完整；真实 ORCA/HPC、SpecLabOS、生产级 worker 运维仍未落地 |
 | 完整参考项目目标 Phase 1-7 | 约 50%-55% | 本地结构/xTB、ChemOS laser parser fixture、ORCA fake external、integration config 已落地；AiiDA/真实 ORCA executor/SpecLabOS/Atlas/对象存储仍是后续工作 |
 
-核心结论：当前版本已经适合作为“可演示计算智能模块”的基线。下一步不应重复实现 adapter 或 planner 基础设施，而应优先做真实依赖环境验收、前端可视化/e2e、审计元数据增强和真实外部执行器边界。
+核心结论：当前版本已经适合作为“可演示计算智能模块”的基线。下一步重点不是再造一套 adapter 或 planner，而是把真实依赖环境、真实外部执行器、真实实验系统和生产级存储/审计逐步接上。
 
 ## 3. 当前已完成内容
 
@@ -84,14 +96,14 @@
 
 | 能力 | 当前实现 | 主要文件 | 状态 |
 |---|---|---|---|
-| campaign | 创建、列表、详情，状态支持 draft/running/paused/completed/failed/archived | `backend/app/schemas/optimization.py`、`backend/app/services/optimization_service.py` | 已完成 MVP；缺状态管理 API |
+| campaign | 创建、列表、详情，状态支持 draft/running/paused/completed/failed/archived，并支持 pause/resume/archive/complete/fail API | `backend/app/schemas/optimization.py`、`backend/app/services/optimization_service.py`、`backend/app/api/v1/endpoints/optimization.py` | 已完成 MVP |
 | candidate 导入 | JSON 批量导入、CSV 导入报告、ChemOS demo 导入、descriptor 生成 | `backend/app/services/optimization_service.py`、`backend/app/api/v1/endpoints/optimization.py` | 已完成 MVP |
 | descriptor | `candidate_descriptor.v1`，RDKit Morgan 或 SMILES hash fallback | `backend/app/services/optimization_service.py` | 已完成 MVP |
-| planner request/response | `planner_request.v1`、`planner_response.v1`，suggestion 保存 request/response 快照 | `backend/app/schemas/optimization.py`、`backend/app/services/optimization_service.py` | 已完成 MVP |
+| planner request/response | `planner_request.v1`、`planner_response.v1`，constraints schema、skipped/low confidence reason、suggestion request/response 快照版本字段 | `backend/app/schemas/optimization.py`、`backend/app/services/optimization_service.py`、`backend/app/services/planner_adapters.py` | 已完成 MVP |
 | fallback planner | 按稳定 key 顺序选择未评价候选 | `backend/app/services/planner_adapters.py` | 已完成 |
 | tanimoto planner | 基于最佳 observation 的 Tanimoto 相似度推荐 | `backend/app/services/planner_adapters.py` | 已完成轻量版 |
-| suggestion 转 computation | 幂等提交 `MOCK_LASER` computation run | `backend/app/services/optimization_service.py` | 已完成 MVP；缺 workflow 可配置 |
-| observation | 手工写入、从 completed `MOCK_LASER/ORCA_CHEMOS_LASER` run 映射目标值 | `backend/app/services/optimization_service.py` | 已完成 MVP；手工 observation 目标字段校验不足 |
+| suggestion 转 computation | 幂等提交 computation run，按 campaign preset 选择 mock/ORCA 路径 | `backend/app/services/optimization_service.py` | 已完成 MVP |
+| observation | 手工写入、从 completed `MOCK_LASER/ORCA_CHEMOS_LASER` run 映射目标值，并校验 objective schema | `backend/app/services/optimization_service.py` | 已完成 MVP |
 | automation | completed computation 可按配置自动创建 observation 和下一轮 suggestion | `backend/app/workers/computation_worker.py`、`backend/app/services/optimization_service.py` | 已完成 MVP |
 | history | 返回 candidate/suggestion/observation 时间线 | `backend/app/services/optimization_service.py` | 已完成 MVP |
 
@@ -111,7 +123,7 @@
 |---|---|---|---|
 | 计算提交 | 支持 mock/local structure/local xTB/ORCA ChemOS workflow 选项 | `frontend/src/views/ComputationSubmitView.vue` | 已完成 MVP |
 | 计算任务中心 | 列表、筛选、轮询、详情 drawer、timeline、artifact、blob 下载、spectrum SVG 预览 | `frontend/src/views/ComputationRunsView.vue` | 已完成 MVP；结构可视化仍较轻 |
-| Campaign 列表 | 创建 campaign、导入 ChemOS、生成推荐 | `frontend/src/views/CampaignsView.vue` | 已完成 MVP |
+| Campaign 列表 | 创建 campaign、导入 ChemOS、生成推荐、执行 campaign 状态操作 | `frontend/src/views/CampaignsView.vue` | 已完成 MVP |
 | Campaign 详情 | candidates/suggestions/observations/history，提交计算、拒绝 suggestion、生成 observation、CSV import report、campaign 状态操作 | `frontend/src/views/CampaignDetailView.vue` | 已完成 MVP |
 | API client | computation、optimization、integration status/config API 已封装 | `frontend/src/api/polyAgentApi.js` | 已完成 MVP |
 
