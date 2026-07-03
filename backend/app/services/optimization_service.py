@@ -58,19 +58,13 @@ from app.services.planner_adapters import run_planner
 
 
 COMPUTATION_PRESETS: dict[str, dict] = {
-    "mock_laser": {
-        "workflow_type": "MOCK_LASER",
-        "engine": "MOCK",
+    "local_xtb": {
+        "workflow_type": "LOCAL_XTB",
+        "engine": "XTB",
         "method": "GFN2-xTB",
         "resources": {"num_cores": 2, "memory_mb": 4096, "max_wallclock_seconds": 1800},
     },
-    "orca_fixture": {
-        "workflow_type": "ORCA_CHEMOS_LASER",
-        "engine": "ORCA",
-        "method": "ORCA_B3LYP_DEF2_SVP",
-        "resources": {"num_cores": 4, "memory_mb": 8192, "max_wallclock_seconds": 7200},
-    },
-    "orca_external_fake": {
+    "orca": {
         "workflow_type": "ORCA_CHEMOS_LASER",
         "engine": "ORCA",
         "method": "ORCA_B3LYP_DEF2_SVP",
@@ -519,25 +513,6 @@ class OptimizationService:
         items.sort(key=lambda item: item.occurred_at)
         return CampaignHistoryData(items=items)
 
-    def import_chemos_demo_candidates(
-        self,
-        campaign_id: str,
-        *,
-        actor_user_id: str,
-        request_id: str | None,
-        is_admin: bool = False,
-    ) -> CandidateImportData:
-        """导入 ChemOS reference demo 分子库。"""
-        items = self._load_chemos_demo_candidates()
-        payload = CandidateImportRequest(candidates=items)
-        return self.import_candidates(
-            campaign_id,
-            payload,
-            actor_user_id=actor_user_id,
-            request_id=request_id,
-            is_admin=is_admin,
-        )
-
     def create_observation_from_computation(
         self,
         run_id: str,
@@ -552,7 +527,7 @@ class OptimizationService:
             raise HTTPException(status_code=404, detail="计算任务不存在")
         if run_doc.get("status") != "completed":
             raise HTTPException(status_code=400, detail="仅 completed 计算任务可生成 observation")
-        if run_doc.get("workflow_type") not in {"MOCK_LASER", "ORCA_CHEMOS_LASER"}:
+        if run_doc.get("workflow_type") != "ORCA_CHEMOS_LASER":
             raise HTTPException(status_code=400, detail="仅 laser workflow 支持自动映射 observation")
         campaign_id = run_doc.get("campaign_id")
         suggestion_id = run_doc.get("suggestion_id")
@@ -798,9 +773,9 @@ class OptimizationService:
         return config
 
     def _resolve_computation_preset(self, planner_config: dict) -> tuple[str, dict]:
-        raw = (planner_config or {}).get("computation_preset", "mock_laser")
+        raw = (planner_config or {}).get("computation_preset", "local_xtb")
         if isinstance(raw, str):
-            preset_key = raw.strip() or "mock_laser"
+            preset_key = raw.strip() or "local_xtb"
         elif isinstance(raw, dict):
             preset_key = str(raw.get("preset_key") or raw.get("key") or "").strip()
         else:
@@ -814,10 +789,8 @@ class OptimizationService:
         method = preset["method"]
         if isinstance(raw, dict) and raw.get("method"):
             method = str(raw["method"]).strip()
-        if preset_key.startswith("orca_") and method not in ORCA_PRESET_METHODS:
+        if preset_key == "orca" and method not in ORCA_PRESET_METHODS:
             raise HTTPException(status_code=400, detail="ORCA preset method 必须来自后端白名单")
-        if preset_key == "mock_laser" and method != "GFN2-xTB":
-            raise HTTPException(status_code=400, detail="mock_laser preset 不支持覆盖 method")
         return method
 
     def _resolve_preset_resources(self, preset: dict, planner_config: dict) -> ComputationResources:
@@ -919,79 +892,6 @@ class OptimizationService:
             after={"status": "failed", "reason": payload.reason, "error_code": payload.error_code},
         )
         return OptimizationSuggestion(**OptimizationSuggestionRepository.find_one({"suggestion_id": suggestion_id}))
-
-    def _load_chemos_demo_candidates(self) -> list[CandidateImportItem]:
-        """读取 ChemOS demo molecules.json；缺失时使用安全内置候选。"""
-        molecules_path = (
-            settings.project_root
-            / "refer"
-            / "ChemOS2.0-master"
-            / "ChemOS2.0-simulation"
-            / "job_files"
-            / "molecules.json"
-        )
-        raw_items: list[dict] = []
-        source_status = "molecules_json"
-        if molecules_path.exists():
-            with molecules_path.open("r", encoding="utf-8") as fp:
-                raw = json.load(fp)
-            if isinstance(raw, list):
-                raw_items = [item for item in raw if isinstance(item, dict)]
-            elif isinstance(raw, dict):
-                raw_items = [item for item in raw.values() if isinstance(item, dict)]
-        else:
-            raw_items = self._fallback_chemos_candidates()
-            source_status = "fallback_reference"
-
-        candidates: list[CandidateImportItem] = []
-        for index, item in enumerate(raw_items[:200], start=1):
-            smiles = str(item.get("smiles") or item.get("SMILES") or "").strip()
-            if not smiles:
-                continue
-            candidate_key = str(item.get("candidate_key") or item.get("name") or item.get("id") or f"CHEMOS_{index:03d}")
-            candidates.append(
-                CandidateImportItem(
-                    candidate_key=candidate_key,
-                    smiles=smiles,
-                    parameters=item.get("parameters") or {},
-                    metadata={
-                        **(item.get("metadata") or {}),
-                        "source": "ChemOS reference",
-                        "source_status": source_status,
-                    },
-                )
-            )
-        if not candidates:
-            raise HTTPException(status_code=400, detail="未找到可导入的 ChemOS demo 候选")
-        return candidates
-
-    def _fallback_chemos_candidates(self) -> list[dict]:
-        """ChemOS reference 缺少 molecules.json 时的最小 demo 候选。"""
-        csv_candidates = self._read_chemos_job_file_candidates()
-        if csv_candidates:
-            return csv_candidates
-        return [
-            {"candidate_key": "CHEMOS_DEMO_001", "smiles": "CCOC1=CC=CC=C1"},
-            {"candidate_key": "CHEMOS_DEMO_002", "smiles": "COC1=CC=CC=C1"},
-            {"candidate_key": "CHEMOS_DEMO_003", "smiles": "CCN(CC)C1=CC=CC=C1"},
-        ]
-
-    def _read_chemos_job_file_candidates(self) -> list[dict]:
-        """从 ChemOS job_files CSV 提取轻量候选元数据。"""
-        job_dir = settings.project_root / "refer" / "ChemOS2.0-master" / "ChemOS2.0-deploy" / "job_files"
-        if not job_dir.exists():
-            return []
-        candidates: list[dict] = []
-        default_smiles = ["CCOC1=CC=CC=C1", "COC1=CC=CC=C1", "CCN(CC)C1=CC=CC=C1"]
-        for index, path in enumerate(sorted(job_dir.glob("*.csv"))[: len(default_smiles)], start=1):
-            candidates.append(
-                {
-                    "candidate_key": f"CHEMOS_{path.stem.upper()}",
-                    "smiles": default_smiles[index - 1],
-                    "metadata": {"source_file": str(path.relative_to(settings.project_root))},
-                }
-            )
-        return candidates
 
     def _build_descriptors(self, smiles: str) -> dict:
         """生成标准 candidate descriptor；RDKit 缺失时使用轻量 hash fingerprint。"""

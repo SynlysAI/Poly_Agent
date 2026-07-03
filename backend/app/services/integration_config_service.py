@@ -25,8 +25,6 @@ from app.schemas.integrations import ServiceIntegrationUpsertRequest
 SERVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "speclabos": {"display_name": "SpecLabOS", "service_type": "experiment"},
     "aiida": {"display_name": "AiiDA", "service_type": "provenance"},
-    "chemos-demo": {"display_name": "ChemOS demo", "service_type": "workflow"},
-    "chemos-sila": {"display_name": "ChemOS SiLA", "service_type": "workflow"},
     "atlas": {"display_name": "Atlas optimizer", "service_type": "optimizer"},
     "computation-worker": {"display_name": "Computation worker", "service_type": "worker"},
     "artifact-store": {"display_name": "Artifact store", "service_type": "artifact"},

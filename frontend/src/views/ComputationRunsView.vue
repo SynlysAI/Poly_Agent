@@ -56,16 +56,13 @@ const statusOptions = [
 
 const workflowOptions = [
   { label: '全部', value: '' },
-  { label: 'MOCK_XTB_ONLY', value: 'MOCK_XTB_ONLY' },
-  { label: 'MOCK_LASER', value: 'MOCK_LASER' },
   { label: 'LOCAL_STRUCTURE', value: 'LOCAL_STRUCTURE' },
   { label: 'LOCAL_XTB', value: 'LOCAL_XTB' },
-  { label: 'ORCA_CHEMOS_LASER', value: 'ORCA_CHEMOS_LASER' },
+  { label: 'ORCA 精加工', value: 'ORCA_CHEMOS_LASER' },
 ]
 
 const engineOptions = [
   { label: '全部', value: '' },
-  { label: 'MOCK', value: 'MOCK' },
   { label: 'LOCAL', value: 'LOCAL' },
   { label: 'RDKit', value: 'RDKit' },
   { label: 'OPENBABEL', value: 'OPENBABEL' },

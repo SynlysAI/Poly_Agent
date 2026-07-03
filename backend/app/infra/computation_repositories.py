@@ -5,9 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from fastapi import HTTPException
 from pymongo.errors import PyMongoError
 from pymongo import ReturnDocument
 
+from app.core.config import settings
 from app.infra.demo_store import clone_document, demo_store
 from app.infra.mongo import (
     get_audit_events_collection,
@@ -117,6 +119,16 @@ class BaseRepository:
         _mongo_unavailable = True
 
     @classmethod
+    def _handle_mongo_error(cls, exc: PyMongoError) -> None:
+        """Handle MongoDB errors according to the deployment storage policy."""
+        cls._mark_mongo_unavailable()
+        if settings.require_mongodb:
+            raise HTTPException(
+                status_code=503,
+                detail=f"MongoDB 不可用，已禁止本地 demo-store 兜底：{exc.__class__.__name__}",
+            ) from exc
+
+    @classmethod
     def _collection(cls):
         raise NotImplementedError
 
@@ -128,8 +140,8 @@ class BaseRepository:
             try:
                 cls._collection().update_one({key_field: payload[key_field]}, {"$set": payload}, upsert=True)
                 return
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
 
         def mutate(data):
             rows = data[cls.collection_name]
@@ -149,8 +161,8 @@ class BaseRepository:
             try:
                 doc = cls._collection().find_one(filters, {"_id": 0})
                 return _without_mongo_id(doc)
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
         data = demo_store.load()
         for item in data[cls.collection_name]:
             if _matches(item, filters):
@@ -176,8 +188,8 @@ class BaseRepository:
                 total = int(collection.count_documents(filters))
                 cursor = collection.find(filters, {"_id": 0}).sort([(sort_field, -1 if reverse else 1)]).skip(skip).limit(page_size)
                 return [dict(item) for item in cursor], total
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
         data = demo_store.load()
         rows = [clone_document(item) for item in data[cls.collection_name] if _matches(item, filters)]
         rows = _sort_documents(rows, sort_field, reverse=reverse)
@@ -234,8 +246,8 @@ class ComputationRunRepository(BaseRepository):
                 total = int(collection.count_documents(filters))
                 cursor = collection.find(filters, {"_id": 0}).sort([("created_at", -1)]).skip(skip).limit(page_size)
                 return [dict(item) for item in cursor], total
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
         data = demo_store.load()
         rows = [clone_document(item) for item in data[cls.collection_name] if _matches(item, demo_filters)]
         rows = _sort_documents(rows, "created_at", reverse=True)
@@ -248,8 +260,8 @@ class ComputationRunRepository(BaseRepository):
             try:
                 result = cls._collection().update_one({"run_id": run_id}, {"$set": fields})
                 return result.matched_count > 0
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
 
         def mutate(data):
             for item in data[cls.collection_name]:
@@ -281,8 +293,8 @@ class ComputationRunRepository(BaseRepository):
                     return_document=ReturnDocument.AFTER,
                 )
                 return _without_mongo_id(doc)
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
 
         def mutate(data):
             queued = [
@@ -320,8 +332,8 @@ class ComputationRunRepository(BaseRepository):
             try:
                 cursor = cls._collection().find(filters, {"_id": 0}).sort([("updated_at", 1)])
                 return [dict(item) for item in cursor]
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
         data = demo_store.load()
         rows: list[dict[str, Any]] = []
         for item in data[cls.collection_name]:
@@ -365,8 +377,8 @@ class OptimizationCampaignRepository(BaseRepository):
             try:
                 result = cls._collection().update_one({"campaign_id": campaign_id}, {"$set": fields})
                 return result.matched_count > 0
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
 
         def mutate(data):
             for item in data[cls.collection_name]:
@@ -416,8 +428,8 @@ class OptimizationSuggestionRepository(BaseRepository):
             try:
                 result = cls._collection().update_one({"suggestion_id": suggestion_id}, {"$set": fields})
                 return result.matched_count > 0
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
 
         def mutate(data):
             for item in data[cls.collection_name]:
@@ -467,8 +479,8 @@ class ServiceIntegrationRepository(BaseRepository):
             try:
                 result = cls._collection().update_one({"service_key": service_key}, {"$set": fields})
                 return result.matched_count > 0
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
 
         def mutate(data):
             for item in data[cls.collection_name]:
@@ -497,8 +509,8 @@ class AuditEventRepository(BaseRepository):
             try:
                 cls._collection().insert_one(payload)
                 return
-            except PyMongoError:
-                cls._mark_mongo_unavailable()
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
 
         def mutate(data):
             data[cls.collection_name].append(payload)

@@ -55,11 +55,98 @@ class ComputationServiceTest(ComputationTestCase):
     def test_create_run_rejects_unsupported_workflow_engine_pair(self) -> None:
         with self.assertRaises(HTTPException) as caught:
             self.service.create_run(
-                ComputationCreateRequest(**computation_payload(workflow_type="LOCAL_XTB", engine="MOCK")),
+                ComputationCreateRequest(**computation_payload(workflow_type="LOCAL_XTB", engine="LOCAL")),
                 actor_user_id="tester",
                 request_id="req-bad-pair",
             )
         self.assertEqual(caught.exception.status_code, 400)
+
+    def test_list_runs_reads_legacy_mock_records(self) -> None:
+        now = utc_now()
+        ComputationRunRepository.save(
+            "run_id",
+            {
+                "run_id": "comp_legacy_mock",
+                "retry_of_run_id": None,
+                "workflow_type": "MOCK_LASER",
+                "engine": "MOCK",
+                "status": "completed",
+                "molecule": {"smiles": "CCO", "name": "legacy mock"},
+                "parameters": {},
+                "resources": {},
+                "external_refs": {},
+                "steps": [
+                    {
+                        "step_key": "MOCK_RESULT",
+                        "label": "Mock result",
+                        "status": "completed",
+                        "started_at": now,
+                        "finished_at": now,
+                    }
+                ],
+                "artifact_ids": [],
+                "result_summary": {},
+                "error": None,
+                "created_by": "tester",
+                "created_at": now,
+                "updated_at": now,
+                "started_at": now,
+                "finished_at": now,
+                "source": None,
+                "campaign_id": None,
+                "suggestion_id": None,
+            },
+        )
+
+        data = self.service.list_runs(
+            status=None,
+            workflow_type=None,
+            engine=None,
+            keyword=None,
+            page=1,
+            page_size=20,
+            actor_user_id="tester",
+            is_admin=False,
+        )
+
+        self.assertEqual(data.total, 1)
+        self.assertEqual(data.items[0].workflow_type, "MOCK_LASER")
+        self.assertEqual(data.items[0].engine, "MOCK")
+
+    def test_retry_legacy_mock_run_reports_clear_unsupported_reason(self) -> None:
+        now = utc_now()
+        ComputationRunRepository.save(
+            "run_id",
+            {
+                "run_id": "comp_legacy_mock_failed",
+                "retry_of_run_id": None,
+                "workflow_type": "MOCK_XTB_ONLY",
+                "engine": "MOCK",
+                "status": "failed",
+                "molecule": {"smiles": "CCO", "name": "legacy failed"},
+                "parameters": {},
+                "resources": {},
+                "external_refs": {},
+                "steps": [],
+                "artifact_ids": [],
+                "result_summary": {},
+                "error": {"error_code": "MOCK_FAILURE_TRIGGERED", "message": "legacy failure", "retryable": True},
+                "created_by": "tester",
+                "created_at": now,
+                "updated_at": now,
+                "started_at": now,
+                "finished_at": now,
+                "source": None,
+                "campaign_id": None,
+                "suggestion_id": None,
+            },
+        )
+
+        with self.assertRaises(HTTPException) as caught:
+            self.service.retry_run("comp_legacy_mock_failed", actor_user_id="tester", request_id="req-legacy-retry")
+
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("已下线的历史 MOCK", str(caught.exception.detail))
 
     def test_cancel_run_moves_non_terminal_run_to_cancelled(self) -> None:
         created = self.service.create_run(
@@ -94,7 +181,7 @@ class ComputationServiceTest(ComputationTestCase):
 
     def test_failed_run_contains_retryable_error(self) -> None:
         created = self.service.create_run(
-            ComputationCreateRequest(**computation_payload(mock_should_fail=True)),
+            ComputationCreateRequest(**computation_payload(workflow_type="LOCAL_XTB", engine="XTB")),
             actor_user_id="tester",
             request_id="req-fail",
         )
@@ -104,7 +191,7 @@ class ComputationServiceTest(ComputationTestCase):
 
         self.assertTrue(result.claimed)
         self.assertEqual(detail.status, "failed")
-        self.assertEqual(detail.error["error_code"], "MOCK_FAILURE_TRIGGERED")
+        self.assertIn(detail.error["error_code"], {"XTB_NOT_AVAILABLE", "CREST_NOT_AVAILABLE"})
         self.assertTrue(detail.error["retryable"])
 
     def test_resolve_artifact_path_rejects_path_outside_outputs_root(self) -> None:
@@ -118,7 +205,7 @@ class ComputationServiceTest(ComputationTestCase):
         artifact = ComputationArtifact(
             artifact_id="art_outside",
             run_id=created.run_id,
-            step_key="MOCK_RESULT",
+            step_key="LOCAL_GENERATE_STRUCTURE",
             artifact_type="log_text",
             name="outside.txt",
             storage_uri=str(outside_path),

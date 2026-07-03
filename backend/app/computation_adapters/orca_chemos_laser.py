@@ -1,262 +1,201 @@
-"""Controlled ORCA/ChemOS laser workflow adapter."""
+"""Controlled local ORCA refinement workflow adapter."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from app.computation_adapters.base import AdapterContext
 from app.computation_adapters.base import AdapterRunResult
 from app.computation_adapters.base import ArtifactSpec
 from app.computation_adapters.base import build_steps
-from app.computation_adapters.chemos_laser_parser import (
-    GAIN_SCHEMA_VERSION,
-    PARSER_NAME,
-    PARSER_VERSION,
-    RESULT_SCHEMA_VERSION,
-    SPECTRUM_SCHEMA_VERSION,
-    build_fixture_raw_outputs,
-    parse_chemos_laser_outputs,
-    write_json,
-)
+from app.computation_adapters.local_structure import build_local_structure
 from app.core.config import settings
 from app.infra.computation_repositories import utc_now
 
 
-CHEMOS_LASER_STEP_LABELS = {
-    "CHEMOS_PREPARE_STRUCTURE": "结构准备",
-    "CHEMOS_XTB_CREST": "xTB/CREST 构象搜索",
-    "CHEMOS_ORCA": "ORCA 激发态计算",
-    "CHEMOS_SPECTRA_PARSE": "spectra parser",
-    "CHEMOS_GAIN_PARSE": "gain parser",
+PARSER_NAME = "local_orca_adapter"
+PARSER_VERSION = "0.1.0"
+
+ORCA_STEP_LABELS = {
+    "ORCA_PREPARE_STRUCTURE": "结构准备",
+    "ORCA_XTB_CREST": "xTB/CREST 构象搜索",
+    "ORCA_RUN": "运行本机 ORCA",
+    "ORCA_PARSE_RESULT": "解析 ORCA 结果",
+}
+
+ORCA_METHOD_LINES = {
+    "ORCA_B3LYP_DEF2_SVP": "B3LYP def2-SVP TightSCF",
+    "ORCA_PBE0_DEF2_SVP": "PBE0 def2-SVP TightSCF",
 }
 
 
-@dataclass(frozen=True)
-class ExternalJobStatus:
-    """Status returned by a controlled ORCA/ChemOS executor."""
-
-    status: str
-    message: str | None = None
-    raw_output_dir: Path | None = None
-
-
-class FakeOrcaChemosExternalExecutor:
-    """Deterministic external executor used to validate submit/poll boundaries."""
-
-    def __init__(self, *, outcome: str) -> None:
-        self.outcome = outcome
-
-    def submit(self, context: AdapterContext, job_spec: dict, output_dir: Path) -> dict:
-        """Submit a fake job and return backend-owned job references."""
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return {
-            "job_id": f"fake-orca-{context.run.run_id}",
-            "queue": job_spec["queue"],
-            "submitted_at": utc_now(),
-            "executor": "fake",
-        }
-
-    def poll(self, job_id: str) -> ExternalJobStatus:
-        """Return the configured terminal fake outcome."""
-        if self.outcome == "failed":
-            return ExternalJobStatus(status="failed", message=f"fake ORCA job failed: {job_id}")
-        if self.outcome == "timeout":
-            return ExternalJobStatus(status="timeout", message=f"fake ORCA job timed out: {job_id}")
-        return ExternalJobStatus(status="completed")
-
-    def collect(self, context: AdapterContext, output_dir: Path) -> tuple[Path, Path]:
-        """Write deterministic raw outputs as if they were collected from HPC."""
-        return build_fixture_raw_outputs(context.run, output_dir)
-
-    def cancel(self, job_id: str) -> None:
-        """Cancel fake external job."""
-        return None
-
-
 class OrcaChemosLaserAdapter:
-    """Run the controlled ORCA/ChemOS laser workflow.
+    """Run a real local ORCA refinement workflow.
 
-    The API exposes only workflow presets. Shell commands, queue scripts and local
-    paths stay in backend deployment configuration and are not accepted from users.
+    The API exposes only backend-owned presets. Users cannot provide shell
+    commands, queue scripts, executable paths, or arbitrary ORCA input text.
     """
 
     workflow_type = "ORCA_CHEMOS_LASER"
     engine = "ORCA"
-    step_labels = CHEMOS_LASER_STEP_LABELS
+    step_labels = ORCA_STEP_LABELS
 
     def validate_input(self, context: AdapterContext) -> AdapterRunResult | None:
-        """Validate backend ORCA/HPC readiness before execution."""
-        mode = settings.orca_chemos_execution_mode
-        if mode not in {"disabled", "fixture", "external"}:
+        """Validate local ORCA, xTB, CREST and license readiness before execution."""
+        if settings.orca_execution_mode != "local":
             return self._failed_result(
                 context,
-                step_key="CHEMOS_PREPARE_STRUCTURE",
-                error_code="ORCA_WORKFLOW_CONFIG_INVALID",
-                message=f"ORCA/ChemOS workflow 配置无效：execution_mode={mode}",
-                retryable=False,
-                specs=[],
-            )
-        if mode == "disabled":
-            return self._failed_result(
-                context,
-                step_key="CHEMOS_PREPARE_STRUCTURE",
+                step_key="ORCA_PREPARE_STRUCTURE",
                 error_code="ORCA_WORKFLOW_NOT_CONFIGURED",
-                message="ORCA/ChemOS workflow 未配置：请在后端启用 ORCA_CHEMOS_EXECUTION_MODE",
+                message="ORCA workflow 未配置：请设置 ORCA_EXECUTION_MODE=local",
                 retryable=False,
                 specs=[],
             )
-        if mode == "external" and not settings.orca_license_available:
+        if context.run.parameters.method not in ORCA_METHOD_LINES:
             return self._failed_result(
                 context,
-                step_key="CHEMOS_ORCA",
+                step_key="ORCA_PREPARE_STRUCTURE",
+                error_code="ORCA_METHOD_NOT_SUPPORTED",
+                message="ORCA method 必须来自后端白名单",
+                retryable=False,
+                specs=[],
+            )
+        if not settings.orca_license_available:
+            return self._failed_result(
+                context,
+                step_key="ORCA_RUN",
                 error_code="ORCA_LICENSE_UNAVAILABLE",
                 message="ORCA license 不可用或未在后端配置",
                 retryable=True,
                 specs=[],
             )
-        if mode == "external" and not settings.hpc_queue_available:
-            return self._failed_result(
-                context,
-                step_key="CHEMOS_ORCA",
-                error_code="HPC_QUEUE_UNAVAILABLE",
-                message=f"HPC 队列不可用：queue={settings.hpc_queue_name}",
-                retryable=True,
-                specs=[],
-            )
-        if mode == "external" and settings.orca_chemos_external_executor != "fake":
-            return self._failed_result(
-                context,
-                step_key="CHEMOS_ORCA",
-                error_code="ORCA_EXTERNAL_EXECUTOR_UNSUPPORTED",
-                message=f"不支持的 ORCA external executor：{settings.orca_chemos_external_executor}",
-                retryable=False,
-                specs=[],
-            )
+        for service, executable, step_key in (
+            ("ORCA", settings.orca_executable, "ORCA_RUN"),
+            ("xTB", settings.xtb_executable, "ORCA_XTB_CREST"),
+            ("CREST", settings.crest_executable, "ORCA_XTB_CREST"),
+        ):
+            if not shutil.which(executable):
+                return self._failed_result(
+                    context,
+                    step_key=step_key,
+                    error_code=f"{service.upper()}_NOT_AVAILABLE",
+                    message=f"未检测到 {service} 可执行文件",
+                    retryable=True,
+                    specs=[],
+                )
         return None
 
     def run(self, context: AdapterContext) -> AdapterRunResult:
-        """Execute fixture mode and parse ChemOS laser outputs."""
-        if settings.orca_chemos_execution_mode == "external":
-            return self._run_external(context)
+        """Prepare structure with CREST/xTB, run local ORCA, and parse scalar outputs."""
         context.workdir.mkdir(parents=True, exist_ok=True)
         specs: list[ArtifactSpec] = []
         config_path = context.workdir / "workflow_config.json"
-        config = {
-            "schema_version": "orca_chemos_workflow_config.v1",
-            "run_id": context.run.run_id,
-            "workflow_type": context.run.workflow_type,
-            "engine": context.run.engine,
-            "execution_mode": settings.orca_chemos_execution_mode,
-            "allowed_method": context.run.parameters.method,
-            "charge": context.run.parameters.charge,
-            "multiplicity": context.run.parameters.multiplicity,
-            "solvent": context.run.parameters.solvent,
-            "resources": context.run.resources.model_dump(mode="python"),
-            "hpc_queue": settings.hpc_queue_name,
-        }
-        write_json(config_path, config)
-        specs.append(
-            self._artifact(
-                "CHEMOS_PREPARE_STRUCTURE",
-                "input_json",
-                "workflow_config.json",
-                config_path,
-                "application/json",
-                metadata={"output_schema": "orca_chemos_workflow_config.v1"},
+        _write_json(config_path, self._workflow_config(context))
+        specs.append(self._artifact("ORCA_PREPARE_STRUCTURE", "input_json", "workflow_config.json", config_path, "application/json"))
+
+        structure_output = build_local_structure(
+            context.run,
+            workdir=context.workdir,
+            timeout_seconds=context.timeout_seconds,
+            engine="LOCAL",
+            step_key="ORCA_PREPARE_STRUCTURE",
+        )
+        specs.extend(structure_output.artifact_specs)
+        if structure_output.status == "failed" or not structure_output.xyz_path:
+            return self._failed_result(
+                context,
+                step_key="ORCA_PREPARE_STRUCTURE",
+                error_code=(structure_output.error or {}).get("error_code", "ORCA_STRUCTURE_PREP_FAILED"),
+                message=structure_output.error_message or "ORCA 输入结构准备失败",
+                retryable=True,
+                specs=specs,
             )
-        )
 
-        structure_path = context.workdir / "structure.json"
-        xyz_path = context.workdir / "structure.xyz"
-        structure = self._fixture_structure(context)
-        write_json(structure_path, structure)
-        xyz_path.write_text(self._fixture_xyz(context), encoding="utf-8")
+        input_xyz = context.workdir / "input.xyz"
+        shutil.copyfile(structure_output.xyz_path, input_xyz)
+        specs.append(self._artifact("ORCA_PREPARE_STRUCTURE", "xyz", "input.xyz", input_xyz, "chemical/x-xyz"))
+
+        crest_result = self._run_crest(context, input_xyz)
+        specs.extend(crest_result["specs"])
+        if crest_result["returncode"] != 0:
+            return self._failed_result(
+                context,
+                step_key="ORCA_XTB_CREST",
+                error_code="CREST_FAILED",
+                message=f"CREST 构象搜索失败，returncode={crest_result['returncode']}",
+                retryable=True,
+                specs=specs,
+            )
+        crest_best = context.workdir / "crest_best.xyz"
+        if not crest_best.exists():
+            return self._failed_result(
+                context,
+                step_key="ORCA_XTB_CREST",
+                error_code="CREST_OUTPUT_MISSING",
+                message="CREST 未生成 crest_best.xyz",
+                retryable=True,
+                specs=specs,
+            )
+        specs.append(self._artifact("ORCA_XTB_CREST", "xyz", "crest_best.xyz", crest_best, "chemical/x-xyz"))
+
+        orca_input = context.workdir / "orca.inp"
+        orca_input.write_text(self._build_orca_input(context, crest_best), encoding="utf-8")
+        stdout_path = context.workdir / "orca.stdout.log"
+        stderr_path = context.workdir / "orca.stderr.log"
         specs.extend(
             [
-                self._artifact("CHEMOS_PREPARE_STRUCTURE", "structure_json", "structure.json", structure_path, "application/json"),
-                self._artifact("CHEMOS_PREPARE_STRUCTURE", "xyz", "structure.xyz", xyz_path, "chemical/x-xyz"),
-            ]
-        )
-
-        xtb_log = context.workdir / "xtb_crest.log"
-        orca_log = context.workdir / "orca.log"
-        xtb_log.write_text("fixture xTB/CREST conformer search completed\n", encoding="utf-8")
-        orca_log.write_text("fixture ORCA excited-state calculation completed\n", encoding="utf-8")
-        specs.extend(
-            [
-                self._artifact("CHEMOS_XTB_CREST", "log_text", "xtb_crest.log", xtb_log, "text/plain"),
-                self._artifact("CHEMOS_ORCA", "log_text", "orca.log", orca_log, "text/plain"),
-            ]
-        )
-
-        spectra_raw_path, gain_raw_path = build_fixture_raw_outputs(context.run, context.workdir)
-        specs.extend(
-            [
-                self._artifact("CHEMOS_SPECTRA_PARSE", "log_text", "spectra.raw.csv", spectra_raw_path, "text/csv"),
-                self._artifact("CHEMOS_GAIN_PARSE", "log_text", "gain.raw.json", gain_raw_path, "application/json"),
+                self._artifact("ORCA_RUN", "log_text", "orca.inp", orca_input, "text/plain"),
+                self._artifact("ORCA_RUN", "log_text", "orca.stdout.log", stdout_path, "text/plain"),
+                self._artifact("ORCA_RUN", "log_text", "orca.stderr.log", stderr_path, "text/plain"),
             ]
         )
         try:
-            parsed = parse_chemos_laser_outputs(
-                context.run,
-                spectra_raw_path=spectra_raw_path,
-                gain_raw_path=gain_raw_path,
+            orca_result = self._run_command(
+                context,
+                [shutil.which(settings.orca_executable), orca_input.name],
+                stdout_path,
+                stderr_path,
             )
+        except subprocess.TimeoutExpired:
+            stdout_path.touch(exist_ok=True)
+            stderr_path.touch(exist_ok=True)
+            return self._failed_result(
+                context,
+                step_key="ORCA_RUN",
+                error_code="ORCA_TIMEOUT",
+                message="ORCA 执行超时",
+                retryable=True,
+                specs=specs,
+            )
+        if orca_result.returncode != 0:
+            return self._failed_result(
+                context,
+                step_key="ORCA_RUN",
+                error_code="ORCA_FAILED",
+                message=f"ORCA 执行失败，returncode={orca_result.returncode}",
+                retryable=True,
+                specs=specs,
+            )
+
+        try:
+            summary = self._parse_orca_summary(context, stdout_path)
         except ValueError as exc:
             return self._failed_result(
                 context,
-                step_key="CHEMOS_SPECTRA_PARSE",
-                error_code="CHEMOS_LASER_PARSE_FAILED",
+                step_key="ORCA_PARSE_RESULT",
+                error_code="ORCA_RESULT_PARSE_FAILED",
                 message=str(exc),
                 retryable=False,
                 specs=specs,
             )
-
-        spectrum_path = context.workdir / "spectrum.json"
-        gain_path = context.workdir / "gain.json"
         result_path = context.workdir / "result.json"
-        write_json(spectrum_path, parsed.spectrum)
-        write_json(gain_path, parsed.gain)
-        write_json(result_path, parsed.result_summary)
-        specs.extend(
-            [
-                self._artifact(
-                    "CHEMOS_SPECTRA_PARSE",
-                    "spectrum_json",
-                    "spectrum.json",
-                    spectrum_path,
-                    "application/json",
-                    metadata={
-                        "output_schema": SPECTRUM_SCHEMA_VERSION,
-                        "input_checksums": parsed.input_checksums,
-                    },
-                ),
-                self._artifact(
-                    "CHEMOS_GAIN_PARSE",
-                    "metrics_json",
-                    "gain.json",
-                    gain_path,
-                    "application/json",
-                    metadata={
-                        "output_schema": GAIN_SCHEMA_VERSION,
-                        "input_checksums": parsed.input_checksums,
-                    },
-                ),
-                self._artifact(
-                    "CHEMOS_GAIN_PARSE",
-                    "result_json",
-                    "result.json",
-                    result_path,
-                    "application/json",
-                    metadata={
-                        "output_schema": RESULT_SCHEMA_VERSION,
-                        "input_checksums": parsed.input_checksums,
-                    },
-                ),
-            ]
-        )
+        _write_json(result_path, summary)
+        specs.append(self._artifact("ORCA_PARSE_RESULT", "result_json", "result.json", result_path, "application/json"))
+
         finished_at = utc_now()
         return AdapterRunResult(
             status="completed",
@@ -267,185 +206,7 @@ class OrcaChemosLaserAdapter:
                 finished_at=finished_at,
             ),
             artifact_specs=specs,
-            result_summary=parsed.result_summary,
-        )
-
-    def _run_external(self, context: AdapterContext) -> AdapterRunResult:
-        """Submit, poll, collect and parse an external ORCA/ChemOS job."""
-        from app.services.computation_service import ComputationService
-
-        service = ComputationService()
-        context.workdir.mkdir(parents=True, exist_ok=True)
-        specs: list[ArtifactSpec] = []
-        config_path = context.workdir / "workflow_config.json"
-        job_spec_path = context.workdir / "job_spec.json"
-        raw_output_dir = context.workdir / "external_raw"
-        config = self._workflow_config(context)
-        write_json(config_path, config)
-        specs.append(
-            self._artifact(
-                "CHEMOS_PREPARE_STRUCTURE",
-                "input_json",
-                "workflow_config.json",
-                config_path,
-                "application/json",
-                metadata={"output_schema": "orca_chemos_workflow_config.v1"},
-            )
-        )
-        job_spec = {
-            "schema_version": "orca_chemos_external_job.v1",
-            "run_id": context.run.run_id,
-            "workflow_type": context.run.workflow_type,
-            "engine": context.run.engine,
-            "method": context.run.parameters.method,
-            "queue": settings.hpc_queue_name,
-            "resources": context.run.resources.model_dump(mode="python"),
-            "molecule": context.run.molecule.model_dump(mode="python"),
-            "output_dir": "external_raw",
-        }
-        write_json(job_spec_path, job_spec)
-        specs.append(
-            self._artifact(
-                "CHEMOS_PREPARE_STRUCTURE",
-                "input_json",
-                "job_spec.json",
-                job_spec_path,
-                "application/json",
-                metadata={"output_schema": "orca_chemos_external_job.v1"},
-            )
-        )
-
-        executor = FakeOrcaChemosExternalExecutor(outcome=settings.orca_chemos_fake_external_outcome)
-        submitted = executor.submit(context, job_spec, raw_output_dir)
-        job_id = submitted["job_id"]
-        service.update_external_refs(
-            context.run.run_id,
-            {
-                "orca_chemos_job_id": job_id,
-                "queue": submitted["queue"],
-                "submitted_at": submitted["submitted_at"],
-                "executor": submitted["executor"],
-            },
-            worker_id=context.worker_id,
-        )
-        polled = executor.poll(job_id)
-        service.update_external_refs(
-            context.run.run_id,
-            {"polled_at": utc_now(), "external_status": polled.status},
-            worker_id=context.worker_id,
-        )
-        current = service.get_run(context.run.run_id)
-        if current.status == "cancelled":
-            executor.cancel(job_id)
-            service.update_external_refs(
-                context.run.run_id,
-                {"external_cancelled": True, "external_status": "cancelled"},
-                worker_id=context.worker_id,
-            )
-            return self._failed_result(
-                context,
-                step_key="CHEMOS_ORCA",
-                error_code="ORCA_EXTERNAL_JOB_CANCELLED",
-                message="ORCA/ChemOS external job 已取消",
-                retryable=True,
-                specs=specs,
-            )
-        if polled.status == "failed":
-            return self._failed_result(
-                context,
-                step_key="CHEMOS_ORCA",
-                error_code="ORCA_EXTERNAL_JOB_FAILED",
-                message=polled.message or "ORCA/ChemOS external job failed",
-                retryable=True,
-                specs=specs,
-            )
-        if polled.status == "timeout":
-            return self._failed_result(
-                context,
-                step_key="CHEMOS_ORCA",
-                error_code="ORCA_EXTERNAL_JOB_TIMEOUT",
-                message=polled.message or "ORCA/ChemOS external job timed out",
-                retryable=True,
-                specs=specs,
-            )
-
-        spectra_raw_path, gain_raw_path = executor.collect(context, raw_output_dir)
-        specs.extend(
-            [
-                self._artifact("CHEMOS_SPECTRA_PARSE", "log_text", "spectra.raw.csv", spectra_raw_path, "text/csv"),
-                self._artifact("CHEMOS_GAIN_PARSE", "log_text", "gain.raw.json", gain_raw_path, "application/json"),
-            ]
-        )
-        try:
-            parsed = parse_chemos_laser_outputs(
-                context.run,
-                spectra_raw_path=spectra_raw_path,
-                gain_raw_path=gain_raw_path,
-            )
-        except ValueError as exc:
-            return self._failed_result(
-                context,
-                step_key="CHEMOS_SPECTRA_PARSE",
-                error_code="CHEMOS_LASER_PARSE_FAILED",
-                message=str(exc),
-                retryable=False,
-                specs=specs,
-            )
-
-        spectrum_path = context.workdir / "spectrum.json"
-        gain_path = context.workdir / "gain.json"
-        result_path = context.workdir / "result.json"
-        write_json(spectrum_path, parsed.spectrum)
-        write_json(gain_path, parsed.gain)
-        write_json(result_path, parsed.result_summary)
-        specs.extend(
-            [
-                self._artifact(
-                    "CHEMOS_SPECTRA_PARSE",
-                    "spectrum_json",
-                    "spectrum.json",
-                    spectrum_path,
-                    "application/json",
-                    metadata={
-                        "output_schema": SPECTRUM_SCHEMA_VERSION,
-                        "input_checksums": parsed.input_checksums,
-                    },
-                ),
-                self._artifact(
-                    "CHEMOS_GAIN_PARSE",
-                    "metrics_json",
-                    "gain.json",
-                    gain_path,
-                    "application/json",
-                    metadata={
-                        "output_schema": GAIN_SCHEMA_VERSION,
-                        "input_checksums": parsed.input_checksums,
-                    },
-                ),
-                self._artifact(
-                    "CHEMOS_GAIN_PARSE",
-                    "result_json",
-                    "result.json",
-                    result_path,
-                    "application/json",
-                    metadata={
-                        "output_schema": RESULT_SCHEMA_VERSION,
-                        "input_checksums": parsed.input_checksums,
-                    },
-                ),
-            ]
-        )
-        finished_at = utc_now()
-        return AdapterRunResult(
-            status="completed",
-            steps=build_steps(
-                self.step_labels,
-                status="completed",
-                started_at=context.started_at,
-                finished_at=finished_at,
-            ),
-            artifact_specs=specs,
-            result_summary=parsed.result_summary,
+            result_summary=summary,
         )
 
     def collect_artifacts(self, context: AdapterContext, result: AdapterRunResult) -> list[ArtifactSpec]:
@@ -453,10 +214,125 @@ class OrcaChemosLaserAdapter:
         return result.artifact_specs
 
     def parse_result(self, context: AdapterContext, result: AdapterRunResult) -> dict:
-        """Return parsed result summary."""
+        """Return parsed ORCA summary."""
         if result.status != "completed":
             return {}
         return result.result_summary
+
+    def _run_crest(self, context: AdapterContext, input_xyz: Path) -> dict:
+        stdout_path = context.workdir / "crest.stdout.log"
+        stderr_path = context.workdir / "crest.stderr.log"
+        command = [
+            shutil.which(settings.crest_executable),
+            input_xyz.name,
+            "--gfn",
+            "2",
+            "--chrg",
+            str(context.run.parameters.charge),
+            "--uhf",
+            str(max(context.run.parameters.multiplicity - 1, 0)),
+        ]
+        try:
+            completed = self._run_command(context, command, stdout_path, stderr_path)
+            returncode = completed.returncode
+        except subprocess.TimeoutExpired:
+            stdout_path.touch(exist_ok=True)
+            stderr_path.touch(exist_ok=True)
+            returncode = 124
+        return {
+            "returncode": returncode,
+            "specs": [
+                self._artifact("ORCA_XTB_CREST", "log_text", "crest.stdout.log", stdout_path, "text/plain"),
+                self._artifact("ORCA_XTB_CREST", "log_text", "crest.stderr.log", stderr_path, "text/plain"),
+            ],
+        }
+
+    def _run_command(
+        self,
+        context: AdapterContext,
+        command: list[str],
+        stdout_path: Path,
+        stderr_path: Path,
+    ) -> subprocess.CompletedProcess:
+        with stdout_path.open("w", encoding="utf-8") as stdout_fp, stderr_path.open("w", encoding="utf-8") as stderr_fp:
+            return subprocess.run(
+                command,
+                cwd=str(context.workdir),
+                text=True,
+                stdout=stdout_fp,
+                stderr=stderr_fp,
+                timeout=context.timeout_seconds,
+                check=False,
+            )
+
+    def _build_orca_input(self, context: AdapterContext, xyz_path: Path) -> str:
+        maxcore = max(int(context.run.resources.memory_mb / max(context.run.resources.num_cores, 1)), 512)
+        coordinates = _read_xyz_coordinates(xyz_path)
+        return "\n".join(
+            [
+                f"! {ORCA_METHOD_LINES[context.run.parameters.method]}",
+                f"%pal nprocs {context.run.resources.num_cores} end",
+                f"%maxcore {maxcore}",
+                f"* xyz {context.run.parameters.charge} {context.run.parameters.multiplicity}",
+                *coordinates,
+                "*",
+                "",
+            ]
+        )
+
+    def _parse_orca_summary(self, context: AdapterContext, stdout_path: Path) -> dict:
+        text = stdout_path.read_text(encoding="utf-8", errors="replace")
+        energy = _parse_orca_energy_hartree(text)
+        if energy is None:
+            raise ValueError("无法从 ORCA 输出解析 FINAL SINGLE POINT ENERGY")
+        return {
+            "engine": context.run.engine,
+            "workflow_type": context.run.workflow_type,
+            "method": context.run.parameters.method,
+            "energy_hartree": energy,
+            "normal_termination": "ORCA TERMINATED NORMALLY" in text,
+            "crest_used": True,
+            "orca_executable": settings.orca_executable,
+        }
+
+    def _workflow_config(self, context: AdapterContext) -> dict:
+        return {
+            "schema_version": "local_orca_workflow_config.v1",
+            "run_id": context.run.run_id,
+            "workflow_type": context.run.workflow_type,
+            "engine": context.run.engine,
+            "execution_mode": settings.orca_execution_mode,
+            "allowed_method": context.run.parameters.method,
+            "charge": context.run.parameters.charge,
+            "multiplicity": context.run.parameters.multiplicity,
+            "solvent": context.run.parameters.solvent,
+            "resources": context.run.resources.model_dump(mode="python"),
+            "executables": {
+                "orca": settings.orca_executable,
+                "xtb": settings.xtb_executable,
+                "crest": settings.crest_executable,
+            },
+        }
+
+    def _artifact(
+        self,
+        step_key: str,
+        artifact_type: str,
+        name: str,
+        path: Path,
+        mime_type: str,
+        metadata: dict | None = None,
+    ) -> ArtifactSpec:
+        return ArtifactSpec(
+            step_key=step_key,
+            artifact_type=artifact_type,
+            name=name,
+            path=path,
+            mime_type=mime_type,
+            parser_name=PARSER_NAME,
+            parser_version=PARSER_VERSION,
+            metadata={"source": "local_orca", "source_step": step_key, **(metadata or {})},
+        )
 
     def _failed_result(
         self,
@@ -470,9 +346,9 @@ class OrcaChemosLaserAdapter:
     ) -> AdapterRunResult:
         context.workdir.mkdir(parents=True, exist_ok=True)
         error = {"error_code": error_code, "message": message, "retryable": retryable}
-        error_path = context.workdir / "orca-chemos-error.json"
-        log_path = context.workdir / "orca-chemos.log"
-        write_json(error_path, error)
+        error_path = context.workdir / "orca-error.json"
+        log_path = context.workdir / "orca-worker.log"
+        _write_json(error_path, error)
         log_path.write_text(
             "\n".join(
                 [
@@ -487,8 +363,8 @@ class OrcaChemosLaserAdapter:
         )
         specs.extend(
             [
-                self._artifact(step_key, "error_json", "orca-chemos-error.json", error_path, "application/json", {"error_code": error_code}),
-                self._artifact(step_key, "log_text", "orca-chemos.log", log_path, "text/plain", {"error_code": error_code}),
+                self._artifact(step_key, "error_json", "orca-error.json", error_path, "application/json", {"error_code": error_code}),
+                self._artifact(step_key, "log_text", "orca-worker.log", log_path, "text/plain", {"error_code": error_code}),
             ]
         )
         now = utc_now()
@@ -506,65 +382,23 @@ class OrcaChemosLaserAdapter:
             error=error,
         )
 
-    def _artifact(
-        self,
-        step_key: str,
-        artifact_type: str,
-        name: str,
-        path,
-        mime_type: str,
-        metadata: dict | None = None,
-    ) -> ArtifactSpec:
-        return ArtifactSpec(
-            step_key=step_key,
-            artifact_type=artifact_type,
-            name=name,
-            path=path,
-            mime_type=mime_type,
-            parser_name=PARSER_NAME,
-            parser_version=PARSER_VERSION,
-            metadata={"source": "orca_chemos_laser", "source_step": step_key, **(metadata or {})},
-        )
 
-    def _workflow_config(self, context: AdapterContext) -> dict:
-        return {
-            "schema_version": "orca_chemos_workflow_config.v1",
-            "run_id": context.run.run_id,
-            "workflow_type": context.run.workflow_type,
-            "engine": context.run.engine,
-            "execution_mode": settings.orca_chemos_execution_mode,
-            "allowed_method": context.run.parameters.method,
-            "charge": context.run.parameters.charge,
-            "multiplicity": context.run.parameters.multiplicity,
-            "solvent": context.run.parameters.solvent,
-            "resources": context.run.resources.model_dump(mode="python"),
-            "hpc_queue": settings.hpc_queue_name,
-        }
+def _read_xyz_coordinates(path: Path) -> list[str]:
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if len(lines) < 3:
+        raise ValueError("XYZ 文件缺少坐标")
+    coordinates = [line.strip() for line in lines[2:] if line.strip()]
+    if not coordinates:
+        raise ValueError("XYZ 文件缺少坐标")
+    return coordinates
 
-    def _fixture_structure(self, context: AdapterContext) -> dict:
-        return {
-            "schema_version": "structure.v1",
-            "name": context.run.molecule.name or context.run.run_id,
-            "smiles": context.run.molecule.smiles,
-            "source": "orca_chemos_fixture",
-            "atoms": [
-                {"index": 0, "element": "C", "x": 0.0, "y": 0.0, "z": 0.0},
-                {"index": 1, "element": "C", "x": 1.42, "y": 0.0, "z": 0.0},
-                {"index": 2, "element": "H", "x": -0.52, "y": 0.93, "z": 0.0},
-                {"index": 3, "element": "H", "x": 1.94, "y": 0.93, "z": 0.0},
-            ],
-            "bonds": [{"begin": 0, "end": 1, "order": 1.0}],
-        }
 
-    def _fixture_xyz(self, context: AdapterContext) -> str:
-        return "\n".join(
-            [
-                "4",
-                f"fixture structure for {context.run.molecule.smiles}",
-                "C 0.00000000 0.00000000 0.00000000",
-                "C 1.42000000 0.00000000 0.00000000",
-                "H -0.52000000 0.93000000 0.00000000",
-                "H 1.94000000 0.93000000 0.00000000",
-                "",
-            ]
-        )
+def _parse_orca_energy_hartree(text: str) -> float | None:
+    match = re.search(r"FINAL\s+SINGLE\s+POINT\s+ENERGY\s+(-?\d+(?:\.\d+)?)", text)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

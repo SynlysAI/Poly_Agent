@@ -78,7 +78,6 @@ class ComputationService:
             source=payload.source,
             campaign_id=payload.campaign_id,
             suggestion_id=payload.suggestion_id,
-            mock_should_fail=payload.mock_should_fail,
         )
         ComputationRunRepository.save("run_id", run.model_dump(mode="python"))
         self._audit(
@@ -184,6 +183,14 @@ class ComputationService:
         run = self.get_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
         if run.status not in {"failed", "cancelled"}:
             raise HTTPException(status_code=400, detail="仅 failed/cancelled 任务允许重试")
+        if (run.workflow_type, run.engine) not in supported_workflow_engine_pairs():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "该计算任务使用已下线的历史 MOCK workflow/engine "
+                    f"组合：{run.workflow_type}/{run.engine}，不能重试；请重新提交当前支持的计算任务。"
+                ),
+            )
         payload = ComputationCreateRequest(
             workflow_type=run.workflow_type,
             engine=run.engine,
@@ -337,7 +344,7 @@ class ComputationService:
             spectrum = result
         else:
             spectrum = result.get("spectrum") or result.get("spectra", {}).get("spectrum") or {
-                "kind": "mock_metric_sticks",
+                "kind": "metric_sticks",
                 "x_label": "metric",
                 "y_label": "value",
                 "points": [

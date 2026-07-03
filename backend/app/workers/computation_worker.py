@@ -1,7 +1,7 @@
 """计算任务 worker。
 
-该 worker 使用 MongoDB find_one_and_update 原子领取 queued run；Mongo 不可用时沿用
-demo JSON store 的进程内锁领取逻辑，便于本地 MVP smoke test。
+该 worker 使用 MongoDB find_one_and_update 原子领取 queued run；生产环境禁止
+本地 demo JSON store 兜底，避免计算任务写入非真实存储。
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ class WorkerResult:
 class ComputationWorker:
     """领取并执行 queued computation run。"""
 
-    def __init__(self, *, worker_id: str = "worker-mock-1") -> None:
+    def __init__(self, *, worker_id: str = "worker-local-real-1") -> None:
         self.worker_id = worker_id
         self.service = ComputationService()
 
@@ -159,7 +159,7 @@ class ComputationWorker:
 def main() -> None:
     """命令行入口。"""
     parser = argparse.ArgumentParser(description="Run Poly Agent computation worker")
-    parser.add_argument("--worker-id", default="worker-mock-1")
+    parser.add_argument("--worker-id", default="worker-local-real-1")
     parser.add_argument("--once", action="store_true", help="claim and run at most one queued run")
     parser.add_argument("--interval", type=float, default=1.0)
     args = parser.parse_args()

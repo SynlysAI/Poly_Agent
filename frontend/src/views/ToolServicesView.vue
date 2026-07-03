@@ -42,6 +42,36 @@ const serviceTypeOptions = [
 
 const currentConfig = computed(() => configs.value.find((item) => item.service_key === editingServiceKey.value))
 
+const serviceCatalog = {
+  'computation-worker': { name: '计算 Worker', group: '运行组件', hint: '领取 queued run 并执行真实计算 workflow' },
+  'artifact-store': { name: 'Artifact 存储', group: '核心存储', hint: '保存结构、日志、结果 JSON 和下载文件' },
+  rdkit: { name: 'RDKit', group: '计算工具链', hint: 'SMILES 解析和三维结构初猜' },
+  openbabel: { name: 'OpenBabel', group: '计算工具链', hint: '结构格式转换和备用三维结构生成' },
+  xtb: { name: 'xTB', group: '计算工具链', hint: '低成本粗优化和单点计算' },
+  crest: { name: 'CREST', group: '计算工具链', hint: '构象搜索，给 xTB/ORCA 提供合理姿态' },
+  orca: { name: 'ORCA', group: '计算工具链', hint: '高精度 DFT/激发态精加工' },
+  'alchemist-backend': { name: 'Alchemist', group: '优化与实验', hint: '贝叶斯优化和实验设计后端' },
+  speclabos: { name: 'SpecLabOS', group: '优化与实验', hint: '真实实验系统接口，需配置 endpoint' },
+  aiida: { name: 'AiiDA', group: '优化与实验', hint: '计算 provenance 和外部流程记录' },
+  atlas: { name: 'Atlas', group: '优化与实验', hint: '优化器服务' },
+  docker: { name: 'Docker', group: '运行组件', hint: '可选容器运行能力' },
+}
+
+const serviceGroups = computed(() => {
+  const groups = ['核心存储', '计算工具链', '优化与实验', '运行组件']
+  return groups.map((group) => ({
+    name: group,
+    items: services.value.filter((item) => (serviceCatalog[item.service]?.group || '运行组件') === group),
+  })).filter((group) => group.items.length)
+})
+
+const healthSummary = computed(() => {
+  const required = ['artifact-store', 'rdkit', 'openbabel', 'xtb', 'crest', 'orca']
+  const items = services.value.filter((item) => required.includes(item.service))
+  const ready = items.filter((item) => ['up', 'available'].includes(item.status)).length
+  return { ready, total: items.length }
+})
+
 function statusTag(status) {
   if (['up', 'available'].includes(status)) return 'success'
   if (status === 'degraded') return 'warning'
@@ -59,6 +89,44 @@ function formatDate(value) {
 function formatDetails(details) {
   if (!details || Object.keys(details).length === 0) return '{}'
   return JSON.stringify(details, null, 2)
+}
+
+function serviceName(service) {
+  return serviceCatalog[service]?.name || service
+}
+
+function serviceHint(service) {
+  return serviceCatalog[service]?.hint || '外部集成服务'
+}
+
+function statusLabel(status) {
+  const map = {
+    up: '可用',
+    available: '可用',
+    degraded: '异常',
+    down: '不可用',
+    failed: '失败',
+    not_available: '未安装',
+    not_configured: '未配置',
+    disabled: '已停用',
+    unknown: '未知',
+  }
+  return map[status] || status
+}
+
+function servicePrimaryDetail(row) {
+  const details = row.details || {}
+  if (details.path) return details.path
+  if (details.url) return details.url
+  if (details.root) return details.root
+  if (details.host && details.port) return `${details.host}:${details.port}`
+  if (details.worker_id) return details.worker_id
+  return '-'
+}
+
+function serviceReason(row) {
+  const details = row.details || {}
+  return details.reason || details.last_error_summary || details.stderr || ''
 }
 
 function formatConfigSummary(row) {
@@ -191,8 +259,11 @@ onMounted(loadAll)
       <div class="panel-header tools-header">
         <div>
           <h3 class="panel-title">工具服务</h3>
-          <p class="panel-subtitle">计算 worker、artifact store、ChemOS reference 和外部服务集成状态。</p>
+          <p class="panel-subtitle">真实计算工具链、Mongo/artifact、SpecLabOS 和优化服务状态。</p>
         </div>
+        <el-tag size="large" :type="healthSummary.ready === healthSummary.total ? 'success' : 'warning'">
+          核心服务 {{ healthSummary.ready }}/{{ healthSummary.total }}
+        </el-tag>
         <el-button :icon="Refresh" :loading="loadingStatus || loadingConfigs" @click="loadAll">刷新</el-button>
       </div>
     </section>
@@ -201,20 +272,40 @@ onMounted(loadAll)
       <div class="panel-body">
         <el-tabs v-model="activeTab">
           <el-tab-pane label="状态" name="status">
-            <el-table :data="services" v-loading="loadingStatus" stripe>
-              <el-table-column prop="service" label="Service" min-width="180" />
-              <el-table-column prop="status" label="状态" width="140">
-                <template #default="{ row }">
-                  <el-tag size="small" :type="statusTag(row.status)">{{ row.status }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="checked_at" label="检查时间" min-width="190" />
-              <el-table-column label="Details" min-width="420">
-                <template #default="{ row }">
-                  <pre class="details-json">{{ formatDetails(row.details) }}</pre>
-                </template>
-              </el-table-column>
-            </el-table>
+            <div v-loading="loadingStatus" class="service-groups">
+              <section v-for="group in serviceGroups" :key="group.name" class="service-group">
+                <h4>{{ group.name }}</h4>
+                <div class="service-card-grid">
+                  <article v-for="row in group.items" :key="row.service" class="service-card">
+                    <div class="service-card-header">
+                      <div>
+                        <strong>{{ serviceName(row.service) }}</strong>
+                        <span>{{ serviceHint(row.service) }}</span>
+                      </div>
+                      <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+                    </div>
+                    <dl class="service-facts">
+                      <div>
+                        <dt>位置</dt>
+                        <dd>{{ servicePrimaryDetail(row) }}</dd>
+                      </div>
+                      <div>
+                        <dt>版本</dt>
+                        <dd>{{ row.details?.version || '-' }}</dd>
+                      </div>
+                      <div v-if="serviceReason(row)" class="service-reason">
+                        <dt>原因</dt>
+                        <dd>{{ serviceReason(row) }}</dd>
+                      </div>
+                    </dl>
+                    <details>
+                      <summary>查看原始检查结果</summary>
+                      <pre class="details-json">{{ formatDetails(row.details) }}</pre>
+                    </details>
+                  </article>
+                </div>
+              </section>
+            </div>
           </el-tab-pane>
 
           <el-tab-pane label="配置" name="configs">
@@ -315,6 +406,10 @@ onMounted(loadAll)
   gap: 16px;
 }
 
+.tools-header > div {
+  flex: 1;
+}
+
 .panel-subtitle {
   margin: 6px 0 0;
   color: var(--app-ink-muted);
@@ -323,6 +418,86 @@ onMounted(loadAll)
 
 .config-alert {
   margin-bottom: 12px;
+}
+
+.service-groups {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.service-group h4 {
+  margin: 0 0 10px;
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.service-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.service-card {
+  min-height: 190px;
+  padding: 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #ffffff;
+}
+
+.service-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.service-card-header strong {
+  display: block;
+  color: var(--app-ink);
+  font-size: 15px;
+}
+
+.service-card-header span {
+  display: block;
+  margin-top: 4px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.service-facts {
+  margin: 14px 0 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.service-facts div {
+  min-width: 0;
+}
+
+.service-facts dt {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.service-facts dd {
+  margin: 2px 0 0;
+  color: var(--app-ink-body);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.service-reason dd {
+  color: #b45309;
+}
+
+summary {
+  cursor: pointer;
+  color: var(--app-primary-active);
+  font-size: 12px;
 }
 
 .details-json {
@@ -351,6 +526,16 @@ onMounted(loadAll)
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .service-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1180px) {
+  .service-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

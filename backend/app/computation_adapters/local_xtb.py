@@ -14,12 +14,14 @@ from app.computation_adapters.base import AdapterRunResult
 from app.computation_adapters.base import ArtifactSpec
 from app.computation_adapters.base import build_steps
 from app.computation_adapters.local_structure import build_local_structure
+from app.core.config import settings
 from app.infra.computation_repositories import utc_now
 
 
 XTB_STEP_LABELS = {
     "XTB_VALIDATE_INPUT": "输入校验",
     "XTB_PREPARE_STRUCTURE": "准备 xTB 输入结构",
+    "XTB_CREST_SEARCH": "CREST 构象搜索",
     "XTB_RUN": "运行本地 xTB",
     "XTB_PARSE_RESULT": "解析 xTB 结果",
 }
@@ -52,12 +54,21 @@ class LocalXtbAdapter:
                 retryable=False,
                 specs=[],
             )
-        if not shutil.which("xtb"):
+        if not shutil.which(settings.xtb_executable):
             return self._failed_result(
                 context,
                 step_key="XTB_VALIDATE_INPUT",
                 error_code="XTB_NOT_AVAILABLE",
                 message="未检测到 xtb 可执行文件",
+                retryable=True,
+                specs=[],
+            )
+        if not shutil.which(settings.crest_executable):
+            return self._failed_result(
+                context,
+                step_key="XTB_VALIDATE_INPUT",
+                error_code="CREST_NOT_AVAILABLE",
+                message="未检测到 CREST 可执行文件，不能执行真实构象搜索",
                 retryable=True,
                 specs=[],
             )
@@ -127,7 +138,83 @@ class LocalXtbAdapter:
             )
         )
 
-        xtb_path = shutil.which("xtb")
+        crest_path = shutil.which(settings.crest_executable)
+        if not crest_path:
+            return self._failed_result(
+                context,
+                step_key="XTB_VALIDATE_INPUT",
+                error_code="CREST_NOT_AVAILABLE",
+                message="未检测到 CREST 可执行文件，不能执行真实构象搜索",
+                retryable=True,
+                specs=specs,
+            )
+        crest_input_xyz = input_xyz
+        crest_command = self._build_crest_command(context, crest_path, crest_input_xyz)
+        crest_stdout_path = context.workdir / "crest.stdout.log"
+        crest_stderr_path = context.workdir / "crest.stderr.log"
+        try:
+            crest_returncode, crest_cancelled = self._run_subprocess_with_heartbeat(
+                context,
+                crest_command,
+                crest_stdout_path,
+                crest_stderr_path,
+            )
+        except subprocess.TimeoutExpired:
+            crest_stdout_path.touch(exist_ok=True)
+            crest_stderr_path.touch(exist_ok=True)
+            specs.extend(_crest_log_specs(crest_stdout_path, crest_stderr_path))
+            return self._failed_result(
+                context,
+                step_key="XTB_CREST_SEARCH",
+                error_code="CREST_TIMEOUT",
+                message="CREST 构象搜索超时",
+                retryable=True,
+                specs=specs,
+            )
+        except OSError as exc:
+            crest_stderr_path.write_text(str(exc), encoding="utf-8")
+            crest_stdout_path.write_text("", encoding="utf-8")
+            specs.extend(_crest_log_specs(crest_stdout_path, crest_stderr_path))
+            return self._failed_result(
+                context,
+                step_key="XTB_CREST_SEARCH",
+                error_code="CREST_FAILED",
+                message=str(exc),
+                retryable=True,
+                specs=specs,
+            )
+        specs.extend(_crest_log_specs(crest_stdout_path, crest_stderr_path))
+        specs.extend(_crest_output_specs(context.workdir))
+        if crest_cancelled:
+            return self._failed_result(
+                context,
+                step_key="XTB_CREST_SEARCH",
+                error_code="CREST_CANCELLED",
+                message="CREST 构象搜索已取消",
+                retryable=True,
+                specs=specs,
+            )
+        if crest_returncode != 0:
+            return self._failed_result(
+                context,
+                step_key="XTB_CREST_SEARCH",
+                error_code="CREST_FAILED",
+                message=f"CREST 构象搜索失败，returncode={crest_returncode}",
+                retryable=True,
+                specs=specs,
+            )
+        crest_best_xyz = context.workdir / "crest_best.xyz"
+        if not crest_best_xyz.exists():
+            return self._failed_result(
+                context,
+                step_key="XTB_CREST_SEARCH",
+                error_code="CREST_OUTPUT_MISSING",
+                message="CREST 未生成 crest_best.xyz",
+                retryable=True,
+                specs=specs,
+            )
+
+        xtb_path = shutil.which(settings.xtb_executable)
         if not xtb_path:
             return self._failed_result(
                 context,
@@ -137,7 +224,7 @@ class LocalXtbAdapter:
                 retryable=True,
                 specs=specs,
             )
-        command = self._build_command(context, xtb_path, input_xyz)
+        command = self._build_command(context, xtb_path, crest_best_xyz)
         stdout_path = context.workdir / "xtb.stdout.log"
         stderr_path = context.workdir / "xtb.stderr.log"
         try:
@@ -322,7 +409,21 @@ class LocalXtbAdapter:
             "normal_termination": normal_termination,
             "runtime_seconds": runtime_seconds,
             "xtb_version": xtb_version,
+            "crest_used": True,
         }
+
+    def _build_crest_command(self, context: AdapterContext, crest_path: str, input_xyz: Path) -> list[str]:
+        method_key = context.run.parameters.method.upper()
+        return [
+            crest_path,
+            str(input_xyz.name),
+            "--gfn",
+            XTB_METHOD_TO_GFN[method_key],
+            "--chrg",
+            str(context.run.parameters.charge),
+            "--uhf",
+            str(max(context.run.parameters.multiplicity - 1, 0)),
+        ]
 
     def _failed_result(
         self,
@@ -488,6 +589,57 @@ def _xtb_log_specs(stdout_path: Path, stderr_path: Path) -> list[ArtifactSpec]:
             metadata={"source": "local_xtb", "source_step": "XTB_RUN", "stream": "stderr"},
         ),
     ]
+
+
+def _crest_log_specs(stdout_path: Path, stderr_path: Path) -> list[ArtifactSpec]:
+    return [
+        ArtifactSpec(
+            step_key="XTB_CREST_SEARCH",
+            artifact_type="log_text",
+            name="crest.stdout.log",
+            path=stdout_path,
+            mime_type="text/plain",
+            parser_name="local_xtb_adapter",
+            parser_version="0.1.0",
+            metadata={"source": "crest", "source_step": "XTB_CREST_SEARCH", "stream": "stdout"},
+        ),
+        ArtifactSpec(
+            step_key="XTB_CREST_SEARCH",
+            artifact_type="log_text",
+            name="crest.stderr.log",
+            path=stderr_path,
+            mime_type="text/plain",
+            parser_name="local_xtb_adapter",
+            parser_version="0.1.0",
+            metadata={"source": "crest", "source_step": "XTB_CREST_SEARCH", "stream": "stderr"},
+        ),
+    ]
+
+
+def _crest_output_specs(workdir: Path) -> list[ArtifactSpec]:
+    specs: list[ArtifactSpec] = []
+    known_outputs = {
+        "crest_best.xyz": ("xyz", "chemical/x-xyz"),
+        "crest_conformers.xyz": ("xyz", "chemical/x-xyz"),
+        "crest.energies": ("log_text", "text/plain"),
+    }
+    for filename, (artifact_type, mime_type) in known_outputs.items():
+        path = workdir / filename
+        if not path.exists() or not path.is_file():
+            continue
+        specs.append(
+            ArtifactSpec(
+                step_key="XTB_CREST_SEARCH",
+                artifact_type=artifact_type,
+                name=filename,
+                path=path,
+                mime_type=mime_type,
+                parser_name="local_xtb_adapter",
+                parser_version="0.1.0",
+                metadata={"source": "crest", "source_step": "XTB_CREST_SEARCH"},
+            )
+        )
+    return specs
 
 
 def _xtb_output_specs(workdir: Path) -> list[ArtifactSpec]:

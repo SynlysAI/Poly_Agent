@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CloseBold, MagicStick, Plus, Refresh, SwitchButton, Upload, VideoPause } from '@element-plus/icons-vue'
+import { CloseBold, MagicStick, Plus, Refresh, SwitchButton, VideoPause } from '@element-plus/icons-vue'
 
 import {
   archiveCampaign,
@@ -11,7 +11,6 @@ import {
   failCampaign,
   generateSuggestion,
   getApiErrorMessage,
-  importChemosDemoCandidates,
   listCampaigns,
   pauseCampaign,
   resumeCampaign,
@@ -31,15 +30,14 @@ const filters = reactive({
 })
 
 const form = reactive({
-  name: `Mock laser campaign ${new Date().toISOString().slice(0, 10)}`,
-  objective: 'gain_factor',
-  computationPreset: 'mock_laser',
+  name: `真实计算 campaign ${new Date().toISOString().slice(0, 10)}`,
+  objective: 'energy_hartree',
+  computationPreset: 'local_xtb',
 })
 
 const computationPresetOptions = [
-  { value: 'mock_laser', label: 'Mock laser' },
-  { value: 'orca_fixture', label: 'ORCA fixture' },
-  { value: 'orca_external_fake', label: 'ORCA fake external' },
+  { value: 'local_xtb', label: 'xTB / CREST 粗优化' },
+  { value: 'orca', label: 'ORCA 精加工' },
 ]
 
 function formatDate(value) {
@@ -55,13 +53,9 @@ function statusTag(status) {
 }
 
 function computationPresetLabel(row) {
-  const raw = row?.planner_config?.computation_preset || 'mock_laser'
+  const raw = row?.planner_config?.computation_preset || 'local_xtb'
   const key = typeof raw === 'string' ? raw : raw?.preset_key
-  return computationPresetOptions.find((item) => item.value === key)?.label || key || 'Mock laser'
-}
-
-function canImport(row) {
-  return ['draft', 'running'].includes(row.status)
+  return computationPresetOptions.find((item) => item.value === key)?.label || key || 'xTB / CREST 粗优化'
 }
 
 function canGenerate(row) {
@@ -156,19 +150,6 @@ async function handleCreateCampaign() {
   }
 }
 
-async function handleImportChemos(campaign) {
-    actionLoadingId.value = `${campaign.campaign_id}:import`
-  try {
-    const data = await importChemosDemoCandidates(campaign.campaign_id)
-    ElMessage.success(`已导入 ${data.imported_count} 个 ChemOS demo 候选`)
-    await loadCampaigns()
-  } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
-  } finally {
-    actionLoadingId.value = ''
-  }
-}
-
 async function handleGenerateSuggestion(campaign) {
     actionLoadingId.value = `${campaign.campaign_id}:suggest`
   try {
@@ -224,7 +205,6 @@ onMounted(loadCampaigns)
           <el-table-column label="操作" min-width="300" fixed="right">
             <template #default="{ row }">
               <el-button text type="primary" size="small" @click="$router.push(`/optimization/campaigns/${row.campaign_id}`)">详情</el-button>
-              <el-button text type="primary" size="small" :icon="Upload" :disabled="!canImport(row)" :loading="actionLoadingId === `${row.campaign_id}:import`" @click="handleImportChemos(row)">导入 ChemOS</el-button>
               <el-button text type="primary" size="small" :icon="MagicStick" :disabled="!canGenerate(row)" :loading="actionLoadingId === `${row.campaign_id}:suggest`" @click="handleGenerateSuggestion(row)">生成推荐</el-button>
               <el-dropdown v-if="statusActions(row).length" trigger="click">
                 <el-button text type="primary" size="small">状态</el-button>

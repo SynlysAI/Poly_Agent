@@ -7,14 +7,11 @@ from fastapi import HTTPException
 from app.computation_adapters.base import ComputationAdapter
 from app.computation_adapters.local_structure import LocalStructureAdapter
 from app.computation_adapters.local_xtb import LocalXtbAdapter
-from app.computation_adapters.mock import MockComputationAdapter
 from app.computation_adapters.orca_chemos_laser import OrcaChemosLaserAdapter
 
 
 def get_adapter(workflow_type: str, engine: str) -> ComputationAdapter:
     """Resolve workflow/engine to a computation adapter."""
-    if workflow_type in {"MOCK_XTB_ONLY", "MOCK_LASER"} and engine == "MOCK":
-        return MockComputationAdapter()
     if workflow_type == "LOCAL_STRUCTURE" and engine in {"LOCAL", "RDKit", "OPENBABEL"}:
         return LocalStructureAdapter()
     if workflow_type == "LOCAL_XTB" and engine == "XTB":
@@ -30,8 +27,6 @@ def get_adapter(workflow_type: str, engine: str) -> ComputationAdapter:
 def supported_workflow_engine_pairs() -> set[tuple[str, str]]:
     """Return supported workflow/engine pairs for validation and diagnostics."""
     return {
-        ("MOCK_XTB_ONLY", "MOCK"),
-        ("MOCK_LASER", "MOCK"),
         ("LOCAL_STRUCTURE", "LOCAL"),
         ("LOCAL_STRUCTURE", "RDKit"),
         ("LOCAL_STRUCTURE", "OPENBABEL"),

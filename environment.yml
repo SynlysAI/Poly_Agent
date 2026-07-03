@@ -5,6 +5,10 @@ channels:
 dependencies:
   - python=3.12
   - nodejs=22
+  - rdkit
+  - openbabel
+  - xtb
+  - crest
   - pip
   - pip:
       - -r backend/requirements.txt

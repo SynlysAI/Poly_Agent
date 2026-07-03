@@ -9,8 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 ComputationStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
-WorkflowType = Literal["MOCK_XTB_ONLY", "MOCK_LASER", "LOCAL_STRUCTURE", "LOCAL_XTB", "ORCA_CHEMOS_LASER"]
-EngineType = Literal["MOCK", "LOCAL", "RDKit", "OPENBABEL", "XTB", "ORCA"]
+WorkflowType = Literal["LOCAL_STRUCTURE", "LOCAL_XTB", "ORCA_CHEMOS_LASER"]
+EngineType = Literal["LOCAL", "RDKit", "OPENBABEL", "XTB", "ORCA"]
+LegacyWorkflowType = Literal["MOCK_XTB_ONLY", "MOCK_LASER"]
+LegacyEngineType = Literal["MOCK"]
+PersistedWorkflowType = WorkflowType | LegacyWorkflowType
+PersistedEngineType = EngineType | LegacyEngineType
 ArtifactType = Literal[
     "result_json",
     "log_text",
@@ -109,15 +113,14 @@ class ComputationCreateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    workflow_type: WorkflowType = "MOCK_XTB_ONLY"
-    engine: EngineType = "MOCK"
+    workflow_type: WorkflowType = "LOCAL_XTB"
+    engine: EngineType = "XTB"
     molecule: MoleculeInput
     parameters: ComputationParameters = Field(default_factory=ComputationParameters)
     resources: ComputationResources = Field(default_factory=ComputationResources)
     source: str | None = Field(default=None, max_length=80)
     campaign_id: str | None = Field(default=None, max_length=80)
     suggestion_id: str | None = Field(default=None, max_length=80)
-    mock_should_fail: bool = False
 
 
 class ComputationStep(BaseModel):
@@ -136,8 +139,8 @@ class ComputationRun(BaseModel):
 
     run_id: str
     retry_of_run_id: str | None = None
-    workflow_type: WorkflowType
-    engine: EngineType
+    workflow_type: PersistedWorkflowType
+    engine: PersistedEngineType
     status: ComputationStatus
     molecule: MoleculeInput
     parameters: ComputationParameters
@@ -155,7 +158,6 @@ class ComputationRun(BaseModel):
     source: str | None = None
     campaign_id: str | None = None
     suggestion_id: str | None = None
-    mock_should_fail: bool = False
 
 
 class ComputationCreateData(BaseModel):

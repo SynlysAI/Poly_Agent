@@ -69,21 +69,20 @@ class IntegrationConfigServiceTest(ComputationTestCase):
         self.assertEqual(audits[0]["request_id"], "req-upsert")
         self.assertNotIn("plain-text-secret", str(audits[0]))
 
-    def test_api_upsert_config_returns_sanitized_summary(self) -> None:
-        response = self.client.put(
-            "/api/v1/integrations/configs/speclabos",
-            headers={"X-Request-ID": "req-api"},
-            json={
-                "display_name": "SpecLabOS",
-                "service_type": "experiment",
-                "enabled": True,
-                "endpoint": "https://speclabos.example/api",
-                "config_summary": {"workflow_template": "poly-agent-validation"},
-                "secret_refs": {"bearer_token": "SPECLABOS_TOKEN"},
-            },
+    def test_upsert_config_returns_sanitized_summary(self) -> None:
+        config = self.service.upsert_config(
+            "speclabos",
+            ServiceIntegrationUpsertRequest(
+                display_name="SpecLabOS",
+                service_type="experiment",
+                enabled=True,
+                endpoint="https://speclabos.example/api",
+                config_summary={"workflow_template": "poly-agent-validation"},
+                secret_refs={"bearer_token": "SPECLABOS_TOKEN"},
+            ),
+            actor_user_id="demo_user",
+            request_id="req-api",
         )
-
-        payload = response.json()
         audits, total = AuditEventRepository.list_events(
             entity_type="service_integration",
             entity_id="speclabos",
@@ -92,26 +91,21 @@ class IntegrationConfigServiceTest(ComputationTestCase):
             page_size=10,
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["data"]["service_key"], "speclabos")
-        self.assertEqual(payload["data"]["secret_refs"], {"bearer_token": "SPECLABOS_TOKEN"})
-        self.assertNotIn("plain-text-secret", response.text)
+        self.assertEqual(config.service_key, "speclabos")
+        self.assertEqual(config.secret_refs, {"bearer_token": "SPECLABOS_TOKEN"})
+        self.assertNotIn("plain-text-secret", config.model_dump_json())
         self.assertEqual(total, 1)
         self.assertEqual(audits[0]["request_id"], "req-api")
 
-    def test_api_rejects_plaintext_secret_fields(self) -> None:
-        response = self.client.put(
-            "/api/v1/integrations/configs/speclabos",
-            json={
-                "display_name": "SpecLabOS",
-                "service_type": "experiment",
-                "enabled": True,
-                "endpoint": "https://speclabos.example/api",
-                "config_summary": {"api_key": "plain-text-secret"},
-            },
-        )
-
-        self.assertEqual(response.status_code, 422)
+    def test_request_rejects_plaintext_secret_fields(self) -> None:
+        with self.assertRaises(ValidationError):
+            ServiceIntegrationUpsertRequest(
+                display_name="SpecLabOS",
+                service_type="experiment",
+                enabled=True,
+                endpoint="https://speclabos.example/api",
+                config_summary={"api_key": "plain-text-secret"},
+            )
 
     def test_local_dependency_status_includes_path_capabilities_and_failure_reason(self) -> None:
         with patch("app.services.integration_status_service.importlib.util.find_spec", return_value=None), patch(

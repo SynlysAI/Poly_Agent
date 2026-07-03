@@ -14,7 +14,6 @@ import {
   getCampaign,
   getCampaignHistory,
   importCampaignCandidatesCsv,
-  importChemosDemoCandidates,
   pauseCampaign,
   rejectSuggestion,
   resumeCampaign,
@@ -41,16 +40,15 @@ const canGenerate = computed(() => campaign.value?.status === 'running')
 const canSubmitSuggestion = computed(() => campaign.value?.status === 'running')
 
 const computationPresetOptions = [
-  { value: 'mock_laser', label: 'Mock laser' },
-  { value: 'orca_fixture', label: 'ORCA fixture' },
-  { value: 'orca_external_fake', label: 'ORCA fake external' },
+  { value: 'local_xtb', label: 'xTB / CREST 粗优化' },
+  { value: 'orca', label: 'ORCA 精加工' },
 ]
 const computationPreset = computed(() => {
-  const raw = campaign.value?.planner_config?.computation_preset || 'mock_laser'
+  const raw = campaign.value?.planner_config?.computation_preset || 'local_xtb'
   return typeof raw === 'string' ? raw : raw?.preset_key
 })
 const computationPresetLabel = computed(() => (
-  computationPresetOptions.find((item) => item.value === computationPreset.value)?.label || computationPreset.value || 'Mock laser'
+  computationPresetOptions.find((item) => item.value === computationPreset.value)?.label || computationPreset.value || 'xTB / CREST 粗优化'
 ))
 
 function formatDate(value) {
@@ -136,20 +134,6 @@ async function handleStatusAction(action) {
     await loadDetail()
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
-    ElMessage.error(getApiErrorMessage(error))
-  } finally {
-    actionLoading.value = ''
-  }
-}
-
-async function handleImportChemos() {
-  actionLoading.value = 'import'
-  try {
-    const data = await importChemosDemoCandidates(campaignId.value)
-    lastImportReport.value = data
-    ElMessage.success(`已导入 ${data.imported_count} 个候选`)
-    await loadDetail()
-  } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     actionLoading.value = ''
@@ -248,7 +232,6 @@ onMounted(loadDetail)
         </div>
         <div class="header-actions">
           <el-button :icon="Refresh" :loading="loading" @click="loadDetail">刷新</el-button>
-          <el-button :icon="Upload" :disabled="!canImport" :loading="actionLoading === 'import'" @click="handleImportChemos">导入 ChemOS</el-button>
           <el-button :icon="Upload" :disabled="!canImport" :loading="actionLoading === 'import-csv'" @click="csvDialogVisible = true">导入 CSV</el-button>
           <el-button type="primary" :icon="MagicStick" :disabled="!canGenerate" :loading="actionLoading === 'suggest'" @click="handleGenerateSuggestion">生成推荐</el-button>
           <el-dropdown v-if="statusActionOptions.length" trigger="click">

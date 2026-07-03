@@ -278,53 +278,18 @@ class OptimizationServiceTest(ComputationTestCase):
         self.assertEqual(submitted.suggestion_status, "submitted")
         self.assertEqual(detail.campaign_id, campaign_id)
         self.assertEqual(detail.suggestion_id, suggestion.suggestion_id)
-        self.assertEqual(detail.workflow_type, "MOCK_LASER")
-        self.assertEqual(detail.engine, "MOCK")
+        self.assertEqual(detail.workflow_type, "LOCAL_XTB")
+        self.assertEqual(detail.engine, "XTB")
 
-    def test_submit_suggestion_uses_orca_fixture_campaign_preset(self) -> None:
+    def test_submit_suggestion_uses_orca_campaign_preset(self) -> None:
         campaign = self.service.create_campaign(
             CampaignCreateRequest(
-                name="orca-fixture-preset",
-                objectives=[{"name": "gain_factor", "direction": "max"}],
-                planner_config={"batch_size": 1, "computation_preset": "orca_fixture"},
-            ),
-            actor_user_id="tester",
-            request_id="req-campaign",
-        )
-        self.service.import_candidates(
-            campaign.campaign_id,
-            CandidateImportRequest(candidates=[{"candidate_key": "CAND-ORCA", "smiles": "CCO"}]),
-            actor_user_id="tester",
-            request_id="req-import",
-        )
-        suggestion = self.service.generate_suggestions(
-            campaign.campaign_id,
-            SuggestionCreateRequest(batch_size=1),
-            actor_user_id="tester",
-            request_id="req-suggestion",
-        ).items[0]
-
-        submitted = self.service.submit_suggestion_computation(
-            suggestion.suggestion_id,
-            actor_user_id="tester",
-            request_id="req-submit",
-        )
-        detail = self.service.computation_service.get_run(submitted.run_id)
-
-        self.assertEqual(detail.workflow_type, "ORCA_CHEMOS_LASER")
-        self.assertEqual(detail.engine, "ORCA")
-        self.assertEqual(detail.parameters.method, "ORCA_B3LYP_DEF2_SVP")
-        self.assertEqual(detail.resources.num_cores, 4)
-
-    def test_submit_suggestion_uses_orca_external_fake_campaign_preset(self) -> None:
-        campaign = self.service.create_campaign(
-            CampaignCreateRequest(
-                name="orca-external-fake-preset",
+                name="orca-preset",
                 objectives=[{"name": "gain_factor", "direction": "max"}],
                 planner_config={
                     "batch_size": 1,
                     "computation_preset": {
-                        "preset_key": "orca_external_fake",
+                        "preset_key": "orca",
                         "resources": {"num_cores": 6, "memory_mb": 8192, "max_wallclock_seconds": 3600},
                     },
                 },
@@ -354,7 +319,7 @@ class OptimizationServiceTest(ComputationTestCase):
 
         self.assertEqual(detail.workflow_type, "ORCA_CHEMOS_LASER")
         self.assertEqual(detail.engine, "ORCA")
-        self.assertEqual(detail.source, "optimization_suggestion:orca_external_fake")
+        self.assertEqual(detail.source, "optimization_suggestion:orca")
         self.assertEqual(detail.resources.num_cores, 6)
         self.assertEqual(detail.resources.memory_mb, 8192)
 
@@ -379,7 +344,7 @@ class OptimizationServiceTest(ComputationTestCase):
                     planner_config={
                         "batch_size": 1,
                         "computation_preset": {
-                            "preset_key": "orca_fixture",
+                            "preset_key": "orca",
                             "shell_command": "orca input.inp",
                         },
                     },
@@ -414,7 +379,7 @@ class OptimizationServiceTest(ComputationTestCase):
                 objectives=[{"name": "gain_factor", "direction": "max"}],
                 planner_config={
                     "batch_size": 1,
-                    "computation_preset": {"preset_key": "orca_fixture", "method": "/tmp/run_orca.sh"},
+                    "computation_preset": {"preset_key": "orca", "method": "/tmp/run_orca.sh"},
                 },
             ),
             actor_user_id="tester",
@@ -558,7 +523,7 @@ class OptimizationServiceTest(ComputationTestCase):
                 )
             self.assertEqual(caught.exception.status_code, 400)
 
-    def test_create_observation_from_completed_computation(self) -> None:
+    def test_create_observation_from_non_laser_computation_is_rejected(self) -> None:
         campaign_id, _ = self._create_campaign_with_candidate()
         suggestion = self.service.generate_suggestions(
             campaign_id,
@@ -573,14 +538,13 @@ class OptimizationServiceTest(ComputationTestCase):
         )
         ComputationWorker(worker_id="worker-test").acquire_and_run_one()
 
-        data = self.service.create_observation_from_computation(
-            submitted.run_id,
-            actor_user_id="tester",
-            request_id="req-observation",
-        )
-
-        self.assertIn("gain_factor", data.observation.values)
-        self.assertEqual(data.observation.source_run_id, submitted.run_id)
+        with self.assertRaises(HTTPException) as caught:
+            self.service.create_observation_from_computation(
+                submitted.run_id,
+                actor_user_id="tester",
+                request_id="req-observation",
+            )
+        self.assertEqual(caught.exception.status_code, 400)
 
     def test_import_candidates_records_descriptor_schema_metadata(self) -> None:
         campaign_id, _ = self._create_campaign_with_candidate()
@@ -742,8 +706,8 @@ class OptimizationServiceTest(ComputationTestCase):
         event_types = {item["event_type"] for item in events}
 
         self.assertEqual(result.run_id, submitted.run_id)
-        self.assertEqual(len(detail.observations), 1)
-        self.assertEqual(detail.observations[0].source_run_id, submitted.run_id)
-        self.assertEqual(len(detail.suggestions), 2)
-        self.assertIn("automation.observation_created", event_types)
-        self.assertIn("automation.suggestion_triggered", event_types)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(len(detail.observations), 0)
+        self.assertEqual(len(detail.suggestions), 1)
+        self.assertNotIn("automation.observation_created", event_types)
+        self.assertNotIn("automation.suggestion_triggered", event_types)

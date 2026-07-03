@@ -2,28 +2,19 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Connection, Cpu, MagicStick, Plus, Promotion } from '@element-plus/icons-vue'
+import { Cpu, Promotion } from '@element-plus/icons-vue'
 
-import {
-  createCampaign,
-  createComputation,
-  generateSuggestion,
-  getApiErrorMessage,
-  importCampaignCandidates,
-  submitSuggestionComputation,
-} from '../api/polyAgentApi'
+import { createComputation, getApiErrorMessage } from '../api/polyAgentApi'
 
 const router = useRouter()
 const formRef = ref(null)
 const submitting = ref(false)
-const demoSubmitting = ref(false)
-const demoResult = ref(null)
 
 const form = reactive({
   name: 'candidate_001',
   smiles: 'CCOC1=CC=CC=C1',
-  workflow_type: 'MOCK_XTB_ONLY',
-  engine: 'MOCK',
+  workflow_type: 'LOCAL_XTB',
+  engine: 'XTB',
   charge: 0,
   multiplicity: 1,
   method: 'GFN2-xTB',
@@ -41,28 +32,22 @@ const rules = {
 }
 
 const workflowOptions = [
-  { label: 'Mock xTB 单点', value: 'MOCK_XTB_ONLY' },
-  { label: 'Mock Laser 指标', value: 'MOCK_LASER' },
   { label: 'Local 结构生成', value: 'LOCAL_STRUCTURE' },
-  { label: 'Local xTB', value: 'LOCAL_XTB' },
-  { label: 'ORCA/ChemOS Laser', value: 'ORCA_CHEMOS_LASER' },
+  { label: 'xTB / CREST 粗优化', value: 'LOCAL_XTB' },
+  { label: 'ORCA 精加工', value: 'ORCA_CHEMOS_LASER' },
 ]
 
 const engineOptionsByWorkflow = {
-  MOCK_XTB_ONLY: [{ label: 'MOCK 本地演示引擎', value: 'MOCK' }],
-  MOCK_LASER: [{ label: 'MOCK 本地演示引擎', value: 'MOCK' }],
   LOCAL_STRUCTURE: [
     { label: 'LOCAL 自动选择', value: 'LOCAL' },
     { label: 'RDKit', value: 'RDKit' },
     { label: 'OpenBabel', value: 'OPENBABEL' },
   ],
   LOCAL_XTB: [{ label: 'xTB', value: 'XTB' }],
-  ORCA_CHEMOS_LASER: [{ label: 'ORCA 受控工作流', value: 'ORCA' }],
+  ORCA_CHEMOS_LASER: [{ label: 'ORCA', value: 'ORCA' }],
 }
 
 const methodOptionsByWorkflow = {
-  MOCK_XTB_ONLY: [{ label: 'GFN2-xTB', value: 'GFN2-xTB' }],
-  MOCK_LASER: [{ label: 'GFN2-xTB', value: 'GFN2-xTB' }],
   LOCAL_STRUCTURE: [
     { label: 'GFN2-xTB', value: 'GFN2-xTB' },
     { label: 'GFN1-xTB', value: 'GFN1-xTB' },
@@ -90,18 +75,18 @@ const solventOptions = [
 ]
 
 const engineOptions = computed(() => engineOptionsByWorkflow[form.workflow_type] || [])
-const methodOptions = computed(() => methodOptionsByWorkflow[form.workflow_type] || methodOptionsByWorkflow.MOCK_XTB_ONLY)
+const methodOptions = computed(() => methodOptionsByWorkflow[form.workflow_type] || methodOptionsByWorkflow.LOCAL_XTB)
 
 watch(
   () => form.workflow_type,
   (workflowType) => {
-    const options = engineOptionsByWorkflow[workflowType] || []
-    if (!options.some((item) => item.value === form.engine)) {
-      form.engine = options[0]?.value || ''
+    const engines = engineOptionsByWorkflow[workflowType] || []
+    if (!engines.some((item) => item.value === form.engine)) {
+      form.engine = engines[0]?.value || ''
     }
-    const methodOptions = methodOptionsByWorkflow[workflowType] || []
-    if (!methodOptions.some((item) => item.value === form.method)) {
-      form.method = methodOptions[0]?.value || 'GFN2-xTB'
+    const methods = methodOptionsByWorkflow[workflowType] || []
+    if (!methods.some((item) => item.value === form.method)) {
+      form.method = methods[0]?.value || 'GFN2-xTB'
     }
   },
 )
@@ -143,41 +128,6 @@ async function handleSubmit() {
     submitting.value = false
   }
 }
-
-async function handleCreateOptimizationDemo() {
-  demoSubmitting.value = true
-  demoResult.value = null
-  try {
-    const campaign = await createCampaign({
-      name: `Mock laser screening ${new Date().toISOString().slice(0, 10)}`,
-      planner_type: 'fallback',
-      objectives: [
-        { name: 'gain_factor', direction: 'max', unit: 'cm2_s', required: true },
-      ],
-      planner_config: { batch_size: 1, computation_preset: 'mock_laser' },
-    })
-    await importCampaignCandidates(campaign.campaign_id, {
-      candidates: [
-        { candidate_key: 'C001', smiles: form.smiles, metadata: { source: 'TaskSubmitView demo' } },
-        { candidate_key: 'C002', smiles: 'COC1=CC=CC=C1', metadata: { source: 'TaskSubmitView demo' } },
-        { candidate_key: 'C003', smiles: 'CCN(CC)C1=CC=CC=C1', metadata: { source: 'TaskSubmitView demo' } },
-      ],
-    })
-    const suggestions = await generateSuggestion(campaign.campaign_id, { batch_size: 1 })
-    const suggestion = suggestions.items[0]
-    const submitted = await submitSuggestionComputation(suggestion.suggestion_id)
-    demoResult.value = {
-      campaign_id: campaign.campaign_id,
-      suggestion_id: suggestion.suggestion_id,
-      run_id: submitted.run_id,
-    }
-    ElMessage.success('优化闭环 demo 已创建，并已提交首个计算任务')
-  } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
-  } finally {
-    demoSubmitting.value = false
-  }
-}
 </script>
 
 <template>
@@ -186,7 +136,7 @@ async function handleCreateOptimizationDemo() {
       <div class="panel-header">
         <div>
           <h3 class="panel-title">计算任务提交</h3>
-          <p class="panel-subtitle">创建可追踪的 computation run，mock worker 会自动推进状态并生成 artifact。</p>
+          <p class="panel-subtitle">创建可追踪的真实 computation run，worker 会调用已配置的 RDKit/OpenBabel、xTB、CREST 或 ORCA。</p>
         </div>
       </div>
       <div class="panel-body">
@@ -244,43 +194,12 @@ async function handleCreateOptimizationDemo() {
         </el-form>
       </div>
     </section>
-
-    <aside class="panel demo-panel">
-      <div class="panel-header">
-        <div>
-          <h3 class="panel-title">优化闭环 Demo</h3>
-          <p class="panel-subtitle">创建 campaign、导入候选、生成 suggestion，并将 suggestion 转为计算任务。</p>
-        </div>
-      </div>
-      <div class="panel-body demo-flow">
-        <div class="flow-step">
-          <el-icon><Plus /></el-icon>
-          <span>Campaign</span>
-        </div>
-        <div class="flow-step">
-          <el-icon><MagicStick /></el-icon>
-          <span>Suggestion</span>
-        </div>
-        <div class="flow-step">
-          <el-icon><Connection /></el-icon>
-          <span>Computation</span>
-        </div>
-        <el-button type="primary" plain :loading="demoSubmitting" @click="handleCreateOptimizationDemo">生成闭环 demo</el-button>
-        <el-descriptions v-if="demoResult" :column="1" border size="small" class="demo-result">
-          <el-descriptions-item label="Campaign">{{ demoResult.campaign_id }}</el-descriptions-item>
-          <el-descriptions-item label="Suggestion">{{ demoResult.suggestion_id }}</el-descriptions-item>
-          <el-descriptions-item label="Run">{{ demoResult.run_id }}</el-descriptions-item>
-        </el-descriptions>
-      </div>
-    </aside>
   </div>
 </template>
 
 <style scoped>
 .submit-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.8fr);
-  gap: 16px;
+  display: block;
 }
 
 .panel-subtitle {
@@ -308,43 +227,6 @@ async function handleCreateOptimizationDemo() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: 14px;
-}
-
-.demo-panel {
-  align-self: start;
-}
-
-.demo-flow {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.flow-step {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 42px;
-  padding: 0 12px;
-  border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius-sm);
-  background: #f8fbff;
-  color: var(--app-ink-body);
-  font-weight: 600;
-}
-
-.flow-step .el-icon {
-  color: var(--app-primary);
-}
-
-.demo-result {
-  margin-top: 4px;
-}
-
-@media (max-width: 1100px) {
-  .submit-layout {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 640px) {

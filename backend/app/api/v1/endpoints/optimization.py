@@ -258,22 +258,6 @@ async def import_campaign_candidates_csv(
     return ApiResponse(code=0, message="ok", data=data)
 
 
-@router.post("/campaigns/{campaign_id}/candidates:import-chemos-demo", response_model=ApiResponse[CandidateImportData])
-def import_chemos_demo_candidates(
-    campaign_id: str,
-    request: Request,
-    current_user: dict[str, str] | None = Depends(get_current_user),
-) -> ApiResponse[CandidateImportData]:
-    """导入 ChemOS reference demo 候选。"""
-    data = service.import_chemos_demo_candidates(
-        campaign_id,
-        actor_user_id=_actor_user_id(current_user),
-        request_id=_request_id(request),
-        is_admin=_is_admin(current_user),
-    )
-    return ApiResponse(code=0, message="ok", data=data)
-
-
 @router.post("/campaigns/{campaign_id}/suggestions", response_model=ApiResponse[SuggestionCreateData])
 def generate_suggestions(
     campaign_id: str,

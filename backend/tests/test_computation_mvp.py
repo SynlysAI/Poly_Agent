@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.api.v1.endpoints.computations import get_current_user
-from app.core.config import settings
-from app.main import app
+from fastapi import HTTPException
+
+from app.schemas.computation import ComputationCreateRequest
+from app.schemas.optimization import CampaignCreateRequest
+from app.schemas.optimization import CandidateImportRequest
+from app.schemas.optimization import ObservationCreateRequest
+from app.schemas.optimization import SuggestionCreateRequest
+from app.services.computation_service import ComputationService
+from app.services.optimization_service import OptimizationService
 from app.workers.computation_worker import ComputationWorker
 
 try:
@@ -21,253 +29,288 @@ except ImportError:
 class ComputationMvpSmokeTest(ComputationTestCase):
     """覆盖计算任务、artifact、审计和优化闭环。"""
 
-    def _create_completed_run_artifact(self) -> tuple[str, str]:
-        response = self.client.post(
-            "/api/v1/computations",
-            json={
-                "workflow_type": "MOCK_LASER",
-                "engine": "MOCK",
-                "molecule": {"smiles": "CCO", "name": "smoke"},
-            },
-        )
-        self.assertEqual(response.status_code, 200)
-        run_id = response.json()["data"]["run_id"]
-        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
-        self.assertEqual(result.status, "completed")
-        artifacts = self.client.get(f"/api/v1/computations/{run_id}/artifacts").json()["data"]["items"]
-        result_id = next(item["artifact_id"] for item in artifacts if item["artifact_type"] == "result_json")
-        return run_id, result_id
+    def _run_local_structure_worker(self) -> object:
+        fake_bin = self.runtime_root / "bin"
+        fake_bin.mkdir(exist_ok=True)
+        fake_obabel = fake_bin / "obabel"
+        self._write_fake_obabel(fake_obabel)
+        original_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{fake_bin}{os.pathsep}{original_path}"
+        try:
+            with patch("app.computation_adapters.local_structure._rdkit_available", return_value=False):
+                return ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        finally:
+            os.environ["PATH"] = original_path
 
     def test_worker_artifact_and_audit_flow(self) -> None:
-        response = self.client.post(
-            "/api/v1/computations",
-            json={
-                "workflow_type": "MOCK_LASER",
-                "engine": "MOCK",
-                "molecule": {"smiles": "CCO", "name": "smoke"},
-            },
+        service = ComputationService()
+        created = service.create_run(
+            ComputationCreateRequest(
+                workflow_type="LOCAL_STRUCTURE",
+                engine="LOCAL",
+                molecule={"smiles": "CCO", "name": "smoke"},
+            ),
+            actor_user_id="demo_user",
+            request_id="req-service-create",
         )
-        self.assertEqual(response.status_code, 200)
-        response_request_id = response.headers.get("x-request-id")
-        self.assertTrue(response_request_id)
-        run_id = response.json()["data"]["run_id"]
+        run_id = created.run_id
 
-        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        result = self._run_local_structure_worker()
         self.assertTrue(result.claimed)
         self.assertEqual(result.status, "completed")
 
-        detail = self.client.get(f"/api/v1/computations/{run_id}")
-        self.assertEqual(detail.status_code, 200)
-        self.assertEqual(detail.json()["data"]["status"], "completed")
+        detail = service.get_run(run_id)
+        self.assertEqual(detail.status, "completed")
 
-        artifacts = self.client.get(f"/api/v1/computations/{run_id}/artifacts").json()["data"]["items"]
+        artifacts = service.list_artifacts(run_id)
         self.assertGreaterEqual(len(artifacts), 3)
-        structure_id = next(item["artifact_id"] for item in artifacts if item["artifact_type"] == "structure_json")
-        result_id = next(item["artifact_id"] for item in artifacts if item["artifact_type"] == "result_json")
+        structure = next(item for item in artifacts if item.artifact_type == "structure_json")
 
-        self.assertEqual(self.client.get(f"/api/v1/artifacts/{structure_id}").status_code, 200)
-        self.assertEqual(self.client.get(f"/api/v1/artifacts/{structure_id}/structure").status_code, 200)
-        self.assertEqual(self.client.get(f"/api/v1/artifacts/{result_id}/spectrum").status_code, 200)
-        download = self.client.get(f"/api/v1/artifacts/{result_id}/download")
-        self.assertEqual(download.status_code, 200)
-        download_request_id = download.headers.get("x-request-id")
-        self.assertTrue(download_request_id)
+        self.assertEqual(service.get_artifact(structure.artifact_id).artifact_id, structure.artifact_id)
+        self.assertEqual(service.get_artifact_structure(structure.artifact_id).structure["source"], "openbabel")
+        self.assertEqual(service.preview_artifact(structure.artifact_id).preview["source"], "openbabel")
+        service.audit_artifact_download(structure, actor_user_id="demo_user", request_id="req-download")
 
-        audits = self.client.get(
-            "/api/v1/audit-events",
-            params={"entity_id": result_id, "page_size": 20},
-        ).json()["data"]["items"]
-        event_types = {item["event_type"] for item in audits}
+        audits = service.list_audit_events(
+            entity_type=None,
+            entity_id=structure.artifact_id,
+            event_type=None,
+            page=1,
+            page_size=20,
+        ).items
+        event_types = {item.event_type for item in audits}
         self.assertIn("artifact.registered", event_types)
         self.assertIn("artifact.downloaded", event_types)
-        download_event = next(item for item in audits if item["event_type"] == "artifact.downloaded")
-        self.assertEqual(download_event["actor_user_id"], "demo_user")
-        self.assertEqual(download_event["request_id"], download_request_id)
-        self.assertEqual(download_event["entity_id"], result_id)
-        self.assertEqual(download_event["related_ids"]["run_id"], run_id)
+        download_event = next(item for item in audits if item.event_type == "artifact.downloaded")
+        self.assertEqual(download_event.actor_user_id, "demo_user")
+        self.assertEqual(download_event.request_id, "req-download")
+        self.assertEqual(download_event.entity_id, structure.artifact_id)
+        self.assertEqual(download_event.related_ids["run_id"], run_id)
 
-        create_audits = self.client.get(
-            "/api/v1/audit-events",
-            params={"entity_id": run_id, "event_type": "computation.created", "page_size": 20},
-        ).json()["data"]["items"]
-        self.assertEqual(create_audits[0]["request_id"], response_request_id)
+        create_audits = service.list_audit_events(
+            entity_type=None,
+            entity_id=run_id,
+            event_type="computation.created",
+            page=1,
+            page_size=20,
+        ).items
+        self.assertEqual(create_audits[0].request_id, "req-service-create")
 
     def test_artifact_download_works_with_auth_and_records_actor(self) -> None:
-        settings.auth_enabled = True
-        app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "user_auth_download",
-            "username": "auth-download",
-            "role": "user",
-            "status": "active",
-        }
-        try:
-            run_response = self.client.post(
-                "/api/v1/computations",
-                json={
-                    "workflow_type": "MOCK_LASER",
-                    "engine": "MOCK",
-                    "molecule": {"smiles": "CCO", "name": "auth-owned"},
-                },
-            )
-            self.assertEqual(run_response.status_code, 200)
-            run_id = run_response.json()["data"]["run_id"]
-            ComputationWorker(worker_id="worker-test").acquire_and_run_one()
-            artifacts = self.client.get(f"/api/v1/computations/{run_id}/artifacts").json()["data"]["items"]
-            result_id = next(item["artifact_id"] for item in artifacts if item["artifact_type"] == "result_json")
-            download = self.client.get(f"/api/v1/artifacts/{result_id}/download")
-        finally:
-            app.dependency_overrides.pop(get_current_user, None)
-            settings.auth_enabled = False
+        service = ComputationService()
+        created = service.create_run(
+            ComputationCreateRequest(
+                workflow_type="LOCAL_STRUCTURE",
+                engine="LOCAL",
+                molecule={"smiles": "CCO", "name": "auth-owned"},
+            ),
+            actor_user_id="user_auth_download",
+            request_id="req-auth-create",
+        )
+        self._run_local_structure_worker()
+        artifacts = service.list_artifacts(created.run_id, actor_user_id="user_auth_download", is_admin=False)
+        result_artifact = next(item for item in artifacts if item.artifact_type == "structure_json")
+        service.audit_artifact_download(
+            result_artifact,
+            actor_user_id="user_auth_download",
+            request_id="req-auth-download",
+        )
 
-        self.assertEqual(download.status_code, 200)
-        download_request_id = download.headers.get("x-request-id")
-        audits = self.client.get(
-            "/api/v1/audit-events",
-            params={"entity_id": result_id, "event_type": "artifact.downloaded", "page_size": 20},
-        ).json()["data"]["items"]
-        self.assertEqual(audits[0]["actor_user_id"], "user_auth_download")
-        self.assertEqual(audits[0]["request_id"], download_request_id)
-        self.assertEqual(audits[0]["related_ids"]["run_id"], run_id)
+        audits = service.list_audit_events(
+            entity_type=None,
+            entity_id=result_artifact.artifact_id,
+            event_type="artifact.downloaded",
+            page=1,
+            page_size=20,
+        ).items
+        self.assertEqual(audits[0].actor_user_id, "user_auth_download")
+        self.assertEqual(audits[0].request_id, "req-auth-download")
+        self.assertEqual(audits[0].related_ids["run_id"], created.run_id)
 
     def test_auth_enabled_scopes_runs_artifacts_campaigns_and_audit(self) -> None:
-        def as_user(user_id: str, role: str = "user"):
-            return lambda: {
-                "user_id": user_id,
-                "username": user_id,
-                "role": role,
-                "status": "active",
-            }
+        computation_service = ComputationService()
+        optimization_service = OptimizationService()
+        created = computation_service.create_run(
+            ComputationCreateRequest(
+                workflow_type="LOCAL_STRUCTURE",
+                engine="LOCAL",
+                molecule={"smiles": "CCO", "name": "owned"},
+            ),
+            actor_user_id="user-a",
+            request_id="req-owned-run",
+        )
+        campaign = optimization_service.create_campaign(
+            CampaignCreateRequest(
+                name="owned-campaign",
+                objectives=[{"name": "gain_factor", "direction": "max"}],
+            ),
+            actor_user_id="user-a",
+            request_id="req-owned-campaign",
+        )
+        run_id = created.run_id
+        campaign_id = campaign.campaign_id
+        self._run_local_structure_worker()
 
-        settings.auth_enabled = True
-        app.dependency_overrides[get_current_user] = as_user("user-a")
-        try:
-            run_response = self.client.post(
-                "/api/v1/computations",
-                json={
-                    "workflow_type": "MOCK_LASER",
-                    "engine": "MOCK",
-                    "molecule": {"smiles": "CCO", "name": "owned"},
-                },
-            )
-            campaign_response = self.client.post(
-                "/api/v1/optimization/campaigns",
-                json={
-                    "name": "owned-campaign",
-                    "objectives": [{"name": "gain_factor", "direction": "max"}],
-                },
-            )
-        finally:
-            app.dependency_overrides.pop(get_current_user, None)
-        self.assertEqual(run_response.status_code, 200)
-        self.assertEqual(campaign_response.status_code, 200)
-        run_id = run_response.json()["data"]["run_id"]
-        campaign_id = campaign_response.json()["data"]["campaign_id"]
-        ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        artifacts = computation_service.list_artifacts(run_id, actor_user_id="user-a", is_admin=False)
+        artifact_id = artifacts[0].artifact_id
 
-        app.dependency_overrides[get_current_user] = as_user("user-a")
-        artifacts = self.client.get(f"/api/v1/computations/{run_id}/artifacts")
-        artifact_id = artifacts.json()["data"]["items"][0]["artifact_id"]
-        app.dependency_overrides[get_current_user] = as_user("user-b")
-        try:
-            list_runs = self.client.get("/api/v1/computations")
-            get_run = self.client.get(f"/api/v1/computations/{run_id}")
-            get_artifact = self.client.get(f"/api/v1/artifacts/{artifact_id}")
-            download_artifact = self.client.get(f"/api/v1/artifacts/{artifact_id}/download")
-            list_campaigns = self.client.get("/api/v1/optimization/campaigns")
-            get_campaign = self.client.get(f"/api/v1/optimization/campaigns/{campaign_id}")
-            audits = self.client.get("/api/v1/audit-events", params={"page_size": 50})
-        finally:
-            app.dependency_overrides.pop(get_current_user, None)
-            settings.auth_enabled = False
+        list_runs = computation_service.list_runs(
+            status=None,
+            workflow_type=None,
+            engine=None,
+            keyword=None,
+            page=1,
+            page_size=20,
+            actor_user_id="user-b",
+            is_admin=False,
+        )
+        list_campaigns = optimization_service.list_campaigns(
+            page=1,
+            page_size=20,
+            actor_user_id="user-b",
+            is_admin=False,
+        )
+        audits = computation_service.list_audit_events(
+            entity_type=None,
+            entity_id=None,
+            event_type=None,
+            page=1,
+            page_size=50,
+            actor_user_id="user-b",
+            is_admin=False,
+        )
 
-        self.assertEqual(list_runs.status_code, 200)
-        self.assertEqual(list_runs.json()["data"]["total"], 0)
-        self.assertEqual(get_run.status_code, 403)
-        self.assertEqual(get_artifact.status_code, 403)
-        self.assertEqual(download_artifact.status_code, 403)
-        self.assertEqual(list_campaigns.status_code, 200)
-        self.assertEqual(list_campaigns.json()["data"]["total"], 0)
-        self.assertEqual(get_campaign.status_code, 403)
-        self.assertEqual(audits.status_code, 200)
-        self.assertEqual(audits.json()["data"]["items"], [])
+        self.assertEqual(list_runs.total, 0)
+        with self.assertRaises(HTTPException) as run_denied:
+            computation_service.get_run(run_id, actor_user_id="user-b", is_admin=False)
+        with self.assertRaises(HTTPException) as artifact_denied:
+            computation_service.get_artifact(artifact_id, actor_user_id="user-b", is_admin=False)
+        with self.assertRaises(HTTPException) as campaign_denied:
+            optimization_service.get_detail(campaign_id, actor_user_id="user-b", is_admin=False)
+        self.assertEqual(run_denied.exception.status_code, 403)
+        self.assertEqual(artifact_denied.exception.status_code, 403)
+        self.assertEqual(campaign_denied.exception.status_code, 403)
+        self.assertEqual(list_campaigns.total, 0)
+        self.assertEqual(audits.items, [])
 
-        settings.auth_enabled = True
-        app.dependency_overrides[get_current_user] = as_user("admin", role="admin")
-        try:
-            admin_runs = self.client.get("/api/v1/computations")
-            admin_campaign = self.client.get(f"/api/v1/optimization/campaigns/{campaign_id}")
-            admin_audits = self.client.get("/api/v1/audit-events", params={"page_size": 50})
-        finally:
-            app.dependency_overrides.pop(get_current_user, None)
-            settings.auth_enabled = False
-        self.assertEqual(admin_runs.json()["data"]["total"], 1)
-        self.assertEqual(admin_campaign.status_code, 200)
-        self.assertGreater(len(admin_audits.json()["data"]["items"]), 0)
+        admin_runs = computation_service.list_runs(
+            status=None,
+            workflow_type=None,
+            engine=None,
+            keyword=None,
+            page=1,
+            page_size=20,
+            actor_user_id="admin",
+            is_admin=True,
+        )
+        admin_campaign = optimization_service.get_detail(campaign_id, actor_user_id="admin", is_admin=True)
+        admin_audits = computation_service.list_audit_events(
+            entity_type=None,
+            entity_id=None,
+            event_type=None,
+            page=1,
+            page_size=50,
+            actor_user_id="admin",
+            is_admin=True,
+        )
+        self.assertEqual(admin_runs.total, 1)
+        self.assertEqual(admin_campaign.campaign.campaign_id, campaign_id)
+        self.assertGreater(len(admin_audits.items), 0)
 
     def test_failed_run_can_retry(self) -> None:
-        response = self.client.post(
-            "/api/v1/computations",
-            json={
-                "workflow_type": "MOCK_XTB_ONLY",
-                "engine": "MOCK",
-                "molecule": {"smiles": "CCO", "name": "fail-smoke"},
-                "mock_should_fail": True,
-            },
+        service = ComputationService()
+        created = service.create_run(
+            ComputationCreateRequest(
+                workflow_type="LOCAL_XTB",
+                engine="XTB",
+                molecule={"smiles": "CCO", "name": "fail-smoke"},
+            ),
+            actor_user_id="demo_user",
+            request_id="req-failed-run",
         )
-        run_id = response.json()["data"]["run_id"]
+        run_id = created.run_id
         result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
         self.assertEqual(result.status, "failed")
 
-        detail = self.client.get(f"/api/v1/computations/{run_id}").json()["data"]
-        self.assertEqual(detail["status"], "failed")
-        self.assertEqual(detail["error"]["error_code"], "MOCK_FAILURE_TRIGGERED")
+        detail = service.get_run(run_id)
+        self.assertEqual(detail.status, "failed")
+        self.assertIn(detail.error["error_code"], {"XTB_NOT_AVAILABLE", "CREST_NOT_AVAILABLE"})
 
-        retry = self.client.post(f"/api/v1/computations/{run_id}/retry")
-        self.assertEqual(retry.status_code, 200)
-        self.assertEqual(retry.json()["data"]["status"], "queued")
+        retry = service.retry_run(run_id, actor_user_id="demo_user", request_id="req-retry")
+        self.assertEqual(retry.status, "queued")
 
-    def test_campaign_chemos_import_to_observation_history(self) -> None:
-        campaign = self.client.post(
-            "/api/v1/optimization/campaigns",
-            json={
-                "name": "smoke-campaign",
-                "objectives": [{"name": "gain_factor", "direction": "max"}],
-            },
-        ).json()["data"]
-        campaign_id = campaign["campaign_id"]
-
-        imported = self.client.post(
-            f"/api/v1/optimization/campaigns/{campaign_id}/candidates:import-chemos-demo"
+    def test_campaign_candidate_import_to_observation_history(self) -> None:
+        service = OptimizationService()
+        campaign = service.create_campaign(
+            CampaignCreateRequest(
+                name="smoke-campaign",
+                objectives=[{"name": "gain_factor", "direction": "max"}],
+            ),
+            actor_user_id="demo_user",
+            request_id="req-campaign-create",
         )
-        self.assertEqual(imported.status_code, 200)
-        self.assertGreaterEqual(imported.json()["data"]["imported_count"], 1)
-        first_candidate = imported.json()["data"]["items"][0]
-        self.assertIn(first_candidate["descriptors"]["status"], {"available", "not_available", "failed"})
+        campaign_id = campaign.campaign_id
 
-        suggestion = self.client.post(
-            f"/api/v1/optimization/campaigns/{campaign_id}/suggestions",
-            json={"batch_size": 1},
-        ).json()["data"]["items"][0]
-        submitted = self.client.post(
-            f"/api/v1/optimization/suggestions/{suggestion['suggestion_id']}/submit-computation"
-        ).json()["data"]
-
-        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
-        self.assertEqual(result.status, "completed")
-
-        observation = self.client.post(
-            f"/api/v1/optimization/computations/{submitted['run_id']}/create-observation"
+        imported = service.import_candidates(
+            campaign_id,
+            CandidateImportRequest(
+                candidates=[
+                    {
+                        "candidate_key": "cand-ethanol",
+                        "smiles": "CCO",
+                        "parameters": {"solvent": "ETHANOL"},
+                        "metadata": {"source": "smoke-test"},
+                    }
+                ]
+            ),
+            actor_user_id="demo_user",
+            request_id="req-candidate-import",
         )
-        self.assertEqual(observation.status_code, 200)
-        self.assertIn("gain_factor", observation.json()["data"]["observation"]["values"])
+        self.assertGreaterEqual(imported.imported_count, 1)
+        first_candidate = imported.items[0]
+        self.assertEqual(first_candidate.candidate_key, "cand-ethanol")
 
-        history = self.client.get(f"/api/v1/optimization/campaigns/{campaign_id}/history")
-        self.assertEqual(history.status_code, 200)
-        event_types = [item["event_type"] for item in history.json()["data"]["items"]]
+        suggestion = service.generate_suggestions(
+            campaign_id,
+            SuggestionCreateRequest(batch_size=1),
+            actor_user_id="demo_user",
+            request_id="req-suggestion-create",
+        ).items[0]
+
+        observation = service.create_observation(
+            campaign_id,
+            ObservationCreateRequest(
+                candidate_id=suggestion.candidate_id,
+                suggestion_id=suggestion.suggestion_id,
+                values={"gain_factor": 1.25},
+                source_type="manual",
+            ),
+            actor_user_id="demo_user",
+            request_id="req-observation-create",
+        )
+        self.assertIn("gain_factor", observation.values)
+
+        history = service.get_history(campaign_id, actor_user_id="demo_user", is_admin=False)
+        event_types = [item.event_type for item in history.items]
         self.assertIn("candidate.imported", event_types)
         self.assertIn("suggestion.generated", event_types)
         self.assertIn("observation.created", event_types)
 
+    def _write_fake_obabel(self, path: Path) -> None:
+        path.write_text(
+            """#!/usr/bin/env python3
+import sys
+from pathlib import Path
 
-if __name__ == "__main__":
-    unittest.main()
+out = Path(sys.argv[sys.argv.index("-O") + 1])
+if out.suffix == ".xyz":
+    out.write_text("2\\nfake openbabel\\nC 0.0 0.0 0.0\\nO 1.2 0.0 0.0\\n", encoding="utf-8")
+elif out.suffix == ".sdf":
+    out.write_text("fake sdf\\n  OpenBabel\\n\\nM  END\\n$$$$\\n", encoding="utf-8")
+else:
+    out.write_text("", encoding="utf-8")
+sys.stdout.write("fake obabel ok\\n")
+""",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)

@@ -156,9 +156,20 @@ class LocalXtbAdapterTest(ComputationTestCase):
                 request_id="req-xtb-timeout",
             )
 
+            def timeout_xtb_after_crest(context, command, stdout_path, stderr_path):
+                if "crest" in str(command[0]):
+                    stdout_path.write_text("crest ok\n", encoding="utf-8")
+                    stderr_path.write_text("", encoding="utf-8")
+                    (context.workdir / "crest_best.xyz").write_text(
+                        "2\nfake crest best\nC 0.0 0.0 0.0\nO 1.1 0.0 0.0\n",
+                        encoding="utf-8",
+                    )
+                    return 0, False
+                raise subprocess.TimeoutExpired(cmd=["xtb"], timeout=60)
+
             with patch("app.computation_adapters.local_structure._rdkit_available", return_value=False), patch(
                 "app.computation_adapters.local_xtb.LocalXtbAdapter._run_subprocess_with_heartbeat",
-                side_effect=subprocess.TimeoutExpired(cmd=["xtb"], timeout=60),
+                side_effect=timeout_xtb_after_crest,
             ):
                 result = ComputationWorker(worker_id="worker-xtb-test").acquire_and_run_one()
         finally:
@@ -177,6 +188,7 @@ class LocalXtbAdapterTest(ComputationTestCase):
         fake_bin = self.runtime_root / f"bin-{xtb_mode}"
         fake_bin.mkdir()
         self._write_fake_obabel(fake_bin / "obabel")
+        self._write_fake_crest(fake_bin / "crest")
         self._write_fake_xtb(fake_bin / "xtb", mode=xtb_mode)
         return fake_bin
 
@@ -232,4 +244,17 @@ print("xTB failed", file=sys.stderr)
 sys.exit(2)
 """
         path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+
+    def _write_fake_crest(self, path: Path) -> None:
+        path.write_text(
+            """#!/usr/bin/env python3
+from pathlib import Path
+Path("crest_best.xyz").write_text("2\\nfake crest best\\nC 0.0 0.0 0.0\\nO 1.1 0.0 0.0\\n", encoding="utf-8")
+Path("crest_conformers.xyz").write_text("2\\nfake crest conformer\\nC 0.0 0.0 0.0\\nO 1.1 0.0 0.0\\n", encoding="utf-8")
+Path("crest.energies").write_text("-5.4321\\n", encoding="utf-8")
+print("crest ok")
+""",
+            encoding="utf-8",
+        )
         path.chmod(0o755)

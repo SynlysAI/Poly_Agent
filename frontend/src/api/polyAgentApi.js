@@ -95,7 +95,16 @@ export function getApiErrorMessage(error) {
     if (error.kind === 'canceled') return '请求已取消'
     const statusMsgMap = { 400: '参数有误', 401: '登录已过期', 403: '无权限', 404: '资源未找到', 422: '参数校验失败', 500: '服务器内部错误', 502: '上游服务异常', 504: '上游服务超时' }
     if (error.status && statusMsgMap[error.status]) {
-      return `${statusMsgMap[error.status]}：${error.message || ''}`
+      const genericMessages = new Set([
+        'internal error',
+        'invalid parameter',
+        'validation failed',
+        'resource not found',
+        'upstream service error',
+        'upstream timeout',
+      ])
+      const message = error.detail && genericMessages.has(error.message) ? error.detail : (error.message || error.detail || '')
+      return `${statusMsgMap[error.status]}：${message}`
     }
     return error.message || '服务异常'
   }
@@ -244,10 +253,6 @@ export function importCampaignCandidatesCsv(campaignId, csvText) {
   const formData = new FormData()
   formData.append('csv_text', csvText)
   return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import-csv`, formData).then(unwrapResponse)
-}
-
-export function importChemosDemoCandidates(campaignId) {
-  return apiClient.post(`/optimization/campaigns/${campaignId}/candidates:import-chemos-demo`).then(unwrapResponse)
 }
 
 export function generateSuggestion(campaignId, payload = { batch_size: 1 }) {

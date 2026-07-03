@@ -16,7 +16,7 @@ from app.services.integration_config_service import IntegrationConfigService
 
 
 class IntegrationStatusService:
-    """收集 ChemOS/worker/artifact/AiiDA/SpecLabOS 状态摘要。"""
+    """收集 worker/artifact/AiiDA/SpecLabOS/本机计算工具状态摘要。"""
 
     def get_status(self) -> dict:
         """返回集成状态列表。"""
@@ -28,9 +28,6 @@ class IntegrationStatusService:
         items = [
             self._worker_status(checked_at),
             self._artifact_status(checked_at),
-            self._chemos_status(checked_at),
-            self._port_status("chemos-streamlit", "127.0.0.1", 8501, checked_at),
-            self._port_status("chemos-sila", "127.0.0.1", 65001, checked_at),
             self._port_status("atlas", "127.0.0.1", 65100, checked_at),
             self._alchemist_status(checked_at),
             self._aiida_status(checked_at),
@@ -38,6 +35,8 @@ class IntegrationStatusService:
             self._rdkit_status(checked_at),
             self._openbabel_status(checked_at),
             self._xtb_status(checked_at),
+            self._crest_status(checked_at),
+            self._orca_status(checked_at),
             self._docker_status(checked_at),
         ]
         return {
@@ -73,10 +72,8 @@ class IntegrationStatusService:
             "status": "up",
             "checked_at": checked_at,
             "details": {
-                "worker_id": "worker-local-mock",
+                "worker_id": "worker-local-real",
                 "capabilities": [
-                    "MOCK_XTB_ONLY",
-                    "MOCK_LASER",
                     "LOCAL_STRUCTURE",
                     "LOCAL_XTB",
                     "ORCA_CHEMOS_LASER",
@@ -90,28 +87,6 @@ class IntegrationStatusService:
             "status": "up" if settings.outputs_root.exists() else "down",
             "checked_at": checked_at,
             "details": {"root": str(settings.outputs_root)},
-        }
-
-    def _chemos_status(self, checked_at: str) -> dict:
-        script = settings.project_root / "scripts" / "run_chemos.sh"
-        if not script.exists():
-            return {
-                "service": "chemos-demo",
-                "status": "not_configured",
-                "checked_at": checked_at,
-                "details": {"reason": "scripts/run_chemos.sh missing"},
-            }
-        check = self._run_script(script, "check")
-        status = self._run_script(script, "status")
-        service_status = "available" if check["returncode"] == 0 else "degraded"
-        return {
-            "service": "chemos-demo",
-            "status": service_status,
-            "checked_at": checked_at,
-            "details": {
-                "check": check,
-                "status": status,
-            },
         }
 
     def _run_script(self, script: Path, command: str) -> dict:
@@ -258,7 +233,7 @@ class IntegrationStatusService:
         }
 
     def _xtb_status(self, checked_at: str) -> dict:
-        xtb_path = shutil.which("xtb")
+        xtb_path = shutil.which(settings.xtb_executable) or shutil.which("xtb")
         version = None
         reason = None
         if xtb_path:
@@ -290,5 +265,72 @@ class IntegrationStatusService:
                 "version": version,
                 "reason": reason,
                 "capabilities": ["geometry_optimization", "single_point"] if xtb_path else [],
+            },
+        }
+
+    def _crest_status(self, checked_at: str) -> dict:
+        crest_path = shutil.which(settings.crest_executable) or shutil.which("crest")
+        return self._executable_status(
+            "crest",
+            crest_path,
+            [crest_path, "--version"] if crest_path else None,
+            checked_at,
+            ["conformer_search"] if crest_path else [],
+        )
+
+    def _orca_status(self, checked_at: str) -> dict:
+        orca_path = shutil.which(settings.orca_executable) or shutil.which("orca")
+        return self._executable_status(
+            "orca",
+            orca_path,
+            [orca_path] if orca_path else None,
+            checked_at,
+            ["dft_refinement", "excited_state"] if orca_path and settings.orca_license_available else [],
+            license_required=True,
+        )
+
+    def _executable_status(
+        self,
+        service: str,
+        executable_path: str | None,
+        command: list[str] | None,
+        checked_at: str,
+        capabilities: list[str],
+        *,
+        license_required: bool = False,
+    ) -> dict:
+        version = None
+        reason = None
+        if executable_path and command:
+            try:
+                completed = subprocess.run(
+                    command,
+                    text=True,
+                    capture_output=True,
+                    timeout=4,
+                    check=False,
+                )
+                version = (completed.stdout or completed.stderr).strip()[:300] or "detected"
+                if completed.returncode != 0 and service != "orca":
+                    reason = f"{service} probe returned {completed.returncode}"
+            except subprocess.TimeoutExpired:
+                version = "detected"
+                reason = f"{service} probe timed out"
+            except OSError as exc:
+                version = "unknown"
+                reason = str(exc)
+        else:
+            reason = f"{service} executable not found on PATH"
+        if license_required and executable_path and not settings.orca_license_available:
+            reason = "ORCA license is not marked available in backend configuration"
+        return {
+            "service": service,
+            "status": "available" if executable_path and not reason else "not_available",
+            "checked_at": checked_at,
+            "details": {
+                "path": executable_path,
+                "version": version,
+                "reason": reason,
+                "capabilities": capabilities if executable_path and not reason else [],
             },
         }
