@@ -1,0 +1,583 @@
+<script setup>
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { CircleCheck, CircleClose, Clock, Refresh, VideoPause, VideoPlay, CloseBold, SwitchButton } from '@element-plus/icons-vue'
+
+import {
+  advanceResearchRun,
+  createResearchRun,
+  failResearchRun,
+  getApiErrorMessage,
+  getResearchRun,
+  listProblemSpecs,
+  listResearchRuns,
+  pauseResearchRun,
+  resumeResearchRun,
+  startResearchRun,
+} from '../../api/polyAgentApi'
+import GateReviewDialog from './GateReviewDialog.vue'
+
+const emit = defineEmits(['research-run-updated'])
+
+const loading = ref(false)
+const actionLoading = ref('')
+const runs = ref([])
+const selectedRunId = ref('')
+const currentRun = ref(null)
+const gateDialogVisible = ref(false)
+const gateStage = ref(null)
+
+// 新建 ResearchRun 表单
+const newRunForm = ref({
+  problem_spec_id: '',
+  campaign_id: '',
+  profile_id: 'fluoropolymer',
+  max_iterations: 5,
+  batch_size: 10,
+  description: '',
+})
+const showCreateForm = ref(false)
+const problemSpecs = ref([])
+
+const stageLabels = {
+  PROBLEM_SPEC: '问题定义',
+  KNOWLEDGE_RETRIEVAL: '文献检索',
+  STRUCTURE_FEATURE: '结构表示',
+  COMPUTE_PREDICT: '计算预测',
+  RECOMMENDATION_ASK: '候选推荐',
+  HUMAN_REVIEW: '人工审核',
+  EXPERIMENT_EXECUTION: '实验执行',
+  RESULT_TELL: '结果回填',
+  MODEL_UPDATE: '模型更新',
+  ARCHIVE_LEARNING: '经验归档',
+}
+
+const profileOptions = [
+  { label: '氟基高分子', value: 'fluoropolymer' },
+  { label: '碳基高分子', value: 'carbon_polymer' },
+  { label: '硅基高分子', value: 'silicon_polymer' },
+]
+
+function statusTag(status) {
+  const map = { draft: 'info', running: 'warning', paused: 'info', blocked_approval: 'danger', completed: 'success', failed: 'danger', archived: 'info' }
+  return map[status] || 'info'
+}
+
+function statusLabel(status) {
+  const map = { draft: '草稿', running: '运行中', paused: '已暂停', blocked_approval: '等待审批', completed: '已完成', failed: '已失败', archived: '已归档' }
+  return map[status] || status
+}
+
+function stageStatusTag(status) {
+  const map = { pending: 'info', running: 'warning', blocked_approval: 'danger', completed: 'success', failed: 'danger' }
+  return map[status] || 'info'
+}
+
+function stageStatusLabel(status) {
+  const map = { pending: '待执行', running: '执行中', blocked_approval: '等待审批', completed: '已完成', failed: '已失败' }
+  return map[status] || status
+}
+
+function formatDate(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+const canStart = computed(() => currentRun.value?.status === 'draft')
+const canPause = computed(() => ['running', 'blocked_approval'].includes(currentRun.value?.status))
+const canResume = computed(() => currentRun.value?.status === 'paused')
+const canAdvance = computed(() => currentRun.value?.status === 'running')
+const canFail = computed(() => !['completed', 'failed', 'archived'].includes(currentRun.value?.status))
+
+async function loadRuns() {
+  loading.value = true
+  try {
+    const data = await listResearchRuns({ page: 1, page_size: 50 })
+    runs.value = data.items || []
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadProblemSpecs() {
+  try {
+    const data = await listProblemSpecs({ page: 1, page_size: 50 })
+    problemSpecs.value = data.items || []
+  } catch {
+    problemSpecs.value = []
+  }
+}
+
+async function selectRun(runId) {
+  selectedRunId.value = runId
+  showCreateForm.value = false
+  if (runId === '__new__') {
+    currentRun.value = null
+    showCreateForm.value = true
+    await loadProblemSpecs()
+    return
+  }
+  await loadRunDetail(runId)
+}
+
+async function loadRunDetail(runId) {
+  loading.value = true
+  try {
+    currentRun.value = await getResearchRun(runId)
+    emit('research-run-updated', currentRun.value)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleCreate() {
+  if (!newRunForm.value.problem_spec_id) {
+    ElMessage.warning('请选择 ProblemSpec')
+    return
+  }
+  actionLoading.value = 'create'
+  try {
+    const data = await createResearchRun(newRunForm.value)
+    ElMessage.success('ResearchRun 创建成功')
+    showCreateForm.value = false
+    selectedRunId.value = data.run_id
+    currentRun.value = data
+    emit('research-run-updated', data)
+    await loadRuns()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+async function handleStart() {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入启动原因', '启动 ResearchRun', {
+      confirmButtonText: '启动',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
+    })
+    actionLoading.value = 'start'
+    const data = await startResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    currentRun.value = data
+    emit('research-run-updated', data)
+    ElMessage.success('ResearchRun 已启动')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+async function handlePause() {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入暂停原因', '暂停 ResearchRun', {
+      confirmButtonText: '暂停',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
+    })
+    actionLoading.value = 'pause'
+    const data = await pauseResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    currentRun.value = data
+    emit('research-run-updated', data)
+    ElMessage.success('ResearchRun 已暂停')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+async function handleResume() {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入恢复原因', '恢复 ResearchRun', {
+      confirmButtonText: '恢复',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
+    })
+    actionLoading.value = 'resume'
+    const data = await resumeResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    currentRun.value = data
+    emit('research-run-updated', data)
+    ElMessage.success('ResearchRun 已恢复')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+async function handleAdvance() {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入推进原因', '继续推进 ResearchRun', {
+      confirmButtonText: '推进',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
+    })
+    actionLoading.value = 'advance'
+    const data = await advanceResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    currentRun.value = data
+    emit('research-run-updated', data)
+    ElMessage.success('ResearchRun 已推进')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+async function handleFail() {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入失败原因', '标记 ResearchRun 失败', {
+      confirmButtonText: '标记失败',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
+    })
+    actionLoading.value = 'fail'
+    const data = await failResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    currentRun.value = data
+    emit('research-run-updated', data)
+    ElMessage.success('ResearchRun 已标记为失败')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+function openGateReview(stage) {
+  gateStage.value = stage
+  gateDialogVisible.value = true
+}
+
+function handleGateDecided(result) {
+  gateDialogVisible.value = false
+  if (result) {
+    currentRun.value = result
+    emit('research-run-updated', result)
+  }
+}
+
+onMounted(loadRuns)
+</script>
+
+<template>
+  <div class="research-run-panel">
+    <!-- 选择/新建 -->
+    <div class="run-selector">
+      <el-select
+        v-model="selectedRunId"
+        placeholder="选择已有 ResearchRun 或新建"
+        style="width: 400px"
+        @change="selectRun"
+      >
+        <el-option label="+ 新建 ResearchRun" value="__new__" />
+        <el-option
+          v-for="run in runs"
+          :key="run.run_id"
+          :label="`ResearchRun - ${run.profile_id}`"
+          :value="run.run_id"
+        >
+          <span>ResearchRun · {{ run.profile_id }} · {{ statusLabel(run.status) }}</span>
+          <el-tag size="small" :type="statusTag(run.status)" style="margin-left:8px">{{ statusLabel(run.status) }}</el-tag>
+        </el-option>
+      </el-select>
+      <el-button :icon="Refresh" :loading="loading" @click="loadRuns">刷新</el-button>
+    </div>
+
+    <!-- 创建表单 -->
+    <div v-if="showCreateForm" class="create-form">
+      <h4>新建 AutoResearch ResearchRun</h4>
+      <el-form label-position="top">
+        <el-form-item label="ProblemSpec" required>
+          <el-select v-model="newRunForm.problem_spec_id" placeholder="选择研发任务定义" style="width:100%">
+            <el-option
+              v-for="spec in problemSpecs"
+              :key="spec.problem_spec_id"
+              :label="spec.name"
+              :value="spec.problem_spec_id"
+            />
+          </el-select>
+        </el-form-item>
+        <div class="form-row">
+          <el-form-item label="材料 Profile" style="flex:1">
+            <el-select v-model="newRunForm.profile_id">
+              <el-option v-for="item in profileOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="最大迭代次数" style="flex:1">
+            <el-input-number v-model="newRunForm.max_iterations" :min="1" :max="100" />
+          </el-form-item>
+          <el-form-item label="批次大小" style="flex:1">
+            <el-input-number v-model="newRunForm.batch_size" :min="1" :max="100" />
+          </el-form-item>
+        </div>
+        <el-form-item label="描述">
+          <el-input v-model="newRunForm.description" type="textarea" :rows="2" placeholder="简要描述本次 AutoResearch 运行" />
+        </el-form-item>
+        <el-button type="primary" :loading="actionLoading === 'create'" @click="handleCreate">创建草稿</el-button>
+      </el-form>
+    </div>
+
+    <!-- ResearchRun 详情 -->
+    <div v-if="currentRun" class="run-detail" v-loading="loading">
+      <!-- 基本信息 -->
+      <div class="detail-top">
+        <div>
+          <h4>{{ currentRun.run_id }}</h4>
+          <span class="run-meta">Profile: {{ currentRun.profile_id }} · Batch: {{ currentRun.batch_size }}</span>
+        </div>
+        <div class="detail-actions">
+          <el-tag size="large" :type="statusTag(currentRun.status)">{{ statusLabel(currentRun.status) }}</el-tag>
+          <el-button v-if="canStart" type="primary" :icon="VideoPlay" :loading="actionLoading === 'start'" @click="handleStart">启动</el-button>
+          <el-button v-if="canPause" :icon="VideoPause" :loading="actionLoading === 'pause'" @click="handlePause">暂停</el-button>
+          <el-button v-if="canResume" type="primary" :icon="VideoPlay" :loading="actionLoading === 'resume'" @click="handleResume">恢复</el-button>
+          <el-button v-if="canAdvance" :icon="SwitchButton" :loading="actionLoading === 'advance'" @click="handleAdvance">推进</el-button>
+          <el-button v-if="canFail" type="danger" :icon="CloseBold" :loading="actionLoading === 'fail'" @click="handleFail">标记失败</el-button>
+        </div>
+      </div>
+
+      <el-descriptions :column="3" border size="small" style="margin:14px 0">
+        <el-descriptions-item label="ProblemSpec">{{ currentRun.problem_spec_id }}</el-descriptions-item>
+        <el-descriptions-item label="Campaign">{{ currentRun.campaign_id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="当前阶段">{{ stageLabels[currentRun.current_stage] || currentRun.current_stage || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="创建者">{{ currentRun.created_by }}</el-descriptions-item>
+        <el-descriptions-item label="创建时间">{{ formatDate(currentRun.created_at) }}</el-descriptions-item>
+        <el-descriptions-item label="更新时间">{{ formatDate(currentRun.updated_at) }}</el-descriptions-item>
+      </el-descriptions>
+
+      <!-- Stage 时间线 -->
+      <section class="stage-section">
+        <h4>阶段推进进度</h4>
+        <div v-if="currentRun.stage_runs?.length" class="stage-timeline">
+          <div
+            v-for="(stage, idx) in currentRun.stage_runs"
+            :key="stage.stage_run_id"
+            class="stage-item"
+          >
+            <div class="stage-marker">
+              <el-icon v-if="stage.status === 'completed'" class="stage-icon-done"><CircleCheck /></el-icon>
+              <el-icon v-else-if="stage.status === 'failed'" class="stage-icon-fail"><CircleClose /></el-icon>
+              <el-icon v-else-if="stage.status === 'blocked_approval'" class="stage-icon-pending"><Clock /></el-icon>
+              <span v-else class="stage-dot" :class="`dot-${stage.status}`" />
+              <div v-if="idx < currentRun.stage_runs.length - 1" class="stage-line" :class="stage.status === 'completed' ? 'line-done' : ''" />
+            </div>
+            <div class="stage-info">
+              <strong>{{ stageLabels[stage.stage_key] || stage.stage_key }}</strong>
+              <el-tag size="small" :type="stageStatusTag(stage.status)">{{ stageStatusLabel(stage.status) }}</el-tag>
+              <div v-if="stage.status === 'blocked_approval'" style="margin-top:6px">
+                <el-button type="warning" size="small" @click="openGateReview(stage)">审批</el-button>
+              </div>
+              <div v-if="stage.decisions?.length" class="stage-decisions">
+                <div v-for="d in stage.decisions" :key="`${d.stage_key}-${d.decided_at}`" class="decision-item">
+                  <el-tag size="small" :type="d.decision === 'approved' ? 'success' : 'danger'">
+                    {{ d.decision === 'approved' ? '已批准' : '已拒绝' }}
+                  </el-tag>
+                  <span>{{ d.reason }} · {{ formatDate(d.decided_at) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-hint">
+          暂无阶段运行记录
+        </div>
+      </section>
+
+      <!-- 关联 AlgorithmRun -->
+      <section v-if="currentRun.linked_algorithm_runs?.length" class="linked-section">
+        <h4>关联算法运行 ({{ currentRun.linked_algorithm_runs.length }})</h4>
+        <div class="linked-list">
+          <el-tag v-for="id in currentRun.linked_algorithm_runs" :key="id" size="small" style="margin:2px">{{ id }}</el-tag>
+        </div>
+      </section>
+    </div>
+
+    <!-- Gate 审批 Dialog -->
+    <GateReviewDialog
+      :visible="gateDialogVisible"
+      :research-run-id="currentRun?.run_id || ''"
+      :stage-run="gateStage"
+      @decided="handleGateDecided"
+    />
+  </div>
+</template>
+
+<style scoped>
+.research-run-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.run-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.create-form {
+  padding: 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #f8fbff;
+}
+
+.create-form h4 {
+  margin: 0 0 12px;
+}
+
+.form-row {
+  display: flex;
+  gap: 16px;
+}
+
+.detail-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.detail-top h4 {
+  margin: 0;
+  font-family: var(--app-mono-font);
+  font-size: 15px;
+}
+
+.run-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stage-section h4,
+.linked-section h4 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.stage-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.stage-item {
+  display: flex;
+  gap: 14px;
+  min-height: 50px;
+}
+
+.stage-marker {
+  width: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+}
+
+.stage-marker .el-icon {
+  font-size: 20px;
+}
+
+.stage-icon-done {
+  color: #16a34a;
+}
+
+.stage-icon-fail {
+  color: #dc2626;
+}
+
+.stage-icon-pending {
+  color: #d97706;
+}
+
+.stage-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.dot-pending { background: #d1d5db; }
+.dot-running { background: #3b82f6; }
+.dot-blocked_approval { background: #d97706; }
+.dot-completed { background: #16a34a; }
+.dot-failed { background: #dc2626; }
+
+.stage-line {
+  flex: 1;
+  width: 2px;
+  background: #e5e7eb;
+  min-height: 20px;
+}
+
+.line-done {
+  background: #16a34a;
+}
+
+.stage-info {
+  flex: 1;
+  padding-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stage-info strong {
+  font-size: 14px;
+}
+
+.stage-decisions {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.decision-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--app-ink-muted);
+}
+
+.linked-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.empty-hint {
+  color: var(--app-ink-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 16px 0;
+}
+</style>

@@ -24,6 +24,10 @@ COLLECTION_NAMES = [
     "optimization_observations",
     "service_integrations",
     "audit_events",
+    "research_problem_specs",
+    "algorithm_registry_entries",
+    "algorithm_runs",
+    "research_runs",
 ]
 
 

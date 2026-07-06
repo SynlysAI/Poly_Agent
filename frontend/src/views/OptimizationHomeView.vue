@@ -1,10 +1,20 @@
 <script setup>
 import { useRouter } from 'vue-router'
-import { Connection, DataAnalysis, MagicStick, SetUp } from '@element-plus/icons-vue'
+import { Connection, DataAnalysis, MagicStick, SetUp, Star } from '@element-plus/icons-vue'
 
 const router = useRouter()
 
 const entries = [
+  {
+    key: 'research-engine',
+    title: 'ResearchEngine 研发引擎',
+    category: '智能研发',
+    description: '定义材料研发任务、人工调用算法、启动 AutoResearch 自动编排并审批阶段门禁。',
+    icon: Star,
+    actionText: '进入研发引擎',
+    route: '/optimization',
+    metrics: ['ProblemSpec', 'AlgorithmRun', 'Stage/Gate'],
+  },
   {
     key: 'campaigns',
     title: 'Campaign 闭环管理',
@@ -119,7 +129,7 @@ function openEntry(entry) {
 
 .entry-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -178,6 +188,12 @@ function openEntry(entry) {
   gap: 8px;
   flex-wrap: wrap;
   margin: 16px 0;
+}
+
+@media (max-width: 1024px) {
+  .entry-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {

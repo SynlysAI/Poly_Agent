@@ -416,12 +416,13 @@ class ComputationService:
         )
         self._audit(
             "computation.status_changed",
-            actor_user_id=worker_id,
+            actor_user_id=run.created_by,
             request_id=None,
             entity_type="computation_run",
             entity_id=run.run_id,
             before={"status": "queued"},
             after={"status": "running"},
+            actor_role="system",
         )
         return self.get_run(run.run_id)
 
@@ -501,12 +502,13 @@ class ComputationService:
             failed_run_ids.append(run_id)
             self._audit(
                 "computation.stale_failed",
-                actor_user_id=actor_user_id,
+                actor_user_id=run_doc.get("created_by", actor_user_id),
                 request_id=None,
                 entity_type="computation_run",
                 entity_id=run_id,
                 before={"status": "running"},
                 after={"status": "failed", "error_code": "WORKER_HEARTBEAT_STALE"},
+                actor_role="system",
             )
         return failed_run_ids
 
@@ -589,12 +591,13 @@ class ComputationService:
         )
         self._audit(
             "computation.status_changed",
-            actor_user_id=worker_id,
+            actor_user_id=run.created_by,
             request_id=None,
             entity_type="computation_run",
             entity_id=run.run_id,
             before={"status": run.status},
             after={"status": adapter_result.status},
+            actor_role="system",
         )
         return self.get_run(run.run_id)
 
@@ -632,11 +635,12 @@ class ComputationService:
             artifacts.append(artifact)
             self._audit(
                 "artifact.registered",
-                actor_user_id=actor_worker_id,
+                actor_user_id=run.created_by,
                 request_id=None,
                 entity_type="computation_artifact",
                 entity_id=artifact.artifact_id,
                 related_ids={"run_id": run.run_id},
+                actor_role="system",
             )
         return [artifact.artifact_id for artifact in artifacts]
 
@@ -706,14 +710,29 @@ class ComputationService:
         before: dict | None = None,
         after: dict | None = None,
         related_ids: dict | None = None,
+        actor_role: str | None = None,
     ) -> None:
-        """写审计事件。"""
+        """写审计事件。
+
+        Args:
+            event_type: 事件类型。
+            actor_user_id: 操作人 ID。
+            request_id: 关联的 HTTP 请求 ID。
+            entity_type: 实体类型。
+            entity_id: 实体 ID。
+            before: 变更前快照。
+            after: 变更后快照。
+            related_ids: 关联实体 ID。
+            actor_role: 操作人角色，显式传入时直接使用；未传入时按 actor_user_id 前缀推导。
+        """
+        if actor_role is None:
+            actor_role = "system" if actor_user_id.startswith("worker-") else "user"
         AuditEventRepository.append(
             {
                 "event_id": self._new_id("audit"),
                 "event_type": event_type,
                 "actor_user_id": actor_user_id,
-                "actor_role": "system" if actor_user_id.startswith("worker-") else "user",
+                "actor_role": actor_role,
                 "request_id": request_id,
                 "entity_type": entity_type,
                 "entity_id": entity_id,

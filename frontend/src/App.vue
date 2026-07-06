@@ -44,6 +44,7 @@ const HEADER_SECTION_ROUTE_MAP = {
   '任务中心': '/tasks/center',
   '计算智能': '/tasks/submit',
   '湿实验优化': '/optimization',
+  '研发引擎': '/research-engine',
   '工具服务': '/tools',
   '系统管理': '/database',
 }
@@ -220,6 +221,10 @@ onBeforeUnmount(() => {
           <el-menu-item index="/optimization">
             <el-icon><Aim /></el-icon>
             <span>湿实验优化</span>
+          </el-menu-item>
+          <el-menu-item index="/research-engine">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>研发引擎</span>
           </el-menu-item>
           <el-menu-item index="/dialogue">
             <el-icon><ChatLineRound /></el-icon>

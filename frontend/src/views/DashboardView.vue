@@ -4,13 +4,15 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { View } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, getIntegrationStatus, listCampaigns, listComputations } from '../api/polyAgentApi'
-import { mapCampaignToGlobalTask, mapComputationRunToGlobalTask } from '../tasks/taskModules'
+import { getApiErrorMessage, getIntegrationStatus, listAlgorithmRuns, listCampaigns, listComputations, listResearchRuns } from '../api/polyAgentApi'
+import { mapAlgorithmRunToGlobalTask, mapCampaignToGlobalTask, mapComputationRunToGlobalTask, mapResearchRunToGlobalTask } from '../tasks/taskModules'
 
 const router = useRouter()
 const loading = ref(false)
 const computationRows = ref([])
 const campaignRows = ref([])
+const algorithmRuns = ref([])
+const researchRuns = ref([])
 const integrationItems = ref([])
 const computationsTotal = ref(0)
 const campaignsTotal = ref(0)
@@ -19,17 +21,21 @@ const stats = computed(() => {
   const allItems = [
     ...computationRows.value.map(mapComputationRunToGlobalTask),
     ...campaignRows.value.map(mapCampaignToGlobalTask),
+    ...algorithmRuns.value.map(mapAlgorithmRunToGlobalTask),
+    ...researchRuns.value.map(mapResearchRunToGlobalTask),
   ]
   const runningCount = allItems.filter((item) => item.status === 'running').length
   const completedCount = allItems.filter((item) => item.status === 'completed').length
+  const blockedCount = allItems.filter((item) => item.status === 'blocked_approval').length
   const integrationsUp = integrationItems.value.filter(
     (item) => item.status === 'up' || item.status === 'available',
   ).length
 
   return [
     { title: '总任务数', value: String(computationsTotal.value + campaignsTotal.value), color: '#3b82f6' },
-    { title: '已完成任务', value: String(completedCount), color: '#16a34a' },
-    { title: '运行中任务', value: String(runningCount), color: '#d97706' },
+    { title: '已完成', value: String(completedCount), color: '#16a34a' },
+    { title: '运行中', value: String(runningCount), color: '#d97706' },
+    { title: '待审批', value: String(blockedCount), color: '#d97706' },
     { title: '模型服务', value: String(integrationsUp), color: '#7c3aed' },
   ]
 })
@@ -38,13 +44,15 @@ const recentTasks = computed(() =>
   [
     ...computationRows.value.map(mapComputationRunToGlobalTask),
     ...campaignRows.value.map(mapCampaignToGlobalTask),
+    ...algorithmRuns.value.map(mapAlgorithmRunToGlobalTask),
+    ...researchRuns.value.map(mapResearchRunToGlobalTask),
   ]
     .sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
     .slice(0, 10),
 )
 
 function getStatusTag(status) {
-  const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', draft: 'info', paused: 'info', archived: 'info' }
+  const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', draft: 'info', paused: 'info', archived: 'info', blocked_approval: 'danger' }
   return map[status] || 'info'
 }
 
@@ -64,13 +72,17 @@ function goToTask(task) {
 async function loadDashboardData() {
   loading.value = true
   try {
-    const [computations, campaigns, status] = await Promise.all([
+    const [computations, campaigns, algoRuns, researchRunsData, status] = await Promise.all([
       listComputations({ page: 1, page_size: 5 }).catch(() => ({ items: [], total: 0 })),
       listCampaigns({ page: 1, page_size: 5 }).catch(() => ({ items: [], total: 0 })),
+      listAlgorithmRuns({ page: 1, page_size: 5 }).catch(() => ({ items: [] })),
+      listResearchRuns({ page: 1, page_size: 5 }).catch(() => ({ items: [] })),
       getIntegrationStatus().catch(() => ({ items: [] })),
     ])
     computationRows.value = computations.items || []
     campaignRows.value = campaigns.items || []
+    algorithmRuns.value = algoRuns.items || []
+    researchRuns.value = researchRunsData.items || []
     integrationItems.value = status.items || []
     computationsTotal.value = computations.total || 0
     campaignsTotal.value = campaigns.total || 0
@@ -138,6 +150,7 @@ onMounted(() => {
           <el-button @click="$router.push('/tasks/center')" style="width:100%">查看任务中心</el-button>
           <el-button @click="$router.push('/dialogue')" style="width:100%">问答对话</el-button>
           <el-button @click="$router.push('/tools')" style="width:100%">工具服务</el-button>
+          <el-button type="primary" @click="$router.push('/research-engine')" style="width:100%">ResearchEngine 研发引擎</el-button>
         </div>
       </div>
     </div>

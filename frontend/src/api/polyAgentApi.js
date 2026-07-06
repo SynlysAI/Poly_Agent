@@ -312,3 +312,95 @@ export function chatWithLLM(messages) {
 export function suggestExperiments(payload) {
   return apiClient.post('/llm/suggest-experiments', payload).then(r => r.data)
 }
+
+// ── ResearchEngine API ──
+
+// ── ProblemSpec ──
+
+export function createProblemSpec(payload) {
+  return apiClient.post('/research-engine/problem-specs', payload).then(unwrapResponse)
+}
+
+export function listProblemSpecs(params = {}) {
+  return apiClient.get('/research-engine/problem-specs', { params }).then(unwrapResponse)
+}
+
+export function getProblemSpec(problemSpecId) {
+  return apiClient.get(`/research-engine/problem-specs/${problemSpecId}`).then(unwrapResponse)
+}
+
+export function updateProblemSpec(problemSpecId, payload) {
+  return apiClient.patch(`/research-engine/problem-specs/${problemSpecId}`, payload).then(unwrapResponse)
+}
+
+export function freezeProblemSpec(problemSpecId) {
+  return apiClient.post(`/research-engine/problem-specs/${problemSpecId}/freeze`).then(unwrapResponse)
+}
+
+// ── AlgorithmRegistry ──
+
+export function listAlgorithms(params = {}) {
+  return apiClient.get('/research-engine/algorithms', { params }).then(unwrapResponse)
+}
+
+export function getAlgorithm(algorithmId) {
+  return apiClient.get(`/research-engine/algorithms/${algorithmId}`).then(unwrapResponse)
+}
+
+// ── AlgorithmRun ──
+
+export function createAlgorithmRun(payload) {
+  return apiClient.post('/research-engine/algorithm-runs', payload).then(unwrapResponse)
+}
+
+export function listAlgorithmRuns(params = {}) {
+  return apiClient.get('/research-engine/algorithm-runs', { params }).then(unwrapResponse)
+}
+
+export function getAlgorithmRun(runId) {
+  return apiClient.get(`/research-engine/algorithm-runs/${runId}`).then(unwrapResponse)
+}
+
+// ── ResearchRun ──
+
+export function createResearchRun(payload) {
+  return apiClient.post('/research-engine/research-runs', payload).then(unwrapResponse)
+}
+
+export function listResearchRuns(params = {}) {
+  return apiClient.get('/research-engine/research-runs', { params }).then(unwrapResponse)
+}
+
+export function getResearchRun(runId) {
+  return apiClient.get(`/research-engine/research-runs/${runId}`).then(unwrapResponse)
+}
+
+export function startResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/start`, payload).then(unwrapResponse)
+}
+
+export function advanceResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/advance`, payload).then(unwrapResponse)
+}
+
+export function pauseResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/pause`, payload).then(unwrapResponse)
+}
+
+export function resumeResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/resume`, payload).then(unwrapResponse)
+}
+
+export function failResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/fail`, payload).then(unwrapResponse)
+}
+
+// ── Stage/Gate 审批 ──
+
+export function approveStage(runId, stageRunId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/approve`, payload).then(unwrapResponse)
+}
+
+export function rejectStage(runId, stageRunId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/reject`, payload).then(unwrapResponse)
+}

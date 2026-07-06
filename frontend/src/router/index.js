@@ -16,6 +16,7 @@ import TaskCenterView from '../views/TaskCenterView.vue'
 import TaskSubmitView from '../views/TaskSubmitView.vue'
 import ToolServicesView from '../views/ToolServicesView.vue'
 import AlchemistToolView from '../views/AlchemistToolView.vue'
+import ResearchEngineView from '../views/ResearchEngineView.vue'
 
 const AUTH_PUBLIC_PATHS = new Set(['/login', '/register'])
 
@@ -35,6 +36,7 @@ const routes = [
   { path: '/dialogue', component: DialogueView, meta: { title: '问答对话' } },
   { path: '/tools', component: ToolServicesView, meta: { section: '工具服务', title: '工具列表' } },
   { path: '/tools/alchemist', component: AlchemistToolView, meta: { section: '工具服务', title: '实验设计与优化' } },
+  { path: '/research-engine', component: ResearchEngineView, meta: { section: '研发引擎', title: 'ResearchEngine' } },
   { path: '/database', component: DatabaseManagementView, meta: { requiresRole: 'admin', section: '系统管理', title: '数据库管理' } },
   { path: '/:pathMatch(.*)*', component: NotFoundView, meta: { public: true, title: '页面不存在' } },
 ]
