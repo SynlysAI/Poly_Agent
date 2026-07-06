@@ -155,6 +155,12 @@ export function disableInviteCode(inviteId) {
   return apiClient.patch(`/admin/invite-codes/${inviteId}/disable`).then(unwrapResponse)
 }
 
+// ── 审计 API ──
+
+export function listAuditEvents(params = {}) {
+  return apiClient.get('/audit-events', { params }).then(unwrapResponse)
+}
+
 // ── 计算智能 API ──
 
 export function createComputation(payload) {

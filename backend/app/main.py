@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -111,6 +113,45 @@ def _map_http_error(status_code: int) -> tuple[int, str]:
     return 50001, "internal error"
 
 
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
+    """Startup: 启动后台 stale-run reaper；Shutdown: 取消 reaper 任务。"""
+    stop_event = asyncio.Event()
+    logger_reaper = get_logger("poly_agent.stale_reaper")
+
+    async def stale_reaper_loop() -> None:
+        logger_reaper.info(
+            "stale-run reaper started (interval=%ds, heartbeat_threshold=%ds, wallclock_factor=%.1f)",
+            settings.stale_reaper_interval_seconds,
+            settings.stale_run_heartbeat_seconds,
+            settings.stale_run_wallclock_safety_factor,
+        )
+        while not stop_event.is_set():
+            try:
+                await asyncio.sleep(settings.stale_reaper_interval_seconds)
+                if stop_event.is_set():
+                    break
+                from app.services.computation_service import ComputationService
+
+                service = ComputationService()
+                failed = service.fail_stale_running_runs(actor_user_id="system-reaper")
+                if failed:
+                    logger_reaper.info("stale-run reaper: failed %d runs: %s", len(failed), failed)
+            except Exception:
+                logger_reaper.exception("stale-run reaper loop error")
+
+    reaper_task = asyncio.create_task(stale_reaper_loop())
+    try:
+        yield
+    finally:
+        stop_event.set()
+        reaper_task.cancel()
+        try:
+            await reaper_task
+        except asyncio.CancelledError:
+            logger_reaper.info("stale-run reaper stopped")
+
+
 def create_app() -> FastAPI:
     """创建 FastAPI 应用实例。"""
     global APP_LOGGER
@@ -120,6 +161,7 @@ def create_app() -> FastAPI:
         title="Poly Agent Backend",
         version="0.1.0",
         description="Poly Agent 高分子材料性能预测平台。",
+        lifespan=app_lifespan,
     )
     app.add_middleware(
         CORSMiddleware,

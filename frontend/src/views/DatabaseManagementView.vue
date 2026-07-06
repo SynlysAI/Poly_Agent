@@ -1,70 +1,258 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import {
+  Cpu, Document, Monitor, Refresh, SetUp,
+} from '@element-plus/icons-vue'
 
-const activeCollection = ref('polymer_samples')
+import {
+  getApiErrorMessage,
+  getIntegrationStatus,
+  listAuditEvents,
+  listCampaigns,
+  listComputations,
+} from '../api/polyAgentApi'
 
-const collections = [
-  { key: 'polymer_samples', name: '聚合物样品', count: 1286 },
-  { key: 'prediction_results', name: '预测结果', count: 956 },
-  { key: 'experiment_data', name: '实验数据', count: 420 },
-  { key: 'literature_data', name: '文献数据', count: 318 },
+const activeSection = ref('audit-events')
+const loading = ref(false)
+const sectionCache = ref({})
+
+const activeData = computed(() => sectionCache.value[activeSection.value] || { items: [], total: 0 })
+
+function sectionCount(key) {
+  const entry = sectionCache.value[key]
+  return entry ? entry.total : '-'
+}
+
+const sections = [
+  { key: 'audit-events', name: '审计事件', icon: Document },
+  { key: 'computations', name: '计算任务', icon: Cpu },
+  { key: 'campaigns', name: '优化任务', icon: SetUp },
+  { key: 'services', name: '服务状态', icon: Monitor },
 ]
 
-const sampleColumns = [
-  { prop: 'sample_id', label: '样品编号', minWidth: 140 },
-  { prop: 'name', label: '名称', minWidth: 120 },
-  { prop: 'material_type', label: '材料类型', minWidth: 100 },
-  { prop: 'mw', label: '分子量 (Mw)', minWidth: 120 },
-  { prop: 'pdi', label: 'PDI', minWidth: 80 },
-  { prop: 'source', label: '数据来源', minWidth: 100 },
-  { prop: 'created_at', label: '录入时间', minWidth: 140 },
+const sectionTitle = computed(() => sections.find((s) => s.key === activeSection.value)?.name || '')
+
+// ── Column definitions per section ──
+
+const auditEventColumns = [
+  { prop: 'event_type', label: '事件类型', minWidth: 130 },
+  { prop: 'actor_user_id', label: '操作人', minWidth: 150 },
+  { prop: 'entity_type', label: '实体类型', minWidth: 120 },
+  { prop: 'entity_id', label: '实体 ID', minWidth: 180 },
 ]
 
-const sampleData = [
-  { sample_id: 'PE-2026-001', name: 'HDPE-Grade-A', material_type: 'PE', mw: '124,500', pdi: '2.1', source: '实验', created_at: '2026-06-15' },
-  { sample_id: 'PP-2026-015', name: 'PP-Copolymer-B', material_type: 'PP', mw: '89,200', pdi: '3.2', source: '实验', created_at: '2026-06-20' },
-  { sample_id: 'PS-2026-008', name: 'PS-Standard', material_type: 'PS', mw: '210,000', pdi: '1.05', source: '文献', created_at: '2026-05-28' },
+const computationColumns = [
+  { prop: 'run_id', label: 'Run ID', minWidth: 190 },
+  { prop: 'workflow_type', label: 'Workflow', minWidth: 140 },
+  { prop: 'engine', label: 'Engine', minWidth: 90 },
+  { prop: 'status', label: '状态', minWidth: 100 },
 ]
+
+const campaignColumns = [
+  { prop: 'campaign_id', label: 'Campaign ID', minWidth: 210 },
+  { prop: 'name', label: '名称', minWidth: 200 },
+  { prop: 'status', label: '状态', minWidth: 100 },
+  { prop: 'planner_type', label: 'Planner', minWidth: 110 },
+]
+
+const serviceColumns = [
+  { prop: 'service', label: 'Service', minWidth: 180 },
+  { prop: 'status', label: '状态', minWidth: 110 },
+]
+
+const tableColumns = computed(() => {
+  const map = {
+    'audit-events': auditEventColumns,
+    computations: computationColumns,
+    campaigns: campaignColumns,
+    services: serviceColumns,
+  }
+  return map[activeSection.value] || []
+})
+
+// ── Helpers ──
+
+function formatDate(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+function statusTag(status) {
+  const map = { active: 'success', disabled: 'danger', used_up: 'info', expired: 'warning', up: 'success', available: 'success', completed: 'success', running: 'warning', failed: 'danger', queued: 'info', cancelled: 'info', draft: 'info', paused: 'info', archived: 'info', degraded: 'warning', not_configured: 'info', not_available: 'info', unknown: 'info', down: 'danger' }
+  return map[status] || 'info'
+}
+
+function statusLabel(status) {
+  const map = { active: '正常', disabled: '已禁用', used_up: '已用完', expired: '已过期', up: '可用', available: '可用', not_configured: '未配置', not_available: '未安装', degraded: '异常', down: '不可用', unknown: '未知' }
+  return map[status] || status
+}
+
+function truncate(str, max) {
+  if (!str) return '-'
+  return String(str).length > max ? String(str).slice(0, max) + '…' : str
+}
+
+// ── Data loading ──
+
+async function loadSectionData() {
+  loading.value = true
+  try {
+    const key = activeSection.value
+    switch (key) {
+      case 'audit-events': {
+        const res = await listAuditEvents({ page: 1, page_size: 50 })
+        sectionCache.value = { ...sectionCache.value, [key]: { items: res.items || [], total: res.total || 0 } }
+        break
+      }
+      case 'computations': {
+        const res = await listComputations({ page: 1, page_size: 50 })
+        sectionCache.value = { ...sectionCache.value, [key]: { items: res.items || [], total: res.total || 0 } }
+        break
+      }
+      case 'campaigns': {
+        const res = await listCampaigns({ page: 1, page_size: 50 })
+        sectionCache.value = { ...sectionCache.value, [key]: { items: res.items || [], total: res.total || 0 } }
+        break
+      }
+      case 'services': {
+        const res = await getIntegrationStatus()
+        sectionCache.value = { ...sectionCache.value, [key]: { items: res.items || [], total: res.items?.length || 0 } }
+        break
+      }
+    }
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    loading.value = false
+  }
+}
+
+// ── Actions ──
+
+watch(activeSection, () => {
+  loadSectionData()
+})
+
+onMounted(() => {
+  loadSectionData()
+})
 </script>
 
 <template>
   <div style="display:flex;gap:16px;height:calc(100vh - 100px)">
+    <!-- Left sidebar -->
     <div class="panel" style="width:220px;flex-shrink:0;display:flex;flex-direction:column">
       <div class="panel-header">
-        <h3 class="panel-title">数据集</h3>
+        <h3 class="panel-title">系统管理</h3>
       </div>
       <div class="panel-body" style="flex:1;overflow-y:auto;padding:8px">
         <div
-          v-for="col in collections"
-          :key="col.key"
-          @click="activeCollection = col.key"
+          v-for="section in sections"
+          :key="section.key"
+          @click="activeSection = section.key"
           :style="{
             padding: '10px 12px',
             borderRadius: 'var(--app-radius-sm)',
             cursor: 'pointer',
             marginBottom: '4px',
-            background: activeCollection === col.key ? 'var(--app-primary-light)' : 'transparent',
-            color: activeCollection === col.key ? 'var(--app-primary)' : 'var(--app-ink-body)',
-            fontWeight: activeCollection === col.key ? '600' : '400',
+            background: activeSection === section.key ? 'var(--app-primary-light)' : 'transparent',
+            color: activeSection === section.key ? 'var(--app-primary)' : 'var(--app-ink-body)',
+            fontWeight: activeSection === section.key ? '600' : '400',
             fontSize: '13px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
           }"
         >
-          <div>{{ col.name }}</div>
-          <div style="font-size:11px;margin-top:2px;opacity:0.7">{{ col.count.toLocaleString() }} 条记录</div>
+          <el-icon><component :is="section.icon" /></el-icon>
+          <div style="flex:1">
+            <div>{{ section.name }}</div>
+            <div style="font-size:11px;margin-top:2px;opacity:0.7">{{ sectionCount(section.key) }} 条记录</div>
+          </div>
         </div>
       </div>
     </div>
+
+    <!-- Right content area -->
     <div class="panel" style="flex:1;display:flex;flex-direction:column">
-      <div class="panel-header">
-        <h3 class="panel-title">数据浏览</h3>
+      <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between">
+        <h3 class="panel-title">{{ sectionTitle }}</h3>
         <div style="display:flex;gap:8px">
-          <el-input size="small" placeholder="搜索..." style="width:200px" />
-          <el-button size="small" type="primary">查询</el-button>
+          <el-button size="small" :icon="Refresh" :loading="loading" @click="loadSectionData">刷新</el-button>
         </div>
       </div>
       <div class="panel-body" style="flex:1;overflow:auto">
-        <el-table :data="sampleData" :columns="sampleColumns" stripe style="width:100%">
-          <el-table-column v-for="col in sampleColumns" :key="col.prop" :prop="col.prop" :label="col.label" :min-width="col.minWidth" />
+        <!-- Audit event table -->
+        <el-table v-if="activeSection === 'audit-events'" :data="activeData.items" v-loading="loading" stripe>
+          <el-table-column prop="event_type" label="事件类型" min-width="130" />
+          <el-table-column prop="actor_user_id" label="操作人" min-width="170" />
+          <el-table-column prop="entity_type" label="实体类型" min-width="120" />
+          <el-table-column prop="entity_id" label="实体 ID" min-width="220" />
+          <el-table-column prop="request_id" label="Request ID" min-width="150">
+            <template #default="{ row }">{{ truncate(row.request_id, 16) }}</template>
+          </el-table-column>
+          <el-table-column label="时间" min-width="170">
+            <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
+          </el-table-column>
+        </el-table>
+
+        <!-- Computation table -->
+        <el-table v-else-if="activeSection === 'computations'" :data="activeData.items" v-loading="loading" stripe>
+          <el-table-column prop="run_id" label="Run ID" min-width="200" />
+          <el-table-column label="分子" min-width="180">
+            <template #default="{ row }">{{ row.molecule?.name || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="workflow_type" label="Workflow" min-width="140" />
+          <el-table-column prop="engine" label="Engine" min-width="90" />
+          <el-table-column label="状态" min-width="100">
+            <template #default="{ row }">
+              <el-tag size="small" :type="statusTag(row.status)">{{ row.status }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="创建时间" min-width="170">
+            <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column prop="created_by" label="创建人" min-width="140" />
+        </el-table>
+
+        <!-- Campaign table -->
+        <el-table v-else-if="activeSection === 'campaigns'" :data="activeData.items" v-loading="loading" stripe>
+          <el-table-column prop="campaign_id" label="Campaign ID" min-width="220" />
+          <el-table-column prop="name" label="名称" min-width="200" />
+          <el-table-column label="状态" min-width="100">
+            <template #default="{ row }">
+              <el-tag size="small" :type="statusTag(row.status)">{{ row.status }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="planner_type" label="Planner" min-width="110" />
+          <el-table-column label="目标" min-width="180">
+            <template #default="{ row }">{{ row.objectives?.map((o) => o.name).join(', ') || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="创建时间" min-width="170">
+            <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column prop="created_by" label="创建人" min-width="140" />
+        </el-table>
+
+        <!-- Services table -->
+        <el-table v-else-if="activeSection === 'services'" :data="activeData.items" v-loading="loading" stripe>
+          <el-table-column prop="service" label="Service" min-width="200" />
+          <el-table-column label="状态" min-width="110">
+            <template #default="{ row }">
+              <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="详情" min-width="220">
+            <template #default="{ row }">
+              <span style="font-size:12px;color:var(--app-ink-muted)">{{ row.details?.version || row.details?.path || row.details?.url || row.details?.root || row.details?.reason || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="检查时间" min-width="170">
+            <template #default="{ row }">{{ formatDate(row.checked_at) }}</template>
+          </el-table-column>
         </el-table>
       </div>
     </div>

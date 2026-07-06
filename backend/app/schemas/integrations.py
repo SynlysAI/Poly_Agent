@@ -12,8 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 
 IntegrationServiceKey = Literal[
     "speclabos",
-    "aiida",
     "atlas",
+    "alchemist-backend",
     "computation-worker",
     "artifact-store",
 ]

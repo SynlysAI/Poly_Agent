@@ -16,7 +16,7 @@ from app.services.integration_config_service import IntegrationConfigService
 
 
 class IntegrationStatusService:
-    """收集 worker/artifact/AiiDA/SpecLabOS/本机计算工具状态摘要。"""
+    """收集 worker/artifact/SpecLabOS/本机计算工具状态摘要。"""
 
     def get_status(self) -> dict:
         """返回集成状态列表。"""
@@ -30,7 +30,6 @@ class IntegrationStatusService:
             self._artifact_status(checked_at),
             self._port_status("atlas", "127.0.0.1", 65100, checked_at),
             self._alchemist_status(checked_at),
-            self._aiida_status(checked_at),
             self._speclabos_status(checked_at),
             self._rdkit_status(checked_at),
             self._openbabel_status(checked_at),
@@ -64,6 +63,10 @@ class IntegrationStatusService:
         if config.last_checked_at:
             item["status"] = config.last_status
             item["checked_at"] = config.last_checked_at.isoformat()
+        elif details["configured"] and not config.enabled:
+            item["status"] = "disabled"
+        elif details["configured"] and item["status"] == "not_configured":
+            item["status"] = "down"
         return item
 
     def _worker_status(self, checked_at: str) -> dict:
@@ -76,7 +79,7 @@ class IntegrationStatusService:
                 "capabilities": [
                     "LOCAL_STRUCTURE",
                     "LOCAL_XTB",
-                    "ORCA_CHEMOS_LASER",
+                    "ORCA_COMPUTE_ENGINE_LASER",
                 ],
             },
         }
@@ -144,14 +147,6 @@ class IntegrationStatusService:
                 "host": host,
                 "port": port,
             },
-        }
-
-    def _aiida_status(self, checked_at: str) -> dict:
-        return {
-            "service": "aiida",
-            "status": "not_configured",
-            "checked_at": checked_at,
-            "details": {"reason": "MVP 仅登记 reference artifact/parser 边界"},
         }
 
     def _speclabos_status(self, checked_at: str) -> dict:

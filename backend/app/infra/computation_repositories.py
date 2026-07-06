@@ -344,6 +344,46 @@ class ComputationRunRepository(BaseRepository):
                 rows.append(clone_document(item))
         return _sort_documents(rows, "updated_at", reverse=False)
 
+    @classmethod
+    def list_wallclock_expired_running(cls, *, safety_factor: float, now: datetime) -> list[dict[str, Any]]:
+        """List running runs whose wallclock time exceeds max_wallclock_seconds * safety_factor."""
+        from datetime import timedelta
+
+        results: list[dict[str, Any]] = []
+        if cls._can_use_mongo():
+            try:
+                cursor = cls._collection().find(
+                    {"status": "running", "started_at": {"$exists": True}},
+                    {"_id": 0},
+                ).sort([("updated_at", 1)])
+                for doc in cursor:
+                    resources = doc.get("resources") or {}
+                    max_wallclock = int(resources.get("max_wallclock_seconds", 0) or 0)
+                    started_at = doc.get("started_at")
+                    if max_wallclock <= 0 or started_at is None:
+                        continue
+                    if started_at + timedelta(seconds=max_wallclock * safety_factor) < now:
+                        results.append(dict(doc))
+                return results
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        # Demo-store fallback
+        data = demo_store.load()
+        for item in data[cls.collection_name]:
+            if item.get("status") != "running":
+                continue
+            started_at = _coerce_datetime(item.get("started_at"))
+            if started_at is None:
+                continue
+            resources = item.get("resources") or {}
+            max_wallclock = int(resources.get("max_wallclock_seconds", 0) or 0)
+            if max_wallclock <= 0:
+                continue
+            deadline = started_at + timedelta(seconds=max_wallclock * safety_factor)
+            if deadline < now:
+                results.append(clone_document(item))
+        return _sort_documents(results, "updated_at", reverse=False)
+
 
 class ComputationArtifactRepository(BaseRepository):
     """计算 artifact 仓储。"""

@@ -52,7 +52,6 @@ const serviceCatalog = {
   orca: { name: 'ORCA', group: '计算工具链', hint: '高精度 DFT/激发态精加工' },
   'alchemist-backend': { name: 'Alchemist', group: '优化与实验', hint: '贝叶斯优化和实验设计后端' },
   speclabos: { name: 'SpecLabOS', group: '优化与实验', hint: '真实实验系统接口，需配置 endpoint' },
-  aiida: { name: 'AiiDA', group: '优化与实验', hint: '计算 provenance 和外部流程记录' },
   atlas: { name: 'Atlas', group: '优化与实验', hint: '优化器服务' },
   docker: { name: 'Docker', group: '运行组件', hint: '可选容器运行能力' },
 }

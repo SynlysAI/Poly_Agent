@@ -1,4 +1,4 @@
-# ChemOS 计算、优化与可视化能力迁移设计
+# ComputeEngine 计算、优化与可视化能力迁移设计
 
 ## 1. 文档定位
 
@@ -6,14 +6,14 @@
 |---|---|
 | 文档状态 | Current migration status and remaining roadmap |
 | 日期 | 2026-07-02 |
-| 目标 | 记录 ChemOS 可迁移能力在 Poly_Agent 中的实际落地状态和后续迁移边界 |
-| 关联文档 | `doc/chemos-computation-product-prd.md`、`doc/chemos-computation-product-design.md`、`doc/chemos-computation-progress-and-plan.md` |
+| 目标 | 记录 ComputeEngine 可迁移能力在 Poly_Agent 中的实际落地状态和后续迁移边界 |
+| 关联文档 | `doc/compute-engine-computation-product-prd.md`、`doc/compute-engine-computation-product-design.md`、`doc/compute-engine-computation-progress-and-plan.md` |
 
-本文不再作为从零开始的开发计划，而是作为 ChemOS 参考项目能力向当前 Poly_Agent 代码迁移的状态说明。
+本文不再作为从零开始的开发计划，而是作为 ComputeEngine 参考项目能力向当前 Poly_Agent 代码迁移的状态说明。
 
 ## 2. 当前结论
 
-ChemOS 中最有价值的能力不是原样迁移 UI 或 SiLA 服务，而是迁移以下思想：
+ComputeEngine 中最有价值的能力不是原样迁移 UI 或 SiLA 服务，而是迁移以下思想：
 - computation workflow 分步骤执行。
 - provenance 外部化，业务库只保存引用和摘要。
 - artifact/result/parser 元数据化。
@@ -30,31 +30,31 @@ ChemOS 中最有价值的能力不是原样迁移 UI 或 SiLA 服务，而是迁
 - completed computation 自动 observation 和下一轮 suggestion。
 - integration status 和 service integration 后端配置。
 
-仍未落地的 ChemOS 高复杂度部分：
+仍未落地的 ComputeEngine 高复杂度部分：
 - AiiDA WorkChain 真实提交和状态同步。
 - ORCA/HPC external executor。
 - CREST/ORCA 多步骤真实 raw output 解析。
 - Atlas/Olympus 独立 optimizer service。
 - SpecLabOS 实验 workflow 提交和结果回写。
 
-## 3. ChemOS 能力迁移映射
+## 3. ComputeEngine 能力迁移映射
 
-| ChemOS 能力 | 参考来源 | Poly_Agent 当前落点 | 状态 |
+| ComputeEngine 能力 | 参考来源 | Poly_Agent 当前落点 | 状态 |
 |---|---|---|---|
-| 计算任务生命周期 | ChemOS workflow 思路 | `computation_runs`、`ComputationWorker` | 已落地 MVP |
+| 计算任务生命周期 | ComputeEngine workflow 思路 | `computation_runs`、`ComputationWorker` | 已落地 MVP |
 | step timeline | AiiDA WorkChain outline | adapter `step_labels` + run `steps` | 已落地 MVP |
 | artifact/result asset | AiiDA retrieved/output 思路 | `computation_artifacts` + `.runtime/outputs` | 已落地 MVP |
 | 本地结构生成 | OpenBabel/RDKit | `LocalStructureAdapter` | 已落地 MVP |
 | xTB 轻量计算 | xTB/CREST 前处理思路 | `LocalXtbAdapter` | 已落地 MVP |
-| ORCA laser workflow | `laser_workchain.py` | `OrcaChemosLaserAdapter` fixture/parser | 部分落地 |
-| spectra/gain parser | ChemOS spectra 后处理 | `chemos_laser_parser.py` | 部分落地，需真实样本 |
+| ORCA laser workflow | `laser_workchain.py` | `OrcaComputeEngineLaserAdapter` fixture/parser | 部分落地 |
+| spectra/gain parser | ComputeEngine spectra 后处理 | `compute_engine_laser_parser.py` | 部分落地，需真实样本 |
 | optimizer campaign | Atlas/Olympus 闭环 | OptimizationService | 已落地 MVP |
 | fallback planner | 本地规则策略 | `planner_adapters.py` | 已落地 |
 | Tanimoto planner | Atlas Tanimoto 思路 | 轻量 `tanimoto` planner | 已落地轻量版 |
 | AiiDA provenance | AiiDA process UUID | `external_refs.aiida_process_uuid` 占位 | 未接真实同步 |
 | SpecLabOS 实验验证 | 用户现有平台 | integration config + suggestion 字段占位 | 未接真实提交 |
-| ChemOS SiLA 仪器层 | SiLA servers | 不迁移，由 SpecLabOS 承担 | 明确不迁移 |
-| Streamlit UI | ChemOS demo UI | 不迁移，使用 Vue 页面 | 明确不迁移 |
+| ComputeEngine SiLA 仪器层 | SiLA servers | 不迁移，由 SpecLabOS 承担 | 明确不迁移 |
+| Streamlit UI | ComputeEngine demo UI | 不迁移，使用 Vue 页面 | 明确不迁移 |
 
 ## 4. 当前 Poly_Agent 落地结构
 
@@ -82,8 +82,8 @@ backend/app
     mock.py
     local_structure.py
     local_xtb.py
-    orca_chemos_laser.py
-    chemos_laser_parser.py
+    orca_compute_engine_laser.py
+    compute_engine_laser_parser.py
   workers/
     computation_worker.py
   infra/
@@ -113,7 +113,7 @@ backend/tests/
   test_computation_service.py
   test_local_structure_adapter.py
   test_local_xtb_adapter.py
-  test_orca_chemos_laser_workflow.py
+  test_orca_compute_engine_laser_workflow.py
   test_optimization_service.py
   test_integration_config_service.py
 ```
@@ -129,7 +129,7 @@ Poly_Agent Vue
       -> ComputationWorker
           -> adapter registry
           -> local adapters
-          -> ORCA/ChemOS external adapter later
+          -> ORCA/ComputeEngine external adapter later
           -> AiiDA adapter later
       -> OptimizationService
           -> fallback/tanimoto planner
@@ -164,7 +164,7 @@ External systems
 - `audit_events`
 
 关键迁移结果：
-- ChemOS/AiiDA 的步骤式 workflow 映射为 run `steps`。
+- ComputeEngine/AiiDA 的步骤式 workflow 映射为 run `steps`。
 - AiiDA retrieved/output 文件思想映射为 `ArtifactSpec` + artifact metadata。
 - 外部 process/job id 映射到 `external_refs`，当前字段已有占位。
 
@@ -182,7 +182,7 @@ External systems
 - `optimization_observations`
 
 关键迁移结果：
-- ChemOS optimizer 状态从 pickle/进程内对象迁移为可查询集合。
+- ComputeEngine optimizer 状态从 pickle/进程内对象迁移为可查询集合。
 - planner 输入输出保存为 request/response snapshot。
 - suggestion、computation run、observation 已可通过 id 追踪。
 
@@ -239,10 +239,10 @@ Local xTB:
 - 捕获 stdout/stderr/output/result/error artifact。
 - 覆盖缺依赖、成功、非零退出、timeout。
 
-ORCA/ChemOS fixture:
+ORCA/ComputeEngine fixture:
 - 受控 workflow preset。
 - `disabled/fixture/external` execution mode。
-- fixture 模式生成 raw spectra/gain 并解析为 `chemos_spectrum.v1`、`chemos_gain.v1`、`chemos_laser_result.v1`。
+- fixture 模式生成 raw spectra/gain 并解析为 `compute_engine_spectrum.v1`、`compute_engine_gain.v1`、`compute_engine_laser_result.v1`。
 - external 模式目前明确返回 `ORCA_EXTERNAL_EXECUTOR_NOT_IMPLEMENTED`。
 
 ### 8.2 下一步 adapter
@@ -301,7 +301,7 @@ BoTorch/native optimization：
 ## 10. 前端迁移状态
 
 已落地：
-- ChemOS Streamlit UI 不迁移。
+- ComputeEngine Streamlit UI 不迁移。
 - Vue 页面已经覆盖计算提交、计算任务中心、campaign 列表和详情、服务状态。
 - 光谱已经有基础 SVG 预览。
 - artifact 下载使用 API blob。
@@ -359,7 +359,7 @@ Poly_Agent 只负责：
 | Phase 5: Tanimoto planner | 已完成轻量版 |
 | Phase 6: 计算驱动优化闭环 | 已完成 MVP |
 | service_integrations 后端配置 | 已完成后端 MVP |
-| ORCA/ChemOS parser fixture | 已完成 fixture MVP |
+| ORCA/ComputeEngine parser fixture | 已完成 fixture MVP |
 
 ### 需要继续推进的路线
 
@@ -370,7 +370,7 @@ Poly_Agent 只负责：
 | Phase C | campaign lifecycle、planner 约束、SpecLabOS 实验提交 | P1/P2 |
 | Phase D | integration config 前端、审计增强、对象存储 | P1/P2 |
 
-详细任务见 `doc/chemos-computation-progress-and-plan.md`。
+详细任务见 `doc/compute-engine-computation-progress-and-plan.md`。
 
 ## 14. 验证计划
 
@@ -382,7 +382,7 @@ PYTHONPATH=backend python -m unittest \
   backend.tests.test_computation_service \
   backend.tests.test_local_structure_adapter \
   backend.tests.test_local_xtb_adapter \
-  backend.tests.test_orca_chemos_laser_workflow \
+  backend.tests.test_orca_compute_engine_laser_workflow \
   backend.tests.test_optimization_service \
   backend.tests.test_integration_config_service
 ```
@@ -397,13 +397,13 @@ PYTHONPATH=backend python -m unittest \
 
 ## 15. 关键设计决策
 
-### Decision 1: 不迁移 ChemOS Streamlit 前端
+### Decision 1: 不迁移 ComputeEngine Streamlit 前端
 
-Poly_Agent 已有 Vue/FastAPI 架构，ChemOS UI 只作为参考。当前已通过 Vue 页面承载计算和优化流程。
+Poly_Agent 已有 Vue/FastAPI 架构，ComputeEngine UI 只作为参考。当前已通过 Vue 页面承载计算和优化流程。
 
-### Decision 2: 不迁移 ChemOS SiLA 仪器层
+### Decision 2: 不迁移 ComputeEngine SiLA 仪器层
 
-用户已有 SpecLabOS。ChemOS SiLA 仪器服务不作为 Poly_Agent 的设备控制层。
+用户已有 SpecLabOS。ComputeEngine SiLA 仪器服务不作为 Poly_Agent 的设备控制层。
 
 ### Decision 3: AiiDA 独立部署
 
@@ -430,4 +430,4 @@ Adapter 返回 `AdapterRunResult` 和 `ArtifactSpec`。ComputationService 统一
 
 ## 17. 最终口径
 
-当前 Poly_Agent 已经吸收 ChemOS 的核心产品思想，并形成可运行的计算智能 MVP：计算任务、adapter、artifact、优化闭环和基础可视化已经贯通。后续迁移重点不再是“把 ChemOS 代码搬进来”，而是围绕安全、权限、真实外部执行器、实验系统和生产化运维，把已建立的 Poly_Agent 边界继续补完整。
+当前 Poly_Agent 已经吸收 ComputeEngine 的核心产品思想，并形成可运行的计算智能 MVP：计算任务、adapter、artifact、优化闭环和基础可视化已经贯通。后续迁移重点不再是“把 ComputeEngine 代码搬进来”，而是围绕安全、权限、真实外部执行器、实验系统和生产化运维，把已建立的 Poly_Agent 边界继续补完整。

@@ -1,4 +1,4 @@
-# ChemOS 计算智能模块当前进展与后续开发计划
+# ComputeEngine 计算智能模块当前进展与后续开发计划
 
 ## 1. 文档信息
 
@@ -6,10 +6,10 @@
 |---|---|
 | 文档状态 | Current code assessment, completed increments, and refined implementation plan |
 | 日期 | 2026-07-02 |
-| 对照文档 | `doc/chemos-computation-product-prd.md`、`doc/chemos-computation-product-design.md`、`doc/chemos-computation-migration-design.md` |
-| 代码范围 | `backend/app`、`backend/tests`、`frontend/src`、`scripts/run_chemos.sh` |
+| 对照文档 | `doc/compute-engine-computation-product-prd.md`、`doc/compute-engine-computation-product-design.md`、`doc/compute-engine-computation-migration-design.md` |
+| 代码范围 | `backend/app`、`backend/tests`、`frontend/src`、`scripts/run_compute_engine.sh` |
 
-本文基于当前仓库代码重新评估 ChemOS 计算智能模块：哪些方案已经落地，哪些只是部分完成，以及下一步应如何继续拆分。
+本文基于当前仓库代码重新评估 ComputeEngine 计算智能模块：哪些方案已经落地，哪些只是部分完成，以及下一步应如何继续拆分。
 
 ## 2. 总体判断
 
@@ -23,7 +23,7 @@
 真实接入的程度，需要分开看：
 - `RDKit / OpenBabel / xTB`：代码已经接入，本地 adapter 已经写好；如果运行环境装好依赖，就可以产出真实结构和真实 xTB 结果。
 - 当前仓库运行环境里，这些本地依赖默认还是 `not_available`，所以默认仍以 mock/fake/fixture 演示为主。
-- `ORCA / ChemOS`：现在已经有受控 preset、parser、artifact 流程和 fake external executor，但还没有真正连到 ORCA、HPC 队列或 AiiDA。
+- `ORCA / ComputeEngine`：现在已经有受控 preset、parser、artifact 流程和 fake external executor，但还没有真正连到 ORCA、HPC 队列或 AiiDA。
 - `SpecLabOS`：目前只有字段和 integration config 基础，还没有真实实验提交能力。
 - `MongoDB`：不可用时会回退到本地 demo JSON store，所以系统能演示，但不等于已经具备稳定的生产级数据持久化。
 
@@ -37,7 +37,7 @@
   -> 登记 artifact/result/error/audit
   -> 前端查看 timeline、artifact、spectrum、下载文件
   -> 创建 campaign
-  -> 导入 JSON 或 ChemOS demo candidate
+  -> 导入 JSON 或 ComputeEngine demo candidate
   -> fallback/tanimoto planner 生成 suggestion
   -> suggestion 按 campaign preset 转 mock/ORCA computation
   -> completed laser run 转 observation
@@ -53,7 +53,7 @@
 |---|---:|---|
 | MVP/P0 产品闭环 | 约 92%-95% | 主流程、adapter、artifact、审计、planner、权限隔离、CSV import report、suggestion 状态机、objective 校验、worker heartbeat/cancel、integration config 前端管理均已落地；剩余主要是前端 e2e、审计元数据细化和真实运行环境验收 |
 | Phase 1 可演示计算智能模块 | 约 82%-85% | mock/local/fixture/fake external 演示能力已较完整；真实 ORCA/HPC、SpecLabOS、生产级 worker 运维仍未落地 |
-| 完整参考项目目标 Phase 1-7 | 约 50%-55% | 本地结构/xTB、ChemOS laser parser fixture、ORCA fake external、integration config 已落地；AiiDA/真实 ORCA executor/SpecLabOS/Atlas/对象存储仍是后续工作 |
+| 完整参考项目目标 Phase 1-7 | 约 50%-55% | 本地结构/xTB、ComputeEngine laser parser fixture、ORCA fake external、integration config 已落地；AiiDA/真实 ORCA executor/SpecLabOS/Atlas/对象存储仍是后续工作 |
 
 核心结论：当前版本已经适合作为“可演示计算智能模块”的基线。下一步重点不是再造一套 adapter 或 planner，而是把真实依赖环境、真实外部执行器、真实实验系统和生产级存储/审计逐步接上。
 
@@ -64,7 +64,7 @@
 | 能力 | 当前实现 | 主要文件 | 状态 |
 |---|---|---|---|
 | 创建计算任务 | `POST /api/v1/computations`，校验 workflow/engine 组合 | `backend/app/api/v1/endpoints/computations.py`、`backend/app/services/computation_service.py` | 已完成 MVP |
-| workflow/engine 白名单 | 支持 `MOCK_XTB_ONLY/MOCK`、`MOCK_LASER/MOCK`、`LOCAL_STRUCTURE/LOCAL|RDKit|OPENBABEL`、`LOCAL_XTB/XTB`、`ORCA_CHEMOS_LASER/ORCA` | `backend/app/computation_adapters/registry.py`、`backend/app/schemas/computation.py` | 已完成 |
+| workflow/engine 白名单 | 支持 `MOCK_XTB_ONLY/MOCK`、`MOCK_LASER/MOCK`、`LOCAL_STRUCTURE/LOCAL|RDKit|OPENBABEL`、`LOCAL_XTB/XTB`、`ORCA_COMPUTE_ENGINE_LASER/ORCA` | `backend/app/computation_adapters/registry.py`、`backend/app/schemas/computation.py` | 已完成 |
 | 任务列表/详情 | 支持分页、status、workflow、engine、keyword 筛选，并按 owner/admin 做权限过滤 | `backend/app/services/computation_service.py` | 已完成 MVP |
 | 取消/重试 | 非终态取消，failed/cancelled 生成 retry run | `backend/app/services/computation_service.py` | 已完成 MVP；真实 external job cancel 语义待加强 |
 | worker 执行模型 | 原子领取 queued run，初始化 timeline，调用 adapter，统一落库，heartbeat，stale reclaim | `backend/app/workers/computation_worker.py`、`backend/app/services/computation_service.py` | 已完成 MVP；graceful shutdown 可后续增强 |
@@ -79,7 +79,7 @@
 | mock adapter | 原 mock 计算逻辑已迁移到 adapter | `backend/app/computation_adapters/mock.py` | 已完成 |
 | local structure | RDKit 或 OpenBabel 生成 `input_json/structure_json/xyz/sdf/log/error` | `backend/app/computation_adapters/local_structure.py` | 已完成 MVP |
 | local xTB | 隔离 workdir、白名单参数、subprocess timeout、stdout/stderr/output/result/error artifact | `backend/app/computation_adapters/local_xtb.py` | 已完成 MVP |
-| ORCA/ChemOS laser | 受控 workflow preset、fixture raw outputs、fake external executor、spectra/gain parser、result summary | `backend/app/computation_adapters/orca_chemos_laser.py`、`backend/app/computation_adapters/chemos_laser_parser.py` | 部分完成；真实 external executor 未接入 |
+| ORCA/ComputeEngine laser | 受控 workflow preset、fixture raw outputs、fake external executor、spectra/gain parser、result summary | `backend/app/computation_adapters/orca_compute_engine_laser.py`、`backend/app/computation_adapters/compute_engine_laser_parser.py` | 部分完成；真实 external executor 未接入 |
 
 ### 3.3 Artifact、结果和审计
 
@@ -97,13 +97,13 @@
 | 能力 | 当前实现 | 主要文件 | 状态 |
 |---|---|---|---|
 | campaign | 创建、列表、详情，状态支持 draft/running/paused/completed/failed/archived，并支持 pause/resume/archive/complete/fail API | `backend/app/schemas/optimization.py`、`backend/app/services/optimization_service.py`、`backend/app/api/v1/endpoints/optimization.py` | 已完成 MVP |
-| candidate 导入 | JSON 批量导入、CSV 导入报告、ChemOS demo 导入、descriptor 生成 | `backend/app/services/optimization_service.py`、`backend/app/api/v1/endpoints/optimization.py` | 已完成 MVP |
+| candidate 导入 | JSON 批量导入、CSV 导入报告、ComputeEngine demo 导入、descriptor 生成 | `backend/app/services/optimization_service.py`、`backend/app/api/v1/endpoints/optimization.py` | 已完成 MVP |
 | descriptor | `candidate_descriptor.v1`，RDKit Morgan 或 SMILES hash fallback | `backend/app/services/optimization_service.py` | 已完成 MVP |
 | planner request/response | `planner_request.v1`、`planner_response.v1`，constraints schema、skipped/low confidence reason、suggestion request/response 快照版本字段 | `backend/app/schemas/optimization.py`、`backend/app/services/optimization_service.py`、`backend/app/services/planner_adapters.py` | 已完成 MVP |
 | fallback planner | 按稳定 key 顺序选择未评价候选 | `backend/app/services/planner_adapters.py` | 已完成 |
 | tanimoto planner | 基于最佳 observation 的 Tanimoto 相似度推荐 | `backend/app/services/planner_adapters.py` | 已完成轻量版 |
 | suggestion 转 computation | 幂等提交 computation run，按 campaign preset 选择 mock/ORCA 路径 | `backend/app/services/optimization_service.py` | 已完成 MVP |
-| observation | 手工写入、从 completed `MOCK_LASER/ORCA_CHEMOS_LASER` run 映射目标值，并校验 objective schema | `backend/app/services/optimization_service.py` | 已完成 MVP |
+| observation | 手工写入、从 completed `MOCK_LASER/ORCA_COMPUTE_ENGINE_LASER` run 映射目标值，并校验 objective schema | `backend/app/services/optimization_service.py` | 已完成 MVP |
 | automation | completed computation 可按配置自动创建 observation 和下一轮 suggestion | `backend/app/workers/computation_worker.py`、`backend/app/services/optimization_service.py` | 已完成 MVP |
 | history | 返回 candidate/suggestion/observation 时间线 | `backend/app/services/optimization_service.py` | 已完成 MVP |
 
@@ -111,7 +111,7 @@
 
 | 能力 | 当前实现 | 主要文件 | 状态 |
 |---|---|---|---|
-| 集成状态探测 | worker/artifact/ChemOS ports/AiiDA/SpecLabOS/RDKit/OpenBabel/xTB/Docker | `backend/app/services/integration_status_service.py` | 已完成 MVP |
+| 集成状态探测 | worker/artifact/ComputeEngine ports/AiiDA/SpecLabOS/RDKit/OpenBabel/xTB/Docker | `backend/app/services/integration_status_service.py` | 已完成 MVP |
 | service_integrations 配置 | 持久化 endpoint/config_summary/secret_refs/last_status | `backend/app/services/integration_config_service.py`、`backend/app/schemas/integrations.py` | 已完成后端 MVP |
 | 配置安全 | 拒绝 token/password/api_key/secret/private_key 等明文字段 | `backend/app/schemas/integrations.py`、`backend/app/services/integration_config_service.py` | 已完成 |
 | 管理 API | list/upsert/check integration configs，管理员权限保护 | `backend/app/api/v1/endpoints/integrations.py` | 已完成后端 MVP |
@@ -121,9 +121,9 @@
 
 | 页面 | 当前能力 | 主要文件 | 状态 |
 |---|---|---|---|
-| 计算提交 | 支持 mock/local structure/local xTB/ORCA ChemOS workflow 选项 | `frontend/src/views/ComputationSubmitView.vue` | 已完成 MVP |
+| 计算提交 | 支持 mock/local structure/local xTB/ORCA ComputeEngine workflow 选项 | `frontend/src/views/ComputationSubmitView.vue` | 已完成 MVP |
 | 计算任务中心 | 列表、筛选、轮询、详情 drawer、timeline、artifact、blob 下载、spectrum SVG 预览 | `frontend/src/views/ComputationRunsView.vue` | 已完成 MVP；结构可视化仍较轻 |
-| Campaign 列表 | 创建 campaign、导入 ChemOS、生成推荐、执行 campaign 状态操作 | `frontend/src/views/CampaignsView.vue` | 已完成 MVP |
+| Campaign 列表 | 创建 campaign、导入 ComputeEngine、生成推荐、执行 campaign 状态操作 | `frontend/src/views/CampaignsView.vue` | 已完成 MVP |
 | Campaign 详情 | candidates/suggestions/observations/history，提交计算、拒绝 suggestion、生成 observation、CSV import report、campaign 状态操作 | `frontend/src/views/CampaignDetailView.vue` | 已完成 MVP |
 | API client | computation、optimization、integration status/config API 已封装 | `frontend/src/api/polyAgentApi.js` | 已完成 MVP |
 
@@ -135,7 +135,7 @@
 | computation service | workflow/engine 组合校验、失败 retry、artifact path 越界 | `backend/tests/test_computation_service.py` | 已有 |
 | local structure | 缺依赖失败、OpenBabel fake CLI 成功 | `backend/tests/test_local_structure_adapter.py` | 已有 |
 | local xTB | 缺依赖、成功、非零退出、timeout/retry | `backend/tests/test_local_xtb_adapter.py` | 已有 |
-| ORCA/ChemOS laser | 输入安全、fixture parser artifact、未配置失败、observation 映射 | `backend/tests/test_orca_chemos_laser_workflow.py` | 已有 |
+| ORCA/ComputeEngine laser | 输入安全、fixture parser artifact、未配置失败、observation 映射 | `backend/tests/test_orca_compute_engine_laser_workflow.py` | 已有 |
 | optimization service | import/generate/submit/observation、descriptor、tanimoto、automation | `backend/tests/test_optimization_service.py` | 已有 |
 | integration config | 密钥字段拒绝、upsert/check、API 权限 | `backend/tests/test_integration_config_service.py` | 已有 |
 | 前端 e2e | 浏览器路径、可视化和下载行为 | 暂无 | 待补 |
@@ -156,7 +156,7 @@
 | ART-002 | artifact 下载审计 | 已完成短期方案 | 大文件/跨域场景可后续做短期 download token |
 | ART-003 | parser metadata | 已完成 MVP | parser version 后续要跟真实 parser 发布版本绑定 |
 | OPT-001 | 创建 campaign | 已完成 MVP | 已有 pause/resume/archive/complete/fail API |
-| OPT-002 | 导入候选 | 已完成 MVP | 已支持 JSON/CSV/ChemOS demo 和失败行/重复行报告；导入任务审计明细可后续增强 |
+| OPT-002 | 导入候选 | 已完成 MVP | 已支持 JSON/CSV/ComputeEngine demo 和失败行/重复行报告；导入任务审计明细可后续增强 |
 | OPT-003 | 写入 observation | 已完成 MVP | 已按 campaign objectives 校验 required/allowed/finite values |
 | OPT-004 | fallback suggestion | 已完成 | 已额外实现 tanimoto planner |
 | OPT-005 | suggestion 状态流转 | 已完成 MVP | 已有 reject/failed API、原因记录、审计和 history |
@@ -176,7 +176,7 @@
 | 光谱/曲线可视化 | 后端有 `spectrum_json`，前端有基础 SVG 曲线 | 部分完成；补更可靠图表和结构视图 |
 | AiiDA worker | 仅 external ref 字段和状态占位 | P2 |
 | ORCA laser workflow | 有 fixture parser、受控配置和 fake external executor；真实 executor 未实现 | P1/P2 |
-| ChemOS spectra/gain parser | fixture raw outputs 和 parser 已实现 | 部分完成；需真实输出样本适配 |
+| ComputeEngine spectra/gain parser | fixture raw outputs 和 parser 已实现 | 部分完成；需真实输出样本适配 |
 | Atlas/Olympus planner | 未接入；已有轻量 tanimoto 替代 | P2/P3 |
 | SpecLabOS 实验提交 | 集成配置占位，未提交实验 | P2 |
 | SmartAccess 事件 | 未接入 | P3 |
@@ -345,7 +345,7 @@
 - artifact preview 对文本和大 JSON 有截断策略；local structure/xTB 文本产物有文件级上限。
 - integration status 已返回 RDKit/OpenBabel/xTB 的 `path`、`version`、`capabilities`、`reason`。
 - fake toolchain 单测已保留并覆盖 summary/preview 截断。
-- 真实 RDKit/OpenBabel/xTB 环境 smoke 已尝试：当前 base 缺 `rdkit/obabel/xtb`，已有 `chemos` env 只有 RDKit 且缺 `obabel/xtb/pymongo`；创建 `poly-agent-local` conda env 时 resolver 长时间未完成并已中止，未污染 base。仍需在可用依赖环境补跑。
+- 真实 RDKit/OpenBabel/xTB 环境 smoke 已尝试：当前 base 缺 `rdkit/obabel/xtb`，已有 `compute_engine` env 只有 RDKit 且缺 `obabel/xtb/pymongo`；创建 `poly-agent-local` conda env 时 resolver 长时间未完成并已中止，未污染 base。仍需在可用依赖环境补跑。
 
 **验收标准：**
 - xTB result summary 解析 `xtb_version`、`runtime_seconds`、`normal_termination`。
@@ -393,22 +393,22 @@ PYTHONPATH=backend python -m unittest \
 # workflow_type=LOCAL_XTB, engine=XTB, method=GFN2-xTB
 ```
 
-#### Task B2: ORCA/ChemOS external executor 边界
+#### Task B2: ORCA/ComputeEngine external executor 边界
 
 **目标：** 从 fixture parser 过渡到受控外部执行器，不允许用户传 shell 命令或本地路径。
 
 **当前状态（2026-07-02）：fake external executor 已完成。**
-- `ORCA_CHEMOS_EXECUTION_MODE=external` 且 `ORCA_CHEMOS_EXTERNAL_EXECUTOR=fake` 时，后端生成 `workflow_config.json` 和 `job_spec.json`，不接收用户 shell 命令或本地路径。
-- fake executor 覆盖 submit/poll/success/fail/timeout/cancel，external refs 记录 `orca_chemos_job_id`、`queue`、`submitted_at`、`polled_at`、`executor`、`external_status`。
-- success 路径收集 `spectra.raw.csv`、`gain.raw.json`，复用现有 `chemos_laser_parser` 生成 spectrum/gain/result artifacts。
+- `ORCA_COMPUTE_ENGINE_EXECUTION_MODE=external` 且 `ORCA_COMPUTE_ENGINE_EXTERNAL_EXECUTOR=fake` 时，后端生成 `workflow_config.json` 和 `job_spec.json`，不接收用户 shell 命令或本地路径。
+- fake executor 覆盖 submit/poll/success/fail/timeout/cancel，external refs 记录 `orca_compute_engine_job_id`、`queue`、`submitted_at`、`polled_at`、`executor`、`external_status`。
+- success 路径收集 `spectra.raw.csv`、`gain.raw.json`，复用现有 `compute_engine_laser_parser` 生成 spectrum/gain/result artifacts。
 - fail/timeout 保留明确 failed error artifact；running cancel 保持 run 为 `cancelled` 并写 `external_cancelled=true`。
 - 下一步是真实 HPC/AiiDA executor adapter；fake executor 已提供边界测试和 job spec 形状。
 
 **验收标准：**
-- `ORCA_CHEMOS_EXECUTION_MODE=external` 时不再直接返回 `ORCA_EXTERNAL_EXECUTOR_NOT_IMPLEMENTED`。
+- `ORCA_COMPUTE_ENGINE_EXECUTION_MODE=external` 时不再直接返回 `ORCA_EXTERNAL_EXECUTOR_NOT_IMPLEMENTED`。
 - 后端按部署配置生成 job workdir 和 job spec，提交到受控 executor。
 - run external refs 记录 job id、queue、submitted_at、polled_at。
-- 支持 poll completed/failed，收集 ORCA/ChemOS raw outputs，复用现有 parser。
+- 支持 poll completed/failed，收集 ORCA/ComputeEngine raw outputs，复用现有 parser。
 - license/queue/config 不可用时保留明确 failed error artifact。
 
 **验证：**
@@ -416,30 +416,30 @@ PYTHONPATH=backend python -m unittest \
 - fixture parser 测试继续通过。
 
 **预计改动：**
-- `backend/app/computation_adapters/orca_chemos_laser.py`
-- `backend/app/computation_adapters/chemos_laser_parser.py`
+- `backend/app/computation_adapters/orca_compute_engine_laser.py`
+- `backend/app/computation_adapters/compute_engine_laser_parser.py`
 - `backend/app/core/config.py`
 - `backend/app/workers/computation_worker.py`
-- `backend/tests/test_orca_chemos_laser_workflow.py`
+- `backend/tests/test_orca_compute_engine_laser_workflow.py`
 
 **Dependencies:** A5 对 long-running/cancel 语义有帮助；建议先完成 A5。
 
 **fake external smoke 配置：**
 
 ```bash
-export ORCA_CHEMOS_EXECUTION_MODE=external
-export ORCA_CHEMOS_EXTERNAL_EXECUTOR=fake
+export ORCA_COMPUTE_ENGINE_EXECUTION_MODE=external
+export ORCA_COMPUTE_ENGINE_EXTERNAL_EXECUTOR=fake
 export ORCA_LICENSE_AVAILABLE=true
 export HPC_QUEUE_AVAILABLE=true
 export HPC_QUEUE_NAME=debug
 
 # 可选：success | failed | timeout
-export ORCA_CHEMOS_FAKE_EXTERNAL_OUTCOME=success
+export ORCA_COMPUTE_ENGINE_FAKE_EXTERNAL_OUTCOME=success
 ```
 
 #### Task B3: Optimization submit workflow preset
 
-**目标：** suggestion 转 computation 不再硬编码 `MOCK_LASER`，支持按 campaign 配置提交 ORCA/ChemOS 或 mock。
+**目标：** suggestion 转 computation 不再硬编码 `MOCK_LASER`，支持按 campaign 配置提交 ORCA/ComputeEngine 或 mock。
 
 **当前状态（2026-07-02）：已完成第一版。**
 - campaign `planner_config.computation_preset` 支持后端白名单 preset：`mock_laser`、`orca_fixture`、`orca_external_fake`。

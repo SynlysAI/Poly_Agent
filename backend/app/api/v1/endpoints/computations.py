@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
 
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, require_admin
 from app.schemas.common import ApiResponse
 from app.schemas.computation import (
     ArtifactListData,
@@ -122,6 +122,22 @@ def retry_computation(
         actor_user_id=_actor_user_id(current_user),
         request_id=_request_id(request),
         is_admin=_is_admin(current_user),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/computations/{run_id}/fail-stale", response_model=ApiResponse[ComputationRun])
+def fail_stale_computation(
+    run_id: str,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+    _admin: None = Depends(require_admin),
+) -> ApiResponse[ComputationRun]:
+    """强制将一个 stuck running 任务标记为 failed（仅管理员可操作）。"""
+    data = service.force_fail_run(
+        run_id,
+        actor_user_id=_actor_user_id(current_user),
+        is_admin=True,
     )
     return ApiResponse(code=0, message="ok", data=data)
 

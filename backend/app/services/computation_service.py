@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -68,7 +68,7 @@ class ComputationService:
             molecule=payload.molecule,
             parameters=payload.parameters,
             resources=payload.resources,
-            external_refs={"worker_id": None, "aiida_process_uuid": None, "speclabos_run_id": None},
+            external_refs={"worker_id": None, "speclabos_run_id": None},
             steps=[],
             artifact_ids=[],
             result_summary={},
@@ -399,9 +399,8 @@ class ComputationService:
             ComputationStep(step_key=key, label=label, status="queued")
             for key, label in step_labels.items()
         ]
-        if steps:
-            steps[0].status = "running"
-            steps[0].started_at = now
+        # All steps start as "queued"; final step statuses are written by finish_acquired_run().
+        # This avoids showing a step as "running" forever if the worker dies before finish.
         ComputationRunRepository.update_fields(
             run.run_id,
             {
@@ -453,17 +452,41 @@ class ComputationService:
         ComputationRunRepository.update_fields(run_id, update)
         return self.get_run(run_id)
 
-    def fail_stale_running_runs(self, *, stale_before: datetime, actor_user_id: str) -> list[str]:
-        """将 heartbeat 过期的 running run 标记为 failed。"""
-        stale_runs = ComputationRunRepository.list_stale_running(stale_before=stale_before)
-        failed_run_ids: list[str] = []
+    def fail_stale_running_runs(self, *, actor_user_id: str) -> list[str]:
+        """将 heartbeat 过期或 wallclock 超时的 running run 标记为 failed。"""
         now = utc_now()
+        # Primary: heartbeat stale check
+        heartbeat_stale_before = now - timedelta(seconds=settings.stale_run_heartbeat_seconds)
+        stale_runs = ComputationRunRepository.list_stale_running(stale_before=heartbeat_stale_before)
+        # Secondary: wallclock timeout check
+        wallclock_expired = ComputationRunRepository.list_wallclock_expired_running(
+            safety_factor=settings.stale_run_wallclock_safety_factor,
+            now=now,
+        )
+        # Deduplicate by run_id
+        seen_ids = {str(r["run_id"]) for r in stale_runs}
+        for r in wallclock_expired:
+            if str(r["run_id"]) not in seen_ids:
+                stale_runs.append(r)
+
+        failed_run_ids: list[str] = []
         for run_doc in stale_runs:
             run_id = str(run_doc["run_id"])
+            # Fix steps: transition any "running"/"queued" step to "failed"
+            fixed_steps = []
+            for step in run_doc.get("steps") or []:
+                step_copy = dict(step)
+                if step_copy.get("status") in ("running", "queued"):
+                    step_copy["status"] = "failed"
+                    step_copy["finished_at"] = now
+                    step_copy["error"] = "worker heartbeat 已过期"
+                fixed_steps.append(step_copy)
+
             updated = ComputationRunRepository.update_fields(
                 run_id,
                 {
                     "status": "failed",
+                    "steps": fixed_steps,
                     "updated_at": now,
                     "finished_at": now,
                     "error": {
@@ -486,6 +509,53 @@ class ComputationService:
                 after={"status": "failed", "error_code": "WORKER_HEARTBEAT_STALE"},
             )
         return failed_run_ids
+
+    def force_fail_run(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str,
+        is_admin: bool = False,
+    ) -> ComputationRun:
+        """Admin-only: 强制将一个 stuck running 任务标记为 failed（retryable）。"""
+        run = self.get_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        if run.status != "running":
+            raise HTTPException(status_code=400, detail="仅 running 状态的任务允许强制失败")
+        now = utc_now()
+        # Fix steps: transition any "running"/"queued" step to "failed"
+        fixed_steps = []
+        for step in run.steps:
+            step_copy = step.model_dump(mode="python")
+            if step_copy.get("status") in ("running", "queued"):
+                step_copy["status"] = "failed"
+                step_copy["finished_at"] = now
+                step_copy["error"] = "管理员手动强制标记失败"
+            fixed_steps.append(step_copy)
+
+        ComputationRunRepository.update_fields(
+            run_id,
+            {
+                "status": "failed",
+                "steps": fixed_steps,
+                "updated_at": now,
+                "finished_at": now,
+                "error": {
+                    "error_code": "ADMIN_FORCE_FAILED",
+                    "message": "管理员手动强制标记失败",
+                    "retryable": True,
+                },
+            },
+        )
+        self._audit(
+            "computation.admin_force_failed",
+            actor_user_id=actor_user_id,
+            request_id=None,
+            entity_type="computation_run",
+            entity_id=run_id,
+            before={"status": "running"},
+            after={"status": "failed", "error_code": "ADMIN_FORCE_FAILED"},
+        )
+        return self.get_run(run_id)
 
     def finish_acquired_run(
         self,

@@ -58,7 +58,7 @@ const workflowOptions = [
   { label: '全部', value: '' },
   { label: 'LOCAL_STRUCTURE', value: 'LOCAL_STRUCTURE' },
   { label: 'LOCAL_XTB', value: 'LOCAL_XTB' },
-  { label: 'ORCA 精加工', value: 'ORCA_CHEMOS_LASER' },
+  { label: 'ORCA 精加工', value: 'ORCA_COMPUTE_ENGINE_LASER' },
 ]
 
 const engineOptions = [

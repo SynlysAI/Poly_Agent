@@ -65,7 +65,7 @@ COMPUTATION_PRESETS: dict[str, dict] = {
         "resources": {"num_cores": 2, "memory_mb": 4096, "max_wallclock_seconds": 1800},
     },
     "orca": {
-        "workflow_type": "ORCA_CHEMOS_LASER",
+        "workflow_type": "ORCA_COMPUTE_ENGINE_LASER",
         "engine": "ORCA",
         "method": "ORCA_B3LYP_DEF2_SVP",
         "resources": {"num_cores": 4, "memory_mb": 8192, "max_wallclock_seconds": 7200},
@@ -527,7 +527,7 @@ class OptimizationService:
             raise HTTPException(status_code=404, detail="计算任务不存在")
         if run_doc.get("status") != "completed":
             raise HTTPException(status_code=400, detail="仅 completed 计算任务可生成 observation")
-        if run_doc.get("workflow_type") != "ORCA_CHEMOS_LASER":
+        if run_doc.get("workflow_type") != "ORCA_COMPUTE_ENGINE_LASER":
             raise HTTPException(status_code=400, detail="仅 laser workflow 支持自动映射 observation")
         campaign_id = run_doc.get("campaign_id")
         suggestion_id = run_doc.get("suggestion_id")

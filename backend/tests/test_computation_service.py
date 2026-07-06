@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -186,7 +187,8 @@ class ComputationServiceTest(ComputationTestCase):
             request_id="req-fail",
         )
 
-        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        with patch("app.computation_adapters.local_xtb.shutil.which", return_value=None):
+            result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
         detail = self.service.get_run(created.run_id)
 
         self.assertTrue(result.claimed)
@@ -344,20 +346,99 @@ class ComputationServiceTest(ComputationTestCase):
             actor_user_id="tester",
             request_id="req-stale",
         )
-        now = utc_now()
+        import datetime as dt
+        past = utc_now() - dt.timedelta(seconds=120)
         ComputationRunRepository.update_fields(
             created.run_id,
             {
                 "status": "running",
                 "external_refs.worker_id": "worker-dead",
-                "external_refs.claimed_at": now,
-                "external_refs.heartbeat_at": now,
+                "external_refs.claimed_at": past,
+                "external_refs.heartbeat_at": past,
             },
         )
 
-        reclaimed = self.service.fail_stale_running_runs(stale_before=utc_now(), actor_user_id="worker-monitor")
+        reclaimed = self.service.fail_stale_running_runs(actor_user_id="worker-monitor")
         detail = self.service.get_run(created.run_id)
 
         self.assertEqual(reclaimed, [created.run_id])
         self.assertEqual(detail.status, "failed")
         self.assertEqual(detail.error["error_code"], "WORKER_HEARTBEAT_STALE")
+
+    def test_admin_can_force_fail_a_running_run(self) -> None:
+        """Admins can force-fail a specific stuck running run."""
+        created = self.service.create_run(
+            ComputationCreateRequest(**computation_payload()),
+            actor_user_id="tester",
+            request_id="req-force-fail",
+        )
+        now = utc_now()
+        ComputationRunRepository.update_fields(
+            created.run_id,
+            {
+                "status": "running",
+                "external_refs.worker_id": "worker-stuck",
+                "external_refs.claimed_at": now,
+                "external_refs.heartbeat_at": now,
+            },
+        )
+        result = self.service.force_fail_run(
+            created.run_id,
+            actor_user_id="admin",
+            is_admin=True,
+        )
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.error["error_code"], "ADMIN_FORCE_FAILED")
+        self.assertTrue(result.error["retryable"])
+
+    def test_wallclock_expired_run_marked_failed_by_reaper(self) -> None:
+        """Runs exceeding max_wallclock_seconds * safety_factor should be failed."""
+        created = self.service.create_run(
+            ComputationCreateRequest(**computation_payload()),
+            actor_user_id="tester",
+            request_id="req-wallclock",
+        )
+        import datetime as dt
+        past = utc_now() - dt.timedelta(hours=2)
+        ComputationRunRepository.update_fields(
+            created.run_id,
+            {
+                "status": "running",
+                "started_at": past,
+                "external_refs.worker_id": "worker-slow",
+                "external_refs.claimed_at": past,
+                "external_refs.heartbeat_at": utc_now(),
+            },
+        )
+        failed = self.service.fail_stale_running_runs(actor_user_id="test-reaper")
+        detail = self.service.get_run(created.run_id)
+        self.assertEqual(detail.status, "failed")
+        self.assertIn(created.run_id, failed)
+
+    def test_stale_reaper_fixes_steps(self) -> None:
+        """When stale reaper fails a run, 'running'/'queued' steps become 'failed'."""
+        created = self.service.create_run(
+            ComputationCreateRequest(**computation_payload()),
+            actor_user_id="tester",
+            request_id="req-stale-steps",
+        )
+        import datetime as dt
+        past = utc_now() - dt.timedelta(seconds=120)
+        ComputationRunRepository.update_fields(
+            created.run_id,
+            {
+                "status": "running",
+                "steps": [
+                    {"step_key": "step1", "label": "first", "status": "running", "started_at": str(past)},
+                    {"step_key": "step2", "label": "second", "status": "queued"},
+                ],
+                "external_refs.worker_id": "worker-dead",
+                "external_refs.claimed_at": past,
+                "external_refs.heartbeat_at": past,
+            },
+        )
+        self.service.fail_stale_running_runs(actor_user_id="test-reaper")
+        detail = self.service.get_run(created.run_id)
+        self.assertEqual(detail.status, "failed")
+        for step in detail.steps:
+            self.assertEqual(step.status, "failed", f"Step {step.step_key} should be failed")

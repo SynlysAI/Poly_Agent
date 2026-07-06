@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -317,7 +318,7 @@ class OptimizationServiceTest(ComputationTestCase):
         )
         detail = self.service.computation_service.get_run(submitted.run_id)
 
-        self.assertEqual(detail.workflow_type, "ORCA_CHEMOS_LASER")
+        self.assertEqual(detail.workflow_type, "ORCA_COMPUTE_ENGINE_LASER")
         self.assertEqual(detail.engine, "ORCA")
         self.assertEqual(detail.source, "optimization_suggestion:orca")
         self.assertEqual(detail.resources.num_cores, 6)
@@ -694,7 +695,8 @@ class OptimizationServiceTest(ComputationTestCase):
             request_id="req-submit",
         )
 
-        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        with patch("app.computation_adapters.local_xtb.shutil.which", return_value=None):
+            result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
         detail = self.service.get_detail(campaign.campaign_id)
         events, _ = AuditEventRepository.list_events(
             entity_type=None,

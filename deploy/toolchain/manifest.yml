@@ -1,0 +1,136 @@
+# Poly_Agent 计算工具链部署包清单
+# ====================================
+# 该文件声明部署包中所有工具、服务及其安装/验收策略。
+# 字段说明：
+#   name: 工具/服务名称
+#   category: core（必装）| optional（可选安装）
+#   source: conda（conda-forge 通道）| pip | npm | system | git | custom
+#   version: 推荐版本；null 表示安装最新稳定版
+#   install_method: 安装方式标签
+#   port: 服务监听端口；CLI 工具填 null
+#   verify_cmd: 验收命令
+#   description: 简要说明
+
+manifest_version: "1.0"
+package_name: "poly-agent-toolchain"
+package_version: "0.1.0"
+
+tools:
+  # ---- 核心必装工具 ----
+  - name: python
+    category: core
+    source: conda
+    version: "3.12"
+    install_method: conda_env
+    port: null
+    verify_cmd: "python --version"
+    description: "Python 3.12 运行时，承载 FastAPI 后端"
+
+  - name: nodejs
+    category: core
+    source: conda
+    version: "22"
+    install_method: conda_env
+    port: null
+    verify_cmd: "node --version"
+    description: "Node.js 22 运行时，用于前端 Vite 构建"
+
+  - name: rdkit
+    category: core
+    source: conda
+    version: null
+    install_method: conda_env
+    port: null
+    verify_cmd: "python -c \"import rdkit; print(rdkit.__version__)\""
+    description: "化学信息学工具包，SMILES 解析与 3D 结构生成"
+
+  - name: openbabel
+    category: core
+    source: conda
+    version: null
+    install_method: conda_env
+    port: null
+    verify_cmd: "obabel -V"
+    description: "化学文件格式转换工具"
+
+  - name: xtb
+    category: core
+    source: conda
+    version: null
+    install_method: conda_env
+    port: null
+    verify_cmd: "xtb --version"
+    description: "半经验量子化学紧束缚计算程序"
+
+  - name: crest
+    category: core
+    source: conda
+    version: null
+    install_method: conda_env
+    port: null
+    verify_cmd: "crest --version"
+    description: "构象搜索与团簇采样工具"
+
+  - name: mongodb
+    category: core
+    source: conda
+    version: "6.0.16"
+    install_method: separate_conda_env
+    port: 27017
+    verify_cmd: "mongosh --eval 'db.runCommand({ping: 1})' --quiet"
+    description: "文档数据库，存储计算任务、配置与审计日志"
+
+  - name: poly-agent-backend
+    category: core
+    source: pip
+    version: null
+    install_method: pip_requirements
+    port: 5100
+    verify_cmd: "curl -sf http://127.0.0.1:5100/api/v1/health"
+    description: "Poly_Agent FastAPI 后端服务"
+
+  - name: poly-agent-frontend
+    category: core
+    source: npm
+    version: null
+    install_method: npm_build
+    port: null
+    verify_cmd: "npm run build"
+    description: "Poly_Agent Vue3/Vite 前端"
+
+  - name: computation-worker
+    category: core
+    source: pip
+    version: null
+    install_method: pip_requirements
+    port: null
+    verify_cmd: "python -c \"from app.workers.computation_worker import ComputationWorker; print('ok')\""
+    description: "计算任务消费者，领取并执行 queued computation run"
+
+  # ---- 可选服务包 ----
+  - name: alchemist-backend
+    category: optional
+    source: git
+    version: null
+    install_method: git_clone_or_local_path
+    port: 8004
+    verify_cmd: "curl -sf http://127.0.0.1:8004/api/v1/health"
+    description: "ALchemist 主动学习优化后端（独立 FastAPI 服务）"
+
+  - name: orca
+    category: optional
+    source: custom
+    version: null
+    install_method: manual_path_probe
+    port: null
+    verify_cmd: "orca 2>&1 | head -5"
+    description: "ORCA 量子化学程序（商业软件，仅做路径/许可证探测）"
+
+  - name: atlas
+    category: optional
+    source: git
+    version: null
+    install_method: disabled_by_default
+    port: 65100
+    verify_cmd: null
+    description: "Atlas/ComputeEngine 优化器（参考仓库不完整，默认 disabled）"

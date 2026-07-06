@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from app.computation_adapters.base import ComputationAdapter
 from app.computation_adapters.local_structure import LocalStructureAdapter
 from app.computation_adapters.local_xtb import LocalXtbAdapter
-from app.computation_adapters.orca_chemos_laser import OrcaChemosLaserAdapter
+from app.computation_adapters.orca_compute_engine_laser import OrcaComputeEngineLaserAdapter
 
 
 def get_adapter(workflow_type: str, engine: str) -> ComputationAdapter:
@@ -16,8 +16,8 @@ def get_adapter(workflow_type: str, engine: str) -> ComputationAdapter:
         return LocalStructureAdapter()
     if workflow_type == "LOCAL_XTB" and engine == "XTB":
         return LocalXtbAdapter()
-    if workflow_type == "ORCA_CHEMOS_LASER" and engine == "ORCA":
-        return OrcaChemosLaserAdapter()
+    if workflow_type == "ORCA_COMPUTE_ENGINE_LASER" and engine == "ORCA":
+        return OrcaComputeEngineLaserAdapter()
     raise HTTPException(
         status_code=400,
         detail=f"不支持的计算 workflow/engine 组合：{workflow_type}/{engine}",
@@ -31,5 +31,5 @@ def supported_workflow_engine_pairs() -> set[tuple[str, str]]:
         ("LOCAL_STRUCTURE", "RDKit"),
         ("LOCAL_STRUCTURE", "OPENBABEL"),
         ("LOCAL_XTB", "XTB"),
-        ("ORCA_CHEMOS_LASER", "ORCA"),
+        ("ORCA_COMPUTE_ENGINE_LASER", "ORCA"),
     }
