@@ -2,34 +2,34 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CHEMOS_DIR="$ROOT_DIR/refer/ChemOS2.0-master/ChemOS2.0-simulation"
-RUNTIME_DIR="$ROOT_DIR/.runtime/chemos"
+COMPUTE_ENGINE_DIR="$ROOT_DIR/refer/ChemOS2.0-master/ChemOS2.0-simulation"
+RUNTIME_DIR="$ROOT_DIR/.runtime/compute_engine"
 LOG_DIR="$RUNTIME_DIR/logs"
 PID_DIR="$RUNTIME_DIR/pids"
 PG_RUNTIME_DIR="$RUNTIME_DIR/postgres"
-PG_DATA_DIR="${CHEMOS_POSTGRES_DATA_DIR:-$PG_RUNTIME_DIR/data}"
+PG_DATA_DIR="${COMPUTE_ENGINE_POSTGRES_DATA_DIR:-$PG_RUNTIME_DIR/data}"
 PG_SOCKET_DIR="$PG_RUNTIME_DIR/socket"
-ENV_NAME="${CHEMOS_CONDA_ENV:-chemos}"
-STREAMLIT_PORT="${CHEMOS_STREAMLIT_PORT:-8501}"
-STREAMLIT_HOST="${CHEMOS_STREAMLIT_HOST:-0.0.0.0}"
-CHEMSPEED_PORT="${CHEMOS_CHEMSPEED_PORT:-65001}"
-HPLC_PORT="${CHEMOS_HPLC_PORT:-65010}"
-OPTICS_PORT="${CHEMOS_OPTICS_PORT:-65070}"
-ATLAS_PORT="${CHEMOS_ATLAS_PORT:-65100}"
-POSTGRES_CONTAINER="${CHEMOS_POSTGRES_CONTAINER:-chemos-postgres}"
-POSTGRES_IMAGE="${CHEMOS_POSTGRES_IMAGE:-postgres:15}"
-POSTGRES_HOST="${CHEMOS_POSTGRES_HOST:-127.0.0.1}"
-POSTGRES_PORT="${CHEMOS_POSTGRES_PORT:-5432}"
-POSTGRES_USER="${CHEMOS_POSTGRES_USER:-chemos}"
-POSTGRES_PASSWORD="${CHEMOS_POSTGRES_PASSWORD:-chemos}"
-POSTGRES_DB="${CHEMOS_POSTGRES_DB:-chemos}"
-POSTGRES_BIN_DIR="${CHEMOS_POSTGRES_BIN_DIR:-}"
+ENV_NAME="${COMPUTE_ENGINE_CONDA_ENV:-compute_engine}"
+STREAMLIT_PORT="${COMPUTE_ENGINE_STREAMLIT_PORT:-8501}"
+STREAMLIT_HOST="${COMPUTE_ENGINE_STREAMLIT_HOST:-0.0.0.0}"
+CHEMSPEED_PORT="${COMPUTE_ENGINE_CHEMSPEED_PORT:-65001}"
+HPLC_PORT="${COMPUTE_ENGINE_HPLC_PORT:-65010}"
+OPTICS_PORT="${COMPUTE_ENGINE_OPTICS_PORT:-65070}"
+ATLAS_PORT="${COMPUTE_ENGINE_ATLAS_PORT:-65100}"
+POSTGRES_CONTAINER="${COMPUTE_ENGINE_POSTGRES_CONTAINER:-compute-engine-postgres}"
+POSTGRES_IMAGE="${COMPUTE_ENGINE_POSTGRES_IMAGE:-postgres:15}"
+POSTGRES_HOST="${COMPUTE_ENGINE_POSTGRES_HOST:-127.0.0.1}"
+POSTGRES_PORT="${COMPUTE_ENGINE_POSTGRES_PORT:-5432}"
+POSTGRES_USER="${COMPUTE_ENGINE_POSTGRES_USER:-compute_engine}"
+POSTGRES_PASSWORD="${COMPUTE_ENGINE_POSTGRES_PASSWORD:-compute_engine}"
+POSTGRES_DB="${COMPUTE_ENGINE_POSTGRES_DB:-compute_engine}"
+POSTGRES_BIN_DIR="${COMPUTE_ENGINE_POSTGRES_BIN_DIR:-}"
 
 mkdir -p "$LOG_DIR" "$PID_DIR" "$PG_RUNTIME_DIR" "$PG_SOCKET_DIR"
 
-export CHEMOS_POSTGRES_DB="$POSTGRES_DB"
-export CHEMOS_POSTGRES_USER="$POSTGRES_USER"
-export CHEMOS_POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+export COMPUTE_ENGINE_POSTGRES_DB="$POSTGRES_DB"
+export COMPUTE_ENGINE_POSTGRES_USER="$POSTGRES_USER"
+export COMPUTE_ENGINE_POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
 
 detect_postgres_bin_dir() {
   local candidate=""
@@ -119,28 +119,28 @@ postgres_with_runtime() {
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/run_chemos.sh [command]
+Usage: scripts/run_compute_engine.sh [command]
 
 Commands:
-  postgres    Start PostgreSQL for ChemOS demo data. Prefer local Conda binaries, fallback to Docker.
-  gui          Start only the ChemOS Streamlit GUI.
+  postgres    Start PostgreSQL for ComputeEngine demo data. Prefer local Conda binaries, fallback to Docker.
+  gui          Start only the ComputeEngine Streamlit GUI.
   base         Start HPLC, Chemspeed, Optics simulators, then Streamlit GUI.
   with-atlas   Start Atlas too. Requires olympus/atlas optimizer stack.
-  workflow     Run ChemOS closed-loop laserworkflow.py. Requires Atlas, RDKit, Olympus, PostgreSQL.
-  status       Show status of PostgreSQL and ChemOS service processes.
-  stop         Stop ChemOS services tracked by PID files, then stop local PostgreSQL.
-  check        Check installed imports in the chemos Conda environment.
+  workflow     Run ComputeEngine closed-loop laserworkflow.py. Requires Atlas, RDKit, Olympus, PostgreSQL.
+  status       Show status of PostgreSQL and ComputeEngine service processes.
+  stop         Stop ComputeEngine services tracked by PID files, then stop local PostgreSQL.
+  check        Check installed imports in the compute_engine Conda environment.
 
 Default command: base
 
 Environment:
-  CHEMOS_CONDA_ENV       Conda environment name. Default: chemos
-  CHEMOS_STREAMLIT_HOST  Streamlit bind host. Default: 0.0.0.0
-  CHEMOS_STREAMLIT_PORT  Streamlit port. Default: 8501
-  CHEMOS_POSTGRES_HOST   PostgreSQL host. Default: 127.0.0.1
-  CHEMOS_POSTGRES_PORT   PostgreSQL host port. Default: 5432
-  CHEMOS_POSTGRES_DATA_DIR PostgreSQL data dir for local mode. Default: .runtime/chemos/postgres/data
-  CHEMOS_POSTGRES_BIN_DIR  PostgreSQL bin dir override for local mode.
+  COMPUTE_ENGINE_CONDA_ENV       Conda environment name. Default: compute_engine
+  COMPUTE_ENGINE_STREAMLIT_HOST  Streamlit bind host. Default: 0.0.0.0
+  COMPUTE_ENGINE_STREAMLIT_PORT  Streamlit port. Default: 8501
+  COMPUTE_ENGINE_POSTGRES_HOST   PostgreSQL host. Default: 127.0.0.1
+  COMPUTE_ENGINE_POSTGRES_PORT   PostgreSQL host port. Default: 5432
+  COMPUTE_ENGINE_POSTGRES_DATA_DIR PostgreSQL data dir for local mode. Default: .runtime/compute_engine/postgres/data
+  COMPUTE_ENGINE_POSTGRES_BIN_DIR  PostgreSQL bin dir override for local mode.
 USAGE
 }
 
@@ -151,15 +151,15 @@ run_in_env() {
 check_env() {
   run_in_env python -c "import sila2, streamlit, sqlalchemy, psycopg2, numpy, pandas; print('core imports ok')"
   (
-    cd "$CHEMOS_DIR/sila-hplc"
+    cd "$COMPUTE_ENGINE_DIR/sila-hplc"
     run_in_env python -c "import silahplc; print('silahplc ok')"
   )
   (
-    cd "$CHEMOS_DIR/sila-chemspeed"
+    cd "$COMPUTE_ENGINE_DIR/sila-chemspeed"
     run_in_env python -c "import chmspd_sila2_pkg; print('chmspd_sila2_pkg ok')"
   )
   (
-    cd "$CHEMOS_DIR/sila-optics"
+    cd "$COMPUTE_ENGINE_DIR/sila-optics"
     run_in_env python -c "import SilaOpticsTable; print('SilaOpticsTable ok')"
   )
   echo "Streamlit: $(run_in_env streamlit --version)"
@@ -431,7 +431,7 @@ status_postgres() {
 }
 
 status_services() {
-  echo "ChemOS runtime: $RUNTIME_DIR"
+  echo "ComputeEngine runtime: $RUNTIME_DIR"
   status_postgres
   status_named_service "hplc" "$HPLC_PORT"
   status_named_service "chemspeed" "$CHEMSPEED_PORT"
@@ -450,17 +450,17 @@ stop_services() {
 }
 
 start_gui() {
-  start_bg "streamlit" "$CHEMOS_DIR/streamlit" streamlit run Hello.py --server.address "$STREAMLIT_HOST" --server.port "$STREAMLIT_PORT"
+  start_bg "streamlit" "$COMPUTE_ENGINE_DIR/streamlit" streamlit run Hello.py --server.address "$STREAMLIT_HOST" --server.port "$STREAMLIT_PORT"
 }
 
 start_base_servers() {
-  start_bg "hplc" "$CHEMOS_DIR/sila-hplc" python start_server.py
-  start_bg "chemspeed" "$CHEMOS_DIR/sila-chemspeed" python start_server.py
-  start_bg "optics" "$CHEMOS_DIR/sila-optics" python start_server.py
+  start_bg "hplc" "$COMPUTE_ENGINE_DIR/sila-hplc" python start_server.py
+  start_bg "chemspeed" "$COMPUTE_ENGINE_DIR/sila-chemspeed" python start_server.py
+  start_bg "optics" "$COMPUTE_ENGINE_DIR/sila-optics" python start_server.py
 }
 
 start_atlas() {
-  start_bg "atlas" "$CHEMOS_DIR/sila-atlas" python start_server.py
+  start_bg "atlas" "$COMPUTE_ENGINE_DIR/sila-atlas" python start_server.py
 }
 
 start_postgres() {
@@ -491,7 +491,7 @@ start_postgres() {
   fi
 
   echo "PostgreSQL available at $POSTGRES_HOST:$POSTGRES_PORT database=$POSTGRES_DB user=$POSTGRES_USER"
-  echo "ChemOS source files still contain dblogin.py credentials; align them with this database before using DB-backed pages."
+  echo "ComputeEngine source files still contain dblogin.py credentials; align them with this database before using DB-backed pages."
 }
 
 command="${1:-base}"
@@ -515,28 +515,28 @@ case "$command" in
     trap cleanup EXIT INT TERM
     ensure_postgres
     start_gui
-    echo "ChemOS GUI: http://$STREAMLIT_HOST:$STREAMLIT_PORT"
+    echo "ComputeEngine GUI: http://$STREAMLIT_HOST:$STREAMLIT_PORT"
     echo "Press Ctrl+C to stop."
     wait
     ;;
   base)
     trap cleanup EXIT INT TERM
-    echo "Starting ChemOS base demo without Atlas."
+    echo "Starting ComputeEngine base demo without Atlas."
     ensure_postgres
     start_base_servers
     start_gui
-    echo "ChemOS GUI: http://$STREAMLIT_HOST:$STREAMLIT_PORT"
+    echo "ComputeEngine GUI: http://$STREAMLIT_HOST:$STREAMLIT_PORT"
     echo "Press Ctrl+C to stop."
     wait
     ;;
   with-atlas)
     trap cleanup EXIT INT TERM
-    echo "Starting ChemOS demo with Atlas. This requires olympus and atlas imports to be installed."
+    echo "Starting ComputeEngine demo with Atlas. This requires olympus and atlas imports to be installed."
     ensure_postgres
     start_atlas
     start_base_servers
     start_gui
-    echo "ChemOS GUI: http://$STREAMLIT_HOST:$STREAMLIT_PORT"
+    echo "ComputeEngine GUI: http://$STREAMLIT_HOST:$STREAMLIT_PORT"
     echo "Press Ctrl+C to stop."
     wait
     ;;
@@ -544,7 +544,7 @@ case "$command" in
     echo "Running closed-loop workflow. Requires PostgreSQL plus RDKit/Olympus/Atlas and live SiLA services."
     ensure_postgres
     (
-      cd "$CHEMOS_DIR"
+      cd "$COMPUTE_ENGINE_DIR"
       PYTHONNOUSERSITE=1 conda run -n "$ENV_NAME" python laserworkflow.py
     )
     ;;

@@ -33,14 +33,14 @@ ORCA_METHOD_LINES = {
 }
 
 
-class OrcaChemosLaserAdapter:
+class OrcaComputeEngineLaserAdapter:
     """Run a real local ORCA refinement workflow.
 
     The API exposes only backend-owned presets. Users cannot provide shell
     commands, queue scripts, executable paths, or arbitrary ORCA input text.
     """
 
-    workflow_type = "ORCA_CHEMOS_LASER"
+    workflow_type = "ORCA_COMPUTE_ENGINE_LASER"
     engine = "ORCA"
     step_labels = ORCA_STEP_LABELS
 

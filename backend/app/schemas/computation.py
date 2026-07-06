@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 ComputationStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
-WorkflowType = Literal["LOCAL_STRUCTURE", "LOCAL_XTB", "ORCA_CHEMOS_LASER"]
+WorkflowType = Literal["LOCAL_STRUCTURE", "LOCAL_XTB", "ORCA_COMPUTE_ENGINE_LASER"]
 EngineType = Literal["LOCAL", "RDKit", "OPENBABEL", "XTB", "ORCA"]
 LegacyWorkflowType = Literal["MOCK_XTB_ONLY", "MOCK_LASER"]
 LegacyEngineType = Literal["MOCK"]

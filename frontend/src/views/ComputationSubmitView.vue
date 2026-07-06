@@ -34,7 +34,7 @@ const rules = {
 const workflowOptions = [
   { label: 'Local 结构生成', value: 'LOCAL_STRUCTURE' },
   { label: 'xTB / CREST 粗优化', value: 'LOCAL_XTB' },
-  { label: 'ORCA 精加工', value: 'ORCA_CHEMOS_LASER' },
+  { label: 'ORCA 精加工', value: 'ORCA_COMPUTE_ENGINE_LASER' },
 ]
 
 const engineOptionsByWorkflow = {
@@ -44,7 +44,7 @@ const engineOptionsByWorkflow = {
     { label: 'OpenBabel', value: 'OPENBABEL' },
   ],
   LOCAL_XTB: [{ label: 'xTB', value: 'XTB' }],
-  ORCA_CHEMOS_LASER: [{ label: 'ORCA', value: 'ORCA' }],
+  ORCA_COMPUTE_ENGINE_LASER: [{ label: 'ORCA', value: 'ORCA' }],
 }
 
 const methodOptionsByWorkflow = {
@@ -57,7 +57,7 @@ const methodOptionsByWorkflow = {
     { label: 'GFN1-xTB', value: 'GFN1-xTB' },
     { label: 'GFN0-xTB', value: 'GFN0-xTB' },
   ],
-  ORCA_CHEMOS_LASER: [
+  ORCA_COMPUTE_ENGINE_LASER: [
     { label: 'B3LYP / def2-SVP', value: 'ORCA_B3LYP_DEF2_SVP' },
     { label: 'PBE0 / def2-SVP', value: 'ORCA_PBE0_DEF2_SVP' },
   ],

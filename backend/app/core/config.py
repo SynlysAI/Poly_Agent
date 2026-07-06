@@ -32,9 +32,9 @@ class Settings:
         )
         self.orca_execution_mode: str = os.getenv(
             "ORCA_EXECUTION_MODE",
-            os.getenv("ORCA_CHEMOS_EXECUTION_MODE", "disabled"),
+            os.getenv("ORCA_COMPUTE_ENGINE_EXECUTION_MODE", "disabled"),
         ).strip().lower()
-        self.orca_chemos_execution_mode: str = self.orca_execution_mode
+        self.orca_compute_engine_execution_mode: str = self.orca_execution_mode
         self.orca_license_available: bool = os.getenv("ORCA_LICENSE_AVAILABLE", "false").strip().lower() in {
             "1",
             "true",
@@ -85,6 +85,18 @@ class Settings:
             "yes",
             "on",
         }
+
+        # Stale-run reaper 配置
+        self.stale_run_heartbeat_seconds: int = int(os.getenv("STALE_RUN_HEARTBEAT_SECONDS", "60"))
+        # running 任务的 heartbeat 超过此秒数未更新则判定为过期
+        # 必须 > heartbeat 间隔（5s）；60s 提供 12 个 heartbeat 周期的容错
+        self.stale_run_wallclock_safety_factor: float = float(
+            os.getenv("STALE_RUN_WALLCLOCK_SAFETY_FACTOR", "3.0")
+        )
+        # 整体 wallclock 超时 = max_wallclock_seconds * safety_factor
+        # 默认 1800s max_wallclock × 3.0 = 90 分钟后强制失败
+        self.stale_reaper_interval_seconds: int = int(os.getenv("STALE_REAPER_INTERVAL_SECONDS", "60"))
+        # 后台 reaper 任务运行间隔
 
         # ALchemist 主动学习工具后端地址
         self.alchemist_backend_url: str = os.getenv(

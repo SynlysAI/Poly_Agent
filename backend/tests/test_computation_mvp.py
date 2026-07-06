@@ -229,7 +229,8 @@ class ComputationMvpSmokeTest(ComputationTestCase):
             request_id="req-failed-run",
         )
         run_id = created.run_id
-        result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
+        with patch("app.computation_adapters.local_xtb.shutil.which", return_value=None):
+            result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
         self.assertEqual(result.status, "failed")
 
         detail = service.get_run(run_id)

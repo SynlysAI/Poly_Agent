@@ -1,6 +1,74 @@
 # Poly Agent — 高分子智能分析平台
 
-**Poly Agent** 是 AI4MS 门户下的高分子材料性能预测子应用，与 Spec Agent 同属一个产品线。为用户提供高分子样品性能指标预测、任务管理和实验数据浏览功能。
+**Poly Agent** 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec Agent](https://github.com/SynlysAI/Spec_Agent) 同属一个产品线。平台围绕高分子材料研发场景，提供实验设计与贝叶斯优化（Alchemist）、计算智能任务管理（ComputeEngine Computation）、以及正在建设中的 AI 驱动材料研发引擎（ResearchEngine），帮助材料科学家系统化地设计实验、管理计算任务、追踪优化闭环。
+
+## 功能概览
+
+### 1. Alchemist — 实验设计与贝叶斯优化
+
+基于贝叶斯优化（主动学习）的实验设计工具，用尽量少的实验次数找到最优实验条件。完整 6 步闭环流程：
+
+| 步骤 | 能力 |
+|------|------|
+| 变量定义 | 支持连续实值、整数、分类、离散值四种变量类型 |
+| 实验设计 (DoE) | 11 种设计方法：LHS、Sobol、全/部分因子、CCD、Box-Behnken、Plackett-Burman 等；支持 OED 最优设计（D/A/I-optimal） |
+| 实验数据 | CSV 导入、手动录入、设计矩阵回填，统计摘要展示 |
+| GP 建模 | 高斯过程代理模型，支持 Matern/RBF/IBNN 核函数，scikit-learn/BoTorch 后端 |
+| 采集优化 | EI/PI/UCB/qEI/qUCB 采集策略，批量推荐下一轮实验，闭环迭代 |
+| 可视化诊断 | Parity 图、CV 指标曲线、Q-Q 图、校准曲线、等值线图、超参数展示 |
+
+支持 LLM 辅助实验条件建议和效应项推荐，Session 持久化管理优化项目。
+
+> 详细操作流程见 [doc/optimization-workflow-user-guide.md](doc/optimization-workflow-user-guide.md)
+
+### 2. ComputeEngine — 计算智能模块
+
+可演示的计算智能闭环系统，支持计算任务提交、worker 执行、产物管理和优化 campaign。
+
+| 能力 | 说明 |
+|------|------|
+| 计算任务管理 | 创建/列表/详情/取消/重试，支持 workflow/engine 白名单校验 |
+| 多引擎适配 | Mock、Local Structure (RDKit/OpenBabel)、Local xTB、ORCA ComputeEngine Laser (fixture) |
+| Worker 执行模型 | 原子领取 queued run、初始化 timeline、调用 adapter、统一落库、heartbeat、stale reclaim |
+| Artifact 资产 | 自动登记产物（structure/xyz/sdf/spectrum/log 等），支持预览和下载 |
+| Campaign 优化 | 创建 campaign、导入候选、planner 生成 suggestion、自动 observation 回填、下一轮推荐 |
+| 集成状态 | 管理 service integration 配置、secret refs，手动 check 并回写状态 |
+| Demo 兜底 | MongoDB 不可用时自动回退本地 JSON store |
+
+> 当前进度：MVP 约 92-95% 完成，主流程跑通。详见 [doc/compute-engine-computation-progress-and-plan.md](doc/compute-engine-computation-progress-and-plan.md)
+
+### 3. ResearchEngine — 高分子材料 AI 研发引擎（规划中）
+
+面向高分子材料研发场景的下一代平台能力，构建"双通道研发框架"：
+
+- **人工算法触发通道**：材料科学家在工作台中主动选择文献检索、结构表示、计算、性质预测、BO/MOBO 等工具
+- **AutoResearch 自动编排通道**：系统基于 ProblemSpec 自动组织研究阶段、选择算法、生成候选、触发实验、回填结果
+
+两条通道共享 ProblemSpec、AlgorithmRun、ResearchRun、Observation、AuditEvent 等统一底座。
+
+> 实施计划拆分为 6 个阶段，详见 [doc/research-engine-plan-00-roadmap.md](doc/research-engine-plan-00-roadmap.md)
+
+### 4. 基础功能
+
+- **认证体系**：与 AI4MS 门户共享账户体系，HMAC-SHA256 令牌 + 邀请码注册，支持门户 SSO 免登录
+- **工具服务**：集成状态监控，支持外部服务（ComputeEngine、SpecLabOS 等）配置和健康检查
+- **数据库管理**：管理员面板，管理用户、邀请码和数据
+
+## 项目状态
+
+| 模块 | 状态 | 完成度 |
+|------|------|--------|
+| Alchemist 实验设计与优化 | ✅ MVP 完成 | ~95% |
+| ComputeEngine 计算智能 | ✅ MVP 基本完成 | ~92-95% |
+| Research Engine | 📋 规划阶段 | 方案设计完成，待实施 |
+| 认证与基础功能 | ✅ 完成 | ~95% |
+| 真实外部系统接入 (ORCA/HPC/SpecLabOS) | 📋 规划中 | 后续阶段 |
+
+当前版本已适合作为"可演示计算智能模块"的基线。下一步重点：
+- 真实 ORCA/HPC/AiiDA executor 接入
+- SpecLabOS 真实实验系统对接
+- ResearchEngine P0 阶段（双通道闭环）
+- 生产级 worker 运维和持久化
 
 ## 技术栈
 
@@ -8,7 +76,9 @@
 |---|------|
 | 后端 | Python 3.12 + FastAPI + MongoDB |
 | 前端 | Vue 3 + Element Plus + Vite |
+| 计算引擎 | RDKit, OpenBabel, xTB, ORCA (fixture), BoTorch, scikit-learn |
 | 认证 | HMAC-SHA256 令牌，与 AI4MS 门户共享账户体系 |
+| 部署 | PM2, Conda |
 
 ## 项目结构
 
@@ -16,38 +86,67 @@
 Poly_Agent/
 ├── backend/
 │   ├── app/
-│   │   ├── api/v1/                # API 路由 (health, auth, admin)
-│   │   ├── core/                  # 配置、令牌认证、日志
-│   │   ├── infra/                 # MongoDB 连接、数据仓储
-│   │   ├── schemas/               # Pydantic 数据模型
-│   │   ├── services/              # 认证服务 (登录/注册/邀请码)
-│   │   └── main.py                # FastAPI 入口 (托管前端静态文件)
-│   ├── .env.example               # 环境变量模板
+│   │   ├── api/v1/                    # API 路由
+│   │   │   └── endpoints/             # health, auth, admin, optimization
+│   │   │                              #   computations, integrations, llm, alchemist_proxy
+│   │   ├── computation_adapters/      # 计算引擎适配器
+│   │   │   ├── base.py                #   adapter 协议
+│   │   │   ├── registry.py            #   统一派发
+│   │   │   ├── local_structure.py      #   RDKit/OpenBabel 结构生成
+│   │   │   ├── local_xtb.py            #   xTB 计算
+│   │   │   └── orca_compute_engine_laser.py    #   ORCA ComputeEngine Laser
+│   │   ├── core/                      # 配置、令牌认证、日志、LLM 客户端
+│   │   ├── infra/                     # MongoDB 连接、数据仓储、demo store
+│   │   ├── schemas/                   # Pydantic 数据模型 (computation, optimization, integrations...)
+│   │   ├── services/                  # 业务逻辑 (auth, computation, optimization, planner, integrations)
+│   │   ├── workers/                   # computation worker (原子领取、执行、落库)
+│   │   └── main.py                    # FastAPI 入口 (托管前端静态文件)
+│   ├── tests/
+│   ├── .env.example
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── api/                   # Axios 客户端与 API 调用
-│   │   ├── auth/                  # 认证状态管理 + 门户 SSO
-│   │   ├── router/                # 路由配置 + 导航守卫
-│   │   ├── views/                 # 页面组件
-│   │   │   ├── DashboardView      # 工作台
-│   │   │   ├── TaskSubmitView     # 任务提交 (性能预测)
-│   │   │   ├── TaskCenterView     # 任务中心
-│   │   │   ├── DialogueView       # 问答对话
-│   │   │   ├── ToolServicesView   # 工具服务
-│   │   │   ├── DatabaseManagementView  # 数据库管理 (管理员)
-│   │   │   ├── LoginView          # 登录
-│   │   │   └── RegisterView       # 邀请码注册
-│   │   ├── App.vue                # 主布局 (侧边栏 + 顶栏)
-│   │   ├── style.css              # 全局样式 (DESIGN.md 规范)
+│   │   ├── api/                       # Axios 客户端与 API 调用
+│   │   ├── auth/                      # 认证状态管理 + 门户 SSO
+│   │   ├── router/                    # 路由配置 + 导航守卫
+│   │   ├── views/
+│   │   │   ├── DashboardView.vue      # 工作台
+│   │   │   ├── TaskSubmitView.vue     # 性能预测任务提交
+│   │   │   ├── TaskCenterView.vue     # 任务中心
+│   │   │   ├── OptimizationHomeView.vue  # Alchemist 优化工作台
+│   │   │   ├── ComputationSubmitView.vue # 计算任务提交
+│   │   │   ├── ComputationRunsView.vue   # 计算任务列表
+│   │   │   ├── CampaignsView.vue         # 优化 Campaign 列表
+│   │   │   ├── CampaignDetailView.vue    # Campaign 详情
+│   │   │   ├── ToolServicesView.vue      # 工具服务集成管理
+│   │   │   ├── DatabaseManagementView.vue # 数据库管理 (管理员)
+│   │   │   ├── DialogueView.vue          # 问答对话
+│   │   │   ├── AlchemistToolView.vue     # Alchemist 工具入口
+│   │   │   └── alchemist/               # Alchemist 子面板 (变量/实验/建模/采集/可视化)
+│   │   ├── App.vue                    # 主布局 (侧边栏 + 顶栏)
+│   │   ├── style.css                  # 全局样式
 │   │   └── main.js
-│   ├── public/brand/              # 品牌 Logo
+│   ├── public/brand/                  # 品牌 Logo
 │   ├── index.html
 │   ├── vite.config.js
 │   └── package.json
-├── DESIGN.md                      # 前端设计规范文档
-├── ecosystem.config.js            # PM2 部署配置
-└── .gitignore
+├── doc/                               # 文档
+│   ├── optimization-workflow-user-guide.md       # Alchemist 操作流程
+│   ├── computation-workflows-user-guide.md        # 计算工作流用户指南
+│   ├── compute-engine-computation-product-prd.md          # ComputeEngine 产品需求文档
+│   ├── compute-engine-computation-product-design.md       # ComputeEngine 产品设计
+│   ├── compute-engine-computation-migration-design.md     # ComputeEngine 迁移设计
+│   ├── compute-engine-computation-progress-and-plan.md    # ComputeEngine 进度与计划
+│   ├── poly-agent-toolchain-deployment-pack.md    # 工具链部署包
+│   ├── research-engine-and-auto-research-design.md # ResearchEngine 技术方案
+│   ├── research-engine-plan-00-roadmap.md         # ResearchEngine 实施路线图
+│   └── research-engine-plan-01~06-*.md            # ResearchEngine 各阶段计划
+├── refer/                             # 参考资料 (AutoResearchClaw, ComputeEngine, SpecLabOS)
+├── scripts/                           # 部署与运维脚本
+├── deploy/                            # 部署配置
+├── DESIGN.md                          # 前端设计规范
+├── ecosystem.config.js                # PM2 部署配置
+└── environment.yml                    # Conda 环境定义
 ```
 
 ## 快速开始

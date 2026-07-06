@@ -178,3 +178,22 @@ def disable_invite_code(invite_id: str) -> ApiResponse[AdminInviteCodeStatusData
         message="ok",
         data=AdminInviteCodeStatusData(invite_id=invite_id, status="disabled"),
     )
+
+
+@router.post("/reap-stale-runs", response_model=ApiResponse[dict])
+def reap_stale_runs() -> ApiResponse[dict]:
+    """批量清理 heartbeat 过期或 wallclock 超时的 running 计算任务。
+
+    扫描所有 running 状态但 worker heartbeat 已过期（或 wallclock 超时）的任务，
+    并将其标记为 failed（retryable）。
+    返回清理的 run 数量和 ID 列表。
+    """
+    from app.services.computation_service import ComputationService
+
+    service = ComputationService()
+    failed_ids = service.fail_stale_running_runs(actor_user_id="admin-reaper")
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data={"failed_count": len(failed_ids), "failed_run_ids": failed_ids},
+    )

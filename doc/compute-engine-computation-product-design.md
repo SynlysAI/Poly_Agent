@@ -1,4 +1,4 @@
-# ChemOS 计算智能模块产品设计文档
+# ComputeEngine 计算智能模块产品设计文档
 
 ## 1. 文档信息
 
@@ -6,10 +6,10 @@
 |---|---|
 | 文档状态 | Current architecture design aligned to implemented code |
 | 日期 | 2026-07-02 |
-| 关联文档 | `doc/chemos-computation-product-prd.md`、`doc/chemos-computation-migration-design.md`、`doc/chemos-computation-progress-and-plan.md` |
+| 关联文档 | `doc/compute-engine-computation-product-prd.md`、`doc/compute-engine-computation-migration-design.md`、`doc/compute-engine-computation-progress-and-plan.md` |
 | 代码范围 | `backend/app`、`backend/tests`、`frontend/src` |
 
-本文描述当前 ChemOS 计算智能模块在 Poly_Agent 中的实际设计。历史设计中的“新增模块”若已落地，本文按当前实现记录；未落地内容单独列为后续扩展。
+本文描述当前 ComputeEngine 计算智能模块在 Poly_Agent 中的实际设计。历史设计中的“新增模块”若已落地，本文按当前实现记录；未落地内容单独列为后续扩展。
 
 ## 2. 设计原则
 
@@ -33,7 +33,7 @@ Vue frontend
           -> ComputationService
           -> ComputationWorker
               -> adapter registry
-              -> mock/local_structure/local_xtb/orca_chemos_fixture
+              -> mock/local_structure/local_xtb/orca_compute_engine_fixture
           -> artifact preview/download/spectrum/structure
       -> optimization API
           -> OptimizationService
@@ -47,7 +47,7 @@ Vue frontend
 
 外部系统边界：
 - RDKit/OpenBabel/xTB 是可选本地依赖，不阻塞应用启动。
-- ORCA/ChemOS 目前支持 fixture/parser；external executor 未实现。
+- ORCA/ComputeEngine 目前支持 fixture/parser；external executor 未实现。
 - AiiDA、SpecLabOS、Atlas/Olympus 仍为后续 adapter，不进入主后端必需依赖。
 
 ## 4. 组件职责
@@ -115,7 +115,7 @@ Vue frontend
 | `MOCK_LASER` | `MOCK` | `MockComputationAdapter` |
 | `LOCAL_STRUCTURE` | `LOCAL`、`RDKit`、`OPENBABEL` | `LocalStructureAdapter` |
 | `LOCAL_XTB` | `XTB` | `LocalXtbAdapter` |
-| `ORCA_CHEMOS_LASER` | `ORCA` | `OrcaChemosLaserAdapter` fixture/parser |
+| `ORCA_COMPUTE_ENGINE_LASER` | `ORCA` | `OrcaComputeEngineLaserAdapter` fixture/parser |
 
 不支持的组合在 create run 时返回 400。
 
@@ -251,7 +251,7 @@ Descriptor schema 当前为 `candidate_descriptor.v1`：
 | GET | `/api/v1/optimization/campaigns/{campaign_id}` | campaign 详情 |
 | GET | `/api/v1/optimization/campaigns/{campaign_id}/history` | history |
 | POST | `/api/v1/optimization/campaigns/{campaign_id}/candidates:import` | JSON 导入候选 |
-| POST | `/api/v1/optimization/campaigns/{campaign_id}/candidates:import-chemos-demo` | 导入 ChemOS demo 候选 |
+| POST | `/api/v1/optimization/campaigns/{campaign_id}/candidates:import-compute-engine-demo` | 导入 ComputeEngine demo 候选 |
 | POST | `/api/v1/optimization/campaigns/{campaign_id}/suggestions` | 生成 suggestion |
 | POST | `/api/v1/optimization/suggestions/{suggestion_id}/submit-computation` | suggestion 转 computation |
 | POST | `/api/v1/optimization/campaigns/{campaign_id}/observations` | 手工写 observation |
@@ -323,12 +323,12 @@ Local xTB:
 - `XTB_RUN`
 - `XTB_PARSE_RESULT`
 
-ORCA/ChemOS fixture:
-- `CHEMOS_PREPARE_STRUCTURE`
-- `CHEMOS_XTB_CREST`
-- `CHEMOS_ORCA`
-- `CHEMOS_SPECTRA_PARSE`
-- `CHEMOS_GAIN_PARSE`
+ORCA/ComputeEngine fixture:
+- `COMPUTE_ENGINE_PREPARE_STRUCTURE`
+- `COMPUTE_ENGINE_XTB_CREST`
+- `COMPUTE_ENGINE_ORCA`
+- `COMPUTE_ENGINE_SPECTRA_PARSE`
+- `COMPUTE_ENGINE_GAIN_PARSE`
 
 ### 7.4 错误处理
 
@@ -393,7 +393,7 @@ Planner 返回 `PlannerResponse`：
 
 当前支持：
 - 手工 observation。
-- `MOCK_LASER` 或 `ORCA_CHEMOS_LASER` completed run 转 computation observation。
+- `MOCK_LASER` 或 `ORCA_COMPUTE_ENGINE_LASER` completed run 转 computation observation。
 - automation 配置下，worker 完成后自动生成 observation 和下一轮 suggestion。
 
 当前缺口：
@@ -479,7 +479,7 @@ Planner 返回 `PlannerResponse`：
 | `POLY_AGENT_OUTPUT_ROOT` | `.runtime/outputs` | artifact 输出 |
 | `AUTH_ENABLED` | `false` | 是否启用登录鉴权 |
 | `MONGODB_HOST/PORT/...` | localhost | 主业务 Mongo |
-| `ORCA_CHEMOS_EXECUTION_MODE` | `disabled` | `disabled/fixture/external` |
+| `ORCA_COMPUTE_ENGINE_EXECUTION_MODE` | `disabled` | `disabled/fixture/external` |
 | `ORCA_LICENSE_AVAILABLE` | `false` | ORCA external 前置检查 |
 | `HPC_QUEUE_AVAILABLE` | `false` | HPC external 前置检查 |
 | `HPC_QUEUE_NAME` | `default` | 队列名摘要 |
@@ -494,7 +494,7 @@ PYTHONPATH=backend python -m unittest \
   backend.tests.test_computation_service \
   backend.tests.test_local_structure_adapter \
   backend.tests.test_local_xtb_adapter \
-  backend.tests.test_orca_chemos_laser_workflow \
+  backend.tests.test_orca_compute_engine_laser_workflow \
   backend.tests.test_optimization_service \
   backend.tests.test_integration_config_service
 ```
@@ -513,7 +513,7 @@ PYTHONPATH=backend python -m unittest \
 | AUTH 开启后缺 owner 过滤 | 数据泄露 | Phase A 优先补齐权限 |
 | worker 崩溃后 run 卡 running | 用户无法恢复任务 | heartbeat/stale reclaim |
 | running cancel 不杀子进程 | 资源泄露 | local adapter cancel hook |
-| ORCA external 执行器未实现 | 真实 ChemOS laser 不能跑 | 先实现 fake executor 边界 |
+| ORCA external 执行器未实现 | 真实 ComputeEngine laser 不能跑 | 先实现 fake executor 边界 |
 | artifact 绝对路径暴露 | 部署信息泄露 | 后续改 storage scheme |
 | Atlas/Olympus 依赖复杂 | 优化能力受限 | 轻量 tanimoto 保底，Atlas 独立 adapter |
 

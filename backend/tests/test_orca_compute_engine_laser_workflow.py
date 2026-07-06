@@ -19,7 +19,7 @@ except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 
-class OrcaChemosLaserWorkflowTest(ComputationTestCase):
+class OrcaComputeEngineLaserWorkflowTest(ComputationTestCase):
     """Validate real local ORCA workflow boundaries."""
 
     def setUp(self) -> None:
@@ -30,14 +30,14 @@ class OrcaChemosLaserWorkflowTest(ComputationTestCase):
 
     def tearDown(self) -> None:
         settings.orca_execution_mode = self.original_orca_mode
-        settings.orca_chemos_execution_mode = self.original_orca_mode
+        settings.orca_compute_engine_execution_mode = self.original_orca_mode
         settings.orca_license_available = self.original_orca_license
         super().tearDown()
 
     def test_orca_request_rejects_shell_command_and_local_path_parameters(self) -> None:
         with self.assertRaises(ValidationError):
             ComputationCreateRequest(
-                workflow_type="ORCA_CHEMOS_LASER",
+                workflow_type="ORCA_COMPUTE_ENGINE_LASER",
                 engine="ORCA",
                 molecule={"smiles": "CCO"},
                 parameters={"method": "/tmp/run_orca.sh"},
@@ -45,7 +45,7 @@ class OrcaChemosLaserWorkflowTest(ComputationTestCase):
 
         with self.assertRaises(ValidationError):
             ComputationCreateRequest(
-                workflow_type="ORCA_CHEMOS_LASER",
+                workflow_type="ORCA_COMPUTE_ENGINE_LASER",
                 engine="ORCA",
                 molecule={"smiles": "CCO"},
                 parameters={"method": "ORCA_B3LYP_DEF2_SVP", "shell_command": "orca input.inp"},
@@ -53,7 +53,7 @@ class OrcaChemosLaserWorkflowTest(ComputationTestCase):
 
     def test_orca_unconfigured_failure_is_explicit(self) -> None:
         settings.orca_execution_mode = "disabled"
-        settings.orca_chemos_execution_mode = "disabled"
+        settings.orca_compute_engine_execution_mode = "disabled"
         created = self._create_orca_run("req-orca-disabled")
 
         result = ComputationWorker(worker_id="worker-test").acquire_and_run_one()
@@ -66,7 +66,7 @@ class OrcaChemosLaserWorkflowTest(ComputationTestCase):
 
     def test_orca_license_missing_fails_closed(self) -> None:
         settings.orca_execution_mode = "local"
-        settings.orca_chemos_execution_mode = "local"
+        settings.orca_compute_engine_execution_mode = "local"
         settings.orca_license_available = False
         created = self._create_orca_run("req-orca-license")
 
@@ -79,7 +79,7 @@ class OrcaChemosLaserWorkflowTest(ComputationTestCase):
 
     def test_orca_local_success_registers_inputs_logs_and_result(self) -> None:
         settings.orca_execution_mode = "local"
-        settings.orca_chemos_execution_mode = "local"
+        settings.orca_compute_engine_execution_mode = "local"
         settings.orca_license_available = True
         fake_bin = self._prepare_fake_toolchain()
         original_path = os.environ.get("PATH", "")
@@ -108,7 +108,7 @@ class OrcaChemosLaserWorkflowTest(ComputationTestCase):
     def _create_orca_run(self, request_id: str):
         return self.service.create_run(
             ComputationCreateRequest(
-                workflow_type="ORCA_CHEMOS_LASER",
+                workflow_type="ORCA_COMPUTE_ENGINE_LASER",
                 engine="ORCA",
                 molecule={"smiles": "CCO", "name": "orca-test"},
                 parameters={"method": "ORCA_B3LYP_DEF2_SVP"},

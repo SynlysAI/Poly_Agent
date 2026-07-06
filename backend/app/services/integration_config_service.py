@@ -24,8 +24,8 @@ from app.schemas.integrations import ServiceIntegrationUpsertRequest
 
 SERVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "speclabos": {"display_name": "SpecLabOS", "service_type": "experiment"},
-    "aiida": {"display_name": "AiiDA", "service_type": "provenance"},
     "atlas": {"display_name": "Atlas optimizer", "service_type": "optimizer"},
+    "alchemist-backend": {"display_name": "ALchemist backend", "service_type": "optimizer"},
     "computation-worker": {"display_name": "Computation worker", "service_type": "worker"},
     "artifact-store": {"display_name": "Artifact store", "service_type": "artifact"},
 }
@@ -36,10 +36,13 @@ class IntegrationConfigService:
 
     def list_configs(self) -> ServiceIntegrationListData:
         """查询持久化配置列表，补齐未保存的默认集成项。"""
-        persisted = {
-            item["service_key"]: ServiceIntegrationConfig.model_validate(item)
-            for item in ServiceIntegrationRepository.list_configs()
-        }
+        persisted = {}
+        for item in ServiceIntegrationRepository.list_configs():
+            key = item.get("service_key")
+            if key not in SERVICE_DEFAULTS:
+                # 跳过已从代码中移除的服务（如 AiiDA）
+                continue
+            persisted[key] = ServiceIntegrationConfig.model_validate(item)
         items = []
         for service_key in SERVICE_DEFAULTS:
             if service_key in persisted:

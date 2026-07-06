@@ -1,4 +1,4 @@
-# ChemOS 计算智能模块产品需求文档 PRD
+# ComputeEngine 计算智能模块产品需求文档 PRD
 
 ## 1. 文档信息
 
@@ -6,10 +6,10 @@
 |---|---|
 | 文档状态 | Current product requirements aligned to implemented code |
 | 日期 | 2026-07-02 |
-| 关联文档 | `doc/chemos-computation-product-design.md`、`doc/chemos-computation-migration-design.md`、`doc/chemos-computation-progress-and-plan.md` |
-| 代码范围 | `backend/app`、`backend/tests`、`frontend/src`、`scripts/run_chemos.sh` |
+| 关联文档 | `doc/compute-engine-computation-product-design.md`、`doc/compute-engine-computation-migration-design.md`、`doc/compute-engine-computation-progress-and-plan.md` |
+| 代码范围 | `backend/app`、`backend/tests`、`frontend/src`、`scripts/run_compute_engine.sh` |
 
-本文定义 Poly_Agent 中 ChemOS 计算智能模块的当前产品需求、已交付范围和剩余缺口。它以当前代码为基线，而不是早期设计假设。
+本文定义 Poly_Agent 中 ComputeEngine 计算智能模块的当前产品需求、已交付范围和剩余缺口。它以当前代码为基线，而不是早期设计假设。
 
 ## 2. 背景和当前事实
 
@@ -19,7 +19,7 @@
 |---|---|
 | 计算任务 | 已有 computation API、worker、artifact、audit、mock/local/ORCA fixture adapter |
 | 本地计算 | 已支持 RDKit/OpenBabel 结构生成和 xTB subprocess adapter |
-| ORCA/ChemOS | 已支持受控 `ORCA_CHEMOS_LASER` fixture/parser 模式；真实 external executor 未接入 |
+| ORCA/ComputeEngine | 已支持受控 `ORCA_COMPUTE_ENGINE_LASER` fixture/parser 模式；真实 external executor 未接入 |
 | 优化闭环 | 已有 campaign/candidate/suggestion/observation，fallback 和 tanimoto planner，自动 observation/下一轮 suggestion |
 | 集成状态 | 已有 integration status 探测和 service integration 后端配置管理 |
 | 前端 | 已有 computation submit/runs、campaign list/detail、Tool Services 状态页 |
@@ -28,11 +28,11 @@
 ### 2.2 仍需解决的问题
 
 - AUTH 开启后，computation、campaign、artifact、audit 仍缺完整 owner 权限隔离。
-- candidate 导入只支持 JSON/ChemOS demo，缺 CSV 和失败行/重复行报告。
+- candidate 导入只支持 JSON/ComputeEngine demo，缺 CSV 和失败行/重复行报告。
 - suggestion schema 有 `rejected/failed`，但还没有 reject/failed API 和原因记录。
 - 手工 observation 还未按 campaign objectives 严格校验字段。
 - worker 还缺 heartbeat、stale running reclaim 和运行中 cancel 的资源终止语义。
-- ORCA/ChemOS 目前是 fixture/parser 验证，真实 HPC/AiiDA/external executor 尚未实现。
+- ORCA/ComputeEngine 目前是 fixture/parser 验证，真实 HPC/AiiDA/external executor 尚未实现。
 - Tool Services 前端还不能管理后端已实现的 integration config。
 
 ## 3. 产品目标
@@ -53,7 +53,7 @@
 | N1 | 让前端传 shell command、本地路径或任意 job script | 安全和审计风险不可接受 |
 | N2 | 把 AiiDA PostgreSQL 当成 Poly_Agent 主业务库 | AiiDA 是外部 provenance 系统，业务只保存引用和摘要 |
 | N3 | 把 ORCA license/HPC key/SpecLabOS token 写入业务库 | 敏感配置只能通过环境变量或 secret reference |
-| N4 | 迁移 ChemOS Streamlit/SiLA 仪器层作为主界面 | Poly_Agent 已有 Vue/FastAPI 架构，实验设备由 SpecLabOS 承担 |
+| N4 | 迁移 ComputeEngine Streamlit/SiLA 仪器层作为主界面 | Poly_Agent 已有 Vue/FastAPI 架构，实验设备由 SpecLabOS 承担 |
 | N5 | 第一版强依赖 Atlas/Olympus | 依赖重且未在当前环境完整验证，当前用轻量 tanimoto 替代 |
 
 ## 5. 用户和角色
@@ -73,7 +73,7 @@
 | 模块 | 已交付能力 |
 |---|---|
 | Computation | 创建、列表、详情、取消、重试、worker 执行、timeline |
-| Workflow | `MOCK_XTB_ONLY`、`MOCK_LASER`、`LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_CHEMOS_LASER` fixture |
+| Workflow | `MOCK_XTB_ONLY`、`MOCK_LASER`、`LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER` fixture |
 | Artifact | metadata、preview、structure、spectrum、download、checksum、parser metadata |
 | Local adapter | RDKit/OpenBabel 结构生成，xTB fake/real subprocess 执行边界 |
 | Optimization | campaign/candidate/suggestion/observation/history |
@@ -92,7 +92,7 @@
 | Observation | 按 objectives 校验 required/allowed values |
 | Worker | heartbeat、stale reclaim、running cancel |
 | 前端 | integration config 管理、结构 viewer、前端 e2e |
-| ORCA/ChemOS | external executor、真实 raw output parser 样本验证 |
+| ORCA/ComputeEngine | external executor、真实 raw output parser 样本验证 |
 
 ## 7. 核心用户流程
 
@@ -160,7 +160,7 @@
 | COMP-006 | P0 | 重试任务 | 已完成 MVP，缺 retry policy |
 | COMP-007 | P1 | local 结构生成 | 已完成 MVP |
 | COMP-008 | P1 | local xTB | 已完成 MVP |
-| COMP-009 | P1/P2 | ORCA/ChemOS external executor | 未完成，已有 fixture/parser |
+| COMP-009 | P1/P2 | ORCA/ComputeEngine external executor | 未完成，已有 fixture/parser |
 | COMP-010 | P2 | AiiDA 状态同步 | 未完成 |
 
 ### 8.2 Artifact 和结果展示
