@@ -337,6 +337,10 @@ export function freezeProblemSpec(problemSpecId) {
   return apiClient.post(`/research-engine/problem-specs/${problemSpecId}/freeze`).then(unwrapResponse)
 }
 
+export function archiveProblemSpec(problemSpecId, payload = {}) {
+  return apiClient.post(`/research-engine/problem-specs/${problemSpecId}:archive`, payload).then(unwrapResponse)
+}
+
 // ── ExecutionDecision ──
 
 export function createExecutionDecision(problemSpecId, payload) {
@@ -359,6 +363,16 @@ export function listAlgorithms(params = {}) {
 
 export function getAlgorithm(algorithmId) {
   return apiClient.get(`/research-engine/algorithms/${algorithmId}`).then(unwrapResponse)
+}
+
+// ── ResearchEngine Examples ──
+
+export function listResearchEngineExamples() {
+  return apiClient.get('/research-engine/examples').then(unwrapResponse)
+}
+
+export function instantiateResearchEngineExample(exampleId) {
+  return apiClient.post(`/research-engine/examples/${exampleId}/instantiate`).then(unwrapResponse)
 }
 
 // ── AlgorithmRun ──
@@ -389,6 +403,10 @@ export function getManualWorkflow(workflowId) {
   return apiClient.get(`/research-engine/manual-workflows/${workflowId}`).then(unwrapResponse)
 }
 
+export function archiveManualWorkflow(workflowId, payload = {}) {
+  return apiClient.post(`/research-engine/manual-workflows/${workflowId}:archive`, payload).then(unwrapResponse)
+}
+
 export function startWorkflowRun(workflowId) {
   return apiClient.post(`/research-engine/manual-workflows/${workflowId}/runs`).then(unwrapResponse)
 }
@@ -413,6 +431,10 @@ export function listResearchRuns(params = {}) {
 
 export function getResearchRun(runId) {
   return apiClient.get(`/research-engine/research-runs/${runId}`).then(unwrapResponse)
+}
+
+export function archiveResearchRun(runId, payload = {}) {
+  return apiClient.post(`/research-engine/research-runs/${runId}:archive`, payload).then(unwrapResponse)
 }
 
 export function startResearchRun(runId, payload) {
@@ -443,4 +465,18 @@ export function approveStage(runId, stageRunId, payload) {
 
 export function rejectStage(runId, stageRunId, payload) {
   return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/reject`, payload).then(unwrapResponse)
+}
+
+export function getResearchRunTraceability(runId) {
+  return apiClient.get(`/research-engine/research-runs/${runId}/traceability`).then(unwrapResponse)
+}
+
+export function getStageRunTraceability(runId, stageRunId) {
+  return apiClient.get(`/research-engine/research-runs/${runId}/stages/${stageRunId}/traceability`).then(unwrapResponse)
+}
+
+// ── Structured Assistant API ──
+
+export function chatWithAssistant(payload) {
+  return apiClient.post('/assistant/chat', payload).then(unwrapResponse)
 }

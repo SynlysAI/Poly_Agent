@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { VideoPlay } from '@element-plus/icons-vue'
 
@@ -24,16 +24,32 @@ const running = ref(false)
 const formInputs = ref({})
 const lastRun = ref(null)
 const lastWorkflowRun = ref(null)
+const schemaFields = computed(() => {
+  const fields = props.selectedAlgorithm?.input_schema?.fields || {}
+  const uiHints = props.selectedAlgorithm?.input_schema?.ui_hints || {}
+  return Object.keys(fields).filter(key => uiHints[key]?.widget !== 'hidden')
+})
 
 watch(() => props.selectedAlgorithm, (algo) => {
   if (algo) {
     const inputs = {}
-    const required = algo.input_schema?.required || []
     const fields = algo.input_schema?.fields || {}
-    for (const key of required) {
+    const fieldOptions = algo.input_schema?.field_options || {}
+    const fieldDefaults = algo.input_schema?.field_defaults || {}
+    const uiHints = algo.input_schema?.ui_hints || {}
+    for (const key of Object.keys(fields)) {
+      if (uiHints[key]?.widget === 'hidden') continue
       const fieldType = fields[key] || 'string'
-      if (fieldType.includes('int') || fieldType.includes('float') || fieldType.includes('number')) {
+      if (Object.prototype.hasOwnProperty.call(fieldDefaults, key)) {
+        inputs[key] = fieldDefaults[key]
+      } else if (fieldOptions[key]?.length > 0) {
+        inputs[key] = isListFieldWithSchema(algo, key) ? [] : fieldOptions[key][0]
+      } else if (fieldType.includes('int') || fieldType.includes('float') || fieldType.includes('number')) {
         inputs[key] = 0
+      } else if (fieldType.includes('list[') || fieldType.includes('list [')) {
+        inputs[key] = []
+      } else if (fieldType.includes('dict') || fieldType.includes('object')) {
+        inputs[key] = {}
       } else {
         inputs[key] = ''
       }
@@ -41,6 +57,54 @@ watch(() => props.selectedAlgorithm, (algo) => {
     formInputs.value = inputs
   }
 }, { immediate: true })
+
+function hasFieldOptions(key) {
+  return (props.selectedAlgorithm?.input_schema?.field_options?.[key]?.length || 0) > 0
+}
+
+function fieldOptions(key) {
+  return props.selectedAlgorithm?.input_schema?.field_options?.[key] || []
+}
+
+function isListField(key) {
+  return isListFieldWithSchema(props.selectedAlgorithm, key)
+}
+
+function isListFieldWithSchema(algo, key) {
+  const desc = algo?.input_schema?.fields?.[key] || ''
+  const widget = algo?.input_schema?.ui_hints?.[key]?.widget
+  return widget === 'multiselect' || desc.includes('list[') || desc.includes('list [')
+}
+
+function isJsonField(key) {
+  const desc = props.selectedAlgorithm?.input_schema?.fields?.[key] || ''
+  const widget = props.selectedAlgorithm?.input_schema?.ui_hints?.[key]?.widget
+  return widget === 'json' || desc.includes('dict') || desc.includes('object')
+}
+
+function jsonValue(key) {
+  const value = formInputs.value[key]
+  if (typeof value === 'string') return value
+  return JSON.stringify(value ?? {}, null, 2)
+}
+
+function setJsonValue(key, value) {
+  try {
+    formInputs.value[key] = value.trim() ? JSON.parse(value) : {}
+  } catch {
+    formInputs.value[key] = value
+  }
+}
+
+function isIntField(key) {
+  const desc = props.selectedAlgorithm?.input_schema?.fields?.[key] || ''
+  return desc.includes('int') && !desc.includes('float')
+}
+
+function isFloatField(key) {
+  const desc = props.selectedAlgorithm?.input_schema?.fields?.[key] || ''
+  return desc.includes('float') || desc.includes('number')
+}
 
 async function handleRun() {
   if (!props.selectedAlgorithm) return
@@ -147,24 +211,64 @@ function formatDate(value) {
       </div>
 
       <!-- 输入表单 -->
-      <el-form v-if="selectedAlgorithm.input_schema?.required?.length" label-position="top" class="run-form">
+      <el-form v-if="schemaFields.length" label-position="top" class="run-form">
         <el-form-item
-          v-for="key in (selectedAlgorithm.input_schema.required || [])"
+          v-for="key in schemaFields"
           :key="key"
-          :label="key"
+          :label="`${key}${(selectedAlgorithm.input_schema.required || []).includes(key) ? ' *' : ''}`"
         >
+          <!-- 多选下拉：字段类型为 list -->
+          <el-select
+            v-if="hasFieldOptions(key) && isListField(key)"
+            v-model="formInputs[key]"
+            multiple
+            style="width:100%"
+            :placeholder="`选择 ${key}`"
+          >
+            <el-option
+              v-for="opt in fieldOptions(key)"
+              :key="opt"
+              :label="opt"
+              :value="opt"
+            />
+          </el-select>
+          <!-- 单选下拉：字段有 field_options -->
+          <el-select
+            v-else-if="hasFieldOptions(key)"
+            v-model="formInputs[key]"
+            style="width:100%"
+            :placeholder="`选择 ${key}`"
+          >
+            <el-option
+              v-for="opt in fieldOptions(key)"
+              :key="opt"
+              :label="opt || '(留空)'"
+              :value="opt"
+            />
+          </el-select>
+          <!-- 整数输入 -->
           <el-input-number
-            v-if="(selectedAlgorithm.input_schema.fields?.[key] || '').includes('int')"
+            v-else-if="isIntField(key)"
             v-model="formInputs[key]"
             :step="1"
             style="width:100%"
           />
+          <!-- 浮点数输入 -->
           <el-input-number
-            v-else-if="(selectedAlgorithm.input_schema.fields?.[key] || '').includes('float') || (selectedAlgorithm.input_schema.fields?.[key] || '').includes('number')"
+            v-else-if="isFloatField(key)"
             v-model="formInputs[key]"
             :step="0.1"
             style="width:100%"
           />
+          <el-input
+            v-else-if="isJsonField(key)"
+            :model-value="jsonValue(key)"
+            type="textarea"
+            :rows="4"
+            :placeholder="`输入 JSON: ${key}`"
+            @update:model-value="setJsonValue(key, $event)"
+          />
+          <!-- 默认文本输入 -->
           <el-input
             v-else
             v-model="formInputs[key]"

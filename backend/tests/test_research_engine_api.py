@@ -117,6 +117,29 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertLessEqual(len(data["data"]["items"]), 2)
         self.assertGreaterEqual(data["data"]["total"], 3)
 
+    def test_archive_problem_spec_hides_from_default_list(self) -> None:
+        """归档 ProblemSpec 后默认列表隐藏，按 archived 状态可查。"""
+        create_resp = self.client.post(
+            f"{self.base_url}/problem-specs",
+            json=problem_spec_payload(name="待归档研发任务"),
+        )
+        ps_id = create_resp.json()["data"]["problem_spec_id"]
+
+        archive_resp = self.client.post(
+            f"{self.base_url}/problem-specs/{ps_id}:archive",
+            json={"reason": "API 测试归档"},
+        )
+        self.assertEqual(archive_resp.status_code, 200)
+        self.assertEqual(archive_resp.json()["data"]["status"], "archived")
+
+        default_resp = self.client.get(f"{self.base_url}/problem-specs")
+        default_ids = [item["problem_spec_id"] for item in default_resp.json()["data"]["items"]]
+        self.assertNotIn(ps_id, default_ids)
+
+        archived_resp = self.client.get(f"{self.base_url}/problem-specs?status=archived")
+        archived_ids = [item["problem_spec_id"] for item in archived_resp.json()["data"]["items"]]
+        self.assertIn(ps_id, archived_ids)
+
     def test_list_with_filters(self) -> None:
         """按状态和材料体系过滤。"""
         # 创建一条数据
@@ -467,6 +490,46 @@ class ManualWorkflowApiTest(ComputationTestCase):
         self.assertEqual(aruns.status_code, 200)
         self.assertEqual(aruns.json()["data"]["total"], 1)
         self.assertEqual(aruns.json()["data"]["items"][0]["trigger_source"], "human_workflow")
+
+    def test_archive_manual_workflow_hides_from_default_list(self) -> None:
+        """归档人工 Workflow 后默认列表隐藏，按 archived 状态可查。"""
+        decision_resp = self.client.post(
+            f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions",
+            json={"mode": "manual_workbench", "reason": "API 测试归档 workflow"},
+        )
+        workflow_resp = self.client.post(
+            f"{self.base_url}/manual-workflows",
+            json={
+                "problem_spec_id": self.ps_id,
+                "execution_decision_id": decision_resp.json()["data"]["decision_id"],
+                "name": "待归档 Workflow",
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "algorithm_id": "literature_mock",
+                        "input_bindings": {
+                            "keywords": {"source": "manual_input", "value": "polymer"}
+                        },
+                    }
+                ],
+            },
+        )
+        workflow_id = workflow_resp.json()["data"]["workflow_id"]
+
+        archive_resp = self.client.post(
+            f"{self.base_url}/manual-workflows/{workflow_id}:archive",
+            json={"reason": "API 测试归档"},
+        )
+        self.assertEqual(archive_resp.status_code, 200)
+        self.assertEqual(archive_resp.json()["data"]["status"], "archived")
+
+        default_resp = self.client.get(f"{self.base_url}/manual-workflows")
+        default_ids = [item["workflow_id"] for item in default_resp.json()["data"]["items"]]
+        self.assertNotIn(workflow_id, default_ids)
+
+        archived_resp = self.client.get(f"{self.base_url}/manual-workflows?status=archived")
+        archived_ids = [item["workflow_id"] for item in archived_resp.json()["data"]["items"]]
+        self.assertIn(workflow_id, archived_ids)
 
 
 # =============================================================================
@@ -913,6 +976,26 @@ class ResearchRunApiTest(ComputationTestCase):
         self.assertLessEqual(len(data["data"]["items"]), 2)
         self.assertGreaterEqual(data["data"]["total"], 3)
 
+    def test_archive_research_run_hides_from_default_list(self) -> None:
+        """归档 ResearchRun 后默认列表隐藏，按 archived 状态可查。"""
+        created = self._create_research_run()
+        run_id = created["run_id"]
+
+        archive_resp = self.client.post(
+            f"{self.base_url}/research-runs/{run_id}:archive",
+            json={"reason": "API 测试归档"},
+        )
+        self.assertEqual(archive_resp.status_code, 200)
+        self.assertEqual(archive_resp.json()["data"]["status"], "archived")
+
+        default_resp = self.client.get(f"{self.base_url}/research-runs")
+        default_ids = [item["run_id"] for item in default_resp.json()["data"]["items"]]
+        self.assertNotIn(run_id, default_ids)
+
+        archived_resp = self.client.get(f"{self.base_url}/research-runs?status=archived")
+        archived_ids = [item["run_id"] for item in archived_resp.json()["data"]["items"]]
+        self.assertIn(run_id, archived_ids)
+
     def test_list_by_status(self) -> None:
         """按状态过滤 ResearchRun。"""
         self._create_research_run()
@@ -933,7 +1016,12 @@ class ResearchRunApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["code"], 0)
-        self.assertIn(data["data"]["status"], ["running", "blocked_approval"])
+        self.assertEqual(data["data"]["status"], "blocked_approval")
+        problem_stage = next(
+            sr for sr in data["data"]["stage_runs"]
+            if sr["stage_key"] == "PROBLEM_SPEC"
+        )
+        self.assertEqual(problem_stage["status"], "blocked_approval")
 
     def test_start_requires_reason(self) -> None:
         """启动时缺少 reason 返回 422。"""
@@ -998,7 +1086,7 @@ class ResearchRunApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["code"], 0)
-        self.assertIn(data["data"]["status"], ["running", "blocked_approval"])
+        self.assertEqual(data["data"]["status"], "running")
 
     def test_fail_research_run(self) -> None:
         """POST /research-runs/{id}/fail 标记失败。"""
@@ -1087,7 +1175,13 @@ class StageGateApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["code"], 0)
-        self.assertIn(data["data"]["status"], ["running", "blocked_approval"])
+        self.assertEqual(data["data"]["status"], "failed")
+        knowledge_stage = next(
+            sr for sr in data["data"]["stage_runs"]
+            if sr["stage_key"] == "KNOWLEDGE_RETRIEVAL"
+        )
+        self.assertEqual(knowledge_stage["status"], "failed")
+        self.assertGreater(len(knowledge_stage["linked_algorithm_runs"]), 0)
 
     def test_reject_gate(self) -> None:
         """POST .../stages/{stage_run_id}/reject 拒绝 gate。"""
@@ -1191,7 +1285,7 @@ class StageGateApiTest(ComputationTestCase):
             self.assertEqual(approve_resp.status_code, 200)
             run_data = approve_resp.json()["data"]
 
-        self.assertIn(run_data["status"], ["completed", "blocked_approval"])
+        self.assertIn(run_data["status"], ["completed", "blocked_approval", "failed"])
 
     def test_full_pause_resume_flow(self) -> None:
         """完整暂停-恢复流程 API 测试。"""

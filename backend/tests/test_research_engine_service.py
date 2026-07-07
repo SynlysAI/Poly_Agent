@@ -1180,21 +1180,11 @@ class ResearchRunOrchestratorServiceTest(ComputationTestCase):
             actor_user_id="tester",
             reason="批准 ProblemSpec",
         )
-        # 批准后应继续推进到下一个 gate (KNOWLEDGE_RETRIEVAL 自动完成 -> RECOMMENDATION_ASK gate)
-        # 或已到下一个 gate
-        has_blocked = False
-        for sr in approved.stage_runs:
-            if sr.status == "blocked_approval":
-                has_blocked = True
-                break
-        # 应该有至少一个 gate blocking（或者是 RECOMMENDATION_ASK 或是 HUMAN_REVIEW）
-        self.assertTrue(has_blocked,
-                        f"审批后应有下一个 gate 阻塞，当前状态: {approved.status}")
-
-        # 验证自动完成的阶段（KNOWLEDGE_RETRIEVAL 等）
-        completed_stages = [sr for sr in approved.stage_runs if sr.status == "completed"]
-        self.assertGreater(len(completed_stages), 0,
-                           "至少应有自动完成的阶段")
+        # 批准后会进入真实 adapter 阶段；测试环境未配置 RAG，不能静默 mock 成功。
+        self.assertEqual(approved.status, "failed")
+        knowledge_stage = [sr for sr in approved.stage_runs if sr.stage_key == "KNOWLEDGE_RETRIEVAL"][0]
+        self.assertEqual(knowledge_stage.status, "failed")
+        self.assertGreater(len(knowledge_stage.linked_algorithm_runs), 0)
 
     def test_reject_stage(self) -> None:
         """拒绝 gate 阶段。"""
@@ -1352,8 +1342,8 @@ class ResearchRunOrchestratorServiceTest(ComputationTestCase):
                 reason=f"批准 {blocked_sr.stage_key}",
             )
 
-        # 最终状态应为 completed 或 blocked_approval（如果有未处理的 gate）
-        self.assertIn(rr.status, ["completed", "blocked_approval"])
+        # 未配置真实 adapter 时会停在 failed，不能静默 mock 成功。
+        self.assertIn(rr.status, ["completed", "blocked_approval", "failed"])
         # 至少验证有阶段完成了
         completed_count = sum(1 for sr in rr.stage_runs if sr.status == "completed")
         self.assertGreater(completed_count, 0, "至少有部分阶段已完成")

@@ -401,6 +401,7 @@ class ManualAlgorithmWorkflow(ManualAlgorithmWorkflowCreate):
     """人工算法 Workflow 定义。"""
 
     workflow_id: str
+    status: str = "active"
     validation_status: str = "validated"
     created_by: str
     owner_id: str | None = None
@@ -478,6 +479,14 @@ class AlgorithmIOSchema(BaseModel):
     fields: dict[str, str] = Field(default_factory=dict)
     required: list[str] = Field(default_factory=list)
     constraints: dict[str, dict] = Field(default_factory=dict)
+    field_defaults: dict[str, object] = Field(default_factory=dict)
+    ui_hints: dict[str, dict] = Field(default_factory=dict)
+    field_options: dict[str, list[str]] = Field(default_factory=dict)
+    """字段可选值列表，key 为字段名，value 为该字段允许的值列表。
+
+    若字段在 field_options 中有定义，前端应渲染为下拉选择而非自由文本输入。
+    包含值时后端 validate_input 会进行白名单校验。
+    """
 
 
 class AlgorithmRegistryEntry(BaseModel):
@@ -531,6 +540,39 @@ class AlgorithmRegistryListData(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+class ResearchEngineExampleSummary(BaseModel):
+    """ResearchEngine 示例流程摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    example_id: str
+    title: str
+    description: str
+    mode: ExecutionDecisionMode
+    tags: list[str] = Field(default_factory=list)
+
+
+class ResearchEngineExampleListData(BaseModel):
+    """ResearchEngine 示例流程列表。"""
+
+    items: list[ResearchEngineExampleSummary]
+
+
+class ResearchEngineExampleInstantiateResult(BaseModel):
+    """ResearchEngine 示例实例化结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    example_id: str
+    problem_spec: ProblemSpec
+    execution_decision: ExecutionDecision
+    manual_workflow: ManualAlgorithmWorkflow | None = None
+    workflow_run: WorkflowRun | None = None
+    research_run: ResearchRun | None = None
+    navigation: dict = Field(default_factory=dict)
+    message: str
 
 
 # =============================================================================
@@ -759,6 +801,20 @@ class ResearchRunStatusChangeRequest(BaseModel):
         if not normalized:
             raise ValueError("状态变更原因不能为空")
         return normalized
+
+
+class ArchiveRequest(BaseModel):
+    """软删除/归档请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="用户归档", max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        return normalized or "用户归档"
 
 
 class StageApprovalRequest(BaseModel):

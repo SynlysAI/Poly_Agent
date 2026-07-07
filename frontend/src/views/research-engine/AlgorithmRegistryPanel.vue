@@ -9,12 +9,15 @@ import {
   listAlgorithms,
 } from '../../api/polyAgentApi'
 
-const emit = defineEmits(['run-created'])
+const emit = defineEmits(['run-created', 'workflow-confirmed'])
 
 const loading = ref(false)
 const algorithms = ref([])
 const detailVisible = ref(false)
 const detail = ref(null)
+const showDemoAlgorithms = ref(false)
+// 多选模式：已选算法列表 [{algorithm_id, name, step_id}]
+const selectedAlgorithms = ref([])
 
 const filters = reactive({
   algorithm_family: '',
@@ -60,6 +63,7 @@ const triggerOptions = [
 const filteredAlgorithms = computed(() => {
   const kw = filters.keyword.trim().toLowerCase()
   return algorithms.value.filter((item) => {
+    if (!showDemoAlgorithms.value && isDemoAlgorithm(item)) return false
     const matchesType = !filters.type || item.type === filters.type
     const matchesFamily = !filters.algorithm_family || item.algorithm_family === filters.algorithm_family
     const matchesMaterial = !filters.material_scope || (item.material_scope || []).includes(filters.material_scope)
@@ -69,6 +73,10 @@ const filteredAlgorithms = computed(() => {
     return matchesFamily && matchesType && matchesMaterial && matchesTrigger && matchesKeyword
   })
 })
+
+function isDemoAlgorithm(algo) {
+  return Boolean(algo?.input_schema?.ui_hints?._algorithm?.hidden_by_default)
+}
 
 function familyLabel(family) {
   const map = {
@@ -142,6 +150,42 @@ async function showDetail(algo) {
   }
 }
 
+function isSelected(algorithmId) {
+  return selectedAlgorithms.value.some(s => s.algorithm_id === algorithmId)
+}
+
+function toggleAlgorithm(algo) {
+  const idx = selectedAlgorithms.value.findIndex(s => s.algorithm_id === algo.algorithm_id)
+  if (idx >= 0) {
+    selectedAlgorithms.value.splice(idx, 1)
+  } else {
+    selectedAlgorithms.value.push({
+      algorithm_id: algo.algorithm_id,
+      name: algo.name,
+      step_id: `step_${selectedAlgorithms.value.length + 1}`,
+    })
+  }
+}
+
+function removeAlgorithm(algorithmId) {
+  const idx = selectedAlgorithms.value.findIndex(s => s.algorithm_id === algorithmId)
+  if (idx >= 0) {
+    selectedAlgorithms.value.splice(idx, 1)
+    // 重新编号 step_id
+    selectedAlgorithms.value.forEach((s, i) => {
+      s.step_id = `step_${i + 1}`
+    })
+  }
+}
+
+function confirmWorkflow() {
+  if (selectedAlgorithms.value.length === 0) {
+    ElMessage.warning('请先选择至少一个算法')
+    return
+  }
+  emit('workflow-confirmed', [...selectedAlgorithms.value])
+}
+
 function handleRun(algo) {
   emit('run-created', algo)
 }
@@ -176,13 +220,40 @@ onMounted(loadData)
       <el-input v-model="filters.keyword" placeholder="搜索算法名称" clearable style="width:200px">
         <template #prefix><el-icon><Search /></el-icon></template>
       </el-input>
+      <el-switch
+        v-model="showDemoAlgorithms"
+        active-text="显示演示算法"
+        inactive-text="隐藏演示算法"
+      />
       <el-button text @click="handleReset">重置</el-button>
       <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
     </div>
 
+    <!-- 已选算法摘要条 -->
+    <div v-if="selectedAlgorithms.length > 0" class="selected-algo-bar">
+      <div class="selected-algo-info">
+        <span class="selected-label">已选算法 ({{ selectedAlgorithms.length }})：</span>
+        <el-tag
+          v-for="(algo, idx) in selectedAlgorithms"
+          :key="algo.algorithm_id"
+          closable
+          size="small"
+          type="primary"
+          effect="plain"
+          style="margin:2px 4px"
+          @close="removeAlgorithm(algo.algorithm_id)"
+        >
+          {{ idx + 1 }}. {{ algo.name }}
+        </el-tag>
+      </div>
+      <el-button type="success" size="small" @click="confirmWorkflow">
+        确认 Workflow
+      </el-button>
+    </div>
+
     <!-- 算法卡片网格 -->
     <div class="algo-grid" v-loading="loading">
-      <article v-for="algo in filteredAlgorithms" :key="algo.algorithm_id" class="algo-card">
+      <article v-for="algo in filteredAlgorithms" :key="algo.algorithm_id" class="algo-card" :class="{ 'is-selected': isSelected(algo.algorithm_id) }">
         <div class="algo-card-top">
           <div>
             <strong>{{ algo.name }}</strong>
@@ -195,16 +266,17 @@ onMounted(loadData)
           <el-tag size="small" effect="plain" :type="familyTag(algo.algorithm_family)">{{ familyLabel(algo.algorithm_family) }}</el-tag>
           <el-tag size="small" effect="plain">{{ materialScopeLabel(algo.material_scope) }}</el-tag>
           <el-tag size="small" effect="plain" :type="statusTag(algo.status)">{{ statusLabel(algo.status) }}</el-tag>
+          <el-tag v-if="isDemoAlgorithm(algo)" size="small" effect="plain" type="info">演示</el-tag>
         </div>
         <div class="algo-actions">
           <el-button text type="primary" size="small" :icon="ViewIcon" @click="showDetail(algo)">查看详情</el-button>
           <el-button
             v-if="(algo.trigger_modes || []).includes('human_workflow') && algo.status === 'active'"
-            type="primary"
+            :type="isSelected(algo.algorithm_id) ? 'warning' : 'primary'"
             size="small"
-            @click="handleRun(algo)"
+            @click="toggleAlgorithm(algo)"
           >
-            加入 Workflow
+            {{ isSelected(algo.algorithm_id) ? '取消选择' : '选择' }}
           </el-button>
         </div>
       </article>
@@ -306,6 +378,39 @@ onMounted(loadData)
   background: #ffffff;
   display: flex;
   flex-direction: column;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.algo-card.is-selected {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+  background: #f8fbff;
+}
+
+.selected-algo-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--app-radius-md);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selected-algo-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.selected-label {
+  font-size: 13px;
+  color: var(--app-ink);
+  font-weight: 500;
 }
 
 .algo-card-top {

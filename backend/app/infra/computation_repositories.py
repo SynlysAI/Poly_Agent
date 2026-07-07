@@ -45,7 +45,17 @@ def _matches(document: dict[str, Any], filters: dict[str, Any]) -> bool:
                 value = None
                 break
             value = value.get(part)
-        if isinstance(expected, set):
+        if isinstance(expected, dict):
+            if "$ne" in expected and value == expected["$ne"]:
+                return False
+            if "$in" in expected:
+                allowed = expected["$in"]
+                if isinstance(value, list):
+                    if not any(item in value for item in allowed):
+                        return False
+                elif value not in allowed:
+                    return False
+        elif isinstance(expected, set):
             if value not in expected:
                 return False
         elif isinstance(expected, str) and expected.startswith("__contains__:"):

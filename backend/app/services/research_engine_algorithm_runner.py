@@ -9,9 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
+import httpx
+
+from app.core.config import settings
 from app.infra.computation_repositories import utc_now
 from app.infra.research_engine_repositories import AlgorithmRegistryRepository
 
@@ -61,6 +67,19 @@ class BaseMockRunner:
                 raise ValueError(
                     f"字段 '{field_name}' 值 {value} 大于最大值 {constraint['max']}"
                 )
+
+        # 校验 field_options 白名单
+        field_options = input_schema.get("field_options", {})
+        for field_name, allowed_values in field_options.items():
+            if field_name in input_snapshot and allowed_values:
+                value = input_snapshot[field_name]
+                # 支持单值和列表值（如 target_properties）
+                values_to_check = value if isinstance(value, list) else [value]
+                for v in values_to_check:
+                    if v is not None and v != "" and v not in allowed_values:
+                        raise ValueError(
+                            f"字段 '{field_name}' 值 '{v}' 不在允许的值列表中: {allowed_values}"
+                        )
 
     def run(self, input_snapshot: dict) -> dict:
         """执行 mock 逻辑，返回 output_summary。
@@ -590,6 +609,292 @@ class ComputationSubmitAdapter(BaseMockRunner):
 
 
 # =============================================================================
+# 6. literature_rag_adapter：本地 RAG 文献库检索
+# =============================================================================
+
+
+class LiteratureRAGAdapter(BaseMockRunner):
+    """本地 RAG 文献库检索适配器。
+
+    读取 .runtime/rag/literature_index.json，未配置或空库时返回明确状态。
+    支持的索引格式为 list[dict] 或 {"documents": list[dict]}。
+    """
+
+    algorithm_id = "literature_rag_adapter"
+
+    def run(self, input_snapshot: dict) -> dict:
+        query = input_snapshot.get("query", "").strip()
+        top_k = int(input_snapshot.get("top_k", 5) or 5)
+        index_path = Path(os.getenv(
+            "RESEARCH_ENGINE_RAG_INDEX",
+            str(settings.runtime_root / "rag" / "literature_index.json"),
+        ))
+
+        if not index_path.exists():
+            return {
+                "configured": False,
+                "hits": [],
+                "answer": "",
+                "message": f"未配置文献库：请创建本地 RAG 索引 {index_path}",
+                "index_path": str(index_path),
+            }
+
+        try:
+            raw = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError(f"文献 RAG 索引无法读取: {exc}") from exc
+
+        documents = raw.get("documents", raw) if isinstance(raw, dict) else raw
+        if not isinstance(documents, list) or not documents:
+            return {
+                "configured": False,
+                "hits": [],
+                "answer": "",
+                "message": "文献库为空：请导入论文摘要、片段或知识卡片后重试",
+                "index_path": str(index_path),
+            }
+
+        query_tokens = self._tokenize(query)
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for doc in documents:
+            if not isinstance(doc, dict):
+                continue
+            text = " ".join(str(doc.get(key, "")) for key in ("title", "abstract", "content", "summary", "keywords"))
+            material_family = input_snapshot.get("material_family")
+            target_properties = input_snapshot.get("target_properties") or []
+            score = self._score(text, query_tokens)
+            if material_family and material_family in text:
+                score += 1.0
+            for prop in target_properties:
+                if str(prop) in text:
+                    score += 0.5
+            if score > 0:
+                scored.append((score, doc))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        hits = [
+            {
+                "rank": idx + 1,
+                "score": round(score, 4),
+                "title": doc.get("title") or doc.get("id") or f"document_{idx + 1}",
+                "source": doc.get("source") or doc.get("doi") or doc.get("url"),
+                "snippet": self._snippet(doc),
+                "metadata": doc.get("metadata", {}),
+            }
+            for idx, (score, doc) in enumerate(scored[:top_k])
+        ]
+
+        if not hits:
+            return {
+                "configured": True,
+                "hits": [],
+                "answer": "",
+                "message": "文献库已配置，但没有命中当前查询",
+                "index_path": str(index_path),
+            }
+
+        answer = "；".join(hit["snippet"] for hit in hits[:3] if hit.get("snippet"))
+        return {
+            "configured": True,
+            "hits": hits,
+            "answer": answer,
+            "message": f"命中 {len(hits)} 条文献片段",
+            "index_path": str(index_path),
+        }
+
+    @staticmethod
+    def _tokenize(text: str) -> set[str]:
+        normalized = text.lower().replace("/", " ").replace(",", " ")
+        return {token for token in normalized.split() if token}
+
+    @staticmethod
+    def _score(text: str, tokens: set[str]) -> float:
+        lower = text.lower()
+        return float(sum(1 for token in tokens if token in lower))
+
+    @staticmethod
+    def _snippet(doc: dict[str, Any]) -> str:
+        text = str(doc.get("summary") or doc.get("abstract") or doc.get("content") or "")
+        return text[:280]
+
+
+# =============================================================================
+# 7. vertical_predictor_adapter：垂类预测服务适配器
+# =============================================================================
+
+
+class VerticalPredictorAdapter(BaseMockRunner):
+    """垂类性质预测服务适配器。"""
+
+    algorithm_id = "vertical_predictor_adapter"
+
+    def run(self, input_snapshot: dict) -> dict:
+        service_url = os.getenv("VERTICAL_PREDICTOR_URL", "").strip()
+        if not service_url:
+            raise ValueError(
+                "垂类预测服务未配置：请设置 VERTICAL_PREDICTOR_URL，"
+                "服务需实现 POST /predict 并返回 predictions/uncertainty/model_id"
+            )
+
+        payload = {
+            "smiles": input_snapshot.get("smiles"),
+            "target_properties": input_snapshot.get("target_properties", []),
+            "material_family": input_snapshot.get("material_family"),
+            "model_id": input_snapshot.get("model_id"),
+            "features": input_snapshot.get("features", {}),
+        }
+        try:
+            with httpx.Client(base_url=service_url.rstrip("/"), timeout=60.0) as client:
+                response = client.post("/predict", json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"垂类预测服务调用失败: {exc}") from exc
+        except ValueError as exc:
+            raise RuntimeError("垂类预测服务返回了非 JSON 响应") from exc
+
+        if not isinstance(data, dict) or "predictions" not in data:
+            raise RuntimeError("垂类预测服务响应格式错误：缺少 predictions 字段")
+
+        predictions = data.get("predictions")
+        if not isinstance(predictions, dict):
+            raise RuntimeError("垂类预测服务响应格式错误：predictions 必须是对象")
+
+        return {
+            "configured": True,
+            "predictions": predictions,
+            "uncertainty": data.get("uncertainty", {}),
+            "model_id": data.get("model_id") or input_snapshot.get("model_id") or "remote",
+            "raw_response": data,
+        }
+
+
+# =============================================================================
+# 8. mobo_alchemist_adapter：Alchemist BO/MOBO 推荐适配器
+# =============================================================================
+
+
+class MOBOAlchemistAdapter(BaseMockRunner):
+    """Alchemist BO/MOBO 推荐适配器。"""
+
+    algorithm_id = "mobo_alchemist_adapter"
+
+    def run(self, input_snapshot: dict) -> dict:
+        base_url = settings.alchemist_backend_url.rstrip("/")
+        variables = input_snapshot.get("variables") or []
+        objectives = input_snapshot.get("objectives") or []
+        observations = input_snapshot.get("historical_observations") or []
+        batch_size = int(input_snapshot.get("batch_size", 5) or 5)
+        session_name = input_snapshot.get("session_name") or f"ResearchEngine {input_snapshot.get('problem_spec_id', '')}".strip()
+
+        try:
+            with httpx.Client(base_url=base_url, timeout=120.0) as client:
+                session_payload = {
+                    "name": session_name or "ResearchEngine Alchemist Recommendation",
+                    "description": "Created by ResearchEngine mobo_alchemist_adapter",
+                    "objectives": objectives,
+                }
+                session = self._json_request(client, "POST", "/sessions", session_payload)
+                session_id = self._extract_id(session, "session_id", "id")
+
+                for variable in variables:
+                    self._json_request(client, "POST", f"/sessions/{session_id}/variables", variable)
+
+                if observations:
+                    experiments = [self._observation_to_experiment(item) for item in observations]
+                    self._json_request(client, "POST", f"/sessions/{session_id}/experiments/batch", experiments)
+
+                model_status = self._json_request(
+                    client,
+                    "POST",
+                    f"/sessions/{session_id}/model/train",
+                    {"model_type": "gp", "objectives": objectives},
+                )
+                suggestions = self._json_request(
+                    client,
+                    "POST",
+                    f"/sessions/{session_id}/acquisition/suggest",
+                    {"batch_size": batch_size, "acquisition": "qNEHVI", "objectives": objectives},
+                )
+        except httpx.ConnectError as exc:
+            raise RuntimeError(
+                f"Alchemist 服务不可用：无法连接 {base_url}，请启动服务或检查 ALCHEMIST_BACKEND_URL"
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise RuntimeError("Alchemist 服务响应超时") from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"Alchemist 服务返回错误: HTTP {exc.response.status_code} {exc.response.text[:200]}") from exc
+
+        candidates = self._normalize_suggestions(suggestions)
+        if not isinstance(candidates, list):
+            raise RuntimeError("Alchemist 响应格式错误：推荐结果必须是列表")
+
+        return {
+            "session_id": session_id,
+            "top_k_candidates": candidates,
+            "acquisition_values": [
+                item.get("acquisition_value")
+                for item in candidates
+                if isinstance(item, dict) and item.get("acquisition_value") is not None
+            ],
+            "model_status": model_status,
+            "raw_suggestions": suggestions,
+        }
+
+    @staticmethod
+    def _json_request(client: httpx.Client, method: str, path: str, payload: object) -> dict:
+        response = client.request(method, path, json=payload)
+        response.raise_for_status()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Alchemist {path} 返回了非 JSON 响应") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Alchemist {path} 响应格式错误：顶层必须是对象")
+        return data
+
+    @staticmethod
+    def _extract_id(data: dict, *keys: str) -> str:
+        for key in keys:
+            value = data.get(key)
+            if value:
+                return str(value)
+        nested = data.get("data")
+        if isinstance(nested, dict):
+            for key in keys:
+                value = nested.get(key)
+                if value:
+                    return str(value)
+        raise RuntimeError("Alchemist 响应格式错误：无法解析 session_id")
+
+    @staticmethod
+    def _observation_to_experiment(observation: dict) -> dict:
+        return {
+            "inputs": observation.get("inputs", observation.get("x", {})),
+            "outputs": observation.get("outputs", observation.get("y", {})),
+            "metadata": observation.get("metadata", {}),
+        }
+
+    @staticmethod
+    def _normalize_suggestions(data: dict) -> list[dict]:
+        for key in ("suggestions", "candidates", "top_k_candidates"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+            if value is not None:
+                raise RuntimeError(f"Alchemist 响应格式错误：{key} 必须是列表")
+        nested = data.get("data")
+        if isinstance(nested, dict):
+            for key in ("suggestions", "candidates", "top_k_candidates"):
+                value = nested.get(key)
+                if isinstance(value, list):
+                    return value
+                if value is not None:
+                    raise RuntimeError(f"Alchemist 响应格式错误：data.{key} 必须是列表")
+        return []
+
+
+# =============================================================================
 # Runner 注册表与路由
 # =============================================================================
 
@@ -609,6 +914,9 @@ def _build_registry() -> dict[str, BaseMockRunner]:
         PropertyPredictorMockRunner(),
         MOBOMockRunner(),
         ComputationSubmitAdapter(),
+        LiteratureRAGAdapter(),
+        VerticalPredictorAdapter(),
+        MOBOAlchemistAdapter(),
     ]
     return {r.algorithm_id: r for r in runners}
 

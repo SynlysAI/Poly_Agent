@@ -1,7 +1,7 @@
-# ResearchEngine P0 进度与验收记录
+# ResearchEngine P0 进度与当前状态
 
-版本：v0.1  
-日期：2026-07-06  
+版本：v0.2
+日期：2026-07-07
 来源设计：`doc/research-engine-and-auto-research-design.md`  
 实施计划：`doc/research-engine-plan-00-roadmap.md`
 
@@ -17,6 +17,34 @@
 | Plan 04 | `research-engine-plan-04-autoresearch-orchestrator.md` | ✅ 已完成 | 2026-07-06 |
 | Plan 05 | `research-engine-plan-05-frontend-mvp.md` | ✅ 已完成 | 2026-07-06 |
 | Plan 06 | `research-engine-plan-06-traceability-and-qa.md` | ✅ 已完成 | 2026-07-06 |
+
+---
+
+## 当前代码状态摘要
+
+截至 2026-07-07，ResearchEngine 已从“规划阶段”进入 P0 可用状态。当前代码提供以下主路径：
+
+| 主路径 | 当前能力 | 主要入口 |
+| --- | --- | --- |
+| 研发任务定义 | 创建、查询、更新、冻结、归档 ProblemSpec；支持材料体系、问题类型、变量、目标、约束和测量条件 | `POST/GET/PATCH /api/v1/research-engine/problem-specs` |
+| 执行路径选择 | 在 ProblemSpec 下创建并查询 `manual_workbench` / `autoresearch` ExecutionDecision | `/api/v1/research-engine/problem-specs/{id}/execution-decisions` |
+| 人工算法 Workflow | 创建、归档 ManualAlgorithmWorkflow，启动 WorkflowRun，按步骤生成 AlgorithmRun | `/api/v1/research-engine/manual-workflows` |
+| 算法清单 | 自动 seed 计算适配器、生产候选适配器、演示 mock 算法和 computation bridge；支持多条件过滤 | `/api/v1/research-engine/algorithms` |
+| AutoResearch | 创建、启动、推进、暂停、恢复、失败标记和归档 ResearchRun；P0 gate 阶段支持批准/拒绝 | `/api/v1/research-engine/research-runs` |
+| 示例流程 | 一键创建人工计算 Workflow 示例和 AutoResearch 审批示例 | `/api/v1/research-engine/examples` |
+| 追溯审计 | 聚合 AlgorithmRun、ResearchRun、StageRun 的输入、输出、artifact、关联计算任务和 audit | `/api/v1/research-engine/*/traceability` |
+| 产品内助手 | 基于项目事实回答 ResearchEngine、计算任务、审批和算法清单问题，返回结构化跳转动作 | `POST /api/v1/assistant/chat` |
+
+前端当前提供 `/research-engine` 双通道工作台、任务中心 ResearchRun/AlgorithmRun 映射、Dashboard 产品内助手、AutoResearch Gate 审批对话框和示例流程入口。
+
+### 算法能力边界
+
+| 类别 | algorithm_id | 当前含义 |
+| --- | --- | --- |
+| 计算 workflow 适配器 | `local_structure_adapter`、`local_xtb_adapter`、`orca_compute_engine_laser_adapter` | 代表已有 Computation workflow 能力；直接提交统一走 `computation_submit_adapter` |
+| 计算提交 bridge | `computation_submit_adapter` | 委托 ComputationService 创建 `LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER` 计算任务 |
+| 生产候选适配器 | `literature_rag_adapter`、`vertical_predictor_adapter`、`mobo_alchemist_adapter` | 已有注册和接口边界，依赖外部索引或服务配置；未配置时返回明确不可用状态 |
+| 演示 mock 算法 | `literature_mock`、`polymer_descriptor_mock`、`property_predictor_mock`、`mobo_mock` | 用于 P0 演示、测试和闭环验收，不代表真实生产算法 |
 
 ---
 
@@ -89,19 +117,24 @@ dist/assets/index.js  5936.54 kB
 
 ---
 
-## 总体测试统计
+## 测试资产统计与当前验证
 
-| 测试类别 | 文件数 | 测试数 | 通过 |
+以下统计按当前测试文件中的 `def test_` 数量整理。本轮文档更新时已运行 ResearchEngine / assistant 相关后端测试；历史回归与前端构建记录来自 P0 验收记录，本轮未重复执行。
+
+| 测试类别 | 文件 | 测试数 | 当前状态 |
 | --- | --- | --- | --- |
-| ResearchEngine 单元测试 | `test_research_engine_schemas.py` | 25 | ✅ |
-| ResearchEngine 仓储测试 | `test_research_engine_repository.py` | 22 | ✅ |
-| ResearchEngine 服务测试 | `test_research_engine_service.py` | 86 | ✅ |
-| ResearchEngine API 测试 | `test_research_engine_api.py` | 76 | ✅ |
-| ResearchEngine E2E 测试 | `test_research_engine_e2e.py` | 11 | ✅ |
-| Traceability API 测试 | `test_research_engine_api.py` (traceability) | 8 | ✅ |
-| 已有回归测试 (7文件) | 7 files | 61 | ✅ |
-| 前端构建 | — | 1 | ✅ |
-| **总计** | | **290** | **全部通过** |
+| ResearchEngine Schema 测试 | `test_research_engine_schemas.py` | 51 | ✅ 本次通过 |
+| ResearchEngine 仓储测试 | `test_research_engine_repository.py` | 39 | ⚠️ 本次 38/39，通过失败见下方已知问题 |
+| ResearchEngine 服务测试 | `test_research_engine_service.py` | 88 | ✅ 本次通过 |
+| ResearchEngine API 测试 | `test_research_engine_api.py` | 82 | ✅ 本次通过 |
+| ResearchEngine E2E 测试 | `test_research_engine_e2e.py` | 11 | ✅ 本次通过 |
+| ResearchEngine 示例与适配器测试 | `test_research_engine_examples_and_adapters.py` | 6 | ✅ 本次通过 |
+| 产品内助手 API 测试 | `test_assistant_api.py` | 3 | ✅ 本次通过 |
+| AutoResearch 示例脚本测试 | `test_autoresearch_example.py` | 3 | ⚠️ 本次 2/3，通过失败见下方已知问题 |
+| 人工 Workflow 示例脚本测试 | `test_manual_workflow_example.py` | 3 | ✅ 本次通过 |
+| 已有回归测试 (7文件) | 7 files | 61 | ✅ P0 验收通过，本次未重跑 |
+| 前端构建 | — | 1 | ✅ P0 验收通过，本次未重跑 |
+| **本次已运行后端测试合计** | 9 files | **286** | **284 passed / 2 failed** |
 
 ---
 
@@ -112,11 +145,11 @@ dist/assets/index.js  5936.54 kB
 | 1 | 用户可创建氟基高分子 ProblemSpec，并关联或创建现有 campaign | ✅ |
 | 2 | 用户可从算法清单人工触发 mock/preset 算法，形成 AlgorithmRun、输入快照、输出摘要、artifact/audit | ✅ |
 | 3 | 用户可基于同一个 ProblemSpec 创建 ResearchRun，并启动固定阶段推进 | ✅ |
-| 4 | ResearchRun 至少能推进到 `RECOMMENDATION_ASK` 或 `HUMAN_REVIEW` gate | ✅ |
-| 5 | 用户可批准或拒绝候选；批准路径复用现有 suggestion/computation/observation 能力 | ✅ |
+| 4 | ResearchRun 至少能推进到 `RECOMMENDATION_ASK` 或 `HUMAN_REVIEW` gate | ⚠️ 依赖阶段适配器配置；未配置 `literature_rag_adapter` 时会在 `KNOWLEDGE_RETRIEVAL` 失败 |
+| 5 | 用户可批准或拒绝候选；批准路径复用现有 suggestion/computation/observation 能力 | ⚠️ 拒绝路径可用；批准后继续推进依赖后续适配器配置 |
 | 6 | ResearchRun / AlgorithmRun / StageRun 详情可查看关键输入、输出、artifact 和 audit | ✅ |
 | 7 | 现有 computation、optimization、integration config 测试不回退 | ✅ |
-| 8 | 前端构建通过，任务提交、湿实验优化、Campaign 详情、Tool Services 中的 ResearchEngine 入口可用 | ✅ |
+| 8 | 前端构建通过，任务提交、湿实验优化、Campaign 详情、任务中心、Dashboard 助手和 ResearchEngine 入口可用 | ✅ |
 
 ---
 
@@ -143,6 +176,17 @@ dist/assets/index.js  5936.54 kB
 | --- | --- |
 | `backend/tests/test_research_engine_e2e.py` | P0 端到端测试，覆盖 11 个闭环场景 |
 
+### P0 后续增量文件
+| 文件 | 内容 |
+| --- | --- |
+| `backend/app/api/v1/endpoints/assistant.py` | 产品内助手结构化 API，基于算法清单、集成状态和 AutoResearch 阶段事实回答问题 |
+| `backend/tests/test_assistant_api.py` | 产品内助手 API 测试 |
+| `backend/tests/test_research_engine_examples_and_adapters.py` | 示例流程和适配器边界测试 |
+| `backend/tests/test_autoresearch_example.py` | AutoResearch 审批、拒绝、暂停恢复示例测试 |
+| `backend/tests/test_manual_workflow_example.py` | 人工单算法、串行 Pipeline、计算提交 Workflow 示例测试 |
+| `frontend/src/views/research-engine/PipelineRunPanel.vue` | 人工多步骤 Workflow / Pipeline 配置与运行面板 |
+| `doc/autoresearch-user-guide.md` | AutoResearch 用户操作指南 |
+
 ---
 
 ## P0 边界与遗留事项
@@ -157,13 +201,39 @@ dist/assets/index.js  5936.54 kB
 ### 已知限制
 1. **Computation adapter 映射**：`local_structure_adapter`、`local_xtb_adapter`、`orca_compute_engine_laser_adapter` 三个 algorithm_id 在 AlgorithmRegistry 中存在，但用户直接调用时需使用 `computation_submit_adapter`（P1 建议统一映射）
 2. **Mock stage 输出**：非 gate 阶段的 mock runner 输出为预设数据，P1 可接入真实算法
-3. **真实观测回填**：当前 observation 关联通过 campaign_id，P1 可增强 ResearchRun 级别的 observation 来��
+3. **真实观测回填**：当前 observation 主要通过 campaign_id 和 computation 结果关联，P1 可增强 ResearchRun 级别 observation、失败原因和实验原始文件回填
+4. **生产候选适配器配置**：`literature_rag_adapter`、`vertical_predictor_adapter`、`mobo_alchemist_adapter` 已具备接口边界，但需要配置外部索引、模型服务或 Alchemist 服务后才可作为生产能力使用
+5. **产品内助手边界**：assistant 已做事实约束和确定性回答分支，但复杂问题仍可能走 LLM fallback，回答必须继续以 live facts 为准
+
+### 当前已知测试失败
+
+本次运行命令：
+
+```bash
+python -m pytest backend/tests/test_research_engine_schemas.py \
+  backend/tests/test_research_engine_repository.py \
+  backend/tests/test_research_engine_service.py \
+  backend/tests/test_research_engine_api.py \
+  backend/tests/test_research_engine_e2e.py \
+  backend/tests/test_research_engine_examples_and_adapters.py \
+  backend/tests/test_assistant_api.py \
+  backend/tests/test_autoresearch_example.py \
+  backend/tests/test_manual_workflow_example.py -q
+```
+
+结果：`284 passed, 2 failed`。
+
+| 失败用例 | 当前表现 | 初步定位 |
+| --- | --- | --- |
+| `ProblemSpecRepositoryTest.test_list_by_status` | 查询 `status="frozen"` 返回 2 条而非 1 条 | demo store 路径下 `list_problem_specs()` 对显式 status 过滤处理不完整 |
+| `AutoResearchExampleTest.test_autoresearch_with_gate_approval` | 批准 `PROBLEM_SPEC` 后 ResearchRun 进入 `failed`，随后 `/advance` 返回 409 | 当前 AutoResearch 阶段映射会在 `KNOWLEDGE_RETRIEVAL` 调用 `literature_rag_adapter`；未配置外部索引时适配器返回 `configured=false` 并触发失败 |
 
 ### P1/P2 候选计划（不在 P0 范围）
 - P1：Schema 驱动算法表单增强和 AlgorithmRegistry 管理
-- P1：ResearchRun pause/resume/checkpoint/rerun 完整恢复语义
+- P1：ResearchRun checkpoint/rerun 完整恢复语义和阶段级重跑
 - P1：ModelUpdate、lesson、archive 和策略收益记录
 - P1：computation adapter algorithm_id 统一映射
+- P1：生产候选适配器接入真实文献索引、垂类预测服务和 MOBO 服务
 - P2：多材料 profile 模板和默认 stage algorithm 配置
 - P2：真实 SpecLabOS / AiiDA / ORCA / HPC 外部执行器
 
@@ -174,6 +244,9 @@ dist/assets/index.js  5936.54 kB
 ```bash
 # 全部 ResearchEngine 测试（含 E2E）
 cd backend && python -m pytest tests/test_research_engine_*.py -v
+
+# ResearchEngine 示例与产品内助手测试
+cd backend && python -m pytest tests/test_research_engine_examples_and_adapters.py tests/test_autoresearch_example.py tests/test_manual_workflow_example.py tests/test_assistant_api.py -v
 
 # 只运行 traceability 测试
 cd backend && python -m pytest tests/test_research_engine_api.py -k traceability -v

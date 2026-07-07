@@ -25,6 +25,7 @@ from app.infra.research_engine_repositories import (
     ResearchRunRepository,
 )
 from app.schemas.research_engine import (
+    AlgorithmRunCreate,
     GateDecision,
     ResearchRun,
     ResearchRunCreate,
@@ -221,6 +222,7 @@ class ResearchEngineOrchestrator:
             problem_spec_id=problem_spec_id,
             campaign_id=campaign_id,
             status=status,
+            include_archived=status == "archived",
             created_by=created_by,
             project_id=project_id,
             page=page,
@@ -228,6 +230,37 @@ class ResearchEngineOrchestrator:
         )
         runs = [self._doc_to_research_run(doc) for doc in items]
         return ResearchRunListData(items=runs, page=page, page_size=page_size, total=total)
+
+    def archive_research_run(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str,
+        reason: str = "归档 AutoResearch 运行",
+        request_id: str | None = None,
+    ) -> ResearchRun:
+        """软删除/归档 ResearchRun，保留阶段、审计和追溯信息。"""
+        doc = self._get_run_doc(run_id)
+        current_status = doc.get("status", "draft")
+        if current_status == "archived":
+            return self._doc_to_research_run(doc)
+
+        now = utc_now()
+        ResearchRunRepository.update_fields(run_id, {
+            "status": "archived",
+            "updated_at": now,
+        })
+        self._write_audit(
+            actor_user_id=actor_user_id,
+            entity_type="research_run",
+            entity_id=run_id,
+            event_type="archived",
+            reason=reason,
+            before={"status": current_status},
+            after={"status": "archived"},
+            request_id=request_id,
+        )
+        return self._doc_to_research_run(self._get_run_doc(run_id))
 
     # ------------------------------------------------------------------
     # 启动与阶段推进
@@ -402,6 +435,44 @@ class ResearchEngineOrchestrator:
                 sr["updated_at"] = now.isoformat() if isinstance(now, datetime) else str(now)
                 self._save_stage_runs(run_id, stage_runs)
 
+            # 需要先产出候选/计算结果的 gate 阶段，先执行再等待审批。
+            if self._stage_algorithm_id(stage_key) is not None:
+                try:
+                    stage_output = self._run_stage_algorithm(
+                        doc=doc,
+                        stage_run=sr,
+                        actor_user_id=actor_user_id,
+                        request_id=request_id,
+                    )
+                    sr["output_summary"] = stage_output
+                    self._save_stage_runs(run_id, stage_runs)
+                except Exception as exc:
+                    sr["status"] = "failed"
+                    sr["error"] = {
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                        "retryable": False,
+                    }
+                    sr["finished_at"] = utc_now().isoformat() if isinstance(utc_now(), datetime) else str(utc_now())
+                    sr["updated_at"] = utc_now().isoformat() if isinstance(utc_now(), datetime) else str(utc_now())
+                    self._save_stage_runs(run_id, stage_runs)
+                    ResearchRunRepository.update_fields(run_id, {
+                        "status": "failed",
+                        "current_stage": stage_key,
+                        "updated_at": utc_now(),
+                    })
+                    self._write_audit(
+                        actor_user_id="system",
+                        entity_type="research_stage_run",
+                        entity_id=sr["stage_run_id"],
+                        event_type="failed",
+                        reason=f"阶段 '{stage_key}' 执行失败: {exc}",
+                        before={"status": "running"},
+                        after={"status": "failed", "error": str(exc)},
+                        request_id=request_id,
+                    )
+                    return self._get_run_doc(run_id)
+
             # 检查是否是 gate 阶段
             if is_p0_gate_stage(stage_key):
                 # gate 阶段：进入 blocked_approval
@@ -428,7 +499,7 @@ class ResearchEngineOrchestrator:
 
             # 非 gate 阶段：自动完成
             try:
-                mock_output = self._run_mock_stage(sr, problem_spec)
+                mock_output = sr.get("output_summary") or self._run_mock_stage(sr, problem_spec)
                 sr["status"] = "completed"
                 sr["output_summary"] = mock_output
                 sr["finished_at"] = utc_now().isoformat() if isinstance(utc_now(), datetime) else str(utc_now())
@@ -513,6 +584,7 @@ class ResearchEngineOrchestrator:
             return {
                 "status": "auto_completed",
                 "stage_key": stage_key,
+                "execution_mode": "mock_fallback",
                 "message": f"阶段 '{stage_key}' 已自动完成（无 mock runner）",
                 "completed_at": utc_now().isoformat() if isinstance(utc_now(), datetime) else str(utc_now()),
             }
@@ -522,6 +594,7 @@ class ResearchEngineOrchestrator:
             return {
                 "status": "auto_completed",
                 "stage_key": stage_key,
+                "execution_mode": "mock_fallback",
                 "message": f"阶段 '{stage_key}' 的 mock runner '{runner_id}' 未注册",
             }
 
@@ -555,7 +628,164 @@ class ResearchEngineOrchestrator:
 
         runner.validate_input(input_snapshot)
         output = runner.run(input_snapshot)
+        output["execution_mode"] = "mock_fallback"
         return output
+
+    def _stage_algorithm_id(self, stage_key: str) -> str | None:
+        """返回 AutoResearch 阶段对应的算法能力 ID。"""
+        return {
+            "KNOWLEDGE_RETRIEVAL": "literature_rag_adapter",
+            "STRUCTURE_FEATURE": "polymer_descriptor_mock",
+            "COMPUTE_PREDICT": "computation_submit_adapter",
+            "RECOMMENDATION_ASK": "mobo_alchemist_adapter",
+        }.get(stage_key)
+
+    def _run_stage_algorithm(
+        self,
+        *,
+        doc: dict,
+        stage_run: dict,
+        actor_user_id: str,
+        request_id: str | None = None,
+    ) -> dict:
+        """通过 AlgorithmRun 执行 AutoResearch 阶段并回写追溯关联。"""
+        from app.services.research_engine_service import ResearchEngineService
+
+        service = ResearchEngineService()
+        service.seed_default_algorithms()
+
+        stage_key = stage_run["stage_key"]
+        algorithm_id = self._stage_algorithm_id(stage_key)
+        if algorithm_id is None:
+            return self._run_mock_stage(stage_run, doc.get("problem_spec_id", ""))
+
+        input_snapshot = self._build_stage_algorithm_input(doc, stage_run, algorithm_id)
+        try:
+            algorithm_run = service.create_algorithm_run(
+                AlgorithmRunCreate(
+                    algorithm_id=algorithm_id,
+                    trigger_source="autoresearch",
+                    trigger_context_id=doc["run_id"],
+                    problem_spec_id=doc.get("problem_spec_id"),
+                    campaign_id=doc.get("campaign_id"),
+                    research_run_id=doc["run_id"],
+                    stage_run_id=stage_run["stage_run_id"],
+                    input_snapshot=input_snapshot,
+                    reason=f"AutoResearch stage {stage_key} 执行算法 {algorithm_id}",
+                ),
+                actor_user_id=actor_user_id,
+                request_id=request_id,
+            )
+            self._link_algorithm_run(doc, stage_run, algorithm_run.run_id)
+            output = dict(algorithm_run.output_summary or {})
+            output.setdefault(
+                "execution_mode",
+                "mock_fallback" if algorithm_id.endswith("_mock") else "adapter",
+            )
+            if output.get("configured") is False:
+                raise RuntimeError(output.get("message") or f"算法 '{algorithm_id}' 未配置")
+            return output
+        except Exception:
+            self._link_latest_algorithm_run(doc, stage_run, algorithm_id)
+            raise
+
+    def _build_stage_algorithm_input(
+        self,
+        doc: dict,
+        stage_run: dict,
+        algorithm_id: str,
+    ) -> dict:
+        """根据 ProblemSpec 和阶段上下文生成算法输入。"""
+        from app.services.research_engine_service import ResearchEngineService
+
+        service = ResearchEngineService()
+        problem_spec = service.get_problem_spec(doc["problem_spec_id"])
+        objectives = [item.model_dump() for item in problem_spec.objectives]
+        variables = [item.model_dump() for item in problem_spec.variables]
+        target_properties = [item["name"] for item in objectives if item.get("name")]
+        material_family = problem_spec.material_family
+        smiles = self._infer_stage_smiles(problem_spec.model_dump())
+        base = {
+            "problem_spec_id": problem_spec.problem_spec_id,
+            "campaign_id": doc.get("campaign_id"),
+            "material_family": material_family,
+            "target_properties": target_properties,
+            "batch_size": doc.get("batch_size", 10),
+        }
+
+        if algorithm_id == "literature_rag_adapter":
+            query_parts = [problem_spec.name, material_family, *(target_properties or [])]
+            return {
+                **base,
+                "query": " ".join(str(part) for part in query_parts if part),
+                "top_k": 5,
+            }
+        if algorithm_id == "polymer_descriptor_mock":
+            return {
+                **base,
+                "smiles": smiles,
+                "polymer_type": "copolymer" if "." in smiles else "homopolymer",
+            }
+        if algorithm_id == "computation_submit_adapter":
+            return {
+                **base,
+                "workflow_type": "LOCAL_STRUCTURE",
+                "smiles": smiles,
+                "charge": 0,
+                "multiplicity": 1,
+                "name": f"{problem_spec.problem_spec_id}-{stage_run['stage_key']}",
+            }
+        if algorithm_id == "mobo_alchemist_adapter":
+            return {
+                **base,
+                "variables": variables,
+                "objectives": objectives,
+                "historical_observations": [],
+                "session_name": f"ResearchEngine {problem_spec.name}",
+            }
+        return base
+
+    @staticmethod
+    def _infer_stage_smiles(problem_spec: dict) -> str:
+        """从 ProblemSpec 中尽量提取 SMILES；没有则使用演示氟聚合物单体。"""
+        for variable in problem_spec.get("variables", []):
+            name = str(variable.get("name", "")).lower()
+            if "smiles" in name:
+                categories = variable.get("categories") or []
+                if categories:
+                    return str(categories[0])
+                description = variable.get("description")
+                if description:
+                    return str(description)
+        return "C=C(F)F"
+
+    def _link_algorithm_run(self, doc: dict, stage_run: dict, algorithm_run_id: str) -> None:
+        """把 AlgorithmRun ID 写入 ResearchRun 和 StageRun 追溯字段。"""
+        stage_links = stage_run.setdefault("linked_algorithm_runs", [])
+        if algorithm_run_id not in stage_links:
+            stage_links.append(algorithm_run_id)
+
+        run_links = list(doc.get("linked_algorithm_runs") or [])
+        if algorithm_run_id not in run_links:
+            run_links.append(algorithm_run_id)
+            doc["linked_algorithm_runs"] = run_links
+            ResearchRunRepository.update_fields(doc["run_id"], {
+                "linked_algorithm_runs": run_links,
+                "updated_at": utc_now(),
+            })
+
+    def _link_latest_algorithm_run(self, doc: dict, stage_run: dict, algorithm_id: str) -> None:
+        """失败时找回刚落库的 AlgorithmRun，保证 Stage 追溯不丢。"""
+        items, _ = AlgorithmRunRepository.list_runs(
+            research_run_id=doc["run_id"],
+            algorithm_id=algorithm_id,
+            page=1,
+            page_size=10,
+        )
+        for item in items:
+            if item.get("stage_run_id") == stage_run.get("stage_run_id"):
+                self._link_algorithm_run(doc, stage_run, item["run_id"])
+                return
 
     def _check_run_completed(self, run_id: str) -> None:
         """检查 ResearchRun 是否所有阶段已完成，若完成则更新状态。

@@ -144,6 +144,10 @@ export function mapAlgorithmRunToGlobalTask(run) {
 }
 
 export function mapResearchRunToGlobalTask(run) {
+  const query = { research_run_id: run.run_id }
+  if (run.status === 'blocked_approval') {
+    query.action = 'approve'
+  }
   return {
     task_id: run.run_id,
     task_type: '自动研发',
@@ -157,7 +161,7 @@ export function mapResearchRunToGlobalTask(run) {
     updated_at: run.updated_at,
     route: {
       path: '/research-engine',
-      query: { research_run_id: run.run_id },
+      query,
     },
     raw: run,
   }

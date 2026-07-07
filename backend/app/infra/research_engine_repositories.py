@@ -52,6 +52,7 @@ class ResearchProblemSpecRepository(BaseRepository):
         campaign_id: str | None = None,
         created_by: str | None = None,
         status: str | None = None,
+        include_archived: bool = False,
         material_family: str | None = None,
         page: int = 1,
         page_size: int = 20,
@@ -79,10 +80,22 @@ class ResearchProblemSpecRepository(BaseRepository):
             filters["created_by"] = created_by
         if status:
             filters["status"] = status
+        elif not include_archived:
+            filters["status"] = {"$ne": "archived"}
         if material_family:
             filters["material_family"] = material_family
 
-        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+        if cls._can_use_mongo():
+            return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+        demo_filters = dict(filters)
+        exclude_archived = demo_filters.pop("status", None) == {"$ne": "archived"}
+        items, total = cls.list_all(demo_filters, sort_field="created_at", reverse=True, page=1, page_size=10000)
+        if exclude_archived:
+            items = [item for item in items if item.get("status") != "archived"]
+            total = len(items)
+        start = (page - 1) * page_size
+        return items[start:start + page_size], total
 
     @classmethod
     def update_fields(cls, problem_spec_id: str, fields: dict[str, Any]) -> bool:
@@ -262,15 +275,29 @@ class AlgorithmRegistryRepository(BaseRepository):
                 cls.save("algorithm_id", entry)
                 count += 1
             else:
-                # 修复已存在条目的旧 trigger_modes 值
-                existing_modes = existing.get("trigger_modes") or []
-                needs_repair = "human" in existing_modes
-                if needs_repair:
-                    from app.services.research_engine_service import normalize_trigger_modes
-                    repaired = normalize_trigger_modes(existing_modes)
-                    cls.update_fields(entry["algorithm_id"], {"trigger_modes": repaired})
-                if entry.get("algorithm_family") and not existing.get("algorithm_family"):
-                    cls.update_fields(entry["algorithm_id"], {"algorithm_family": entry["algorithm_family"]})
+                patch_fields = {
+                    key: entry[key]
+                    for key in (
+                        "name",
+                        "type",
+                        "algorithm_family",
+                        "material_scope",
+                        "task_scope",
+                        "input_schema",
+                        "output_schema",
+                        "call_method",
+                        "trigger_modes",
+                        "runtime_dependency",
+                        "version",
+                        "validation_metric",
+                        "owner",
+                        "status",
+                        "description",
+                    )
+                    if key in entry and entry.get(key) != existing.get(key)
+                }
+                if patch_fields:
+                    cls.update_fields(entry["algorithm_id"], patch_fields)
         return count
 
     @classmethod
@@ -377,6 +404,8 @@ class ManualAlgorithmWorkflowRepository(BaseRepository):
         *,
         problem_spec_id: str | None = None,
         execution_decision_id: str | None = None,
+        status: str | None = None,
+        include_archived: bool = False,
         created_by: str | None = None,
         page: int = 1,
         page_size: int = 20,
@@ -389,7 +418,21 @@ class ManualAlgorithmWorkflowRepository(BaseRepository):
             filters["execution_decision_id"] = execution_decision_id
         if created_by:
             filters["created_by"] = created_by
-        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+        if status:
+            filters["status"] = status
+        elif not include_archived:
+            filters["status"] = {"$ne": "archived"}
+        if cls._can_use_mongo():
+            return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+        demo_filters = dict(filters)
+        exclude_archived = demo_filters.pop("status", None) == {"$ne": "archived"}
+        items, total = cls.list_all(demo_filters, sort_field="created_at", reverse=True, page=1, page_size=10000)
+        if exclude_archived:
+            items = [item for item in items if item.get("status") != "archived"]
+            total = len(items)
+        start = (page - 1) * page_size
+        return items[start:start + page_size], total
 
     @classmethod
     def update_fields(cls, workflow_id: str, fields: dict[str, Any]) -> bool:
@@ -604,6 +647,7 @@ class ResearchRunRepository(BaseRepository):
         problem_spec_id: str | None = None,
         campaign_id: str | None = None,
         status: str | None = None,
+        include_archived: bool = False,
         created_by: str | None = None,
         project_id: str | None = None,
         page: int = 1,
@@ -630,12 +674,24 @@ class ResearchRunRepository(BaseRepository):
             filters["campaign_id"] = campaign_id
         if status:
             filters["status"] = status
+        elif not include_archived:
+            filters["status"] = {"$ne": "archived"}
         if created_by:
             filters["created_by"] = created_by
         if project_id:
             filters["project_id"] = project_id
 
-        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+        if cls._can_use_mongo():
+            return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+        demo_filters = dict(filters)
+        exclude_archived = demo_filters.pop("status", None) == {"$ne": "archived"}
+        items, total = cls.list_all(demo_filters, sort_field="created_at", reverse=True, page=1, page_size=10000)
+        if exclude_archived:
+            items = [item for item in items if item.get("status") != "archived"]
+            total = len(items)
+        start = (page - 1) * page_size
+        return items[start:start + page_size], total
 
     @classmethod
     def update_fields(cls, run_id: str, fields: dict[str, Any]) -> bool:

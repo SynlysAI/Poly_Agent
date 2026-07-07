@@ -14,12 +14,12 @@ const props = defineProps({
 
 const loading = ref(false)
 const reason = ref('')
-const decision = ref('approve')
+const decision = ref('approved')
 
 watch(() => props.visible, (val) => {
   if (val) {
     reason.value = ''
-    decision.value = 'approve'
+    decision.value = 'approved'
   }
 })
 
@@ -63,7 +63,7 @@ async function handleSubmit() {
       reason: reason.value.trim(),
     }
     let result
-    if (decision.value === 'approve') {
+    if (decision.value === 'approved') {
       result = await approveStage(props.researchRunId, props.stageRun.stage_run_id, payload)
       ElMessage.success('已批准该阶段')
     } else {
@@ -109,8 +109,8 @@ function handleCancel() {
       <el-form label-position="top">
         <el-form-item label="审批决策">
           <el-radio-group v-model="decision">
-            <el-radio value="approve">批准 - 继续推进后续阶段</el-radio>
-            <el-radio value="reject">拒绝 - 标记阶段失败</el-radio>
+            <el-radio value="approved">批准 - 继续推进后续阶段</el-radio>
+            <el-radio value="rejected">拒绝 - 标记阶段失败</el-radio>
           </el-radio-group>
         </el-form-item>
 
@@ -128,11 +128,11 @@ function handleCancel() {
     <template #footer>
       <el-button @click="handleCancel">取消</el-button>
       <el-button
-        :type="decision === 'approve' ? 'success' : 'danger'"
+        :type="decision === 'approved' ? 'success' : 'danger'"
         :loading="loading"
         @click="handleSubmit"
       >
-        {{ decision === 'approve' ? '批准' : '拒绝' }}
+        {{ decision === 'approved' ? '批准' : '拒绝' }}
       </el-button>
     </template>
   </el-dialog>

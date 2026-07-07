@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Plus, View as ViewIcon, InfoFilled, ArrowDown } from '@element-plus/icons-vue'
 
 import {
+  archiveProblemSpec,
   createProblemSpec,
   freezeProblemSpec,
   getApiErrorMessage,
@@ -14,6 +15,10 @@ import {
 } from '../../api/polyAgentApi'
 
 const emit = defineEmits(['spec-selected'])
+
+const props = defineProps({
+  currentProblemSpecId: { type: String, default: '' },
+})
 
 const loading = ref(false)
 const saving = ref(false)
@@ -270,10 +275,10 @@ function selectSpec(specId) {
   isNew.value = false
   isViewing.value = false
   selectedSpecId.value = specId
-  loadSpecDetail(specId)
+  loadSpecDetail(specId, 'select')
 }
 
-async function loadSpecDetail(specId) {
+async function loadSpecDetail(specId, source = 'select') {
   loading.value = true
   try {
     detail.value = await getProblemSpec(specId)
@@ -290,13 +295,25 @@ async function loadSpecDetail(specId) {
       campaign_id: detail.value.campaign_id,
       description: detail.value.description || '',
     }
-    emit('spec-selected', detail.value)
+    emit('spec-selected', detail.value, { source })
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loading.value = false
   }
 }
+
+watch(
+  () => props.currentProblemSpecId,
+  (specId) => {
+    if (!specId || specId === selectedSpecId.value) return
+    isNew.value = false
+    isViewing.value = false
+    selectedSpecId.value = specId
+    loadSpecDetail(specId, 'restore')
+  },
+  { immediate: true },
+)
 
 async function handleSave() {
   saving.value = true
@@ -335,7 +352,30 @@ async function handleFreeze() {
     })
     const data = await freezeProblemSpec(detail.value.problem_spec_id)
     detail.value = data
+    emit('spec-selected', data, { source: 'freeze' })
     ElMessage.success('研发任务已冻结')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  }
+}
+
+async function handleArchiveSpec(spec) {
+  try {
+    await ElMessageBox.confirm(`确定要归档研发任务「${spec.name}」吗？归档后默认历史列表将不再显示，但追溯记录会保留。`, '归档确认', {
+      confirmButtonText: '归档',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    await archiveProblemSpec(spec.problem_spec_id, { reason: '用户从研发任务历史列表归档' })
+    ElMessage.success('研发任务已归档')
+    if (selectedSpecId.value === spec.problem_spec_id) {
+      selectedSpecId.value = ''
+      detail.value = null
+      form.value = createEmptyForm()
+      emit('spec-selected', null, { source: 'archive' })
+    }
+    await loadSpecs()
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(getApiErrorMessage(error))
@@ -384,8 +424,20 @@ loadAlgorithms()
           :label="spec.name"
           :value="spec.problem_spec_id"
         >
-          <span>{{ spec.name }}</span>
-          <el-tag size="small" :type="statusTag(spec.status)" style="margin-left:8px">{{ spec.status }}</el-tag>
+          <span class="option-row">
+            <span class="option-main">
+              <span>{{ spec.name }}</span>
+              <el-tag size="small" :type="statusTag(spec.status)" style="margin-left:8px">{{ spec.status }}</el-tag>
+            </span>
+            <el-button
+              text
+              type="danger"
+              size="small"
+              :icon="Delete"
+              aria-label="归档研发任务"
+              @click.stop="handleArchiveSpec(spec)"
+            />
+          </span>
         </el-option>
       </el-select>
       <el-tag v-if="detail" :type="statusTag(detail.status)" size="small">
@@ -576,6 +628,20 @@ loadAlgorithms()
 </template>
 
 <style scoped>
+.option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.option-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
 .problem-spec-panel {
   display: flex;
   flex-direction: column;

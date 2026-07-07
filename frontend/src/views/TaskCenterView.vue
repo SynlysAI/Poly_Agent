@@ -1,8 +1,8 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search, View } from '@element-plus/icons-vue'
+import { Refresh, Search, View, Finished } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, listAlgorithmRuns, listCampaigns, listComputations, listResearchRuns } from '../api/polyAgentApi'
 import {
@@ -16,6 +16,7 @@ import {
 } from '../tasks/taskModules'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const computationRows = ref([])
 const campaignRows = ref([])
@@ -24,9 +25,9 @@ const researchRuns = ref([])
 const total = ref(0)
 
 const filters = reactive({
-  module_id: '',
-  status: '',
-  keyword: '',
+  module_id: route.query.module_id ? String(route.query.module_id) : '',
+  status: route.query.status ? String(route.query.status) : '',
+  keyword: route.query.keyword ? String(route.query.keyword) : '',
   page: 1,
   page_size: 20,
 })
@@ -73,7 +74,7 @@ const summary = computed(() => {
   for (const item of taskRows.value) {
     if (item.status === 'running') counts.running += 1
     if (item.status === 'completed') counts.completed += 1
-    if (item.status === 'queued') counts.pending += 1
+    if (item.status === 'queued' || item.status === 'blocked_approval') counts.pending += 1
   }
   return counts
 })
@@ -113,6 +114,7 @@ async function loadTasks() {
 
 function handleSearch() {
   filters.page = 1
+  syncFiltersToRoute()
   loadTasks()
 }
 
@@ -121,7 +123,19 @@ function handleReset() {
   filters.status = ''
   filters.keyword = ''
   filters.page = 1
+  syncFiltersToRoute()
   loadTasks()
+}
+
+function syncFiltersToRoute() {
+  router.replace({
+    path: route.path,
+    query: {
+      ...(filters.module_id ? { module_id: filters.module_id } : {}),
+      ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.keyword.trim() ? { keyword: filters.keyword.trim() } : {}),
+    },
+  })
 }
 
 function openTask(row) {
@@ -130,6 +144,14 @@ function openTask(row) {
     return
   }
   ElMessage.info('该任务类型暂未接入详情页')
+}
+
+function actionLabel(row) {
+  return row.module_id === 'research-engine' && row.status === 'blocked_approval' ? '审批' : '查看'
+}
+
+function actionIcon(row) {
+  return row.module_id === 'research-engine' && row.status === 'blocked_approval' ? Finished : View
 }
 
 function openModule(moduleId) {
@@ -214,9 +236,17 @@ onMounted(() => {
           <el-table-column label="创建时间" min-width="170">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="110" fixed="right">
+          <el-table-column label="操作" width="120" fixed="right">
             <template #default="{ row }">
-              <el-button text type="primary" size="small" :icon="View" @click="openTask(row)">查看</el-button>
+              <el-button
+                text
+                :type="row.module_id === 'research-engine' && row.status === 'blocked_approval' ? 'warning' : 'primary'"
+                size="small"
+                :icon="actionIcon(row)"
+                @click="openTask(row)"
+              >
+                {{ actionLabel(row) }}
+              </el-button>
             </template>
           </el-table-column>
         </el-table>

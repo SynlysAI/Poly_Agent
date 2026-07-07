@@ -9,7 +9,7 @@ import {
 
 import {
   getApiErrorMessage, getIntegrationStatus, listAlgorithmRuns,
-  listCampaigns, listComputations, listResearchRuns, chatWithLLM,
+  listCampaigns, listComputations, listResearchRuns, chatWithAssistant,
 } from '../api/polyAgentApi'
 import {
   isResearchEngineContainerCampaign,
@@ -89,13 +89,24 @@ function goToTask(task) {
 
 // ------ AI Chat Panel ------
 const chatMessages = ref([
-  { role: 'assistant', content: '你好！我是 PolyAgent 智能助手。你可以向我咨询材料研发相关的问题，比如：\n\n• 如何提交一个计算任务？\n• 怎样设计一个贝叶斯优化实验？\n• 想了解某个聚合物的力学性能预测\n• 帮我分析材料的介电常数数据' },
+  {
+    role: 'assistant',
+    content: '你好！我是 PolyAgent 产品内助手，可以帮你定位页面入口、确认 ResearchEngine 算法清单、提交计算任务和处理 AutoResearch 审批。\n\n- 哪些算法是真实适配器？\n- 如何开始一个 ResearchEngine 示例？\n- 如何查看待审批任务？',
+    actions: [{ label: '进入 ResearchEngine', target: '/research-engine', type: 'route' }],
+    references: [],
+    suggested_questions: ['哪些算法是真实适配器？', '如何开始一个 ResearchEngine 示例？', '如何查看待审批任务？'],
+  },
 ])
 const chatInput = ref('')
 const chatSending = ref(false)
 const chatBodyRef = ref(null)
 const assistantCollapsed = ref(false)
+const assistantWidth = ref(360)
+const assistantResizing = ref(false)
 const assistantToggleLabel = computed(() => (assistantCollapsed.value ? '展开 AI 智能助手' : '隐藏 AI 智能助手'))
+const assistantColumnStyle = computed(() => ({
+  '--assistant-width': `${assistantWidth.value}px`,
+}))
 
 function toggleAssistantPanel() {
   assistantCollapsed.value = !assistantCollapsed.value
@@ -114,8 +125,20 @@ async function sendChatMessage() {
     }
   }, 50)
   try {
-    const data = await chatWithLLM(chatMessages.value.map(m => ({ role: m.role, content: m.content })))
-    chatMessages.value.push({ role: 'assistant', content: data.content || data.message || '抱歉，未能获得有效回复。' })
+    const data = await chatWithAssistant({
+      messages: chatMessages.value.map(m => ({ role: m.role, content: m.content })),
+      context: {
+        current_route: router.currentRoute.value.fullPath,
+        page: 'dashboard',
+      },
+    })
+    chatMessages.value.push({
+      role: 'assistant',
+      content: data.content || '抱歉，未能获得有效回复。',
+      actions: data.actions || [],
+      references: data.references || [],
+      suggested_questions: data.suggested_questions || [],
+    })
   } catch (e) {
     chatMessages.value.push({ role: 'assistant', content: `对话出错：${e.message || '未知错误'}` })
   } finally {
@@ -126,6 +149,115 @@ async function sendChatMessage() {
       }
     }, 50)
   }
+}
+
+function startAssistantResize(event) {
+  assistantResizing.value = true
+  const startX = event.clientX
+  const startWidth = assistantWidth.value
+  const handleMove = (moveEvent) => {
+    const delta = startX - moveEvent.clientX
+    assistantWidth.value = Math.min(560, Math.max(320, startWidth + delta))
+  }
+  const handleUp = () => {
+    assistantResizing.value = false
+    window.removeEventListener('mousemove', handleMove)
+    window.removeEventListener('mouseup', handleUp)
+  }
+  window.addEventListener('mousemove', handleMove)
+  window.addEventListener('mouseup', handleUp)
+}
+
+function openAssistantAction(action) {
+  if (action?.target) {
+    router.push(action.target)
+  }
+}
+
+function openAssistantReference(ref) {
+  if (!ref?.target) return
+  if (ref.type === 'route' || ref.target.startsWith('/')) {
+    router.push(ref.target)
+    return
+  }
+  ElMessage.info(`来源：${ref.target}`)
+}
+
+function askSuggestedQuestion(question) {
+  chatInput.value = question
+  sendChatMessage()
+}
+
+function markdownBlocks(text) {
+  const lines = String(text || '').split('\n')
+  const blocks = []
+  let paragraph = []
+  let list = []
+  let code = []
+  let inCode = false
+  const flushParagraph = () => {
+    if (paragraph.length) {
+      blocks.push({ type: 'paragraph', text: paragraph.join(' ') })
+      paragraph = []
+    }
+  }
+  const flushList = () => {
+    if (list.length) {
+      blocks.push({ type: 'list', items: list })
+      list = []
+    }
+  }
+  for (const line of lines) {
+    if (line.trim().startsWith('```')) {
+      if (inCode) {
+        blocks.push({ type: 'code', text: code.join('\n') })
+        code = []
+        inCode = false
+      } else {
+        flushParagraph()
+        flushList()
+        inCode = true
+      }
+      continue
+    }
+    if (inCode) {
+      code.push(line)
+      continue
+    }
+    if (!line.trim()) {
+      flushParagraph()
+      flushList()
+      continue
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/)
+    if (heading) {
+      flushParagraph()
+      flushList()
+      blocks.push({ type: 'heading', level: heading[1].length, text: heading[2] })
+      continue
+    }
+    const listItem = line.match(/^\s*[-*•]\s+(.+)$/)
+    if (listItem) {
+      flushParagraph()
+      list.push(listItem[1])
+      continue
+    }
+    paragraph.push(line.trim())
+  }
+  flushParagraph()
+  flushList()
+  if (code.length) blocks.push({ type: 'code', text: code.join('\n') })
+  return blocks
+}
+
+function inlineSegments(text) {
+  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g)
+  return parts.filter(Boolean).map((part) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return { strong: true, text: part.slice(2, -2) }
+    }
+    return { strong: false, text: part }
+  })
 }
 
 function handleChatKeydown(event) {
@@ -225,7 +357,7 @@ onMounted(() => {
 
 <template>
   <div class="dashboard-view">
-    <div class="dashboard-layout" :class="{ 'assistant-collapsed': assistantCollapsed }">
+    <div class="dashboard-layout" :class="{ 'assistant-collapsed': assistantCollapsed, 'assistant-resizing': assistantResizing }" :style="assistantColumnStyle">
       <main class="dashboard-main">
         <div class="panel dashboard-overview-panel">
           <div class="panel-header">
@@ -314,6 +446,7 @@ onMounted(() => {
           <el-icon :size="16"><Expand /></el-icon>
         </button>
         <div v-else class="panel chat-panel">
+          <div class="assistant-resize-handle" role="separator" aria-orientation="vertical" title="拖拽调整助手宽度" @mousedown="startAssistantResize" />
           <div class="panel-header chat-header">
             <div class="chat-toggle-left">
               <el-icon :size="18"><ChatLineRound /></el-icon>
@@ -342,7 +475,65 @@ onMounted(() => {
                 :class="msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'"
               >
                 <div class="chat-bubble">
-                  <div class="chat-bubble-text">{{ msg.content }}</div>
+                  <div class="chat-bubble-text">
+                    <template v-for="(block, blockIdx) in markdownBlocks(msg.content)" :key="blockIdx">
+                      <h4 v-if="block.type === 'heading'" class="markdown-heading">
+                        <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
+                          <strong v-if="seg.strong">{{ seg.text }}</strong>
+                          <span v-else>{{ seg.text }}</span>
+                        </template>
+                      </h4>
+                      <ul v-else-if="block.type === 'list'" class="markdown-list">
+                        <li v-for="(item, itemIdx) in block.items" :key="itemIdx">
+                          <template v-for="(seg, segIdx) in inlineSegments(item)" :key="segIdx">
+                            <strong v-if="seg.strong">{{ seg.text }}</strong>
+                            <span v-else>{{ seg.text }}</span>
+                          </template>
+                        </li>
+                      </ul>
+                      <pre v-else-if="block.type === 'code'" class="markdown-code"><code>{{ block.text }}</code></pre>
+                      <p v-else class="markdown-paragraph">
+                        <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
+                          <strong v-if="seg.strong">{{ seg.text }}</strong>
+                          <span v-else>{{ seg.text }}</span>
+                        </template>
+                      </p>
+                    </template>
+                  </div>
+                  <div v-if="msg.actions?.length" class="chat-actions">
+                    <el-button
+                      v-for="action in msg.actions"
+                      :key="`${idx}-${action.label}-${action.target}`"
+                      size="small"
+                      type="primary"
+                      plain
+                      @click="openAssistantAction(action)"
+                    >
+                      {{ action.label }}
+                    </el-button>
+                  </div>
+                  <div v-if="msg.references?.length" class="chat-references">
+                    <button
+                      v-for="ref in msg.references"
+                      :key="`${idx}-${ref.label}`"
+                      type="button"
+                      class="chat-reference"
+                      :title="ref.target"
+                      @click="openAssistantReference(ref)"
+                    >
+                      {{ ref.label }}
+                    </button>
+                  </div>
+                  <div v-if="msg.suggested_questions?.length" class="suggested-questions">
+                    <button
+                      v-for="question in msg.suggested_questions"
+                      :key="`${idx}-${question}`"
+                      type="button"
+                      @click="askSuggestedQuestion(question)"
+                    >
+                      {{ question }}
+                    </button>
+                  </div>
                 </div>
               </div>
               <div v-if="chatSending" class="chat-message chat-message-assistant">
@@ -386,13 +577,18 @@ onMounted(() => {
 
 .dashboard-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, var(--assistant-width, 360px));
   grid-template-areas:
     "overview assistant"
     "workspace assistant";
   gap: 16px;
   align-items: start;
   transition: grid-template-columns 0.2s ease;
+}
+
+.dashboard-layout.assistant-resizing {
+  user-select: none;
+  cursor: col-resize;
 }
 
 .dashboard-layout.assistant-collapsed {
@@ -427,10 +623,37 @@ onMounted(() => {
 
 /* ---- Chat Panel ---- */
 .chat-panel {
-  height: 100%;
+  height: calc(100vh - 112px);
+  max-height: 760px;
+  min-height: 560px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.assistant-resize-handle {
+  position: absolute;
+  left: -6px;
+  top: 10px;
+  bottom: 10px;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.assistant-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+}
+
+.assistant-resize-handle:hover::after {
+  background: var(--app-primary);
 }
 .chat-header {
   display: flex;
@@ -531,7 +754,6 @@ onMounted(() => {
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
 }
 .chat-message-user .chat-bubble {
@@ -558,6 +780,78 @@ onMounted(() => {
   padding: 12px 16px;
   border-top: 1px solid var(--app-border-soft);
   align-items: flex-end;
+}
+
+.markdown-paragraph,
+.markdown-heading,
+.markdown-list {
+  margin: 0 0 8px;
+}
+
+.markdown-paragraph:last-child,
+.markdown-heading:last-child,
+.markdown-list:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-heading {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--app-ink);
+}
+
+.markdown-list {
+  padding-left: 18px;
+}
+
+.markdown-code {
+  margin: 0 0 8px;
+  padding: 8px;
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+  border: 1px solid var(--app-border-soft);
+  overflow: auto;
+  font-size: 12px;
+}
+
+.chat-actions,
+.suggested-questions,
+.chat-references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chat-reference {
+  font-size: 12px;
+  color: var(--app-ink-muted);
+  background: #fff;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.chat-reference:hover {
+  color: var(--app-primary);
+  border-color: #bfdbfe;
+  background: #f8fbff;
+}
+
+.suggested-questions button {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: var(--app-radius-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.suggested-questions button:hover {
+  border-color: var(--app-primary);
+  background: #dbeafe;
 }
 
 /* ---- Dashboard Tabs ---- */
@@ -716,6 +1010,12 @@ onMounted(() => {
 
   .chat-panel {
     height: auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .assistant-resize-handle {
+    display: none;
   }
 }
 </style>

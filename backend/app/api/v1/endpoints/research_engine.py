@@ -16,6 +16,7 @@ from app.schemas.research_engine import (
     AlgorithmRunCreate,
     AlgorithmRunListData,
     AlgorithmRunTraceability,
+    ArchiveRequest,
     EntityAuditListData,
     ExecutionDecision,
     ExecutionDecisionCreate,
@@ -31,6 +32,8 @@ from app.schemas.research_engine import (
     ResearchRunListData,
     ResearchRunStatusChangeRequest,
     ResearchRunTraceability,
+    ResearchEngineExampleInstantiateResult,
+    ResearchEngineExampleListData,
     StageApprovalRequest,
     StageRunTraceability,
     WorkflowRun,
@@ -105,6 +108,23 @@ def list_problem_specs(
             page_size=page_size,
         ),
     )
+
+
+@router.post("/problem-specs/{problem_spec_id}:archive", response_model=ApiResponse[ProblemSpec])
+def archive_problem_spec(
+    problem_spec_id: str,
+    request: Request,
+    payload: ArchiveRequest | None = None,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ProblemSpec]:
+    """归档 ProblemSpec，默认列表隐藏但保留追溯链。"""
+    data = service.archive_problem_spec(
+        problem_spec_id,
+        actor_user_id=_actor_user_id(current_user),
+        reason=payload.reason if payload else "用户归档研发任务",
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.get("/problem-specs/{problem_spec_id}", response_model=ApiResponse[ProblemSpec])
@@ -267,6 +287,37 @@ def get_algorithm(
 
 
 # =============================================================================
+# Examples API
+# =============================================================================
+
+
+@router.get("/examples", response_model=ApiResponse[ResearchEngineExampleListData])
+def list_examples(
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ResearchEngineExampleListData]:
+    """列出可一键创建的 ResearchEngine 示例流程。"""
+    return ApiResponse(code=0, message="ok", data=service.list_examples())
+
+
+@router.post(
+    "/examples/{example_id}/instantiate",
+    response_model=ApiResponse[ResearchEngineExampleInstantiateResult],
+)
+def instantiate_example(
+    example_id: str,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ResearchEngineExampleInstantiateResult]:
+    """实例化 ResearchEngine 示例流程并返回前端跳转信息。"""
+    data = service.instantiate_example(
+        example_id,
+        actor_user_id=_actor_user_id(current_user),
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+# =============================================================================
 # ManualWorkflow / WorkflowRun / AlgorithmRun API
 # =============================================================================
 
@@ -292,15 +343,34 @@ def list_manual_workflows(
     page_size: int = Query(default=20, ge=1, le=100),
     problem_spec_id: str | None = Query(default=None),
     execution_decision_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[ManualAlgorithmWorkflowListData]:
     """查询人工算法 Workflow 列表。"""
     data = service.list_manual_workflows(
         problem_spec_id=problem_spec_id,
         execution_decision_id=execution_decision_id,
+        status=status,
         created_by=current_user["user_id"] if current_user else None,
         page=page,
         page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/manual-workflows/{workflow_id}:archive", response_model=ApiResponse[ManualAlgorithmWorkflow])
+def archive_manual_workflow(
+    workflow_id: str,
+    request: Request,
+    payload: ArchiveRequest | None = None,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ManualAlgorithmWorkflow]:
+    """归档人工 Workflow，默认列表隐藏但保留运行历史和审计。"""
+    data = service.archive_manual_workflow(
+        workflow_id,
+        actor_user_id=_actor_user_id(current_user),
+        reason=payload.reason if payload else "用户归档人工 Workflow",
+        request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
 
@@ -489,6 +559,23 @@ def list_research_runs(
             page_size=page_size,
         ),
     )
+
+
+@router.post("/research-runs/{run_id}:archive", response_model=ApiResponse[ResearchRun])
+def archive_research_run(
+    run_id: str,
+    request: Request,
+    payload: ArchiveRequest | None = None,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ResearchRun]:
+    """归档 ResearchRun，默认列表隐藏但保留阶段和追溯链。"""
+    data = orchestrator.archive_research_run(
+        run_id,
+        actor_user_id=_actor_user_id(current_user),
+        reason=payload.reason if payload else "用户归档 AutoResearch 运行",
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.get("/research-runs/{run_id}", response_model=ApiResponse[ResearchRun])

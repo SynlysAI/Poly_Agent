@@ -45,12 +45,16 @@ from app.schemas.research_engine import (
     ProblemSpecCreate,
     ProblemSpecListData,
     ResearchRunTraceability,
+    ResearchEngineExampleInstantiateResult,
+    ResearchEngineExampleListData,
+    ResearchEngineExampleSummary,
     StageRunTraceability,
     WorkflowRun,
     WorkflowRunListData,
     WorkflowStepRun,
 )
 from app.services.research_engine_defaults import (
+    build_adapter_algorithm_registry,
     build_default_algorithm_registry,
     build_mock_algorithm_registry,
 )
@@ -237,12 +241,46 @@ class ResearchEngineService:
             campaign_id=campaign_id,
             created_by=created_by,
             status=status,
+            include_archived=status == "archived",
             material_family=material_family,
             page=page,
             page_size=page_size,
         )
         specs = [self._doc_to_problem_spec(doc) for doc in items]
         return ProblemSpecListData(items=specs, page=page, page_size=page_size, total=total)
+
+    def archive_problem_spec(
+        self,
+        problem_spec_id: str,
+        *,
+        actor_user_id: str,
+        reason: str = "归档材料研发任务",
+        request_id: str | None = None,
+    ) -> ProblemSpec:
+        """软删除/归档 ProblemSpec，保留审计和追溯。"""
+        existing = ResearchProblemSpecRepository.find_one({"problem_spec_id": problem_spec_id})
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"ProblemSpec '{problem_spec_id}' 不存在")
+        if existing.get("status") == "archived":
+            return self._doc_to_problem_spec(existing)
+
+        now = utc_now()
+        ResearchProblemSpecRepository.update_fields(
+            problem_spec_id,
+            {"status": "archived", "updated_at": now},
+        )
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="problem_spec",
+            entity_id=problem_spec_id,
+            event_type="archived",
+            reason=reason,
+            before={"status": existing.get("status")},
+            after={"status": "archived"},
+            request_id=request_id,
+        )
+        updated = ResearchProblemSpecRepository.find_one({"problem_spec_id": problem_spec_id})
+        return self._doc_to_problem_spec(updated or existing)
 
     def update_problem_spec(
         self,
@@ -521,6 +559,7 @@ class ResearchEngineService:
             "name": payload.name,
             "steps": [step.model_dump() for step in payload.steps],
             "description": payload.description,
+            "status": "active",
             "validation_status": "validated",
             "created_by": actor_user_id,
             "owner_id": actor_user_id,
@@ -558,6 +597,7 @@ class ResearchEngineService:
         *,
         problem_spec_id: str | None = None,
         execution_decision_id: str | None = None,
+        status: str | None = None,
         created_by: str | None = None,
         page: int = 1,
         page_size: int = 20,
@@ -566,6 +606,8 @@ class ResearchEngineService:
         items, total = ManualAlgorithmWorkflowRepository.list_workflows(
             problem_spec_id=problem_spec_id,
             execution_decision_id=execution_decision_id,
+            status=status,
+            include_archived=status == "archived",
             created_by=created_by,
             page=page,
             page_size=page_size,
@@ -576,6 +618,39 @@ class ResearchEngineService:
             page_size=page_size,
             total=total,
         )
+
+    def archive_manual_workflow(
+        self,
+        workflow_id: str,
+        *,
+        actor_user_id: str,
+        reason: str = "归档人工算法 Workflow",
+        request_id: str | None = None,
+    ) -> ManualAlgorithmWorkflow:
+        """软删除/归档人工 Workflow 定义。"""
+        existing = ManualAlgorithmWorkflowRepository.find_one({"workflow_id": workflow_id})
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"ManualAlgorithmWorkflow '{workflow_id}' 不存在")
+        if existing.get("status") == "archived":
+            return self._doc_to_manual_workflow(existing)
+
+        now = utc_now()
+        ManualAlgorithmWorkflowRepository.update_fields(
+            workflow_id,
+            {"status": "archived", "updated_at": now},
+        )
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="manual_algorithm_workflow",
+            entity_id=workflow_id,
+            event_type="archived",
+            reason=reason,
+            before={"status": existing.get("status", "active")},
+            after={"status": "archived"},
+            request_id=request_id,
+        )
+        updated = ManualAlgorithmWorkflowRepository.find_one({"workflow_id": workflow_id})
+        return self._doc_to_manual_workflow(updated or existing)
 
     def start_workflow_run(
         self,
@@ -767,7 +842,11 @@ class ResearchEngineService:
         for entry in build_default_algorithm_registry():
             entries.append(entry.model_dump())
 
-        # Mock/preset 算法（5 个）
+        # 真实外部/本地适配器
+        for entry in build_adapter_algorithm_registry():
+            entries.append(entry.model_dump())
+
+        # Mock/preset 演示算法
         for entry in build_mock_algorithm_registry():
             entries.append(entry.model_dump())
 
@@ -837,6 +916,194 @@ class ResearchEngineService:
             for doc in items
         ]
         return AlgorithmRegistryListData(items=entries, page=page, page_size=page_size, total=total)
+
+    # ------------------------------------------------------------------
+    # Examples
+    # ------------------------------------------------------------------
+
+    def list_examples(self) -> ResearchEngineExampleListData:
+        """列出 ResearchEngine 可实例化示例。"""
+        return ResearchEngineExampleListData(
+            items=[
+                ResearchEngineExampleSummary(
+                    example_id="manual-computation-workflow",
+                    title="人工计算 Workflow 示例",
+                    description="创建 ProblemSpec、manual_workbench 执行决策和 computation_submit_adapter Workflow。",
+                    mode="manual_workbench",
+                    tags=["manual", "workflow", "computation"],
+                ),
+                ResearchEngineExampleSummary(
+                    example_id="autoresearch-approval-demo",
+                    title="AutoResearch 审批示例",
+                    description="创建并启动 ResearchRun，停在 PROBLEM_SPEC blocked_approval 等待审批。",
+                    mode="autoresearch",
+                    tags=["autoresearch", "approval", "gate"],
+                ),
+            ]
+        )
+
+    def instantiate_example(
+        self,
+        example_id: str,
+        *,
+        actor_user_id: str,
+        request_id: str | None = None,
+    ) -> ResearchEngineExampleInstantiateResult:
+        """实例化示例流程。"""
+        if example_id == "manual-computation-workflow":
+            return self._instantiate_manual_computation_example(
+                actor_user_id=actor_user_id,
+                request_id=request_id,
+            )
+        if example_id == "autoresearch-approval-demo":
+            return self._instantiate_autoresearch_approval_example(
+                actor_user_id=actor_user_id,
+                request_id=request_id,
+            )
+        raise HTTPException(status_code=404, detail=f"ResearchEngine 示例 '{example_id}' 不存在")
+
+    def _instantiate_manual_computation_example(
+        self,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+    ) -> ResearchEngineExampleInstantiateResult:
+        problem_spec = self.create_problem_spec(
+            ProblemSpecCreate(
+                name="示例：人工计算 Workflow",
+                material_family="universal",
+                problem_type="structure_property_prediction",
+                allowed_execution_modes=["manual_workbench"],
+                objectives=[{"name": "structure_generation", "direction": "maximize"}],
+                description="一键示例：使用 computation_submit_adapter 提交 LOCAL_STRUCTURE 计算任务。",
+            ),
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+        )
+        decision = self.create_execution_decision(
+            problem_spec.problem_spec_id,
+            ExecutionDecisionCreate(mode="manual_workbench", reason="实例化人工计算 Workflow 示例"),
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+        )
+        workflow = self.create_manual_workflow(
+            ManualAlgorithmWorkflowCreate(
+                problem_spec_id=problem_spec.problem_spec_id,
+                execution_decision_id=decision.decision_id,
+                name="LOCAL_STRUCTURE 计算任务提交示例",
+                description="合法 workflow_type 下拉值示例，避免使用 test1 等非法值。",
+                steps=[
+                    {
+                        "step_id": "step_1",
+                        "algorithm_id": "computation_submit_adapter",
+                        "input_bindings": {
+                            "workflow_type": {"source": "literal", "value": "LOCAL_STRUCTURE"},
+                            "smiles": {"source": "literal", "value": "CCO"},
+                            "name": {"source": "literal", "value": "ethanol"},
+                        },
+                        "depends_on": [],
+                    }
+                ],
+            ),
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+        )
+        return ResearchEngineExampleInstantiateResult(
+            example_id="manual-computation-workflow",
+            problem_spec=problem_spec,
+            execution_decision=decision,
+            manual_workflow=workflow,
+            navigation={
+                "path": "/research-engine",
+                "query": {
+                    "problem_spec_id": problem_spec.problem_spec_id,
+                    "workflow_id": workflow.workflow_id,
+                    "mode": "manual_workbench",
+                },
+            },
+            message="已创建人工计算 Workflow 示例，可进入 ResearchEngine 配置并运行。",
+        )
+
+    def _instantiate_autoresearch_approval_example(
+        self,
+        *,
+        actor_user_id: str,
+        request_id: str | None,
+    ) -> ResearchEngineExampleInstantiateResult:
+        from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
+
+        problem_spec = self.create_problem_spec(
+            ProblemSpecCreate(
+                name="示例：AutoResearch 审批演示",
+                material_family="fluoropolymer",
+                problem_type="formulation_process_optimization",
+                allowed_execution_modes=["autoresearch"],
+                variables=[
+                    {
+                        "name": "monomer_smiles",
+                        "type": "categorical",
+                        "role": "structure",
+                        "categories": ["C=CF", "C=C(F)F", "FC(F)=C(F)F"],
+                    },
+                    {
+                        "name": "fluorine_content",
+                        "type": "continuous",
+                        "role": "formulation",
+                        "unit": "percent",
+                        "bounds": [0.0, 100.0],
+                    },
+                ],
+                objectives=[
+                    {"name": "dielectric_constant", "direction": "maximize"},
+                    {"name": "thermal_stability", "direction": "maximize"},
+                ],
+                constraints=[
+                    {"name": "equipment_temperature_limit", "type": "hard", "expression": "fluorine_content <= 90"},
+                ],
+                description="一键示例：启动后停在 PROBLEM_SPEC gate，等待人工审批。",
+            ),
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+        )
+        decision = self.create_execution_decision(
+            problem_spec.problem_spec_id,
+            ExecutionDecisionCreate(mode="autoresearch", reason="实例化 AutoResearch 审批示例"),
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+        )
+        orchestrator = ResearchEngineOrchestrator()
+        research_run = orchestrator.create_research_run(
+            problem_spec_id=problem_spec.problem_spec_id,
+            execution_decision_id=decision.decision_id,
+            profile_id="fluoropolymer",
+            max_iterations=1,
+            batch_size=5,
+            description="AutoResearch 审批示例",
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+        )
+        research_run = orchestrator.start_research_run(
+            research_run.run_id,
+            actor_user_id=actor_user_id,
+            reason="启动 AutoResearch 审批示例",
+            request_id=request_id,
+        )
+        return ResearchEngineExampleInstantiateResult(
+            example_id="autoresearch-approval-demo",
+            problem_spec=problem_spec,
+            execution_decision=decision,
+            research_run=research_run,
+            navigation={
+                "path": "/research-engine",
+                "query": {
+                    "problem_spec_id": problem_spec.problem_spec_id,
+                    "research_run_id": research_run.run_id,
+                    "action": "approve",
+                    "mode": "autoresearch",
+                },
+            },
+            message="已创建并启动 AutoResearch 示例，当前停在待审批阶段。",
+        )
 
     # ------------------------------------------------------------------
     # AlgorithmRun
@@ -1765,6 +2032,7 @@ class ResearchEngineService:
             name=doc.get("name", ""),
             steps=doc.get("steps", []),
             description=doc.get("description"),
+            status=doc.get("status", "active"),
             validation_status=doc.get("validation_status", "validated"),
             created_by=doc.get("created_by", "system"),
             owner_id=doc.get("owner_id"),

@@ -239,6 +239,11 @@ def build_default_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                     "name": "string - 分子名称（可选）",
                 },
                 required=["smiles"],
+                field_defaults={"name": "research-engine-molecule"},
+                ui_hints={
+                    "smiles": {"widget": "text", "placeholder": "CCO"},
+                    "name": {"widget": "text"},
+                },
             ),
             output_schema=AlgorithmIOSchema(
                 fields={
@@ -276,6 +281,23 @@ def build_default_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                 constraints={
                     "charge": {"min": -5, "max": 5},
                     "multiplicity": {"min": 1, "max": 6},
+                },
+                field_defaults={
+                    "charge": 0,
+                    "multiplicity": 1,
+                    "method": "GFN2-xTB",
+                    "solvent": "",
+                },
+                ui_hints={
+                    "smiles": {"widget": "text", "placeholder": "CCO"},
+                    "method": {"widget": "select"},
+                    "solvent": {"widget": "select"},
+                    "charge": {"widget": "number"},
+                    "multiplicity": {"widget": "number"},
+                },
+                field_options={
+                    "method": ["GFN2-xTB", "GFN1-xTB", "GFN0-xTB"],
+                    "solvent": ["", "WATER", "ACETONITRILE", "TOLUENE", "ETHANOL", "METHANOL", "DCM", "THF"],
                 },
             ),
             output_schema=AlgorithmIOSchema(
@@ -315,6 +337,20 @@ def build_default_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                     "charge": {"min": -5, "max": 5},
                     "multiplicity": {"min": 1, "max": 6},
                 },
+                field_defaults={
+                    "charge": 0,
+                    "multiplicity": 1,
+                    "method": "ORCA_B3LYP_DEF2_SVP",
+                },
+                ui_hints={
+                    "smiles": {"widget": "text", "placeholder": "CCO"},
+                    "method": {"widget": "select"},
+                    "charge": {"widget": "number"},
+                    "multiplicity": {"widget": "number"},
+                },
+                field_options={
+                    "method": ["ORCA_B3LYP_DEF2_SVP", "ORCA_PBE0_DEF2_SVP"],
+                },
             ),
             output_schema=AlgorithmIOSchema(
                 fields={
@@ -336,23 +372,174 @@ def build_default_algorithm_registry() -> list[AlgorithmRegistryEntry]:
 
 
 # =============================================================================
-# Mock/Preset 算法能力清单条目（5 个）
+# Production/Adapter 算法能力清单条目
+# =============================================================================
+
+
+def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
+    """构建 ResearchEngine 真实适配器能力清单。
+
+    适配器不伪装成内置模型：未配置外部服务或本地索引时返回明确配置状态。
+
+    Returns:
+        真实适配器算法能力条目列表。
+    """
+    return [
+        AlgorithmRegistryEntry(
+            algorithm_id="literature_rag_adapter",
+            name="文献 RAG 检索",
+            type="retriever",
+            algorithm_family="knowledge",
+            material_scope=["fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"],
+            task_scope=["KNOWLEDGE_RETRIEVAL"],
+            input_schema=AlgorithmIOSchema(
+                fields={
+                    "query": "string - RAG 检索问题或关键词（必填）",
+                    "material_family": "string - 材料体系",
+                    "target_properties": "list[string] - 目标性质列表",
+                    "top_k": "int - 返回条数（默认 5）",
+                },
+                required=["query"],
+                constraints={"top_k": {"min": 1, "max": 20}},
+                field_defaults={"material_family": "fluoropolymer", "target_properties": [], "top_k": 5},
+                ui_hints={
+                    "query": {"widget": "textarea", "placeholder": "氟基高分子 介电常数 热稳定性"},
+                    "material_family": {"widget": "select"},
+                    "target_properties": {"widget": "multiselect"},
+                    "top_k": {"widget": "number"},
+                },
+                field_options={
+                    "material_family": ["fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"],
+                    "target_properties": ["dielectric_constant", "thermal_stability", "tensile_strength", "conductivity", "elastic_modulus", "hydrophobicity", "glass_transition_temperature"],
+                },
+            ),
+            output_schema=AlgorithmIOSchema(
+                fields={
+                    "configured": "bool - 是否已配置本地 RAG 文献库",
+                    "hits": "list[object] - 命中文献片段",
+                    "answer": "string - 基于命中的摘要回答",
+                    "message": "string - 配置或检索状态",
+                },
+                required=["configured", "hits", "answer"],
+            ),
+            call_method="LOCAL_RAG",
+            trigger_modes=["human_workflow", "autoresearch"],
+            runtime_dependency="本地 RAG 文献库索引 .runtime/rag/literature_index.json",
+            version="1.0.0",
+            validation_metric={"retrieval": "depends_on_local_index"},
+            owner="research_engine_team",
+            status="active",
+            description="查询本地 RAG 文献库；空库时明确返回未配置，不生成伪文献。",
+        ),
+        AlgorithmRegistryEntry(
+            algorithm_id="vertical_predictor_adapter",
+            name="垂类性质预测服务",
+            type="predictor",
+            algorithm_family="vertical_prediction",
+            material_scope=["fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"],
+            task_scope=["COMPUTE_PREDICT"],
+            input_schema=AlgorithmIOSchema(
+                fields={
+                    "smiles": "string - 单体或重复单元 SMILES（必填）",
+                    "target_properties": "list[string] - 目标性质列表（必填）",
+                    "material_family": "string - 材料体系",
+                    "model_id": "string - 垂类模型 ID（可选）",
+                    "features": "dict - 附加特征（可选）",
+                },
+                required=["smiles", "target_properties"],
+                field_defaults={"material_family": "fluoropolymer", "target_properties": ["dielectric_constant"]},
+                ui_hints={
+                    "smiles": {"widget": "text", "placeholder": "C=C(F)F"},
+                    "target_properties": {"widget": "multiselect"},
+                    "material_family": {"widget": "select"},
+                    "model_id": {"widget": "text"},
+                },
+                field_options={
+                    "material_family": ["fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"],
+                    "target_properties": ["dielectric_constant", "thermal_stability", "tensile_strength", "conductivity", "elastic_modulus", "hydrophobicity", "glass_transition_temperature"],
+                },
+            ),
+            output_schema=AlgorithmIOSchema(
+                fields={
+                    "predictions": "dict - 预测值",
+                    "uncertainty": "dict - 不确定性",
+                    "model_id": "string - 实际使用模型",
+                    "configured": "bool - 是否已配置模型服务",
+                },
+                required=["predictions", "configured"],
+            ),
+            call_method="REST",
+            trigger_modes=["human_workflow", "autoresearch"],
+            runtime_dependency="VERTICAL_PREDICTOR_URL 环境变量指向的模型服务",
+            version="1.0.0",
+            validation_metric={"service_contract": "configured_at_runtime"},
+            owner="model_platform_team",
+            status="active",
+            description="垂类性质预测服务调用契约；未配置模型服务时返回可操作错误。",
+        ),
+        AlgorithmRegistryEntry(
+            algorithm_id="mobo_alchemist_adapter",
+            name="Alchemist BO/MOBO 优化推荐",
+            type="optimizer",
+            algorithm_family="wetlab_optimization",
+            material_scope=["fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"],
+            task_scope=["RECOMMENDATION_ASK"],
+            input_schema=AlgorithmIOSchema(
+                fields={
+                    "problem_spec_id": "string - ProblemSpec ID（可自动填充）",
+                    "variables": "list[object] - 搜索变量，兼容 ProblemSpec variables",
+                    "objectives": "list[object] - 优化目标定义（必填）",
+                    "historical_observations": "list[object] - 历史观测数据",
+                    "batch_size": "int - 推荐批次大小（默认 5）",
+                    "session_name": "string - Alchemist session 名称",
+                },
+                required=["objectives"],
+                constraints={"batch_size": {"min": 1, "max": 100}},
+                field_defaults={"batch_size": 5, "historical_observations": []},
+                ui_hints={
+                    "problem_spec_id": {"widget": "hidden", "auto_fill": "problem_spec_id"},
+                    "variables": {"widget": "json"},
+                    "objectives": {"widget": "json"},
+                    "historical_observations": {"widget": "json"},
+                    "batch_size": {"widget": "number"},
+                    "session_name": {"widget": "text"},
+                },
+            ),
+            output_schema=AlgorithmIOSchema(
+                fields={
+                    "session_id": "string - Alchemist session ID",
+                    "top_k_candidates": "list[object] - 推荐候选",
+                    "acquisition_values": "list[float] - 采集函数值",
+                    "model_status": "dict - 模型训练状态",
+                },
+                required=["session_id", "top_k_candidates"],
+            ),
+            call_method="REST",
+            trigger_modes=["human_workflow", "autoresearch"],
+            runtime_dependency="ALCHEMIST_BACKEND_URL",
+            version="1.0.0",
+            validation_metric={"recommendation_backend": "alchemist"},
+            owner="optimization_team",
+            status="active",
+            description="调用 Alchemist session/variable/experiment/model/acquisition API 生成 BO/MOBO 推荐。",
+        ),
+    ]
+
+
+# =============================================================================
+# Mock/Preset 算法能力清单条目（演示算法）
 # =============================================================================
 
 
 def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
     """构建 P0 Mock/Preset 算法能力清单。
 
-    包含 5 个 mock/preset 算法条目，用于演示人工通道闭环：
-    - literature_mock: 文献检索 mock
-    - polymer_descriptor_mock: 聚合物描述符生成 mock
-    - property_predictor_mock: 性质预测 mock
-    - mobo_mock: BO/MOBO 推荐 mock
-    - computation_submit_adapter: 计算任务提交适配器
+    Mock 条目仅用于演示，前端默认隐藏。
 
     Returns:
         Mock 算法能力条目列表。
     """
+    demo_ui_hint = {"_algorithm": {"is_demo": True, "hidden_by_default": True}}
     return [
         AlgorithmRegistryEntry(
             algorithm_id="literature_mock",
@@ -370,6 +557,18 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                 },
                 required=["keywords"],
                 constraints={"max_results": {"min": 1, "max": 100}},
+                field_defaults={"material_family": "fluoropolymer", "target_properties": [], "max_results": 20},
+                ui_hints={
+                    "keywords": {"widget": "textarea"},
+                    "material_family": {"widget": "select"},
+                    "target_properties": {"widget": "multiselect"},
+                    "max_results": {"widget": "number"},
+                    **demo_ui_hint,
+                },
+                field_options={
+                    "material_family": ["fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"],
+                    "target_properties": ["dielectric_constant", "thermal_stability", "tensile_strength", "conductivity", "elastic_modulus", "hydrophobicity", "glass_transition_temperature"],
+                },
             ),
             output_schema=AlgorithmIOSchema(
                 fields={
@@ -387,7 +586,7 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             validation_metric={"recall": "mock"},
             owner="research_engine_team",
             status="active",
-            description="面向材料体系和目标性质的文献检索 mock，返回模拟知识卡片和候选来源",
+            description="演示算法：面向材料体系和目标性质的文献检索 mock，返回模拟知识卡片和候选来源",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="polymer_descriptor_mock",
@@ -403,6 +602,14 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                     "composition": "dict - 共聚物组成配比（可选）",
                 },
                 required=["smiles"],
+                field_defaults={"polymer_type": "homopolymer"},
+                ui_hints={
+                    "smiles": {"widget": "text", "placeholder": "C=C(F)F"},
+                    "polymer_type": {"widget": "select"},
+                    "composition": {"widget": "json"},
+                    **demo_ui_hint,
+                },
+                field_options={"polymer_type": ["homopolymer", "copolymer"]},
             ),
             output_schema=AlgorithmIOSchema(
                 fields={
@@ -423,7 +630,7 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             validation_metric={"descriptor_accuracy": "mock"},
             owner="research_engine_team",
             status="active",
-            description="基于单体 SMILES 生成聚合物描述符，支持均聚物和共聚物体系",
+            description="演示算法：基于单体 SMILES 生成聚合物描述符，支持均聚物和共聚物体系",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="property_predictor_mock",
@@ -445,6 +652,18 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                     "fluorine_content": {"min": 0, "max": 100},
                     "polymerization_temperature": {"min": 20, "max": 180},
                 },
+                field_options={
+                    "target_properties": ["dielectric_constant", "thermal_stability", "tensile_strength", "conductivity", "elastic_modulus", "hydrophobicity", "glass_transition_temperature"],
+                },
+                field_defaults={"target_properties": ["dielectric_constant"], "fluorine_content": 45.0, "polymerization_temperature": 120.0},
+                ui_hints={
+                    "smiles": {"widget": "text", "placeholder": "C=C(F)F"},
+                    "descriptors": {"widget": "json"},
+                    "target_properties": {"widget": "multiselect"},
+                    "fluorine_content": {"widget": "number"},
+                    "polymerization_temperature": {"widget": "number"},
+                    **demo_ui_hint,
+                },
             ),
             output_schema=AlgorithmIOSchema(
                 fields={
@@ -462,7 +681,7 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             validation_metric={"mae": "mock", "r2": "mock"},
             owner="research_engine_team",
             status="active",
-            description="基于描述符或 SMILES 快速预测目标性质，返回预测值和不确定性",
+            description="演示算法：基于描述符或 SMILES 快速预测目标性质，返回预测值和不确定性",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="mobo_mock",
@@ -481,6 +700,16 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                     "constraints": "list[object] - 约束条件",
                 },
                 required=["problem_spec_id", "objectives"],
+                field_defaults={"batch_size": 5, "historical_observations": [], "candidates": []},
+                ui_hints={
+                    "problem_spec_id": {"widget": "hidden", "auto_fill": "problem_spec_id"},
+                    "historical_observations": {"widget": "json"},
+                    "candidates": {"widget": "json"},
+                    "batch_size": {"widget": "number"},
+                    "objectives": {"widget": "json"},
+                    "constraints": {"widget": "json"},
+                    **demo_ui_hint,
+                },
             ),
             output_schema=AlgorithmIOSchema(
                 fields={
@@ -499,7 +728,7 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             validation_metric={"top_k_hit_rate": "mock", "hypervolume_improvement": "mock"},
             owner="research_engine_team",
             status="active",
-            description="基于贝叶斯优化/多目标贝叶斯优化的候选推荐，支持单目标和多目标优化",
+            description="演示算法：基于贝叶斯优化/多目标贝叶斯优化的候选推荐，支持单目标和多目标优化",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="computation_submit_adapter",
@@ -520,6 +749,27 @@ def build_mock_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                     "name": "string - 分子名称（可选）",
                 },
                 required=["workflow_type", "smiles"],
+                field_defaults={
+                    "workflow_type": "LOCAL_STRUCTURE",
+                    "charge": 0,
+                    "multiplicity": 1,
+                    "solvent": "",
+                    "name": "research-engine-computation",
+                },
+                ui_hints={
+                    "workflow_type": {"widget": "select"},
+                    "smiles": {"widget": "text", "placeholder": "CCO"},
+                    "engine": {"widget": "hidden"},
+                    "method": {"widget": "hidden"},
+                    "charge": {"widget": "number"},
+                    "multiplicity": {"widget": "number"},
+                    "solvent": {"widget": "select"},
+                    "name": {"widget": "text"},
+                },
+                field_options={
+                    "workflow_type": ["LOCAL_STRUCTURE", "LOCAL_XTB", "ORCA_COMPUTE_ENGINE_LASER"],
+                    "solvent": ["", "WATER", "ACETONITRILE", "TOLUENE", "ETHANOL", "METHANOL", "DCM", "THF"],
+                },
             ),
             output_schema=AlgorithmIOSchema(
                 fields={

@@ -285,7 +285,7 @@ class ResearchEngineE2ETest(ComputationTestCase):
             )
             self.assertEqual(approve_resp.status_code, 200)
             updated_status = approve_resp.json()["data"]["status"]
-            self.assertIn(updated_status, ["running", "blocked_approval", "completed"])
+            self.assertIn(updated_status, ["running", "blocked_approval", "completed", "failed"])
 
             # 如果是 completed，验证所有阶段都完成了
             if updated_status == "completed":

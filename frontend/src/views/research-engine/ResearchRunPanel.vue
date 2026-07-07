@@ -1,10 +1,12 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheck, CircleClose, Clock, Refresh, VideoPause, VideoPlay, CloseBold, SwitchButton } from '@element-plus/icons-vue'
+import { CircleCheck, CircleClose, Clock, Delete, Refresh, VideoPause, VideoPlay, CloseBold, SwitchButton } from '@element-plus/icons-vue'
 
 import {
   advanceResearchRun,
+  archiveResearchRun,
   createExecutionDecision,
   createResearchRun,
   failResearchRun,
@@ -20,6 +22,7 @@ import {
 import GateReviewDialog from './GateReviewDialog.vue'
 
 const emit = defineEmits(['research-run-updated'])
+const route = useRoute()
 
 const loading = ref(false)
 const actionLoading = ref('')
@@ -81,6 +84,9 @@ const progressColor = computed(() => {
   if (currentRun.value?.status === 'failed') return '#dc2626'
   return '#3b82f6'
 })
+const pendingApprovalStage = computed(() =>
+  (currentRun.value?.stage_runs || []).find(stage => stage.status === 'blocked_approval') || null,
+)
 
 const profileOptions = [
   { label: '氟基高分子', value: 'fluoropolymer' },
@@ -130,6 +136,17 @@ async function loadRuns() {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loading.value = false
+  }
+}
+
+async function openRouteRunIfNeeded() {
+  const routeRunId = route.query.research_run_id ? String(route.query.research_run_id) : ''
+  if (!routeRunId) return
+  selectedRunId.value = routeRunId
+  showCreateForm.value = false
+  await loadRunDetail(routeRunId)
+  if (route.query.action === 'approve' && pendingApprovalStage.value) {
+    openGateReview(pendingApprovalStage.value)
   }
 }
 
@@ -315,6 +332,27 @@ async function handleFail() {
   }
 }
 
+async function handleArchiveRun(run) {
+  try {
+    await ElMessageBox.confirm(`确定要归档 ResearchRun「${run.run_id}」吗？归档后默认历史列表将不再显示，但追溯记录会保留。`, '归档确认', {
+      confirmButtonText: '归档',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    await archiveResearchRun(run.run_id, { reason: '用户从 AutoResearch 历史列表归档' })
+    ElMessage.success('ResearchRun 已归档')
+    if (selectedRunId.value === run.run_id) {
+      selectedRunId.value = ''
+      currentRun.value = null
+      emit('research-run-updated', null)
+    }
+    await loadRuns()
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  }
+}
+
 function openGateReview(stage) {
   gateStage.value = stage
   gateDialogVisible.value = true
@@ -328,7 +366,17 @@ function handleGateDecided(result) {
   }
 }
 
-onMounted(loadRuns)
+watch(
+  () => [route.query.research_run_id, route.query.action],
+  () => {
+    openRouteRunIfNeeded()
+  },
+)
+
+onMounted(async () => {
+  await loadRuns()
+  await openRouteRunIfNeeded()
+})
 </script>
 
 <template>
@@ -348,8 +396,20 @@ onMounted(loadRuns)
           :label="`ResearchRun - ${run.profile_id}`"
           :value="run.run_id"
         >
-          <span>ResearchRun · {{ run.profile_id }} · {{ statusLabel(run.status) }}</span>
-          <el-tag size="small" :type="statusTag(run.status)" style="margin-left:8px">{{ statusLabel(run.status) }}</el-tag>
+          <span class="option-row">
+            <span class="option-main">
+              <span>ResearchRun · {{ run.profile_id }} · {{ statusLabel(run.status) }}</span>
+              <el-tag size="small" :type="statusTag(run.status)" style="margin-left:8px">{{ statusLabel(run.status) }}</el-tag>
+            </span>
+            <el-button
+              text
+              type="danger"
+              size="small"
+              :icon="Delete"
+              aria-label="归档 ResearchRun"
+              @click.stop="handleArchiveRun(run)"
+            />
+          </span>
         </el-option>
       </el-select>
       <el-button :icon="Refresh" :loading="loading" @click="loadRuns">刷新</el-button>
@@ -358,6 +418,24 @@ onMounted(loadRuns)
     <!-- 创建表单 -->
     <div v-if="showCreateForm" class="create-form">
       <h4>新建 AutoResearch ResearchRun</h4>
+
+      <!-- Auto Research 简介提示 -->
+      <el-alert
+        title="Auto Research 自动编排说明"
+        type="info"
+        :closable="true"
+        show-icon
+        style="margin-bottom:14px"
+      >
+        <template #default>
+          <p style="margin:0;line-height:1.7">
+            Auto Research 将自动按 <strong>十阶段</strong> 推进研发流程（文献检索 → 结构表示 → 计算预测 → 候选推荐 → 实验执行 → 结果回填 → 模型更新 → 经验归档）。
+            <br/>
+            在 <strong>3 个 Gate 阶段</strong>（问题定义、候选推荐、实验执行）会暂停等待您的审批——届时阶段时间线中会显示橙色<strong>"审批"按钮</strong>。
+          </p>
+        </template>
+      </el-alert>
+
       <el-form label-position="top">
         <el-form-item label="ProblemSpec" required>
           <el-select v-model="newRunForm.problem_spec_id" placeholder="选择研发任务定义" style="width:100%">
@@ -391,6 +469,24 @@ onMounted(loadRuns)
 
     <!-- ResearchRun 详情 -->
     <div v-if="currentRun" class="run-detail" v-loading="loading">
+      <el-alert
+        v-if="pendingApprovalStage"
+        class="approval-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          待审批：{{ stageLabels[pendingApprovalStage.stage_key] || pendingApprovalStage.stage_key }}
+        </template>
+        <template #default>
+          <div class="approval-alert-body">
+            <span>当前 ResearchRun 已停在 blocked_approval，需要处理 Gate 审批后才能继续推进。</span>
+            <el-button type="warning" size="small" @click="openGateReview(pendingApprovalStage)">立即审批</el-button>
+          </div>
+        </template>
+      </el-alert>
+
       <!-- 基本信息 -->
       <div class="detail-top">
         <div>
@@ -445,7 +541,9 @@ onMounted(loadRuns)
               </div>
               <p class="stage-desc-hint">{{ stageDescriptions[stage.stage_key] || '该阶段的具体任务描述待补充' }}</p>
               <div v-if="stage.status === 'blocked_approval'" style="margin-top:4px">
-                <el-button type="warning" size="small" @click="openGateReview(stage)">审批</el-button>
+                <el-tooltip content="该阶段需要人工审批。点击「审批」按钮，选择批准或拒绝并填写原因。" placement="top">
+                  <el-button type="warning" size="small" @click="openGateReview(stage)">审批</el-button>
+                </el-tooltip>
               </div>
               <div v-if="stage.decisions?.length" class="stage-decisions">
                 <div v-for="d in stage.decisions" :key="`${d.stage_key}-${d.decided_at}`" class="decision-item">
@@ -494,6 +592,20 @@ onMounted(loadRuns)
   gap: 16px;
 }
 
+.option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.option-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
 .run-selector {
   display: flex;
   align-items: center;
@@ -521,6 +633,18 @@ onMounted(loadRuns)
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.approval-alert {
+  margin-bottom: 14px;
+}
+
+.approval-alert-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .detail-top h4 {
