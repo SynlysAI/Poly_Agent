@@ -82,7 +82,7 @@ class ComputationWorker:
 
             OptimizationService().process_completed_computation(
                 finished.run_id,
-                actor_user_id=self.worker_id,
+                actor_user_id=finished.created_by,
             )
         return WorkerResult(claimed=True, run_id=finished.run_id, status=finished.status)
 

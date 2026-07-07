@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleClose, CloseBold, Connection, MagicStick, Refresh, SwitchButton, Upload, VideoPause } from '@element-plus/icons-vue'
+import { CircleClose, CloseBold, Connection, MagicStick, Refresh, Star, SwitchButton, Upload, VideoPause } from '@element-plus/icons-vue'
 
 import {
   archiveCampaign,
@@ -360,6 +360,41 @@ onMounted(loadDetail)
       </div>
     </section>
 
+    <!-- ResearchEngine 入口 -->
+    <section class="panel">
+      <div class="panel-header">
+        <h3 class="panel-title">ResearchEngine 研发引擎</h3>
+      </div>
+      <div class="panel-body">
+        <div class="re-entry-grid">
+          <div class="re-entry-card">
+            <div class="re-entry-top">
+              <el-icon :size="20"><Star /></el-icon>
+              <span>研发任务定义</span>
+            </div>
+            <p>为此 Campaign 创建或关联 ProblemSpec，定义材料体系、变量、目标与约束。</p>
+            <el-button type="primary" size="small" @click="router.push({ path: '/research-engine', query: { problem_spec_id: campaignId } })">进入 ProblemSpec</el-button>
+          </div>
+          <div class="re-entry-card">
+            <div class="re-entry-top">
+              <el-icon :size="20"><MagicStick /></el-icon>
+              <span>人工算法工具</span>
+            </div>
+            <p>浏览算法能力清单，手动触发文献检索、结构表示、性质预测和计算任务。</p>
+            <el-button type="primary" size="small" @click="router.push('/research-engine')">进入算法工作台</el-button>
+          </div>
+          <div class="re-entry-card">
+            <div class="re-entry-top">
+              <el-icon :size="20"><Connection /></el-icon>
+              <span>AutoResearch 编排</span>
+            </div>
+            <p>基于 ProblemSpec 启动自动研发流程，审批阶段门禁，查看推进进度。</p>
+            <el-button type="primary" size="small" @click="router.push({ path: '/research-engine', query: { campaign_id: campaignId } })">进入 AutoResearch</el-button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <el-dialog v-model="csvDialogVisible" title="导入 CSV 候选" width="620px">
       <el-input
         v-model="csvText"
@@ -432,7 +467,44 @@ onMounted(loadDetail)
   gap: 10px;
 }
 
+.re-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.re-entry-card {
+  min-height: 160px;
+  padding: 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #f8fbff;
+  display: flex;
+  flex-direction: column;
+}
+
+.re-entry-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--app-ink);
+}
+
+.re-entry-card p {
+  flex: 1;
+  margin: 0 0 12px;
+  color: var(--app-ink-body);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 @media (max-width: 900px) {
+  .re-entry-grid {
+    grid-template-columns: 1fr;
+  }
   .detail-grid,
   .import-report {
     grid-template-columns: 1fr;

@@ -1,22 +1,33 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search, View } from '@element-plus/icons-vue'
+import { Refresh, Search, View, Finished } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, listCampaigns, listComputations } from '../api/polyAgentApi'
-import { TASK_MODULES, getTaskModule, mapCampaignToGlobalTask, mapComputationRunToGlobalTask } from '../tasks/taskModules'
+import { getApiErrorMessage, listAlgorithmRuns, listCampaigns, listComputations, listResearchRuns } from '../api/polyAgentApi'
+import {
+  TASK_MODULES,
+  getTaskModule,
+  isResearchEngineContainerCampaign,
+  mapAlgorithmRunToGlobalTask,
+  mapCampaignToGlobalTask,
+  mapComputationRunToGlobalTask,
+  mapResearchRunToGlobalTask,
+} from '../tasks/taskModules'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const computationRows = ref([])
 const campaignRows = ref([])
+const algorithmRuns = ref([])
+const researchRuns = ref([])
 const total = ref(0)
 
 const filters = reactive({
-  module_id: '',
-  status: '',
-  keyword: '',
+  module_id: route.query.module_id ? String(route.query.module_id) : '',
+  status: route.query.status ? String(route.query.status) : '',
+  keyword: route.query.keyword ? String(route.query.keyword) : '',
   page: 1,
   page_size: 20,
 })
@@ -36,12 +47,15 @@ const statusOptions = [
   { label: 'Draft', value: 'draft' },
   { label: 'Paused', value: 'paused' },
   { label: 'Archived', value: 'archived' },
+  { label: 'Blocked Approval', value: 'blocked_approval' },
 ]
 
 const taskRows = computed(() => {
   const rows = [
     ...computationRows.value.map(mapComputationRunToGlobalTask),
-    ...campaignRows.value.map(mapCampaignToGlobalTask),
+    ...campaignRows.value.filter((item) => !isResearchEngineContainerCampaign(item)).map(mapCampaignToGlobalTask),
+    ...algorithmRuns.value.map(mapAlgorithmRunToGlobalTask),
+    ...researchRuns.value.map(mapResearchRunToGlobalTask),
   ].sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
   const normalizedKeyword = filters.keyword.trim().toLowerCase()
   return rows.filter((row) => {
@@ -60,13 +74,13 @@ const summary = computed(() => {
   for (const item of taskRows.value) {
     if (item.status === 'running') counts.running += 1
     if (item.status === 'completed') counts.completed += 1
-    if (item.status === 'queued') counts.pending += 1
+    if (item.status === 'queued' || item.status === 'blocked_approval') counts.pending += 1
   }
   return counts
 })
 
 function getStatusTag(status) {
-  const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', draft: 'info', paused: 'info', archived: 'info' }
+  const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', draft: 'info', paused: 'info', archived: 'info', blocked_approval: 'danger' }
   return map[status] || 'info'
 }
 
@@ -80,13 +94,17 @@ function formatDate(value) {
 async function loadTasks() {
   loading.value = true
   try {
-    const [computations, campaigns] = await Promise.all([
+    const [computations, campaigns, algoRuns, researchRunsData] = await Promise.all([
       listComputations({ page: filters.page, page_size: filters.page_size }),
       listCampaigns({ page: filters.page, page_size: filters.page_size }),
+      listAlgorithmRuns({ page: filters.page, page_size: filters.page_size }).catch(() => ({ items: [], total: 0 })),
+      listResearchRuns({ page: filters.page, page_size: filters.page_size }).catch(() => ({ items: [], total: 0 })),
     ])
     computationRows.value = computations.items || []
     campaignRows.value = campaigns.items || []
-    total.value = (computations.total || 0) + (campaigns.total || 0)
+    algorithmRuns.value = algoRuns.items || []
+    researchRuns.value = researchRunsData.items || []
+    total.value = (computations.total || 0) + (campaigns.total || 0) + (algoRuns.total || 0) + (researchRunsData.total || 0)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -96,6 +114,7 @@ async function loadTasks() {
 
 function handleSearch() {
   filters.page = 1
+  syncFiltersToRoute()
   loadTasks()
 }
 
@@ -104,7 +123,19 @@ function handleReset() {
   filters.status = ''
   filters.keyword = ''
   filters.page = 1
+  syncFiltersToRoute()
   loadTasks()
+}
+
+function syncFiltersToRoute() {
+  router.replace({
+    path: route.path,
+    query: {
+      ...(filters.module_id ? { module_id: filters.module_id } : {}),
+      ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.keyword.trim() ? { keyword: filters.keyword.trim() } : {}),
+    },
+  })
 }
 
 function openTask(row) {
@@ -113,6 +144,14 @@ function openTask(row) {
     return
   }
   ElMessage.info('该任务类型暂未接入详情页')
+}
+
+function actionLabel(row) {
+  return row.module_id === 'research-engine' && row.status === 'blocked_approval' ? '审批' : '查看'
+}
+
+function actionIcon(row) {
+  return row.module_id === 'research-engine' && row.status === 'blocked_approval' ? Finished : View
 }
 
 function openModule(moduleId) {
@@ -197,9 +236,17 @@ onMounted(() => {
           <el-table-column label="创建时间" min-width="170">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="110" fixed="right">
+          <el-table-column label="操作" width="120" fixed="right">
             <template #default="{ row }">
-              <el-button text type="primary" size="small" :icon="View" @click="openTask(row)">查看</el-button>
+              <el-button
+                text
+                :type="row.module_id === 'research-engine' && row.status === 'blocked_approval' ? 'warning' : 'primary'"
+                size="small"
+                :icon="actionIcon(row)"
+                @click="openTask(row)"
+              >
+                {{ actionLabel(row) }}
+              </el-button>
             </template>
           </el-table-column>
         </el-table>

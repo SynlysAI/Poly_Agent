@@ -24,6 +24,13 @@ COLLECTION_NAMES = [
     "optimization_observations",
     "service_integrations",
     "audit_events",
+    "research_problem_specs",
+    "execution_decisions",
+    "manual_algorithm_workflows",
+    "workflow_runs",
+    "algorithm_registry_entries",
+    "algorithm_runs",
+    "research_runs",
 ]
 
 

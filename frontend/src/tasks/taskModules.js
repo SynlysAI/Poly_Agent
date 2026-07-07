@@ -2,6 +2,7 @@ import {
   Cpu,
   DataAnalysis,
   SetUp,
+  MagicStick,
 } from '@element-plus/icons-vue'
 
 export const TASK_MODULES = [
@@ -33,6 +34,21 @@ export const TASK_MODULES = [
     routes: {
       submit: '/optimization',
       center: '/optimization/campaigns',
+    },
+  },
+  {
+    id: 'research-engine',
+    name: 'ResearchEngine 研发任务',
+    category: '研发引擎',
+    status: 'online',
+    statusText: '在线',
+    icon: MagicStick,
+    description: '定义材料研发任务、人工调用算法工具、启动 AutoResearch 自动编排并审批阶段门禁。',
+    primaryActionText: '进入研发引擎',
+    centerActionText: '研发任务管理',
+    routes: {
+      submit: '/research-engine',
+      center: '/research-engine',
     },
   },
   {
@@ -100,5 +116,73 @@ export function mapCampaignToGlobalTask(campaign) {
       path: `/optimization/campaigns/${campaign.campaign_id}`,
     },
     raw: campaign,
+  }
+}
+
+export function isResearchEngineContainerCampaign(campaign) {
+  return campaign?.source === 'research_engine' || campaign?.linked_problem_spec_id || String(campaign?.campaign_id || '').startsWith('ps_')
+}
+
+export function mapAlgorithmRunToGlobalTask(run) {
+  return {
+    task_id: run.run_id,
+    task_type: '算法运行',
+    module_id: 'research-engine',
+    module_name: 'ResearchEngine',
+    title: `算法运行: ${run.algorithm_id}`,
+    summary: run.input_snapshot ? JSON.stringify(run.input_snapshot).slice(0, 80) : '-',
+    status: run.status,
+    status_text: run.status,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    route: {
+      path: '/research-engine',
+      query: { run_id: run.run_id },
+    },
+    raw: run,
+  }
+}
+
+export function mapResearchRunToGlobalTask(run) {
+  const query = { research_run_id: run.run_id }
+  if (run.status === 'blocked_approval') {
+    query.action = 'approve'
+  }
+  return {
+    task_id: run.run_id,
+    task_type: '自动研发',
+    module_id: 'research-engine',
+    module_name: 'ResearchEngine',
+    title: `AutoResearch: ${run.profile_id || '研发任务'}`,
+    summary: run.current_stage ? `当前阶段: ${run.current_stage}` : '-',
+    status: run.status,
+    status_text: run.status,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    route: {
+      path: '/research-engine',
+      query,
+    },
+    raw: run,
+  }
+}
+
+export function mapProblemSpecToGlobalTask(spec) {
+  return {
+    task_id: spec.problem_spec_id,
+    task_type: '研发任务定义',
+    module_id: 'research-engine',
+    module_name: 'ResearchEngine',
+    title: spec.name || spec.problem_spec_id,
+    summary: `材料体系: ${spec.material_family} · 状态: ${spec.status}`,
+    status: spec.status,
+    status_text: spec.status,
+    created_at: spec.created_at,
+    updated_at: spec.updated_at,
+    route: {
+      path: '/research-engine',
+      query: { problem_spec_id: spec.problem_spec_id },
+    },
+    raw: spec,
   }
 }

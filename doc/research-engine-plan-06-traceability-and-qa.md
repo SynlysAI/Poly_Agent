@@ -2,12 +2,12 @@
 
 ## 目标
 
-收尾 P0：补齐 ResearchRun / AlgorithmRun / StageRun 的 artifact/audit 聚合查询、任务中心映射、回归测试和浏览器验收，证明完整闭环可演示且不破坏现有模块。
+收尾 P0：补齐 ResearchRun / WorkflowRun / AlgorithmRun / StageRun 的 artifact/audit 聚合查询、任务中心映射、回归测试和浏览器验收，证明完整闭环可演示且不破坏现有模块。
 
 ## 范围
 
 - Artifact / Audit 聚合接口。
-- ResearchRun / AlgorithmRun 详情追溯链。
+- ResearchRun / WorkflowRun / AlgorithmRun 详情追溯链。
 - P0 手工验收脚本。
 - 后端回归测试和前端构建。
 - 浏览器验收或 Playwright 冒烟。
@@ -22,9 +22,10 @@
 
 ### Task 1：artifact/audit 聚合查询
 
-**说明：** 详情页需要一次性拿到与 ResearchRun、AlgorithmRun、StageRun 相关的关键追溯信息。
+**说明：** 详情页需要一次性拿到与 ResearchRun、WorkflowRun、AlgorithmRun、StageRun 相关的关键追溯信息。
 
 **验收标准：**
+- [ ] WorkflowRun 详情返回 step_runs、linked algorithm_runs、artifact refs 和 audit refs。
 - [ ] AlgorithmRun 详情返回自有 artifact 和 linked computation artifact refs。
 - [ ] ResearchRun 详情返回 stage_runs、linked algorithm_runs、linked computation_runs、linked observations。
 - [ ] Audit 查询可按 entity_type/entity_id 聚合关键事件。
@@ -48,7 +49,9 @@
 
 **验收标准：**
 - [ ] 创建 ProblemSpec。
-- [ ] 人工运行 mock predictor。
+- [ ] 创建 `manual_workbench` ExecutionDecision。
+- [ ] 创建单节点 ManualAlgorithmWorkflow 并启动 WorkflowRun，节点运行 mock predictor。
+- [ ] 创建 `autoresearch` ExecutionDecision。
 - [ ] 创建并启动 ResearchRun。
 - [ ] 推进到 gate。
 - [ ] 审批候选。
@@ -98,8 +101,9 @@
 
 **验收标准：**
 - [ ] `cd frontend && npm run build` 通过。
-- [ ] Dashboard、任务提交、湿实验优化、Campaign 详情、Tool Services 可打开。
-- [ ] ProblemSpec 创建表单、AlgorithmRun 表单、ResearchRun gate dialog 可正常显示。
+- [ ] Dashboard、研发引擎、任务提交、湿实验优化、Campaign 详情、Tool Services 可打开。
+- [ ] 任务提交页不出现 ResearchEngine 任务卡。
+- [ ] ProblemSpec 创建表单、ExecutionDecision 选择区、ManualWorkflow 编排界面、ResearchRun gate dialog 可正常显示。
 - [ ] 768px、1024px、1440px 下没有明显文字重叠或关键按钮溢出。
 
 **验证：**

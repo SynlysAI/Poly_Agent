@@ -312,3 +312,171 @@ export function chatWithLLM(messages) {
 export function suggestExperiments(payload) {
   return apiClient.post('/llm/suggest-experiments', payload).then(r => r.data)
 }
+
+// ── ResearchEngine API ──
+
+// ── ProblemSpec ──
+
+export function createProblemSpec(payload) {
+  return apiClient.post('/research-engine/problem-specs', payload).then(unwrapResponse)
+}
+
+export function listProblemSpecs(params = {}) {
+  return apiClient.get('/research-engine/problem-specs', { params }).then(unwrapResponse)
+}
+
+export function getProblemSpec(problemSpecId) {
+  return apiClient.get(`/research-engine/problem-specs/${problemSpecId}`).then(unwrapResponse)
+}
+
+export function updateProblemSpec(problemSpecId, payload) {
+  return apiClient.patch(`/research-engine/problem-specs/${problemSpecId}`, payload).then(unwrapResponse)
+}
+
+export function freezeProblemSpec(problemSpecId) {
+  return apiClient.post(`/research-engine/problem-specs/${problemSpecId}/freeze`).then(unwrapResponse)
+}
+
+export function archiveProblemSpec(problemSpecId, payload = {}) {
+  return apiClient.post(`/research-engine/problem-specs/${problemSpecId}:archive`, payload).then(unwrapResponse)
+}
+
+// ── ExecutionDecision ──
+
+export function createExecutionDecision(problemSpecId, payload) {
+  return apiClient.post(`/research-engine/problem-specs/${problemSpecId}/execution-decisions`, payload).then(unwrapResponse)
+}
+
+export function listExecutionDecisions(problemSpecId, params = {}) {
+  return apiClient.get(`/research-engine/problem-specs/${problemSpecId}/execution-decisions`, { params }).then(unwrapResponse)
+}
+
+export function getActiveExecutionDecision(problemSpecId) {
+  return apiClient.get(`/research-engine/problem-specs/${problemSpecId}/execution-decisions/active`).then(unwrapResponse)
+}
+
+// ── AlgorithmRegistry ──
+
+export function listAlgorithms(params = {}) {
+  return apiClient.get('/research-engine/algorithms', { params }).then(unwrapResponse)
+}
+
+export function getAlgorithm(algorithmId) {
+  return apiClient.get(`/research-engine/algorithms/${algorithmId}`).then(unwrapResponse)
+}
+
+// ── ResearchEngine Examples ──
+
+export function listResearchEngineExamples() {
+  return apiClient.get('/research-engine/examples').then(unwrapResponse)
+}
+
+export function instantiateResearchEngineExample(exampleId) {
+  return apiClient.post(`/research-engine/examples/${exampleId}/instantiate`).then(unwrapResponse)
+}
+
+// ── AlgorithmRun ──
+
+export function createAlgorithmRun(payload) {
+  return apiClient.post('/research-engine/algorithm-runs', payload).then(unwrapResponse)
+}
+
+export function listAlgorithmRuns(params = {}) {
+  return apiClient.get('/research-engine/algorithm-runs', { params }).then(unwrapResponse)
+}
+
+export function getAlgorithmRun(runId) {
+  return apiClient.get(`/research-engine/algorithm-runs/${runId}`).then(unwrapResponse)
+}
+
+// ── ManualWorkflow / WorkflowRun ──
+
+export function createManualWorkflow(payload) {
+  return apiClient.post('/research-engine/manual-workflows', payload).then(unwrapResponse)
+}
+
+export function listManualWorkflows(params = {}) {
+  return apiClient.get('/research-engine/manual-workflows', { params }).then(unwrapResponse)
+}
+
+export function getManualWorkflow(workflowId) {
+  return apiClient.get(`/research-engine/manual-workflows/${workflowId}`).then(unwrapResponse)
+}
+
+export function archiveManualWorkflow(workflowId, payload = {}) {
+  return apiClient.post(`/research-engine/manual-workflows/${workflowId}:archive`, payload).then(unwrapResponse)
+}
+
+export function startWorkflowRun(workflowId) {
+  return apiClient.post(`/research-engine/manual-workflows/${workflowId}/runs`).then(unwrapResponse)
+}
+
+export function listWorkflowRuns(params = {}) {
+  return apiClient.get('/research-engine/workflow-runs', { params }).then(unwrapResponse)
+}
+
+export function getWorkflowRun(workflowRunId) {
+  return apiClient.get(`/research-engine/workflow-runs/${workflowRunId}`).then(unwrapResponse)
+}
+
+// ── ResearchRun ──
+
+export function createResearchRun(payload) {
+  return apiClient.post('/research-engine/research-runs', payload).then(unwrapResponse)
+}
+
+export function listResearchRuns(params = {}) {
+  return apiClient.get('/research-engine/research-runs', { params }).then(unwrapResponse)
+}
+
+export function getResearchRun(runId) {
+  return apiClient.get(`/research-engine/research-runs/${runId}`).then(unwrapResponse)
+}
+
+export function archiveResearchRun(runId, payload = {}) {
+  return apiClient.post(`/research-engine/research-runs/${runId}:archive`, payload).then(unwrapResponse)
+}
+
+export function startResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/start`, payload).then(unwrapResponse)
+}
+
+export function advanceResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/advance`, payload).then(unwrapResponse)
+}
+
+export function pauseResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/pause`, payload).then(unwrapResponse)
+}
+
+export function resumeResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/resume`, payload).then(unwrapResponse)
+}
+
+export function failResearchRun(runId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/fail`, payload).then(unwrapResponse)
+}
+
+// ── Stage/Gate 审批 ──
+
+export function approveStage(runId, stageRunId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/approve`, payload).then(unwrapResponse)
+}
+
+export function rejectStage(runId, stageRunId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/reject`, payload).then(unwrapResponse)
+}
+
+export function getResearchRunTraceability(runId) {
+  return apiClient.get(`/research-engine/research-runs/${runId}/traceability`).then(unwrapResponse)
+}
+
+export function getStageRunTraceability(runId, stageRunId) {
+  return apiClient.get(`/research-engine/research-runs/${runId}/stages/${stageRunId}/traceability`).then(unwrapResponse)
+}
+
+// ── Structured Assistant API ──
+
+export function chatWithAssistant(payload) {
+  return apiClient.post('/assistant/chat', payload).then(unwrapResponse)
+}

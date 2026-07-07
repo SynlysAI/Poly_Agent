@@ -1,6 +1,6 @@
 # Poly Agent — 高分子智能分析平台
 
-**Poly Agent** 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec Agent](https://github.com/SynlysAI/Spec_Agent) 同属一个产品线。平台围绕高分子材料研发场景，提供实验设计与贝叶斯优化（Alchemist）、计算智能任务管理（ComputeEngine Computation）、以及正在建设中的 AI 驱动材料研发引擎（ResearchEngine），帮助材料科学家系统化地设计实验、管理计算任务、追踪优化闭环。
+**Poly Agent** 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec Agent](https://github.com/SynlysAI/Spec_Agent) 同属一个产品线。平台围绕高分子材料研发场景，提供实验设计与贝叶斯优化（Alchemist）、计算智能任务管理（ComputeEngine Computation）、AI 驱动材料研发引擎（ResearchEngine）和产品内助手，帮助材料科学家系统化地定义研发任务、管理计算任务、编排算法工作流并追踪优化闭环。
 
 ## 功能概览
 
@@ -37,20 +37,28 @@
 
 > 当前进度：MVP 约 92-95% 完成，主流程跑通。详见 [doc/compute-engine-computation-progress-and-plan.md](doc/compute-engine-computation-progress-and-plan.md)
 
-### 3. ResearchEngine — 高分子材料 AI 研发引擎（规划中）
+### 3. ResearchEngine — 高分子材料 AI 研发引擎
 
-面向高分子材料研发场景的下一代平台能力，构建"双通道研发框架"：
+面向高分子材料研发场景的 P0 双通道研发框架，围绕统一的 ProblemSpec 组织人工算法 Workflow 和 AutoResearch 自动编排。
 
-- **人工算法触发通道**：材料科学家在工作台中主动选择文献检索、结构表示、计算、性质预测、BO/MOBO 等工具
-- **AutoResearch 自动编排通道**：系统基于 ProblemSpec 自动组织研究阶段、选择算法、生成候选、触发实验、回填结果
+| 能力 | 说明 |
+|------|------|
+| ProblemSpec | 定义材料体系、问题类型、变量、目标、约束、测量条件和可选执行模式；创建时可自动关联容器 campaign |
+| ExecutionDecision | 在同一个 ProblemSpec 下显式选择 `manual_workbench` 或 `autoresearch` |
+| AlgorithmRegistry | 登记计算适配器、生产候选适配器和演示 mock 算法，支持按类型、算法族、材料范围、触发方式和状态过滤 |
+| 人工 Workflow | 编排 ManualAlgorithmWorkflow，启动 WorkflowRun，并为每个步骤生成 AlgorithmRun、输入快照、输出摘要、artifact 和审计事件 |
+| AutoResearch | 创建 ResearchRun，按 10 阶段材料研发序列推进，在 P0 Gate 阶段进入 `blocked_approval` 等待人工批准或拒绝 |
+| 示例流程 | 支持一键实例化人工计算 Workflow 示例和 AutoResearch 审批示例 |
+| 追溯与审计 | 提供 ResearchRun / StageRun / AlgorithmRun traceability API，聚合运行记录、产物、关联计算任务和审计事件 |
 
-两条通道共享 ProblemSpec、AlgorithmRun、ResearchRun、Observation、AuditEvent 等统一底座。
+当前可直接复用现有 ComputationService 的 `LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER` workflow；文献 RAG、垂类预测和 MOBO Alchemist 适配器已登记为生产候选能力，但仍依赖外部服务配置。mock 算法仅用于演示和闭环验收，不代表真实生产模型。
 
-> 实施计划拆分为 6 个阶段，详见 [doc/research-engine-plan-00-roadmap.md](doc/research-engine-plan-00-roadmap.md)
+> 操作指南见 [doc/autoresearch-user-guide.md](doc/autoresearch-user-guide.md)，P0 进度与边界见 [doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md)，设计方案见 [doc/research-engine-and-auto-research-design.md](doc/research-engine-and-auto-research-design.md)
 
 ### 4. 基础功能
 
 - **认证体系**：与 AI4MS 门户共享账户体系，HMAC-SHA256 令牌 + 邀请码注册，支持门户 SSO 免登录
+- **产品内助手**：`/assistant/chat` 基于项目实时事实回答入口、算法清单、计算任务和 AutoResearch 审批问题，并返回结构化跳转动作
 - **工具服务**：集成状态监控，支持外部服务（ComputeEngine、SpecLabOS 等）配置和健康检查
 - **数据库管理**：管理员面板，管理用户、邀请码和数据
 
@@ -60,15 +68,18 @@
 |------|------|--------|
 | Alchemist 实验设计与优化 | ✅ MVP 完成 | ~95% |
 | ComputeEngine 计算智能 | ✅ MVP 基本完成 | ~92-95% |
-| Research Engine | 📋 规划阶段 | 方案设计完成，待实施 |
+| ResearchEngine | ✅ P0 已完成 / ⚠️ 有已知测试缺口 | 双通道闭环、前端工作台、追溯和示例流程可用 |
 | 认证与基础功能 | ✅ 完成 | ~95% |
+| 产品内助手 | ✅ 基础可用 | 基于项目事实的入口引导、审批引导和算法说明 |
 | 真实外部系统接入 (ORCA/HPC/SpecLabOS) | 📋 规划中 | 后续阶段 |
 
-当前版本已适合作为"可演示计算智能模块"的基线。下一步重点：
+当前版本已适合作为"计算智能 + ResearchEngine P0 双通道闭环"的演示和继续迭代基线。下一步重点：
 - 真实 ORCA/HPC/AiiDA executor 接入
 - SpecLabOS 真实实验系统对接
-- ResearchEngine P0 阶段（双通道闭环）
+- ResearchEngine P1：Schema 驱动算法表单、AlgorithmRegistry 管理、checkpoint/rerun 语义和真实算法服务接入
 - 生产级 worker 运维和持久化
+
+当前后端 ResearchEngine/assistant 相关测试存在 2 个已知失败用例，详见 [doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md) 的“当前已知测试失败”。
 
 ## 技术栈
 
@@ -89,6 +100,7 @@ Poly_Agent/
 │   │   ├── api/v1/                    # API 路由
 │   │   │   └── endpoints/             # health, auth, admin, optimization
 │   │   │                              #   computations, integrations, llm, alchemist_proxy
+│   │   │                              #   research_engine, assistant
 │   │   ├── computation_adapters/      # 计算引擎适配器
 │   │   │   ├── base.py                #   adapter 协议
 │   │   │   ├── registry.py            #   统一派发
@@ -97,8 +109,8 @@ Poly_Agent/
 │   │   │   └── orca_compute_engine_laser.py    #   ORCA ComputeEngine Laser
 │   │   ├── core/                      # 配置、令牌认证、日志、LLM 客户端
 │   │   ├── infra/                     # MongoDB 连接、数据仓储、demo store
-│   │   ├── schemas/                   # Pydantic 数据模型 (computation, optimization, integrations...)
-│   │   ├── services/                  # 业务逻辑 (auth, computation, optimization, planner, integrations)
+│   │   ├── schemas/                   # Pydantic 数据模型 (computation, optimization, research_engine...)
+│   │   ├── services/                  # 业务逻辑 (auth, computation, optimization, research_engine...)
 │   │   ├── workers/                   # computation worker (原子领取、执行、落库)
 │   │   └── main.py                    # FastAPI 入口 (托管前端静态文件)
 │   ├── tests/
@@ -122,7 +134,9 @@ Poly_Agent/
 │   │   │   ├── DatabaseManagementView.vue # 数据库管理 (管理员)
 │   │   │   ├── DialogueView.vue          # 问答对话
 │   │   │   ├── AlchemistToolView.vue     # Alchemist 工具入口
-│   │   │   └── alchemist/               # Alchemist 子面板 (变量/实验/建模/采集/可视化)
+│   │   │   ├── ResearchEngineView.vue    # ResearchEngine 双通道工作台
+│   │   │   ├── alchemist/               # Alchemist 子面板 (变量/实验/建模/采集/可视化)
+│   │   │   └── research-engine/          # ProblemSpec、算法清单、Workflow、ResearchRun、Gate 审批面板
 │   │   ├── App.vue                    # 主布局 (侧边栏 + 顶栏)
 │   │   ├── style.css                  # 全局样式
 │   │   └── main.js
@@ -138,7 +152,9 @@ Poly_Agent/
 │   ├── compute-engine-computation-migration-design.md     # ComputeEngine 迁移设计
 │   ├── compute-engine-computation-progress-and-plan.md    # ComputeEngine 进度与计划
 │   ├── poly-agent-toolchain-deployment-pack.md    # 工具链部署包
+│   ├── autoresearch-user-guide.md        # AutoResearch 使用指南
 │   ├── research-engine-and-auto-research-design.md # ResearchEngine 技术方案
+│   ├── research-engine-progress-and-plan.md       # ResearchEngine P0 进度与验收
 │   ├── research-engine-plan-00-roadmap.md         # ResearchEngine 实施路线图
 │   └── research-engine-plan-01~06-*.md            # ResearchEngine 各阶段计划
 ├── refer/                             # 参考资料 (AutoResearchClaw, ComputeEngine, SpecLabOS)

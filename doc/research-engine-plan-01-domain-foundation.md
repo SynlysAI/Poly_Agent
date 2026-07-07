@@ -8,10 +8,12 @@
 
 - `ProblemSpec`：材料研发问题规格，首版可映射到 `OptimizationCampaign`。
 - `AlgorithmRegistry`：算法能力登记，只读清单和 schema 描述。
-- `AlgorithmRun`：人工或自动算法运行记录。
+- `ExecutionDecision`：ProblemSpec 校验后选择 `manual_workbench` 或 `autoresearch` 的决策记录。
+- `ManualAlgorithmWorkflow` / `WorkflowRun` / `WorkflowStepRun`：人工算法工作台的 Workflow 定义、运行记录和节点运行记录。
+- `AlgorithmRun`：人工 Workflow 或 AutoResearch 阶段内部的原子算法运行记录。
 - `ResearchRun` / `ResearchStageRun`：AutoResearch 主运行和阶段运行记录。
 - `StageGate` / `StageContract`：阶段门禁、审批策略和 DoD。
-- 统一状态枚举、触发来源、执行模式、材料阶段枚举。
+- 统一状态枚举、触发来源、执行决策模式、材料阶段枚举。
 
 ## 不做
 
@@ -30,13 +32,18 @@
 - `backend/app/schemas/research_engine.py`
 
 **验收标准：**
-- [ ] 定义 `ExecutionMode = Literal["manual", "autoresearch", "hybrid"]`
-- [ ] 定义 `TriggerSource = Literal["human", "autoresearch", "system"]`
+- [ ] 定义 `ExecutionDecisionMode = Literal["manual_workbench", "autoresearch"]`
+- [ ] 定义 `TriggerSource = Literal["human_workflow", "autoresearch", "system"]`
+- [ ] 定义 `WorkflowRunStatus = Literal["draft", "queued", "running", "completed", "failed", "cancelled"]`
+- [ ] 定义 `WorkflowStepRunStatus = Literal["pending", "running", "completed", "failed", "skipped"]`
 - [ ] 定义 `ResearchRunStatus = Literal["draft", "running", "paused", "blocked_approval", "completed", "failed", "archived"]`
 - [ ] 定义 `ResearchStageStatus = Literal["pending", "running", "blocked_approval", "completed", "failed"]`
-- [ ] `ProblemSpecCreate` 支持 `execution_mode`、variables（类型/单位/边界/必填校验）、objectives、constraints
+- [ ] `ProblemSpecCreate` 支持 `allowed_execution_modes`、`decision_status`、variables（类型/单位/边界/必填校验）、objectives、constraints
+- [ ] `ExecutionDecision` 保存 `problem_spec_id`、`problem_spec_version`、`mode`、`reason`、`initial_context_id`、`created_by`、`created_at`
+- [ ] `ManualAlgorithmWorkflow` 保存 `problem_spec_id`、steps、input_bindings、validation_status；P0 支持线性 steps
+- [ ] `WorkflowRun` 保存 `workflow_id`、`problem_spec_id`、status、step_runs、input_snapshot、artifact_refs
 - [ ] `AlgorithmRegistryEntry` 包含 `algorithm_id`、`type`、`material_scope`、`input_schema`、`output_schema`、`trigger_modes`、`status`、`validation_metric`、`runtime_dependency`
-- [ ] `AlgorithmRun` 区分 `trigger_source`，保存 `input_snapshot: dict`、`output_summary: dict`、`linked_computation_run_id: str | None`
+- [ ] `AlgorithmRun` 区分 `trigger_source`，保存 `workflow_run_id`、`workflow_step_run_id`、`research_run_id`、`stage_run_id`、`input_snapshot: dict`、`output_summary: dict`、`linked_computation_run_id: str | None`
 - [ ] `ResearchRun` 和 `ResearchStageRun` 支持完整状态枚举
 - [ ] `StageGate` 包含 `stage_key`、`required_inputs`、`expected_outputs`、`definition_of_done`、`gate_policy`、`retry_policy`、`rollback_target`、`artifact_policy`
 - [ ] 所有 `field_validator` 使用中文错误消息（与 `computation.py` 中 `"SMILES 不能为空"` 等保持一致）
@@ -97,16 +104,19 @@ blocked_approval → failed（拒绝）
 **说明：** 按现有 `BaseRepository` 模式（`backend/app/infra/computation_repositories.py`）扩展持久化层。该模式实现 Mongo-first + demo JSON 双模存储（通过 `_mongo_unavailable` 标志自动切换）。新增 repository 类可放在 `computation_repositories.py` 中，或新建 `research_engine_repositories.py` 但继承同一个 `BaseRepository`。
 
 **涉及修改的现有文件：**
-- `backend/app/infra/demo_store.py`：在 `COLLECTION_NAMES` 列表（第 18-27 行）中追加 4 个集合名
-- `backend/app/infra/mongo.py`：新增 4 个 collection accessor 函数
-- `backend/app/infra/computation_repositories.py`（或新建 `research_engine_repositories.py`）：新增 4 个 Repository 类
+- `backend/app/infra/demo_store.py`：在 `COLLECTION_NAMES` 列表中追加 ResearchEngine 集合名
+- `backend/app/infra/mongo.py`：新增对应 collection accessor 函数
+- `backend/app/infra/computation_repositories.py`（或新建 `research_engine_repositories.py`）：新增 Repository 类
 
 **验收标准：**
-- [ ] `demo_store.py` 的 `COLLECTION_NAMES` 扩展为 12 个（新增：`research_problem_specs`、`algorithm_registry_entries`、`algorithm_runs`、`research_runs`）
+- [ ] `demo_store.py` 的 `COLLECTION_NAMES` 新增：`research_problem_specs`、`execution_decisions`、`manual_algorithm_workflows`、`workflow_runs`、`algorithm_registry_entries`、`algorithm_runs`、`research_runs`
 - [ ] `mongo.py` 新增对应的 `get_*_collection()` 函数
 - [ ] 新增 `ResearchProblemSpecRepository`：支持 create/get/list/update/freeze，至少按 `project_id`、`campaign_id`、`created_by` 过滤
+- [ ] 新增 `ExecutionDecisionRepository`：支持 create/get/list，按 `problem_spec_id`、`mode`、`created_by` 过滤，并能查询 active decision
+- [ ] 新增 `ManualAlgorithmWorkflowRepository`：支持 create/get/list/update，按 `problem_spec_id`、`created_by` 过滤
+- [ ] 新增 `WorkflowRunRepository`：支持 create/get/list/update，按 `workflow_id`、`problem_spec_id`、`status` 过滤
 - [ ] 新增 `AlgorithmRegistryRepository`：支持只读清单查询，按 `type`、`material_scope`、`trigger_mode`、`status` 过滤
-- [ ] 新增 `AlgorithmRunRepository`：支持 create/get/list，按 `problem_spec_id`、`campaign_id`、`algorithm_id`、`status`、`trigger_source` 过滤
+- [ ] 新增 `AlgorithmRunRepository`：支持 create/get/list，按 `problem_spec_id`、`campaign_id`、`workflow_run_id`、`research_run_id`、`algorithm_id`、`status`、`trigger_source` 过滤
 - [ ] 新增 `ResearchRunRepository`：支持 create/get/list/update，按 `problem_spec_id`、`campaign_id`、`status` 过滤
 - [ ] 每个 Repository 类继承 `BaseRepository`，设置 `collection_name` 类属性
 - [ ] 所有返回值不泄露内部可变对象引用（沿用 `clone_document` 防护）
@@ -146,7 +156,7 @@ blocked_approval → failed（拒绝）
 
 **验收标准：**
 - [ ] ProblemSpec 可以关联 `campaign_id`（可选字段）。
-- [ ] AlgorithmRun / ResearchStageRun 可以引用 `computation_run_id`、`suggestion_id`、`observation_id`（均为可选）。
+- [ ] WorkflowRun / AlgorithmRun / ResearchStageRun 可以引用 `computation_run_id`、`suggestion_id`、`observation_id`（均为可选）。
 - [ ] 字段是可选关联，不破坏现有 optimization 测试。
 
 **验证：**
@@ -159,6 +169,7 @@ blocked_approval → failed（拒绝）
 ## Checkpoint
 
 - [ ] ResearchEngine 新 schema 和 repository 测试通过。
+- [ ] ExecutionDecision、ManualAlgorithmWorkflow、WorkflowRun 的 schema 和 repository 已进入 P0 底座。
 - [ ] 现有 optimization / computation 测试通过。
 - [ ] 尚未引入任何前端入口或自动编排逻辑。
 

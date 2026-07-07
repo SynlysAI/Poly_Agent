@@ -90,3 +90,38 @@ def get_service_integrations_collection() -> Collection:
 def get_audit_events_collection() -> Collection:
     """获取 audit_events 集合。"""
     return get_database()["audit_events"]
+
+
+def get_research_problem_specs_collection() -> Collection:
+    """获取 research_problem_specs 集合。"""
+    return get_database()["research_problem_specs"]
+
+
+def get_execution_decisions_collection() -> Collection:
+    """获取 execution_decisions 集合。"""
+    return get_database()["execution_decisions"]
+
+
+def get_manual_algorithm_workflows_collection() -> Collection:
+    """获取 manual_algorithm_workflows 集合。"""
+    return get_database()["manual_algorithm_workflows"]
+
+
+def get_workflow_runs_collection() -> Collection:
+    """获取 workflow_runs 集合。"""
+    return get_database()["workflow_runs"]
+
+
+def get_algorithm_registry_entries_collection() -> Collection:
+    """获取 algorithm_registry_entries 集合。"""
+    return get_database()["algorithm_registry_entries"]
+
+
+def get_algorithm_runs_collection() -> Collection:
+    """获取 algorithm_runs 集合。"""
+    return get_database()["algorithm_runs"]
+
+
+def get_research_runs_collection() -> Collection:
+    """获取 research_runs 集合。"""
+    return get_database()["research_runs"]

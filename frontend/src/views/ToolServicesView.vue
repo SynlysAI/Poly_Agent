@@ -1,12 +1,14 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Check, Edit, Refresh } from '@element-plus/icons-vue'
+import { Check, Edit, Refresh, View as ViewIcon } from '@element-plus/icons-vue'
 
 import {
   checkIntegrationConfig,
+  getAlgorithm,
   getApiErrorMessage,
   getIntegrationStatus,
+  listAlgorithms,
   listIntegrationConfigs,
   upsertIntegrationConfig,
 } from '../api/polyAgentApi'
@@ -21,6 +23,72 @@ const configError = ref('')
 const editVisible = ref(false)
 const editingServiceKey = ref('')
 const activeTab = ref('status')
+
+// ── ResearchEngine 算法清单 ──
+const algorithms = ref([])
+const algoLoading = ref(false)
+const algoDetailVisible = ref(false)
+const algoDetail = ref(null)
+const algoFilters = reactive({ type: '', material_scope: '', keyword: '' })
+
+const algoTypeOptions = [
+  { label: '全部类型', value: '' },
+  { label: '检索器', value: 'retriever' },
+  { label: '预测器', value: 'predictor' },
+  { label: '模拟器', value: 'simulator' },
+  { label: '优化器', value: 'optimizer' },
+]
+
+function algoTypeTag(type) {
+  const map = { retriever: 'info', predictor: 'success', simulator: 'warning', optimizer: 'danger' }
+  return map[type] || 'info'
+}
+
+function algoTypeLabel(type) {
+  const map = { retriever: '检索器', predictor: '预测器', simulator: '模拟器', optimizer: '优化器' }
+  return map[type] || type
+}
+
+function algoStatusTag(status) {
+  const map = { active: 'success', pending_encapsulation: 'warning', in_development: 'info', frozen: 'info', decommissioned: 'danger' }
+  return map[status] || 'info'
+}
+
+function algoStatusLabel(status) {
+  const map = { active: '已接入', pending_encapsulation: '待封装', in_development: '开发中', frozen: '冻结', decommissioned: '下线' }
+  return map[status] || status
+}
+
+const filteredAlgos = computed(() => {
+  const kw = algoFilters.keyword.trim().toLowerCase()
+  return algorithms.value.filter((item) => {
+    const matchesType = !algoFilters.type || item.type === algoFilters.type
+    const matchesMaterial = !algoFilters.material_scope || (item.material_scope || []).includes(algoFilters.material_scope)
+    const haystack = `${item.name} ${item.algorithm_id} ${item.description || ''}`.toLowerCase()
+    return matchesType && matchesMaterial && (!kw || haystack.includes(kw))
+  })
+})
+
+async function loadAlgos() {
+  algoLoading.value = true
+  try {
+    const data = await listAlgorithms({ page: 1, page_size: 100 })
+    algorithms.value = data.items || []
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    algoLoading.value = false
+  }
+}
+
+async function showAlgoDetail(algo) {
+  try {
+    algoDetail.value = await getAlgorithm(algo.algorithm_id)
+    algoDetailVisible.value = true
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  }
+}
 
 const form = reactive({
   display_name: '',
@@ -249,7 +317,10 @@ async function handleCheck(row) {
   }
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  loadAll()
+  loadAlgos()
+})
 </script>
 
 <template>
@@ -307,6 +378,45 @@ onMounted(loadAll)
             </div>
           </el-tab-pane>
 
+          <el-tab-pane label="算法清单" name="algorithms">
+            <div class="algo-filter-bar">
+              <el-select v-model="algoFilters.type" placeholder="算法类型" clearable style="width:130px">
+                <el-option v-for="item in algoTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+              <el-select v-model="algoFilters.material_scope" placeholder="材料体系" clearable style="width:130px">
+                <el-option label="氟基" value="fluoropolymer" />
+                <el-option label="碳基" value="carbon_polymer" />
+                <el-option label="硅基" value="silicon_polymer" />
+                <el-option label="通用" value="universal" />
+              </el-select>
+              <el-input v-model="algoFilters.keyword" placeholder="搜索算法" clearable style="width:200px" />
+              <el-button text @click="algoFilters.type = ''; algoFilters.material_scope = ''; algoFilters.keyword = ''">重置</el-button>
+              <el-button :icon="Refresh" :loading="algoLoading" @click="loadAlgos">刷新</el-button>
+            </div>
+            <el-table v-if="filteredAlgos.length" :data="filteredAlgos" v-loading="algoLoading" stripe style="margin-top:10px">
+              <el-table-column prop="name" label="算法名称" min-width="180" />
+              <el-table-column label="类型" width="100">
+                <template #default="{ row }"><el-tag size="small" :type="algoTypeTag(row.type)">{{ algoTypeLabel(row.type) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="材料范围" min-width="160">
+                <template #default="{ row }">{{ (row.material_scope || []).join(', ') }}</template>
+              </el-table-column>
+              <el-table-column label="触发方式" min-width="140">
+                <template #default="{ row }">{{ (row.trigger_modes || []).join(', ') }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }"><el-tag size="small" :type="algoStatusTag(row.status)">{{ algoStatusLabel(row.status) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="操作" width="100" fixed="right">
+                <template #default="{ row }">
+                  <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(row)">详情</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-else-if="!algoLoading" class="empty-inline" style="min-height:100px;justify-content:center">
+              暂无算法数据
+            </div>
+          </el-tab-pane>
           <el-tab-pane label="配置" name="configs">
             <el-alert v-if="configError" :title="configError" type="warning" :closable="false" class="config-alert" />
             <el-table v-else :data="configs" v-loading="loadingConfigs" stripe>
@@ -389,6 +499,26 @@ onMounted(loadAll)
         <el-button type="primary" :loading="saving" @click="saveConfig">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 算法详情 drawer -->
+    <el-drawer v-model="algoDetailVisible" :title="algoDetail?.name || '算法详情'" size="520px">
+      <template v-if="algoDetail">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="ID">{{ algoDetail.algorithm_id }}</el-descriptions-item>
+          <el-descriptions-item label="类型"><el-tag size="small" :type="algoTypeTag(algoDetail.type)">{{ algoTypeLabel(algoDetail.type) }}</el-tag></el-descriptions-item>
+          <el-descriptions-item label="状态"><el-tag size="small" :type="algoStatusTag(algoDetail.status)">{{ algoStatusLabel(algoDetail.status) }}</el-tag></el-descriptions-item>
+          <el-descriptions-item label="版本">{{ algoDetail.version }}</el-descriptions-item>
+          <el-descriptions-item label="调用方式">{{ algoDetail.call_method }}</el-descriptions-item>
+          <el-descriptions-item label="运行依赖">{{ algoDetail.runtime_dependency || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="触发方式">{{ (algoDetail.trigger_modes || []).join(', ') }}</el-descriptions-item>
+          <el-descriptions-item label="材料范围">{{ (algoDetail.material_scope || []).join(', ') }}</el-descriptions-item>
+        </el-descriptions>
+        <h4 style="margin:16px 0 8px">输入 Schema</h4>
+        <pre class="details-json" style="max-height:200px">{{ JSON.stringify(algoDetail.input_schema, null, 2) }}</pre>
+        <h4 style="margin:16px 0 8px">输出 Schema</h4>
+        <pre class="details-json" style="max-height:200px">{{ JSON.stringify(algoDetail.output_schema, null, 2) }}</pre>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
@@ -397,6 +527,13 @@ onMounted(loadAll)
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.algo-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .tools-header {
