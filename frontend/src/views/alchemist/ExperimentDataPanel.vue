@@ -2,8 +2,10 @@
 import { onMounted, onActivated, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
 import {
   addExperiment,
+  deleteExperiment,
   getExperiments,
   getExperimentsSummary,
   getVariables,
@@ -218,6 +220,24 @@ function isFiniteNumber(value) {
   return Number.isFinite(Number(value))
 }
 
+async function handleDeleteExperiment(rowIndex) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除第 ${rowIndex + 1} 行实验数据？删除后若已训练模型将自动失效，需重新训练。`,
+      '确认删除',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+    await deleteExperiment(props.sessionId, rowIndex)
+    ElMessage.success('已删除')
+    await loadExperimentData()
+    // 通知父页面可能模型状态变更
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error(`删除失败: ${e.message || e}`)
+    }
+  }
+}
+
 watch(() => props.sessionId, () => {
   experiments.value = []
   variables.value = []
@@ -293,6 +313,11 @@ onActivated(() => {
         <el-table-column v-for="col in getColumnNames()" :key="col" :label="col" min-width="110">
           <template #default="{ row }">
             {{ formatCellValue(row[col]) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="80" fixed="right">
+          <template #default="{ $index }">
+            <el-button type="danger" size="small" @click="handleDeleteExperiment($index)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>

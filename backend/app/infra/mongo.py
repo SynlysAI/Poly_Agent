@@ -125,3 +125,8 @@ def get_algorithm_runs_collection() -> Collection:
 def get_research_runs_collection() -> Collection:
     """获取 research_runs 集合。"""
     return get_database()["research_runs"]
+
+
+def get_alchemist_sessions_collection() -> Collection:
+    """获取 alchemist_sessions 集合。"""
+    return get_database()["alchemist_sessions"]

@@ -98,10 +98,13 @@ class Settings:
         self.stale_reaper_interval_seconds: int = int(os.getenv("STALE_REAPER_INTERVAL_SECONDS", "60"))
         # 后台 reaper 任务运行间隔
 
-        # ALchemist 主动学习工具后端地址
-        self.alchemist_backend_url: str = os.getenv(
-            "ALCHEMIST_BACKEND_URL", "http://127.0.0.1:8004/api/v1"
+        # ALchemist 实验设计运行时目录
+        self.alchemist_runtime_root: Path = self._resolve_project_path(
+            os.getenv("ALCHEMIST_RUNTIME_ROOT", str(self.runtime_root / "alchemist"))
         )
+
+        # Edison Scientific 文献搜索 API Key
+        self.edison_api_key: str = os.getenv("EDISON_API_KEY", "")
 
         # LLM 配置（仅从环境变量读取，无默认值）
         self.llm_api_key: str = os.getenv("LLM_API_KEY", "")

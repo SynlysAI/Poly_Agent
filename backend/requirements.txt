@@ -7,3 +7,17 @@ pymongo==4.14.1
 python-dotenv==1.2.1
 httpx==0.28.1
 openai==1.99.6
+
+# ALchemist 实验设计依赖
+numpy
+pandas
+scipy
+matplotlib
+scikit-learn
+scikit-optimize==0.10.2
+botorch==0.18.1
+gpytorch==1.15.2
+pyDOE==1.3.0
+joblib==1.5.3
+mplcursors==0.7.1
+tabulate

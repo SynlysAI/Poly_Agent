@@ -11,7 +11,7 @@ from app.api.v1.endpoints.computations import router as computations_router
 from app.api.v1.endpoints.health import router as health_router
 from app.api.v1.endpoints.integrations import router as integrations_router
 from app.api.v1.endpoints.optimization import router as optimization_router
-from app.api.v1.endpoints.alchemist_proxy import router as alchemist_router
+from app.api.v1.endpoints.alchemist import router as alchemist_router
 from app.api.v1.endpoints.llm import router as llm_router
 from app.api.v1.endpoints.research_engine import router as research_engine_router
 
