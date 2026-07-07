@@ -4,10 +4,12 @@ import { ElMessage } from 'element-plus'
 import { VideoPlay } from '@element-plus/icons-vue'
 
 import {
-  createAlgorithmRun,
+  createExecutionDecision,
+  createManualWorkflow,
+  getActiveExecutionDecision,
   getAlgorithmRun,
   getApiErrorMessage,
-  listAlgorithmRuns,
+  startWorkflowRun,
 } from '../../api/polyAgentApi'
 
 const emit = defineEmits(['run-completed'])
@@ -21,8 +23,7 @@ const props = defineProps({
 const running = ref(false)
 const formInputs = ref({})
 const lastRun = ref(null)
-const recentRuns = ref([])
-const showRecentRuns = ref(false)
+const lastWorkflowRun = ref(null)
 
 watch(() => props.selectedAlgorithm, (algo) => {
   if (algo) {
@@ -43,22 +44,43 @@ watch(() => props.selectedAlgorithm, (algo) => {
 
 async function handleRun() {
   if (!props.selectedAlgorithm) return
+  if (!props.problemSpecId) {
+    ElMessage.warning('请先选择或创建 ProblemSpec，再进入人工算法工作台')
+    return
+  }
   running.value = true
   try {
-    const payload = {
-      algorithm_id: props.selectedAlgorithm.algorithm_id,
-      trigger_source: 'human',
-      problem_spec_id: props.problemSpecId || undefined,
-      campaign_id: props.campaignId || undefined,
-      input_snapshot: { ...formInputs.value },
-    }
-    const data = await createAlgorithmRun(payload)
-    lastRun.value = data
-    ElMessage.success(`算法运行已创建: ${data.run_id}`)
-    emit('run-completed', data)
+    const decision = await ensureExecutionDecision(
+      props.problemSpecId,
+      'manual_workbench',
+      `人工算法工作台运行 ${props.selectedAlgorithm.algorithm_id}`,
+    )
+    const workflow = await createManualWorkflow({
+      problem_spec_id: props.problemSpecId,
+      execution_decision_id: decision.decision_id,
+      name: `人工运行 ${props.selectedAlgorithm.name || props.selectedAlgorithm.algorithm_id}`,
+      description: '由人工算法工作台创建的单节点 Workflow',
+      steps: [
+        {
+          step_id: 'step_1',
+          algorithm_id: props.selectedAlgorithm.algorithm_id,
+          input_bindings: buildLiteralBindings(formInputs.value),
+        },
+      ],
+    })
+    const workflowRun = await startWorkflowRun(workflow.workflow_id)
+    lastWorkflowRun.value = workflowRun
 
-    // 轮询状态
-    await pollRunStatus(data.run_id)
+    const firstStep = workflowRun.step_runs?.[0]
+    if (!firstStep?.algorithm_run_id) {
+      ElMessage.success(`WorkflowRun 已创建: ${workflowRun.workflow_run_id}`)
+      return
+    }
+
+    const data = await getAlgorithmRun(firstStep.algorithm_run_id)
+    lastRun.value = data
+    ElMessage.success(`WorkflowRun 已完成，生成 AlgorithmRun: ${data.run_id}`)
+    emit('run-completed', data)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -66,32 +88,40 @@ async function handleRun() {
   }
 }
 
-async function pollRunStatus(runId) {
-  let attempts = 0
-  const maxAttempts = 30
-  while (attempts < maxAttempts) {
-    await new Promise(resolve => setTimeout(resolve, 2000))
-    try {
-      const data = await getAlgorithmRun(runId)
-      lastRun.value = data
-      if (['completed', 'failed', 'cancelled'].includes(data.status)) {
-        emit('run-completed', data)
-        return
-      }
-    } catch {
-      // 忽略轮询错误
+async function ensureExecutionDecision(problemSpecId, mode, reason) {
+  try {
+    return await createExecutionDecision(problemSpecId, { mode, reason })
+  } catch (error) {
+    if (error.status !== 409) {
+      throw error
     }
-    attempts++
+    const active = await getActiveExecutionDecision(problemSpecId)
+    if (active?.mode === mode) {
+      return active
+    }
+    throw error
   }
 }
 
+function buildLiteralBindings(inputs) {
+  return Object.fromEntries(
+    Object.entries(inputs || {}).map(([key, value]) => [
+      key,
+      {
+        source: 'literal',
+        value,
+      },
+    ]),
+  )
+}
+
 function statusTag(status) {
-  const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info' }
+  const map = { draft: 'info', queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info' }
   return map[status] || 'info'
 }
 
 function statusLabel(status) {
-  const map = { queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }
+  const map = { draft: '草稿', queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }
   return map[status] || status
 }
 
@@ -155,8 +185,20 @@ function formatDate(value) {
         @click="handleRun"
         style="margin-top:12px;width:100%"
       >
-        运行算法
+        创建并运行 Workflow
       </el-button>
+
+      <div v-if="lastWorkflowRun" class="run-result">
+        <div class="result-header">
+          <span>WorkflowRun</span>
+          <el-tag size="small" :type="statusTag(lastWorkflowRun.status)">{{ statusLabel(lastWorkflowRun.status) }}</el-tag>
+        </div>
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="WorkflowRun ID">{{ lastWorkflowRun.workflow_run_id }}</el-descriptions-item>
+          <el-descriptions-item label="Workflow ID">{{ lastWorkflowRun.workflow_id }}</el-descriptions-item>
+          <el-descriptions-item label="ExecutionDecision">{{ lastWorkflowRun.execution_decision_id }}</el-descriptions-item>
+        </el-descriptions>
+      </div>
 
       <!-- 最近运行结果 -->
       <div v-if="lastRun" class="run-result">

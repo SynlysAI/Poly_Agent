@@ -5,7 +5,15 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Search, View } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, listAlgorithmRuns, listCampaigns, listComputations, listResearchRuns } from '../api/polyAgentApi'
-import { TASK_MODULES, getTaskModule, mapAlgorithmRunToGlobalTask, mapCampaignToGlobalTask, mapComputationRunToGlobalTask, mapResearchRunToGlobalTask } from '../tasks/taskModules'
+import {
+  TASK_MODULES,
+  getTaskModule,
+  isResearchEngineContainerCampaign,
+  mapAlgorithmRunToGlobalTask,
+  mapCampaignToGlobalTask,
+  mapComputationRunToGlobalTask,
+  mapResearchRunToGlobalTask,
+} from '../tasks/taskModules'
 
 const router = useRouter()
 const loading = ref(false)
@@ -44,7 +52,7 @@ const statusOptions = [
 const taskRows = computed(() => {
   const rows = [
     ...computationRows.value.map(mapComputationRunToGlobalTask),
-    ...campaignRows.value.map(mapCampaignToGlobalTask),
+    ...campaignRows.value.filter((item) => !isResearchEngineContainerCampaign(item)).map(mapCampaignToGlobalTask),
     ...algorithmRuns.value.map(mapAlgorithmRunToGlobalTask),
     ...researchRuns.value.map(mapResearchRunToGlobalTask),
   ].sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())

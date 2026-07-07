@@ -23,7 +23,7 @@ function statusLabel(status) {
 }
 
 function triggerLabel(source) {
-  const map = { human: '人工触发', autoresearch: 'AutoResearch', system: '系统触发' }
+  const map = { human_workflow: '人工 Workflow', autoresearch: 'AutoResearch', system: '系统触发' }
   return map[source] || source
 }
 
@@ -75,6 +75,8 @@ onMounted(loadRun)
         <el-descriptions-item label="Campaign">{{ run.campaign_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="ResearchRun">{{ run.research_run_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="StageRun">{{ run.stage_run_id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="WorkflowRun">{{ run.workflow_run_id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="WorkflowStepRun">{{ run.workflow_step_run_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="关联计算任务">{{ run.linked_computation_run_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="关联 Suggestion">{{ run.linked_suggestion_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="创建者">{{ run.created_by }}</el-descriptions-item>

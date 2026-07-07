@@ -44,7 +44,8 @@ def _problem_spec_doc(**overrides) -> dict:
         "name": "测试任务",
         "material_family": "fluoropolymer",
         "problem_type": "formulation_process_optimization",
-        "execution_mode": "hybrid",
+        "allowed_execution_modes": ["manual_workbench", "autoresearch"],
+        "decision_status": "pending_execution_decision",
         "variables": [],
         "objectives": [
             {"name": "dielectric_constant", "direction": "maximize", "unit": "dimensionless"},
@@ -53,7 +54,7 @@ def _problem_spec_doc(**overrides) -> dict:
         "measurements": [],
         "campaign_id": None,
         "description": None,
-        "schema_version": "0.2",
+        "schema_version": "0.4",
         "created_by": "tester",
         "owner_id": None,
         "project_id": "proj_001",
@@ -77,7 +78,7 @@ def _algorithm_entry_doc(**overrides) -> dict:
         "input_schema": {"fields": {"smiles": "string"}, "required": ["smiles"], "constraints": {}},
         "output_schema": {"fields": {"energy": "float"}, "required": ["energy"], "constraints": {}},
         "call_method": "SDK",
-        "trigger_modes": ["human", "autoresearch"],
+        "trigger_modes": ["human_workflow", "autoresearch"],
         "runtime_dependency": "Python",
         "version": "1.0.0",
         "validation_metric": {},
@@ -95,11 +96,13 @@ def _algorithm_run_doc(**overrides) -> dict:
     doc = {
         "run_id": "ar_test_001",
         "algorithm_id": "test_adapter",
-        "trigger_source": "human",
+        "trigger_source": "human_workflow",
         "trigger_context_id": None,
         "problem_spec_id": "ps_test_001",
         "problem_spec_version": None,
         "campaign_id": None,
+        "workflow_run_id": None,
+        "workflow_step_run_id": None,
         "research_run_id": None,
         "stage_run_id": None,
         "linked_computation_run_id": None,
@@ -127,6 +130,7 @@ def _research_run_doc(**overrides) -> dict:
         "run_id": "rr_test_001",
         "project_id": "proj_001",
         "problem_spec_id": "ps_test_001",
+        "execution_decision_id": "ed_test_001",
         "campaign_id": None,
         "profile_id": "fluoropolymer",
         "status": "draft",
@@ -342,7 +346,7 @@ class AlgorithmRunRepositoryTest(ComputationTestCase):
         found = AlgorithmRunRepository.find_one({"run_id": "ar_test_001"})
         self.assertIsNotNone(found)
         self.assertEqual(found["algorithm_id"], "test_adapter")
-        self.assertEqual(found["trigger_source"], "human")
+        self.assertEqual(found["trigger_source"], "human_workflow")
 
     def test_list_by_problem_spec_id(self) -> None:
         """按 ProblemSpec ID 过滤。"""
@@ -357,7 +361,7 @@ class AlgorithmRunRepositoryTest(ComputationTestCase):
 
     def test_list_by_trigger_source(self) -> None:
         """按触发来源过滤。"""
-        doc_human = _algorithm_run_doc(run_id="ar_human", trigger_source="human")
+        doc_human = _algorithm_run_doc(run_id="ar_human", trigger_source="human_workflow")
         doc_auto = _algorithm_run_doc(run_id="ar_auto", trigger_source="autoresearch")
         AlgorithmRunRepository.save("run_id", doc_human)
         AlgorithmRunRepository.save("run_id", doc_auto)

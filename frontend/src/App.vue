@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Fold, Expand, SwitchButton,
-  Monitor, DataAnalysis, Histogram, ChatLineRound, SetUp, FolderOpened, Aim,
+  Monitor, DataAnalysis, Histogram, ChatLineRound, SetUp, FolderOpened, Aim, MagicStick,
 } from '@element-plus/icons-vue'
 
 import { getAuthStatus, getApiErrorMessage, getCurrentUser } from './api/polyAgentApi'
@@ -43,7 +43,7 @@ const HEADER_SECTION_ROUTE_MAP = {
   '任务提交': '/tasks/submit',
   '任务中心': '/tasks/center',
   '计算智能': '/tasks/submit',
-  '湿实验优化': '/optimization',
+  '湿实验优化': '/tasks/submit',
   '研发引擎': '/research-engine',
   '工具服务': '/tools',
   '系统管理': '/database',
@@ -66,7 +66,10 @@ const activeMenu = computed(() => {
   const current = route.path
   if (current.startsWith('/computations/submit')) return '/tasks/submit'
   if (current.startsWith('/computations/runs')) return '/tasks/center'
-  if (current.startsWith('/optimization')) return '/optimization'
+  // 湿实验优化路径不再有独立菜单，归入任务提交
+  if (current.startsWith('/optimization')) return '/tasks/submit'
+  // 问答对话归入工作台
+  if (current.startsWith('/dialogue')) return '/dashboard'
   return current
 })
 
@@ -210,25 +213,17 @@ onBeforeUnmount(() => {
             <el-icon><Monitor /></el-icon>
             <span>工作台</span>
           </el-menu-item>
+          <el-menu-item index="/research-engine">
+            <el-icon><MagicStick /></el-icon>
+            <span>研发引擎</span>
+          </el-menu-item>
           <el-menu-item index="/tasks/submit">
-            <el-icon><DataAnalysis /></el-icon>
+            <el-icon><Aim /></el-icon>
             <span>任务提交</span>
           </el-menu-item>
           <el-menu-item index="/tasks/center">
             <el-icon><Histogram /></el-icon>
             <span>任务中心</span>
-          </el-menu-item>
-          <el-menu-item index="/optimization">
-            <el-icon><Aim /></el-icon>
-            <span>湿实验优化</span>
-          </el-menu-item>
-          <el-menu-item index="/research-engine">
-            <el-icon><DataAnalysis /></el-icon>
-            <span>研发引擎</span>
-          </el-menu-item>
-          <el-menu-item index="/dialogue">
-            <el-icon><ChatLineRound /></el-icon>
-            <span>问答对话</span>
           </el-menu-item>
           <el-menu-item index="/tools">
             <el-icon><SetUp /></el-icon>

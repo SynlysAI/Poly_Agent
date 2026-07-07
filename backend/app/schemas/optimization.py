@@ -77,6 +77,8 @@ class OptimizationCampaign(BaseModel):
     search_space: dict = Field(default_factory=dict)
     objectives: list[OptimizationObjective]
     planner_config: dict = Field(default_factory=dict)
+    source: str | None = Field(default=None, max_length=80)
+    linked_problem_spec_id: str | None = Field(default=None, max_length=80)
     created_by: str
     created_at: datetime
     updated_at: datetime

@@ -20,6 +20,8 @@ from fastapi import HTTPException
 
 from app.schemas.research_engine import (
     AlgorithmRunCreate,
+    ExecutionDecisionCreate,
+    ManualAlgorithmWorkflowCreate,
     ProblemSpec,
     ProblemSpecCreate,
     ProblemSpecObjective,
@@ -33,6 +35,7 @@ from app.services.research_engine_algorithm_runner import (
     PropertyPredictorMockRunner,
     get_runner,
 )
+from app.services.optimization_service import OptimizationService
 from app.services.research_engine_service import ResearchEngineService
 
 
@@ -42,7 +45,6 @@ def problem_spec_payload(**overrides) -> dict:
         "name": "氟基高分子测试任务",
         "material_family": "fluoropolymer",
         "problem_type": "formulation_process_optimization",
-        "execution_mode": "hybrid",
         "objectives": [
             {"name": "dielectric_constant", "direction": "maximize", "unit": "dimensionless"},
         ],
@@ -69,7 +71,9 @@ class ProblemSpecServiceTest(ComputationTestCase):
         ps = self.service.create_problem_spec(payload, actor_user_id="tester")
         self.assertEqual(ps.name, "氟基高分子测试任务")
         self.assertEqual(ps.status, "draft")
-        self.assertEqual(ps.execution_mode, "hybrid")
+        self.assertEqual(ps.schema_version, "0.4")
+        self.assertEqual(ps.decision_status, "pending_execution_decision")
+        self.assertEqual(ps.allowed_execution_modes, ["manual_workbench", "autoresearch"])
         self.assertTrue(ps.problem_spec_id.startswith("ps_"))
 
     def test_get_problem_spec(self) -> None:
@@ -125,14 +129,14 @@ class ProblemSpecServiceTest(ComputationTestCase):
         updated_payload = ProblemSpecCreate(
             **problem_spec_payload(
                 name="更新后的任务名",
-                execution_mode="manual",
+                allowed_execution_modes=["manual_workbench"],
             )
         )
         updated = self.service.update_problem_spec(
             created.problem_spec_id, updated_payload, actor_user_id="tester"
         )
         self.assertEqual(updated.name, "更新后的任务名")
-        self.assertEqual(updated.execution_mode, "manual")
+        self.assertEqual(updated.allowed_execution_modes, ["manual_workbench"])
 
     def test_update_frozen_returns_409(self) -> None:
         """已冻结的 ProblemSpec 不可直接修改。"""
@@ -219,12 +223,39 @@ class ProblemSpecServiceTest(ComputationTestCase):
         ps = self.service.create_problem_spec(payload, actor_user_id="tester")
         self.assertEqual(len(ps.measurements), 1)
 
-    def test_all_execution_modes(self) -> None:
-        """三种 execution_mode 均可创建。"""
-        for mode in ["manual", "autoresearch", "hybrid"]:
-            payload = ProblemSpecCreate(**problem_spec_payload(execution_mode=mode, name=f"{mode}模式"))
-            ps = self.service.create_problem_spec(payload, actor_user_id="tester")
-            self.assertEqual(ps.execution_mode, mode)
+    def test_allowed_execution_modes(self) -> None:
+        """ProblemSpec 记录可用执行策略，但不直接启动运行。"""
+        payload = ProblemSpecCreate(
+            **problem_spec_payload(
+                allowed_execution_modes=["manual_workbench"],
+                name="只允许人工工作台",
+            )
+        )
+        ps = self.service.create_problem_spec(payload, actor_user_id="tester")
+        self.assertEqual(ps.allowed_execution_modes, ["manual_workbench"])
+        self.assertEqual(ps.decision_status, "pending_execution_decision")
+
+    def test_auto_created_campaign_is_optimization_compatible(self) -> None:
+        """自动创建的 ResearchEngine 容器 campaign 可被优化模块读取。"""
+        payload = ProblemSpecCreate(
+            **problem_spec_payload(
+                objectives=[
+                    {"name": "dielectric_constant", "direction": "maximize", "unit": "dimensionless"},
+                    {"name": "density", "direction": "minimize", "unit": "g/cm3"},
+                ],
+            )
+        )
+        ps = self.service.create_problem_spec(payload, actor_user_id="tester")
+
+        optimization_service = OptimizationService()
+        listing = optimization_service.list_campaigns(page=1, page_size=20, actor_user_id="tester")
+        detail = optimization_service.get_detail(ps.campaign_id, actor_user_id="tester")
+
+        self.assertEqual(listing.total, 1)
+        self.assertEqual(detail.campaign.planner_type, "fallback")
+        self.assertEqual(detail.campaign.source, "research_engine")
+        self.assertEqual(detail.campaign.linked_problem_spec_id, ps.problem_spec_id)
+        self.assertEqual([objective.direction for objective in detail.campaign.objectives], ["max", "min"])
 
 
 # =============================================================================
@@ -287,10 +318,10 @@ class AlgorithmRegistryServiceTest(ComputationTestCase):
     def test_list_by_trigger_mode(self) -> None:
         """按触发方式过滤。"""
         self.service.seed_default_algorithms()
-        result = self.service.list_algorithms(trigger_mode="human")
+        result = self.service.list_algorithms(trigger_mode="human_workflow")
         self.assertGreaterEqual(result.total, 1)
         for item in result.items:
-            self.assertIn("human", item.trigger_modes)
+            self.assertIn("human_workflow", item.trigger_modes)
 
     def test_list_by_status(self) -> None:
         """按状态过滤。"""
@@ -351,6 +382,229 @@ class AlgorithmRegistryServiceTest(ComputationTestCase):
         page2 = self.service.list_algorithms(page=2, page_size=5)
         self.assertGreaterEqual(len(page2.items), 1)
 
+    # ── Legacy trigger_modes 兼容性测试 ──
+
+    def test_legacy_trigger_modes_human_normalized_to_human_workflow(self) -> None:
+        """旧数据 trigger_modes=["human"] 应被规范化为 ["human_workflow"]。"""
+        from app.infra.research_engine_repositories import AlgorithmRegistryRepository
+
+        # 直接写入旧数据
+        legacy_doc = {
+            "algorithm_id": "legacy_algo_test",
+            "name": "旧数据测试算法",
+            "type": "predictor",
+            "algorithm_family": "vertical_prediction",
+            "material_scope": ["universal"],
+            "task_scope": ["COMPUTE_PREDICT"],
+            "input_schema": {"fields": {}, "required": [], "constraints": {}},
+            "output_schema": {"fields": {}, "required": [], "constraints": {}},
+            "call_method": "REST",
+            "trigger_modes": ["human"],
+            "runtime_dependency": "",
+            "version": "1.0.0",
+            "validation_metric": {},
+            "owner": "test",
+            "status": "active",
+            "description": "旧数据测试",
+        }
+        AlgorithmRegistryRepository.save("algorithm_id", legacy_doc)
+
+        # get_algorithm 应返回规范化后的值
+        entry = self.service.get_algorithm("legacy_algo_test")
+        self.assertEqual(entry.trigger_modes, ["human_workflow"])
+
+    def test_legacy_algo_returned_by_human_workflow_filter(self) -> None:
+        """trigger_mode=human_workflow 过滤应包含旧 human 记录。"""
+        from app.infra.research_engine_repositories import AlgorithmRegistryRepository
+
+        # 直接写入旧数据
+        legacy_doc = {
+            "algorithm_id": "legacy_algo_filter_test",
+            "name": "旧数据过滤测试",
+            "type": "predictor",
+            "algorithm_family": "vertical_prediction",
+            "material_scope": ["universal"],
+            "task_scope": ["COMPUTE_PREDICT"],
+            "input_schema": {"fields": {}, "required": [], "constraints": {}},
+            "output_schema": {"fields": {}, "required": [], "constraints": {}},
+            "call_method": "REST",
+            "trigger_modes": ["human"],
+            "runtime_dependency": "",
+            "version": "1.0.0",
+            "validation_metric": {},
+            "owner": "test",
+            "status": "active",
+            "description": "旧数据过滤测试",
+        }
+        AlgorithmRegistryRepository.save("algorithm_id", legacy_doc)
+
+        # human_workflow 过滤应能找到这个旧数据条目
+        result = self.service.list_algorithms(trigger_mode="human_workflow", page_size=100)
+        algo_ids = [item.algorithm_id for item in result.items]
+        self.assertIn("legacy_algo_filter_test", algo_ids)
+        # 验证返回的是规范化后的值
+        for item in result.items:
+            if item.algorithm_id == "legacy_algo_filter_test":
+                self.assertEqual(item.trigger_modes, ["human_workflow"])
+
+    def test_algorithm_run_with_legacy_algo_succeeds(self) -> None:
+        """使用旧 trigger_modes=["human"] 的算法创建 AlgorithmRun 应成功通过触发校验。"""
+        from app.infra.research_engine_repositories import AlgorithmRegistryRepository
+
+        # 直接写入旧数据
+        legacy_doc = {
+            "algorithm_id": "legacy_algo_run_test",
+            "name": "旧数据运行测试",
+            "type": "predictor",
+            "algorithm_family": "vertical_prediction",
+            "material_scope": ["universal"],
+            "task_scope": ["COMPUTE_PREDICT"],
+            "input_schema": {
+                "fields": {"smiles": "string", "target_properties": "list[string]"},
+                "required": ["smiles", "target_properties"],
+                "constraints": {},
+            },
+            "output_schema": {
+                "fields": {"predictions": "dict", "uncertainty": "dict"},
+                "required": ["predictions", "uncertainty"],
+            },
+            "call_method": "REST",
+            "trigger_modes": ["human"],
+            "runtime_dependency": "",
+            "version": "1.0.0",
+            "validation_metric": {},
+            "owner": "test",
+            "status": "active",
+            "description": "旧数据运行测试",
+        }
+        AlgorithmRegistryRepository.save("algorithm_id", legacy_doc)
+
+        # 创建 AlgorithmRun，trigger_source="human_workflow" 应对应规范化后的 trigger_modes
+        # 旧值 "human" 被规范化为 "human_workflow"，触发校验通过
+        # 但因无对应 runner，应返回 501（而非 400 触发不支持）
+        with self.assertRaises(HTTPException) as ctx:
+            self.service.create_algorithm_run(
+                AlgorithmRunCreate(
+                    algorithm_id="legacy_algo_run_test",
+                    trigger_source="human_workflow",
+                    input_snapshot={"smiles": "C=CF", "target_properties": ["dielectric_constant"]},
+                ),
+                actor_user_id="tester",
+            )
+        # 应因无 runner 而失败 (501)，而非因 trigger_mode 不支持 (400)
+        self.assertEqual(ctx.exception.status_code, 501)
+        self.assertIn("尚未实现执行器", ctx.exception.detail)
+
+    def test_seed_defaults_repairs_legacy_trigger_modes(self) -> None:
+        """seed_default_algorithms 应修复已存在条目的旧 trigger_modes 值。"""
+        from app.infra.research_engine_repositories import AlgorithmRegistryRepository
+
+        # 先写入一个正常的算法条目，改其 trigger_modes 为旧值
+        self.service.seed_default_algorithms()
+        AlgorithmRegistryRepository.update_fields(
+            "literature_mock",
+            {"trigger_modes": ["human", "autoresearch"]},
+        )
+
+        # 验证旧值在存储中
+        doc = AlgorithmRegistryRepository.find_one({"algorithm_id": "literature_mock"})
+        self.assertIn("human", doc.get("trigger_modes") or [])
+
+        # 再次调用 seed，应修复旧值
+        self.service.seed_default_algorithms()
+
+        # 验证已修复
+        doc = AlgorithmRegistryRepository.find_one({"algorithm_id": "literature_mock"})
+        trigger_modes = doc.get("trigger_modes") or []
+        self.assertNotIn("human", trigger_modes)
+        self.assertIn("human_workflow", trigger_modes)
+
+
+# =============================================================================
+# ExecutionDecision / ManualWorkflow Service 测试
+# =============================================================================
+
+
+class ManualWorkflowServiceTest(ComputationTestCase):
+    """覆盖 v0.4 的执行决策和人工 Workflow 主路径。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.service = ResearchEngineService()
+        self.service.seed_default_algorithms()
+        self.problem_spec = self.service.create_problem_spec(
+            ProblemSpecCreate(**problem_spec_payload()),
+            actor_user_id="tester",
+        )
+
+    def test_create_manual_execution_decision(self) -> None:
+        """ProblemSpec 校验后可显式选择 manual_workbench。"""
+        decision = self.service.create_execution_decision(
+            self.problem_spec.problem_spec_id,
+            ExecutionDecisionCreate(mode="manual_workbench", reason="需要人工调试模型参数"),
+            actor_user_id="tester",
+        )
+        self.assertTrue(decision.decision_id.startswith("ed_"))
+        self.assertEqual(decision.problem_spec_id, self.problem_spec.problem_spec_id)
+        self.assertEqual(decision.mode, "manual_workbench")
+
+        active = self.service.get_active_execution_decision(self.problem_spec.problem_spec_id)
+        self.assertEqual(active.decision_id, decision.decision_id)
+
+    def test_reject_duplicate_active_decision_same_mode(self) -> None:
+        """同一 ProblemSpec 同一模式不能重复创建 active decision。"""
+        self.service.create_execution_decision(
+            self.problem_spec.problem_spec_id,
+            ExecutionDecisionCreate(mode="manual_workbench", reason="第一次选择"),
+            actor_user_id="tester",
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            self.service.create_execution_decision(
+                self.problem_spec.problem_spec_id,
+                ExecutionDecisionCreate(mode="manual_workbench", reason="重复选择"),
+                actor_user_id="tester",
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_single_node_manual_workflow_run_creates_algorithm_run(self) -> None:
+        """单节点人工 WorkflowRun 会生成 WorkflowStepRun 和 AlgorithmRun。"""
+        decision = self.service.create_execution_decision(
+            self.problem_spec.problem_spec_id,
+            ExecutionDecisionCreate(mode="manual_workbench", reason="先跑文献检索"),
+            actor_user_id="tester",
+        )
+        workflow = self.service.create_manual_workflow(
+            ManualAlgorithmWorkflowCreate(
+                problem_spec_id=self.problem_spec.problem_spec_id,
+                execution_decision_id=decision.decision_id,
+                name="单节点文献检索",
+                steps=[
+                    {
+                        "step_id": "s1",
+                        "algorithm_id": "literature_mock",
+                        "input_bindings": {
+                            "keywords": {"source": "manual_input", "value": "氟基高分子 介电常数"}
+                        },
+                    }
+                ],
+            ),
+            actor_user_id="tester",
+        )
+
+        run = self.service.start_workflow_run(workflow.workflow_id, actor_user_id="tester")
+        self.assertEqual(run.status, "completed")
+        self.assertEqual(len(run.step_runs), 1)
+        self.assertEqual(run.step_runs[0].status, "completed")
+        self.assertIsNotNone(run.step_runs[0].algorithm_run_id)
+
+        algorithm_runs = self.service.list_algorithm_runs(
+            workflow_run_id=run.workflow_run_id,
+            trigger_source="human_workflow",
+        )
+        self.assertEqual(algorithm_runs.total, 1)
+        self.assertEqual(algorithm_runs.items[0].trigger_source, "human_workflow")
+        self.assertEqual(algorithm_runs.items[0].workflow_run_id, run.workflow_run_id)
+
 
 # =============================================================================
 # AlgorithmRun Service 测试
@@ -370,7 +624,7 @@ class AlgorithmRunServiceTest(ComputationTestCase):
         """创建 AlgorithmRun 的辅助方法。"""
         payload_dict = {
             "algorithm_id": algorithm_id,
-            "trigger_source": "human",
+            "trigger_source": "human_workflow",
             "input_snapshot": {"keywords": "氟基高分子 介电常数"},
         }
         payload_dict.update(overrides)
@@ -382,7 +636,7 @@ class AlgorithmRunServiceTest(ComputationTestCase):
         """创建文献检索 AlgorithmRun 成功。"""
         run = self._create_run("literature_mock")
         self.assertEqual(run["algorithm_id"], "literature_mock")
-        self.assertEqual(run["trigger_source"], "human")
+        self.assertEqual(run["trigger_source"], "human_workflow")
         self.assertEqual(run["status"], "completed")
         self.assertTrue(run["run_id"].startswith("arun_"))
         # 验证输出
@@ -470,13 +724,12 @@ class AlgorithmRunServiceTest(ComputationTestCase):
         self.assertEqual(ctx.exception.status_code, 404)
 
     def test_create_run_fails_for_unsupported_trigger(self) -> None:
-        """算法不支持 human 触发时返回 400。"""
-        # 先验证 'human' 不在 trigger_modes 中时会发生什么
-        # 对于正常的算法，trigger_mode 包含 'human'
-        run = self._create_run("literature_mock", trigger_source="human")
+        """算法不支持指定触发来源时返回 400。"""
+        # 对于正常的算法，trigger_mode 包含 human_workflow。
+        run = self._create_run("literature_mock", trigger_source="human_workflow")
         self.assertEqual(run["status"], "completed")
 
-        # 测试 system trigger — 文献 mock 只支持 human 和 autoresearch
+        # 测试 system trigger：文献 mock 只支持 human_workflow 和 autoresearch。
         with self.assertRaises(HTTPException) as ctx:
             payload = AlgorithmRunCreate(
                 algorithm_id="literature_mock",
@@ -537,12 +790,12 @@ class AlgorithmRunServiceTest(ComputationTestCase):
 
     def test_list_by_trigger_source(self) -> None:
         """按 trigger_source 过滤 AlgorithmRun。"""
-        self._create_run("literature_mock", trigger_source="human")
+        self._create_run("literature_mock", trigger_source="human_workflow")
 
-        result = self.service.list_algorithm_runs(trigger_source="human")
+        result = self.service.list_algorithm_runs(trigger_source="human_workflow")
         self.assertGreaterEqual(result.total, 1)
         for item in result.items:
-            self.assertEqual(item.trigger_source, "human")
+            self.assertEqual(item.trigger_source, "human_workflow")
 
     def test_list_by_problem_spec(self) -> None:
         """按 problem_spec_id 过滤 AlgorithmRun。"""
@@ -764,13 +1017,17 @@ class ResearchRunOrchestratorServiceTest(ComputationTestCase):
         ps_payload = ProblemSpecCreate(
             name="Plan04 测试任务",
             material_family="fluoropolymer",
-            execution_mode="hybrid",
             objectives=[
                 {"name": "dielectric_constant", "direction": "maximize"},
                 {"name": "thermal_stability", "direction": "maximize"},
             ],
         )
         self.ps = self.svc.create_problem_spec(ps_payload, actor_user_id="tester")
+        self.autoresearch_decision = self.svc.create_execution_decision(
+            self.ps.problem_spec_id,
+            ExecutionDecisionCreate(mode="autoresearch", reason="进入 AutoResearch 编排测试"),
+            actor_user_id="tester",
+        )
         # 写入算法种子
         self.svc.seed_default_algorithms()
 

@@ -19,7 +19,7 @@ from app.schemas.research_engine import (
     AlgorithmRun,
     AlgorithmRunCreate,
     AlgorithmRunListData,
-    ExecutionMode,
+    ExecutionDecisionMode,
     ProblemSpec,
     ProblemSpecConstraint,
     ProblemSpecCreate,
@@ -60,7 +60,7 @@ def problem_spec_payload(**overrides: object) -> dict:
         "name": "氟基高分子测试任务",
         "material_family": "fluoropolymer",
         "problem_type": "formulation_process_optimization",
-        "execution_mode": "hybrid",
+        "allowed_execution_modes": ["manual_workbench", "autoresearch"],
         "objectives": [
             {"name": "dielectric_constant", "direction": "maximize", "unit": "dimensionless"},
         ],
@@ -73,7 +73,7 @@ def algorithm_run_payload(**overrides: object) -> dict:
     """构建最小 AlgorithmRun 创建请求。"""
     payload = {
         "algorithm_id": "local_xtb_adapter",
-        "trigger_source": "human",
+        "trigger_source": "human_workflow",
     }
     payload.update(overrides)
     return payload
@@ -83,6 +83,7 @@ def research_run_payload(**overrides: object) -> dict:
     """构建最小 ResearchRun 创建请求。"""
     payload = {
         "problem_spec_id": "ps_demo_001",
+        "execution_decision_id": "ed_demo_001",
     }
     payload.update(overrides)
     return payload
@@ -101,7 +102,8 @@ class ProblemSpecSchemaTest(ComputationTestCase):
         ps = ProblemSpecCreate(**problem_spec_payload())
         self.assertEqual(ps.name, "氟基高分子测试任务")
         self.assertEqual(ps.material_family, "fluoropolymer")
-        self.assertEqual(ps.execution_mode, "hybrid")
+        self.assertEqual(ps.allowed_execution_modes, ["manual_workbench", "autoresearch"])
+        self.assertEqual(ps.decision_status, "pending_execution_decision")
 
     def test_create_rejects_empty_name(self) -> None:
         """空名称被拒绝。"""
@@ -193,11 +195,16 @@ class ProblemSpecSchemaTest(ComputationTestCase):
         )
         self.assertEqual(len(ps.measurements), 1)
 
-    def test_execution_mode_literal(self) -> None:
-        """execution_mode 仅接受三种合法值。"""
-        for mode in ["manual", "autoresearch", "hybrid"]:
-            ps = ProblemSpecCreate(**problem_spec_payload(execution_mode=mode))
-            self.assertEqual(ps.execution_mode, mode)
+    def test_allowed_execution_modes_literal(self) -> None:
+        """allowed_execution_modes 仅接受 v0.4 合法值。"""
+        for mode in ["manual_workbench", "autoresearch"]:
+            ps = ProblemSpecCreate(**problem_spec_payload(allowed_execution_modes=[mode]))
+            self.assertEqual(ps.allowed_execution_modes, [mode])
+
+    def test_rejects_legacy_execution_mode_field(self) -> None:
+        """v0.4 不再接受旧 execution_mode 字段。"""
+        with self.assertRaises(ValueError):
+            ProblemSpecCreate(**problem_spec_payload(execution_mode="hybrid"))
 
     def test_create_with_campaign_id(self) -> None:
         """可关联已有 campaign。"""
@@ -215,7 +222,7 @@ class ProblemSpecSchemaTest(ComputationTestCase):
             **problem_spec_payload(),
         )
         self.assertEqual(ps.problem_spec_id, "ps_test_001")
-        self.assertEqual(ps.schema_version, "0.2")
+        self.assertEqual(ps.schema_version, "0.4")
         self.assertEqual(ps.status, "draft")
         self.assertEqual(ps.frozen_version, 0)
 
@@ -244,12 +251,12 @@ class AlgorithmRegistrySchemaTest(ComputationTestCase):
                 fields={"energy": "float"},
                 required=["energy"],
             ),
-            trigger_modes=["human", "autoresearch"],
+            trigger_modes=["human_workflow", "autoresearch"],
         )
         self.assertEqual(entry.algorithm_id, "test_adapter")
         self.assertEqual(entry.name, "测试算法")
         self.assertEqual(entry.type, "simulator")
-        self.assertIn("human", entry.trigger_modes)
+        self.assertIn("human_workflow", entry.trigger_modes)
 
     def test_rejects_empty_algorithm_id(self) -> None:
         """空算法 ID 被拒绝。"""
@@ -288,11 +295,11 @@ class AlgorithmRegistrySchemaTest(ComputationTestCase):
 class AlgorithmRunSchemaTest(ComputationTestCase):
     """覆盖 AlgorithmRun 的创建、触发来源区分和关联字段。"""
 
-    def test_create_human_trigger_run(self) -> None:
-        """人工触发的 AlgorithmRun 创建成功。"""
+    def test_create_human_workflow_trigger_run(self) -> None:
+        """人工 Workflow 触发的 AlgorithmRun 创建成功。"""
         ar = AlgorithmRunCreate(**algorithm_run_payload())
         self.assertEqual(ar.algorithm_id, "local_xtb_adapter")
-        self.assertEqual(ar.trigger_source, "human")
+        self.assertEqual(ar.trigger_source, "human_workflow")
 
     def test_create_autoresearch_trigger_run(self) -> None:
         """AutoResearch 触发的 AlgorithmRun 创建成功。"""
@@ -324,7 +331,7 @@ class AlgorithmRunSchemaTest(ComputationTestCase):
         ar = AlgorithmRun(
             run_id="ar_test_001",
             algorithm_id="local_xtb_adapter",
-            trigger_source="human",
+            trigger_source="human_workflow",
             created_by="tester",
             created_at=now,
             updated_at=now,
@@ -366,6 +373,7 @@ class ResearchRunSchemaTest(ComputationTestCase):
         """合法 ResearchRun 创建成功。"""
         rr = ResearchRunCreate(**research_run_payload())
         self.assertEqual(rr.problem_spec_id, "ps_demo_001")
+        self.assertEqual(rr.execution_decision_id, "ed_demo_001")
         self.assertEqual(rr.profile_id, "fluoropolymer")
         self.assertEqual(rr.max_iterations, 5)
 
@@ -571,15 +579,14 @@ class ChineseErrorMessageTest(ComputationTestCase):
 class LiteralTypeTest(ComputationTestCase):
     """确保所有 Literal 类型值正确。"""
 
-    def test_execution_mode_values(self) -> None:
-        """ExecutionMode 包含三种模式。"""
-        self.assertIn("manual", ExecutionMode.__args__)
-        self.assertIn("autoresearch", ExecutionMode.__args__)
-        self.assertIn("hybrid", ExecutionMode.__args__)
+    def test_execution_decision_mode_values(self) -> None:
+        """ExecutionDecisionMode 包含两种 v0.4 执行路径。"""
+        self.assertIn("manual_workbench", ExecutionDecisionMode.__args__)
+        self.assertIn("autoresearch", ExecutionDecisionMode.__args__)
 
     def test_trigger_source_values(self) -> None:
         """TriggerSource 包含三种来源。"""
-        self.assertIn("human", TriggerSource.__args__)
+        self.assertIn("human_workflow", TriggerSource.__args__)
         self.assertIn("autoresearch", TriggerSource.__args__)
         self.assertIn("system", TriggerSource.__args__)
 
@@ -635,7 +642,7 @@ class ListDataSchemaTest(ComputationTestCase):
             AlgorithmRun(
                 run_id="ar_001",
                 algorithm_id="test_adapter",
-                trigger_source="human",
+                trigger_source="human_workflow",
                 created_by="tester",
                 created_at=now,
                 updated_at=now,

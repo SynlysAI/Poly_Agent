@@ -4,7 +4,6 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Search, View as ViewIcon } from '@element-plus/icons-vue'
 
 import {
-  createAlgorithmRun,
   getAlgorithm,
   getApiErrorMessage,
   listAlgorithms,
@@ -18,11 +17,21 @@ const detailVisible = ref(false)
 const detail = ref(null)
 
 const filters = reactive({
+  algorithm_family: '',
   type: '',
   material_scope: '',
   trigger_mode: '',
   keyword: '',
 })
+
+const familyOptions = [
+  { label: '全部算法族', value: '' },
+  { label: '计算智能', value: 'computation' },
+  { label: '湿实验优化', value: 'wetlab_optimization' },
+  { label: '垂类预测模型', value: 'vertical_prediction' },
+  { label: '文献知识', value: 'knowledge' },
+  { label: '结构表示', value: 'structure' },
+]
 
 const typeOptions = [
   { label: '全部类型', value: '' },
@@ -43,8 +52,8 @@ const materialOptions = [
 
 const triggerOptions = [
   { label: '全部触发', value: '' },
-  { label: '人工', value: 'human' },
-  { label: '自动', value: 'autoresearch' },
+  { label: '人工 Workflow', value: 'human_workflow' },
+  { label: 'AutoResearch', value: 'autoresearch' },
   { label: '系统', value: 'system' },
 ]
 
@@ -52,13 +61,36 @@ const filteredAlgorithms = computed(() => {
   const kw = filters.keyword.trim().toLowerCase()
   return algorithms.value.filter((item) => {
     const matchesType = !filters.type || item.type === filters.type
+    const matchesFamily = !filters.algorithm_family || item.algorithm_family === filters.algorithm_family
     const matchesMaterial = !filters.material_scope || (item.material_scope || []).includes(filters.material_scope)
     const matchesTrigger = !filters.trigger_mode || (item.trigger_modes || []).includes(filters.trigger_mode)
-    const haystack = `${item.name} ${item.algorithm_id} ${item.description || ''}`.toLowerCase()
+    const haystack = `${item.name} ${item.algorithm_id} ${item.algorithm_family || ''} ${item.description || ''}`.toLowerCase()
     const matchesKeyword = !kw || haystack.includes(kw)
-    return matchesType && matchesMaterial && matchesTrigger && matchesKeyword
+    return matchesFamily && matchesType && matchesMaterial && matchesTrigger && matchesKeyword
   })
 })
+
+function familyLabel(family) {
+  const map = {
+    computation: '计算智能',
+    wetlab_optimization: '湿实验优化',
+    vertical_prediction: '垂类预测模型',
+    knowledge: '文献知识',
+    structure: '结构表示',
+  }
+  return map[family] || family || '未分类'
+}
+
+function familyTag(family) {
+  const map = {
+    computation: 'warning',
+    wetlab_optimization: 'danger',
+    vertical_prediction: 'success',
+    knowledge: 'info',
+    structure: 'primary',
+  }
+  return map[family] || 'info'
+}
 
 function typeTag(type) {
   const map = { retriever: 'info', predictor: 'success', simulator: 'warning', optimizer: 'danger' }
@@ -115,6 +147,7 @@ function handleRun(algo) {
 }
 
 function handleReset() {
+  filters.algorithm_family = ''
   filters.type = ''
   filters.material_scope = ''
   filters.trigger_mode = ''
@@ -128,6 +161,9 @@ onMounted(loadData)
   <div class="algorithm-registry-panel">
     <!-- 筛选栏 -->
     <div class="filter-bar">
+      <el-select v-model="filters.algorithm_family" placeholder="算法族" clearable style="width:150px">
+        <el-option v-for="item in familyOptions" :key="item.value" :label="item.label" :value="item.value" />
+      </el-select>
       <el-select v-model="filters.type" placeholder="算法类型" clearable style="width:130px">
         <el-option v-for="item in typeOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
@@ -156,21 +192,27 @@ onMounted(loadData)
         </div>
         <p class="algo-desc">{{ algo.description || '暂无描述' }}</p>
         <div class="algo-tags">
+          <el-tag size="small" effect="plain" :type="familyTag(algo.algorithm_family)">{{ familyLabel(algo.algorithm_family) }}</el-tag>
           <el-tag size="small" effect="plain">{{ materialScopeLabel(algo.material_scope) }}</el-tag>
           <el-tag size="small" effect="plain" :type="statusTag(algo.status)">{{ statusLabel(algo.status) }}</el-tag>
         </div>
         <div class="algo-actions">
           <el-button text type="primary" size="small" :icon="ViewIcon" @click="showDetail(algo)">查看详情</el-button>
           <el-button
-            v-if="(algo.trigger_modes || []).includes('human') && algo.status === 'active'"
+            v-if="(algo.trigger_modes || []).includes('human_workflow') && algo.status === 'active'"
             type="primary"
             size="small"
             @click="handleRun(algo)"
           >
-            运行
+            加入 Workflow
           </el-button>
         </div>
       </article>
+      <div v-if="!loading && !filteredAlgorithms.length" class="registry-empty">
+        <strong>暂无匹配算法</strong>
+        <span>调整算法族、类型、材料体系或触发方式后重试。若清单为空，点击刷新会从默认注册表恢复算法条目。</span>
+        <el-button :icon="Refresh" @click="loadData">刷新算法清单</el-button>
+      </div>
     </div>
 
     <!-- 算法详情 drawer -->
@@ -180,6 +222,9 @@ onMounted(loadData)
           <el-descriptions-item label="ID">{{ detail.algorithm_id }}</el-descriptions-item>
           <el-descriptions-item label="类型">
             <el-tag size="small" :type="typeTag(detail.type)">{{ typeLabel(detail.type) }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="算法族">
+            <el-tag size="small" :type="familyTag(detail.algorithm_family)">{{ familyLabel(detail.algorithm_family) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag size="small" :type="statusTag(detail.status)">{{ statusLabel(detail.status) }}</el-tag>
@@ -224,6 +269,33 @@ onMounted(loadData)
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   min-height: 200px;
+}
+
+.registry-empty {
+  grid-column: 1 / -1;
+  min-height: 180px;
+  border: 1px dashed var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: #f8fbff;
+  color: var(--app-ink-body);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+}
+
+.registry-empty strong {
+  color: var(--app-ink);
+  font-size: 15px;
+}
+
+.registry-empty span {
+  max-width: 520px;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .algo-card {

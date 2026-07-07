@@ -47,8 +47,8 @@ export const TASK_MODULES = [
     primaryActionText: '进入研发引擎',
     centerActionText: '研发任务管理',
     routes: {
-      submit: '/optimization',
-      center: '/optimization/campaigns',
+      submit: '/research-engine',
+      center: '/research-engine',
     },
   },
   {
@@ -119,6 +119,10 @@ export function mapCampaignToGlobalTask(campaign) {
   }
 }
 
+export function isResearchEngineContainerCampaign(campaign) {
+  return campaign?.source === 'research_engine' || campaign?.linked_problem_spec_id || String(campaign?.campaign_id || '').startsWith('ps_')
+}
+
 export function mapAlgorithmRunToGlobalTask(run) {
   return {
     task_id: run.run_id,
@@ -132,7 +136,7 @@ export function mapAlgorithmRunToGlobalTask(run) {
     created_at: run.created_at,
     updated_at: run.updated_at,
     route: {
-      path: '/optimization',
+      path: '/research-engine',
       query: { run_id: run.run_id },
     },
     raw: run,
@@ -152,7 +156,7 @@ export function mapResearchRunToGlobalTask(run) {
     created_at: run.created_at,
     updated_at: run.updated_at,
     route: {
-      path: '/optimization',
+      path: '/research-engine',
       query: { research_run_id: run.run_id },
     },
     raw: run,
@@ -172,7 +176,7 @@ export function mapProblemSpecToGlobalTask(spec) {
     created_at: spec.created_at,
     updated_at: spec.updated_at,
     route: {
-      path: '/optimization',
+      path: '/research-engine',
       query: { problem_spec_id: spec.problem_spec_id },
     },
     raw: spec,

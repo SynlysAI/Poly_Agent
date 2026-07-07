@@ -17,6 +17,12 @@ from app.schemas.research_engine import (
     AlgorithmRunListData,
     AlgorithmRunTraceability,
     EntityAuditListData,
+    ExecutionDecision,
+    ExecutionDecisionCreate,
+    ExecutionDecisionListData,
+    ManualAlgorithmWorkflow,
+    ManualAlgorithmWorkflowCreate,
+    ManualAlgorithmWorkflowListData,
     ProblemSpec,
     ProblemSpecCreate,
     ProblemSpecListData,
@@ -27,6 +33,8 @@ from app.schemas.research_engine import (
     ResearchRunTraceability,
     StageApprovalRequest,
     StageRunTraceability,
+    WorkflowRun,
+    WorkflowRunListData,
 )
 from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
 from app.services.research_engine_service import ResearchEngineService
@@ -59,7 +67,7 @@ def create_problem_spec(
 ) -> ApiResponse[ProblemSpec]:
     """创建 ProblemSpec 草稿。
 
-    支持定义材料研发任务的变量、目标、约束和执行模式。
+    支持定义材料研发任务的变量、目标、约束和可选执行路径。
     创建时可选择关联已有 campaign 或自动创建首版容器 campaign。
     """
     data = service.create_problem_spec(
@@ -148,6 +156,68 @@ def freeze_problem_spec(
 
 
 # =============================================================================
+# ExecutionDecision API
+# =============================================================================
+
+
+@router.post(
+    "/problem-specs/{problem_spec_id}/execution-decisions",
+    response_model=ApiResponse[ExecutionDecision],
+)
+def create_execution_decision(
+    problem_spec_id: str,
+    payload: ExecutionDecisionCreate,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ExecutionDecision]:
+    """为 ProblemSpec 显式选择 manual_workbench 或 autoresearch。"""
+    data = service.create_execution_decision(
+        problem_spec_id,
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get(
+    "/problem-specs/{problem_spec_id}/execution-decisions",
+    response_model=ApiResponse[ExecutionDecisionListData],
+)
+def list_execution_decisions(
+    problem_spec_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    mode: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ExecutionDecisionListData]:
+    """查询 ProblemSpec 的执行决策历史。"""
+    data = service.list_execution_decisions(
+        problem_spec_id=problem_spec_id,
+        mode=mode,
+        status=status,
+        created_by=current_user["user_id"] if current_user else None,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get(
+    "/problem-specs/{problem_spec_id}/execution-decisions/active",
+    response_model=ApiResponse[ExecutionDecision],
+)
+def get_active_execution_decision(
+    problem_spec_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ExecutionDecision]:
+    """查询 ProblemSpec 当前 active 执行决策。"""
+    data = service.get_active_execution_decision(problem_spec_id)
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+# =============================================================================
 # AlgorithmRegistry API
 # =============================================================================
 
@@ -157,6 +227,7 @@ def list_algorithms(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
     type: str | None = Query(default=None, alias="type"),
+    algorithm_family: str | None = Query(default=None),
     material_scope: str | None = Query(default=None),
     trigger_mode: str | None = Query(default=None),
     status: str | None = Query(default=None),
@@ -172,6 +243,7 @@ def list_algorithms(
         message="ok",
         data=service.list_algorithms(
             algorithm_type=type,
+            algorithm_family=algorithm_family,
             material_scope=material_scope,
             trigger_mode=trigger_mode,
             status=status,
@@ -195,8 +267,100 @@ def get_algorithm(
 
 
 # =============================================================================
-# AlgorithmRun API
+# ManualWorkflow / WorkflowRun / AlgorithmRun API
 # =============================================================================
+
+
+@router.post("/manual-workflows", response_model=ApiResponse[ManualAlgorithmWorkflow])
+def create_manual_workflow(
+    payload: ManualAlgorithmWorkflowCreate,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ManualAlgorithmWorkflow]:
+    """创建人工算法 Workflow。"""
+    data = service.create_manual_workflow(
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/manual-workflows", response_model=ApiResponse[ManualAlgorithmWorkflowListData])
+def list_manual_workflows(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    problem_spec_id: str | None = Query(default=None),
+    execution_decision_id: str | None = Query(default=None),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ManualAlgorithmWorkflowListData]:
+    """查询人工算法 Workflow 列表。"""
+    data = service.list_manual_workflows(
+        problem_spec_id=problem_spec_id,
+        execution_decision_id=execution_decision_id,
+        created_by=current_user["user_id"] if current_user else None,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/manual-workflows/{workflow_id}", response_model=ApiResponse[ManualAlgorithmWorkflow])
+def get_manual_workflow(
+    workflow_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ManualAlgorithmWorkflow]:
+    """获取人工算法 Workflow 详情。"""
+    data = service.get_manual_workflow(workflow_id)
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/manual-workflows/{workflow_id}/runs", response_model=ApiResponse[WorkflowRun])
+def start_workflow_run(
+    workflow_id: str,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[WorkflowRun]:
+    """启动人工 WorkflowRun。"""
+    data = service.start_workflow_run(
+        workflow_id,
+        actor_user_id=_actor_user_id(current_user),
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/workflow-runs", response_model=ApiResponse[WorkflowRunListData])
+def list_workflow_runs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    workflow_id: str | None = Query(default=None),
+    problem_spec_id: str | None = Query(default=None),
+    execution_decision_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[WorkflowRunListData]:
+    """查询 WorkflowRun 列表。"""
+    data = service.list_workflow_runs(
+        workflow_id=workflow_id,
+        problem_spec_id=problem_spec_id,
+        execution_decision_id=execution_decision_id,
+        status=status,
+        created_by=current_user["user_id"] if current_user else None,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/workflow-runs/{workflow_run_id}", response_model=ApiResponse[WorkflowRun])
+def get_workflow_run(
+    workflow_run_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[WorkflowRun]:
+    """获取 WorkflowRun 详情。"""
+    data = service.get_workflow_run(workflow_run_id)
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.post("/algorithm-runs", response_model=ApiResponse[AlgorithmRun])
@@ -205,10 +369,11 @@ def create_algorithm_run(
     request: Request,
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmRun]:
-    """创建并执行人工算法运行。
+    """创建并执行算法运行。
 
-    用户从 AlgorithmRegistry 选择算法后手动触发，
-    系统校验算法是否支持 human 触发，执行 mock runner 并记录完整运行产物。
+    v0.4 产品主路径中，人工模式应由 ManualAlgorithmWorkflow / WorkflowRun 创建节点运行；
+    该端点保留给兼容调用和 AutoResearch 内部编排。
+    系统校验算法是否支持对应 trigger_source，执行 mock runner 并记录完整运行产物。
     运行产物包含 input_snapshot、output_summary、artifact_refs 和审计事件。
     """
     data = service.create_algorithm_run(
@@ -225,6 +390,7 @@ def list_algorithm_runs(
     page_size: int = Query(default=20, ge=1, le=100),
     problem_spec_id: str | None = Query(default=None),
     campaign_id: str | None = Query(default=None),
+    workflow_run_id: str | None = Query(default=None),
     algorithm_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
     trigger_source: str | None = Query(default=None),
@@ -241,6 +407,7 @@ def list_algorithm_runs(
         data=service.list_algorithm_runs(
             problem_spec_id=problem_spec_id,
             campaign_id=campaign_id,
+            workflow_run_id=workflow_run_id,
             algorithm_id=algorithm_id,
             status=status,
             trigger_source=trigger_source,
@@ -283,6 +450,7 @@ def create_research_run(
     """
     data = orchestrator.create_research_run(
         problem_spec_id=payload.problem_spec_id,
+        execution_decision_id=payload.execution_decision_id,
         campaign_id=payload.campaign_id,
         profile_id=payload.profile_id,
         max_iterations=payload.max_iterations,

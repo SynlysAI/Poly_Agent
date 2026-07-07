@@ -337,6 +337,20 @@ export function freezeProblemSpec(problemSpecId) {
   return apiClient.post(`/research-engine/problem-specs/${problemSpecId}/freeze`).then(unwrapResponse)
 }
 
+// ── ExecutionDecision ──
+
+export function createExecutionDecision(problemSpecId, payload) {
+  return apiClient.post(`/research-engine/problem-specs/${problemSpecId}/execution-decisions`, payload).then(unwrapResponse)
+}
+
+export function listExecutionDecisions(problemSpecId, params = {}) {
+  return apiClient.get(`/research-engine/problem-specs/${problemSpecId}/execution-decisions`, { params }).then(unwrapResponse)
+}
+
+export function getActiveExecutionDecision(problemSpecId) {
+  return apiClient.get(`/research-engine/problem-specs/${problemSpecId}/execution-decisions/active`).then(unwrapResponse)
+}
+
 // ── AlgorithmRegistry ──
 
 export function listAlgorithms(params = {}) {
@@ -359,6 +373,32 @@ export function listAlgorithmRuns(params = {}) {
 
 export function getAlgorithmRun(runId) {
   return apiClient.get(`/research-engine/algorithm-runs/${runId}`).then(unwrapResponse)
+}
+
+// ── ManualWorkflow / WorkflowRun ──
+
+export function createManualWorkflow(payload) {
+  return apiClient.post('/research-engine/manual-workflows', payload).then(unwrapResponse)
+}
+
+export function listManualWorkflows(params = {}) {
+  return apiClient.get('/research-engine/manual-workflows', { params }).then(unwrapResponse)
+}
+
+export function getManualWorkflow(workflowId) {
+  return apiClient.get(`/research-engine/manual-workflows/${workflowId}`).then(unwrapResponse)
+}
+
+export function startWorkflowRun(workflowId) {
+  return apiClient.post(`/research-engine/manual-workflows/${workflowId}/runs`).then(unwrapResponse)
+}
+
+export function listWorkflowRuns(params = {}) {
+  return apiClient.get('/research-engine/workflow-runs', { params }).then(unwrapResponse)
+}
+
+export function getWorkflowRun(workflowRunId) {
+  return apiClient.get(`/research-engine/workflow-runs/${workflowRunId}`).then(unwrapResponse)
 }
 
 // ── ResearchRun ──

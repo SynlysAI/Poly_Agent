@@ -27,7 +27,8 @@ def problem_spec_payload(**overrides) -> dict:
         "name": "氟基高分子 E2E 测试任务",
         "material_family": "fluoropolymer",
         "problem_type": "formulation_process_optimization",
-        "execution_mode": "hybrid",
+        "allowed_execution_modes": ["manual_workbench", "autoresearch"],
+        "decision_status": "pending_execution_decision",
         "objectives": [
             {"name": "dielectric_constant", "direction": "maximize", "unit": "dimensionless"},
             {"name": "thermal_stability", "direction": "maximize", "unit": "celsius"},
@@ -91,30 +92,89 @@ class ResearchEngineE2ETest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         self.ps_id = resp.json()["data"]["problem_spec_id"]
         self.assertEqual(resp.json()["data"]["status"], "draft")
-        self.assertEqual(resp.json()["data"]["schema_version"], "0.2")
+        self.assertEqual(resp.json()["data"]["schema_version"], "0.4")
+
+    def _create_execution_decision(self, mode: str) -> str:
+        """创建或复用指定执行路径的 active 决策。"""
+        resp = self.client.post(
+            f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions",
+            json={"mode": mode, "reason": f"E2E 选择 {mode}"},
+        )
+        if resp.status_code == 409:
+            active = self.client.get(
+                f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions/active",
+            )
+            self.assertEqual(active.status_code, 200)
+            data = active.json()["data"]
+            self.assertEqual(data["mode"], mode)
+            return data["decision_id"]
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["data"]["decision_id"]
+
+    def _create_research_run(self, **overrides) -> dict:
+        """通过 autoresearch 决策创建 ResearchRun。"""
+        payload = {
+            "problem_spec_id": self.ps_id,
+            "execution_decision_id": self._create_execution_decision("autoresearch"),
+            "profile_id": "fluoropolymer",
+        }
+        payload.update(overrides)
+        resp = self.client.post(f"{self.base_url}/research-runs", json=payload)
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["data"]
+
+    def _run_manual_workflow(self, algorithm_id: str, inputs: dict) -> dict:
+        """通过 ManualAlgorithmWorkflow / WorkflowRun 运行单个算法节点。"""
+        decision_id = self._create_execution_decision("manual_workbench")
+        workflow_resp = self.client.post(
+            f"{self.base_url}/manual-workflows",
+            json={
+                "problem_spec_id": self.ps_id,
+                "execution_decision_id": decision_id,
+                "name": f"E2E manual {algorithm_id}",
+                "steps": [
+                    {
+                        "step_id": "step_1",
+                        "algorithm_id": algorithm_id,
+                        "input_bindings": {
+                            key: {"source": "literal", "value": value}
+                            for key, value in inputs.items()
+                        },
+                    },
+                ],
+            },
+        )
+        self.assertEqual(workflow_resp.status_code, 200)
+        workflow_id = workflow_resp.json()["data"]["workflow_id"]
+
+        run_resp = self.client.post(f"{self.base_url}/manual-workflows/{workflow_id}/runs")
+        self.assertEqual(run_resp.status_code, 200)
+        workflow_run = run_resp.json()["data"]
+        self.assertEqual(workflow_run["status"], "completed")
+        self.assertGreater(len(workflow_run["step_runs"]), 0)
+        algorithm_run_id = workflow_run["step_runs"][0]["algorithm_run_id"]
+        self.assertIsNotNone(algorithm_run_id)
+
+        detail = self.client.get(f"{self.base_url}/algorithm-runs/{algorithm_run_id}")
+        self.assertEqual(detail.status_code, 200)
+        return detail.json()["data"]
 
     # =========================================================================
     # 场景 2：人工通道 - mock predictor
     # =========================================================================
 
     def test_e2e_scenario_02_manual_mock_predictor(self) -> None:
-        """E2E 场景 2：人工运行 mock predictor 生成 AlgorithmRun。"""
-        resp = self.client.post(
-            f"{self.base_url}/algorithm-runs",
-            json={
-                "algorithm_id": "literature_mock",
-                "trigger_source": "human",
-                "problem_spec_id": self.ps_id,
-                "input_snapshot": {"keywords": "fluoropolymer dielectric"},
-                "reason": "E2E 测试：人工文献检索",
-            },
+        """E2E 场景 2：人工 Workflow 生成 AlgorithmRun。"""
+        data = self._run_manual_workflow(
+            "literature_mock",
+            {"keywords": "fluoropolymer dielectric"},
         )
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()["data"]
-        self.assertEqual(data["trigger_source"], "human")
+        self.assertEqual(data["trigger_source"], "human_workflow")
         self.assertEqual(data["status"], "completed")
         self.assertIn("knowledge_cards", data["output_summary"])
         self.assertGreater(len(data["artifact_refs"]), 0)
+        self.assertIsNotNone(data["workflow_run_id"])
+        self.assertIsNotNone(data["workflow_step_run_id"])
 
         # 验证追溯链
         trace_resp = self.client.get(
@@ -136,18 +196,9 @@ class ResearchEngineE2ETest(ComputationTestCase):
 
         run_ids = []
         for algo_id, inputs in algorithms:
-            resp = self.client.post(
-                f"{self.base_url}/algorithm-runs",
-                json={
-                    "algorithm_id": algo_id,
-                    "trigger_source": "human",
-                    "problem_spec_id": self.ps_id,
-                    "input_snapshot": inputs,
-                    "reason": f"E2E 测试：人工运行 {algo_id}",
-                },
-            )
-            self.assertEqual(resp.status_code, 200)
-            run_ids.append(resp.json()["data"]["run_id"])
+            data = self._run_manual_workflow(algo_id, inputs)
+            self.assertEqual(data["trigger_source"], "human_workflow")
+            run_ids.append(data["run_id"])
 
         # 验证所有运行都已完成
         for run_id in run_ids:
@@ -162,22 +213,13 @@ class ResearchEngineE2ETest(ComputationTestCase):
     def test_e2e_scenario_03_create_and_start_research_run(self) -> None:
         """E2E 场景 3：创建并启动 ResearchRun。"""
         # 创建
-        resp = self.client.post(
-            f"{self.base_url}/research-runs",
-            json={
-                "problem_spec_id": self.ps_id,
-                "profile_id": "fluoropolymer",
-                "max_iterations": 3,
-                "batch_size": 5,
-            },
-        )
-        self.assertEqual(resp.status_code, 200)
-        run_id = resp.json()["data"]["run_id"]
-        self.assertEqual(resp.json()["data"]["status"], "draft")
-        self.assertGreater(len(resp.json()["data"]["stage_runs"]), 0)
+        run_data = self._create_research_run(max_iterations=3, batch_size=5)
+        run_id = run_data["run_id"]
+        self.assertEqual(run_data["status"], "draft")
+        self.assertGreater(len(run_data["stage_runs"]), 0)
 
         # 验证初始阶段序列包含 P0 所有阶段
-        stage_keys = [sr["stage_key"] for sr in resp.json()["data"]["stage_runs"]]
+        stage_keys = [sr["stage_key"] for sr in run_data["stage_runs"]]
         expected_stages = [
             "PROBLEM_SPEC",
             "KNOWLEDGE_RETRIEVAL",
@@ -214,15 +256,7 @@ class ResearchEngineE2ETest(ComputationTestCase):
     def test_e2e_scenario_04_advance_to_gate_and_approve(self) -> None:
         """E2E 场景 4：推进到 gate、审批并继续推进。"""
         # 创建并启动
-        rr_resp = self.client.post(
-            f"{self.base_url}/research-runs",
-            json={
-                "problem_spec_id": self.ps_id,
-                "profile_id": "fluoropolymer",
-                "max_iterations": 3,
-            },
-        )
-        run_id = rr_resp.json()["data"]["run_id"]
+        run_id = self._create_research_run(max_iterations=3)["run_id"]
 
         start_resp = self.client.post(
             f"{self.base_url}/research-runs/{run_id}/start",
@@ -268,15 +302,7 @@ class ResearchEngineE2ETest(ComputationTestCase):
 
     def test_e2e_scenario_04b_reject_gate(self) -> None:
         """E2E 场景 4b：拒绝 gate 导致 ResearchRun 失败。"""
-        rr_resp = self.client.post(
-            f"{self.base_url}/research-runs",
-            json={
-                "problem_spec_id": self.ps_id,
-                "profile_id": "fluoropolymer",
-                "max_iterations": 3,
-            },
-        )
-        run_id = rr_resp.json()["data"]["run_id"]
+        run_id = self._create_research_run(max_iterations=3)["run_id"]
 
         start_resp = self.client.post(
             f"{self.base_url}/research-runs/{run_id}/start",
@@ -324,23 +350,15 @@ class ResearchEngineE2ETest(ComputationTestCase):
     # =========================================================================
 
     def test_e2e_scenario_05_submit_computation_from_algorithm(self) -> None:
-        """E2E 场景 5：通过 AlgorithmRun 提交 computation 并关联。"""
-        resp = self.client.post(
-            f"{self.base_url}/algorithm-runs",
-            json={
-                "algorithm_id": "computation_submit_adapter",
-                "trigger_source": "human",
-                "problem_spec_id": self.ps_id,
-                "input_snapshot": {
-                    "workflow_type": "LOCAL_STRUCTURE",
-                    "smiles": "CCO",
-                    "name": "E2E_test_structure",
-                },
-                "reason": "E2E 测试：通过 adapter 提交计算任务",
+        """E2E 场景 5：通过人工 Workflow 节点提交 computation 并关联。"""
+        run_data = self._run_manual_workflow(
+            "computation_submit_adapter",
+            {
+                "workflow_type": "LOCAL_STRUCTURE",
+                "smiles": "CCO",
+                "name": "E2E_test_structure",
             },
         )
-        self.assertEqual(resp.status_code, 200)
-        run_data = resp.json()["data"]
         self.assertEqual(run_data["status"], "completed")
 
         # 验证 linked_computation_run_id 存在
@@ -369,32 +387,20 @@ class ResearchEngineE2ETest(ComputationTestCase):
     def test_e2e_scenario_07_full_traceability(self) -> None:
         """E2E 场景 7：完整追溯链包含 stage timeline、artifact、audit。"""
         # 先创建人工运行
-        arun_resp = self.client.post(
-            f"{self.base_url}/algorithm-runs",
-            json={
-                "algorithm_id": "property_predictor_mock",
-                "trigger_source": "human",
-                "problem_spec_id": self.ps_id,
-                "input_snapshot": {
-                    "smiles": "C=C(F)F",
-                    "target_properties": ["dielectric_constant", "thermal_stability"],
-                    "fluorine_content": 45.0,
-                    "polymerization_temperature": 120.0,
-                },
-                "reason": "E2E 人工预测",
+        arun_data = self._run_manual_workflow(
+            "property_predictor_mock",
+            {
+                "smiles": "C=C(F)F",
+                "target_properties": ["dielectric_constant", "thermal_stability"],
+                "fluorine_content": 45.0,
+                "polymerization_temperature": 120.0,
             },
         )
-        arun_id = arun_resp.json()["data"]["run_id"]
+        arun_id = arun_data["run_id"]
+        self.assertTrue(arun_id)
 
         # 创建并启动 ResearchRun
-        rr_resp = self.client.post(
-            f"{self.base_url}/research-runs",
-            json={
-                "problem_spec_id": self.ps_id,
-                "profile_id": "fluoropolymer",
-            },
-        )
-        rr_id = rr_resp.json()["data"]["run_id"]
+        rr_id = self._create_research_run()["run_id"]
 
         self.client.post(
             f"{self.base_url}/research-runs/{rr_id}/start",
@@ -438,14 +444,7 @@ class ResearchEngineE2ETest(ComputationTestCase):
 
     def test_e2e_scenario_08_pause_and_resume(self) -> None:
         """E2E 场景 8：暂停和恢复 ResearchRun。"""
-        rr_resp = self.client.post(
-            f"{self.base_url}/research-runs",
-            json={
-                "problem_spec_id": self.ps_id,
-                "profile_id": "fluoropolymer",
-            },
-        )
-        run_id = rr_resp.json()["data"]["run_id"]
+        run_id = self._create_research_run()["run_id"]
 
         self.client.post(
             f"{self.base_url}/research-runs/{run_id}/start",
@@ -477,14 +476,7 @@ class ResearchEngineE2ETest(ComputationTestCase):
 
     def test_e2e_scenario_09_fail_manual_mark(self) -> None:
         """E2E 场景 9：手动标记 ResearchRun 为失败。"""
-        rr_resp = self.client.post(
-            f"{self.base_url}/research-runs",
-            json={
-                "problem_spec_id": self.ps_id,
-                "profile_id": "fluoropolymer",
-            },
-        )
-        run_id = rr_resp.json()["data"]["run_id"]
+        run_id = self._create_research_run()["run_id"]
 
         self.client.post(
             f"{self.base_url}/research-runs/{run_id}/start",
@@ -558,17 +550,11 @@ class ResearchEngineE2ETest(ComputationTestCase):
         """E2E 场景 11：任务中心可按 ProblemSpec 查询关联的所有运行。"""
         # 创建多个人工运行
         for i in range(3):
-            resp = self.client.post(
-                f"{self.base_url}/algorithm-runs",
-                json={
-                    "algorithm_id": "literature_mock",
-                    "trigger_source": "human",
-                    "problem_spec_id": self.ps_id,
-                    "input_snapshot": {"keywords": f"test_query_{i}"},
-                    "reason": f"E2E query test {i}",
-                },
+            data = self._run_manual_workflow(
+                "literature_mock",
+                {"keywords": f"test_query_{i}"},
             )
-            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(data["status"], "completed")
 
         # 按 problem_spec_id 查询 AlgorithmRun
         list_resp = self.client.get(

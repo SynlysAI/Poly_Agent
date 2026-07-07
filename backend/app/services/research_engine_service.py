@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -20,8 +19,11 @@ from app.infra.computation_repositories import (
 from app.infra.research_engine_repositories import (
     AlgorithmRegistryRepository,
     AlgorithmRunRepository,
+    ExecutionDecisionRepository,
+    ManualAlgorithmWorkflowRepository,
     ResearchProblemSpecRepository,
     ResearchRunRepository,
+    WorkflowRunRepository,
 )
 from app.schemas.research_engine import (
     AlgorithmRegistryEntry,
@@ -29,22 +31,61 @@ from app.schemas.research_engine import (
     AlgorithmRun,
     AlgorithmRunCreate,
     AlgorithmRunListData,
-    AlgorithmRunStatus,
     AlgorithmRunTraceability,
     AuditEventItem,
     EntityAuditListData,
-    ExecutionMode,
+    ExecutionDecision,
+    ExecutionDecisionCreate,
+    ExecutionDecisionListData,
     LinkedComputationRef,
+    ManualAlgorithmWorkflow,
+    ManualAlgorithmWorkflowCreate,
+    ManualAlgorithmWorkflowListData,
     ProblemSpec,
     ProblemSpecCreate,
     ProblemSpecListData,
     ResearchRunTraceability,
     StageRunTraceability,
+    WorkflowRun,
+    WorkflowRunListData,
+    WorkflowStepRun,
 )
 from app.services.research_engine_defaults import (
     build_default_algorithm_registry,
     build_mock_algorithm_registry,
 )
+
+
+# 合法的 trigger_source 值（公共 canonical 值）
+CANONICAL_TRIGGER_MODES: set[str] = {"human_workflow", "autoresearch", "system"}
+
+# 旧值 → 新值的映射
+LEGACY_TRIGGER_MODE_MAP: dict[str, str] = {
+    "human": "human_workflow",
+}
+
+
+def normalize_trigger_modes(modes: list[str] | None) -> list[str]:
+    """规范化 trigger_modes 列表：将旧值映射为 canonical 值，去重并过滤非法值。
+
+    Args:
+        modes: 原始的 trigger_modes 列表（可能包含旧值如 "human"）。
+
+    Returns:
+        规范化后的 trigger_modes 列表。
+    """
+    if not modes:
+        return ["human_workflow"]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for m in modes:
+        canonical = LEGACY_TRIGGER_MODE_MAP.get(m, m)
+        if canonical in CANONICAL_TRIGGER_MODES and canonical not in seen:
+            normalized.append(canonical)
+            seen.add(canonical)
+    if not normalized:
+        return ["human_workflow"]
+    return normalized
 
 
 class ResearchEngineService:
@@ -90,6 +131,12 @@ class ResearchEngineService:
                         "name": f"[ResearchEngine] {payload.name}",
                         "status": "draft",
                         "description": payload.description or "ResearchEngine 自动创建的容器 campaign",
+                        "planner_type": "fallback",
+                        "search_space": {"kind": "research_engine_problem_spec", "candidate_count": 0},
+                        "objectives": self._problem_objectives_to_optimization(payload),
+                        "planner_config": {"batch_size": 1},
+                        "source": "research_engine",
+                        "linked_problem_spec_id": spec_id,
                         "created_by": actor_user_id,
                         "created_at": now,
                         "updated_at": now,
@@ -105,14 +152,15 @@ class ResearchEngineService:
             "name": payload.name,
             "material_family": payload.material_family,
             "problem_type": payload.problem_type,
-            "execution_mode": payload.execution_mode,
+            "allowed_execution_modes": payload.allowed_execution_modes,
+            "decision_status": payload.decision_status,
             "variables": [v.model_dump() for v in payload.variables],
             "objectives": [o.model_dump() for o in payload.objectives],
             "constraints": [c.model_dump() for c in payload.constraints],
             "measurements": [m.model_dump() for m in payload.measurements],
             "campaign_id": campaign_id,
             "description": payload.description,
-            "schema_version": "0.2",
+            "schema_version": "0.4",
             "created_by": actor_user_id,
             "owner_id": actor_user_id,
             "project_id": None,
@@ -132,7 +180,11 @@ class ResearchEngineService:
             event_type="created",
             reason="创建材料研发任务",
             before={},
-            after={"name": payload.name, "execution_mode": payload.execution_mode},
+            after={
+                "name": payload.name,
+                "allowed_execution_modes": payload.allowed_execution_modes,
+                "decision_status": payload.decision_status,
+            },
             request_id=request_id,
         )
 
@@ -233,7 +285,8 @@ class ResearchEngineService:
             "name": payload.name,
             "material_family": payload.material_family,
             "problem_type": payload.problem_type,
-            "execution_mode": payload.execution_mode,
+            "allowed_execution_modes": payload.allowed_execution_modes,
+            "decision_status": payload.decision_status,
             "variables": [v.model_dump() for v in payload.variables],
             "objectives": [o.model_dump() for o in payload.objectives],
             "constraints": [c.model_dump() for c in payload.constraints],
@@ -253,8 +306,16 @@ class ResearchEngineService:
             entity_id=problem_spec_id,
             event_type="updated",
             reason="更新材料研发任务",
-            before={"name": before.get("name"), "execution_mode": before.get("execution_mode")},
-            after={"name": payload.name, "execution_mode": payload.execution_mode},
+            before={
+                "name": before.get("name"),
+                "allowed_execution_modes": before.get("allowed_execution_modes"),
+                "decision_status": before.get("decision_status"),
+            },
+            after={
+                "name": payload.name,
+                "allowed_execution_modes": payload.allowed_execution_modes,
+                "decision_status": payload.decision_status,
+            },
             request_id=request_id,
         )
 
@@ -317,6 +378,378 @@ class ResearchEngineService:
         return self._doc_to_problem_spec(updated or existing)
 
     # ------------------------------------------------------------------
+    # ExecutionDecision
+    # ------------------------------------------------------------------
+
+    def create_execution_decision(
+        self,
+        problem_spec_id: str,
+        payload: ExecutionDecisionCreate,
+        *,
+        actor_user_id: str,
+        request_id: str | None = None,
+    ) -> ExecutionDecision:
+        """为 ProblemSpec 创建显式执行决策。"""
+        spec = self.get_problem_spec(problem_spec_id)
+        if payload.mode not in spec.allowed_execution_modes:
+            raise HTTPException(
+                status_code=422,
+                detail=f"ProblemSpec '{problem_spec_id}' 不允许执行模式 '{payload.mode}'",
+            )
+
+        active = ExecutionDecisionRepository.find_active(problem_spec_id)
+        if active and active.get("mode") == payload.mode:
+            raise HTTPException(
+                status_code=409,
+                detail=f"ProblemSpec '{problem_spec_id}' 已存在 active 的 '{payload.mode}' 执行决策",
+            )
+        if active:
+            ExecutionDecisionRepository.update_fields(
+                active["decision_id"],
+                {"status": "superseded", "updated_at": utc_now()},
+            )
+
+        now = utc_now()
+        decision_id = self._new_id("ed")
+        doc = {
+            "decision_id": decision_id,
+            "problem_spec_id": problem_spec_id,
+            "problem_spec_version": spec.schema_version,
+            "mode": payload.mode,
+            "reason": payload.reason,
+            "status": "active",
+            "initial_context_id": None,
+            "created_by": actor_user_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        ExecutionDecisionRepository.save("decision_id", doc)
+        ResearchProblemSpecRepository.update_fields(
+            problem_spec_id,
+            {"decision_status": "decision_made", "updated_at": now},
+        )
+
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="execution_decision",
+            entity_id=decision_id,
+            event_type="created",
+            reason=payload.reason,
+            before={"previous_active_decision_id": active.get("decision_id") if active else None},
+            after={"problem_spec_id": problem_spec_id, "mode": payload.mode},
+            request_id=request_id,
+        )
+        return self._doc_to_execution_decision(doc)
+
+    def get_execution_decision(self, decision_id: str) -> ExecutionDecision:
+        """获取 ExecutionDecision 详情。"""
+        doc = ExecutionDecisionRepository.find_one({"decision_id": decision_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"ExecutionDecision '{decision_id}' 不存在")
+        return self._doc_to_execution_decision(doc)
+
+    def get_active_execution_decision(self, problem_spec_id: str) -> ExecutionDecision:
+        """获取 ProblemSpec 当前 active ExecutionDecision。"""
+        doc = ExecutionDecisionRepository.find_active(problem_spec_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"ProblemSpec '{problem_spec_id}' 尚未选择执行模式")
+        return self._doc_to_execution_decision(doc)
+
+    def list_execution_decisions(
+        self,
+        *,
+        problem_spec_id: str | None = None,
+        mode: str | None = None,
+        status: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> ExecutionDecisionListData:
+        """分页查询 ExecutionDecision。"""
+        items, total = ExecutionDecisionRepository.list_decisions(
+            problem_spec_id=problem_spec_id,
+            mode=mode,
+            status=status,
+            created_by=created_by,
+            page=page,
+            page_size=page_size,
+        )
+        return ExecutionDecisionListData(
+            items=[self._doc_to_execution_decision(doc) for doc in items],
+            page=page,
+            page_size=page_size,
+            total=total,
+        )
+
+    # ------------------------------------------------------------------
+    # ManualAlgorithmWorkflow / WorkflowRun
+    # ------------------------------------------------------------------
+
+    def create_manual_workflow(
+        self,
+        payload: ManualAlgorithmWorkflowCreate,
+        *,
+        actor_user_id: str,
+        request_id: str | None = None,
+    ) -> ManualAlgorithmWorkflow:
+        """创建人工算法 Workflow 定义。"""
+        spec = self.get_problem_spec(payload.problem_spec_id)
+        decision = self.get_execution_decision(payload.execution_decision_id)
+        if decision.problem_spec_id != payload.problem_spec_id or decision.mode != "manual_workbench":
+            raise HTTPException(status_code=409, detail="人工 Workflow 必须关联 manual_workbench 执行决策")
+
+        seen_steps: set[str] = set()
+        for step in payload.steps:
+            if step.step_id in seen_steps:
+                raise HTTPException(status_code=422, detail=f"Workflow step_id '{step.step_id}' 重复")
+            seen_steps.add(step.step_id)
+            algo_doc = AlgorithmRegistryRepository.find_one({"algorithm_id": step.algorithm_id})
+            if not algo_doc:
+                raise HTTPException(status_code=404, detail=f"算法 '{step.algorithm_id}' 不存在")
+            if "human_workflow" not in normalize_trigger_modes(algo_doc.get("trigger_modes")):
+                raise HTTPException(status_code=400, detail=f"算法 '{step.algorithm_id}' 不支持 human_workflow")
+            for upstream in step.depends_on:
+                if upstream not in seen_steps:
+                    raise HTTPException(status_code=422, detail=f"步骤 '{step.step_id}' 依赖未知上游 '{upstream}'")
+
+        now = utc_now()
+        workflow_id = self._new_id("maw")
+        doc = {
+            "workflow_id": workflow_id,
+            "problem_spec_id": payload.problem_spec_id,
+            "execution_decision_id": payload.execution_decision_id,
+            "name": payload.name,
+            "steps": [step.model_dump() for step in payload.steps],
+            "description": payload.description,
+            "validation_status": "validated",
+            "created_by": actor_user_id,
+            "owner_id": actor_user_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        ManualAlgorithmWorkflowRepository.save("workflow_id", doc)
+        if decision.initial_context_id is None:
+            ExecutionDecisionRepository.update_fields(
+                decision.decision_id,
+                {"initial_context_id": workflow_id, "updated_at": now},
+            )
+
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="manual_algorithm_workflow",
+            entity_id=workflow_id,
+            event_type="created",
+            reason="创建人工算法 Workflow",
+            before={},
+            after={"problem_spec_id": spec.problem_spec_id, "step_count": len(payload.steps)},
+            request_id=request_id,
+        )
+        return self._doc_to_manual_workflow(doc)
+
+    def get_manual_workflow(self, workflow_id: str) -> ManualAlgorithmWorkflow:
+        """获取人工 Workflow 详情。"""
+        doc = ManualAlgorithmWorkflowRepository.find_one({"workflow_id": workflow_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"ManualAlgorithmWorkflow '{workflow_id}' 不存在")
+        return self._doc_to_manual_workflow(doc)
+
+    def list_manual_workflows(
+        self,
+        *,
+        problem_spec_id: str | None = None,
+        execution_decision_id: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> ManualAlgorithmWorkflowListData:
+        """分页查询人工 Workflow。"""
+        items, total = ManualAlgorithmWorkflowRepository.list_workflows(
+            problem_spec_id=problem_spec_id,
+            execution_decision_id=execution_decision_id,
+            created_by=created_by,
+            page=page,
+            page_size=page_size,
+        )
+        return ManualAlgorithmWorkflowListData(
+            items=[self._doc_to_manual_workflow(doc) for doc in items],
+            page=page,
+            page_size=page_size,
+            total=total,
+        )
+
+    def start_workflow_run(
+        self,
+        workflow_id: str,
+        *,
+        actor_user_id: str,
+        request_id: str | None = None,
+    ) -> WorkflowRun:
+        """启动人工 WorkflowRun，按 P0 线性步骤逐个生成 AlgorithmRun。"""
+        workflow = self.get_manual_workflow(workflow_id)
+        spec = self.get_problem_spec(workflow.problem_spec_id)
+        now = utc_now()
+        workflow_run_id = self._new_id("wfr")
+        run_doc = {
+            "workflow_run_id": workflow_run_id,
+            "workflow_id": workflow.workflow_id,
+            "problem_spec_id": workflow.problem_spec_id,
+            "execution_decision_id": workflow.execution_decision_id,
+            "status": "running",
+            "step_runs": [],
+            "input_snapshot": workflow.model_dump(),
+            "artifact_refs": [],
+            "created_by": actor_user_id,
+            "created_at": now,
+            "updated_at": now,
+            "started_at": now,
+            "finished_at": None,
+        }
+        WorkflowRunRepository.save("workflow_run_id", run_doc)
+
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="workflow_run",
+            entity_id=workflow_run_id,
+            event_type="started",
+            reason="启动人工 WorkflowRun",
+            before={},
+            after={"workflow_id": workflow_id},
+            request_id=request_id,
+        )
+
+        step_outputs: dict[str, dict] = {}
+        artifact_refs: list[dict] = []
+        final_status = "completed"
+        for step in workflow.steps:
+            step_run_id = self._new_id("wfs")
+            step_started_at = utc_now()
+            step_doc = {
+                "step_run_id": step_run_id,
+                "workflow_run_id": workflow_run_id,
+                "step_id": step.step_id,
+                "algorithm_id": step.algorithm_id,
+                "status": "running",
+                "input_snapshot": {},
+                "output_summary": {},
+                "algorithm_run_id": None,
+                "error": None,
+                "started_at": step_started_at,
+                "finished_at": None,
+                "created_at": step_started_at,
+                "updated_at": step_started_at,
+            }
+            try:
+                input_snapshot = self._resolve_workflow_input_bindings(
+                    step.input_bindings,
+                    spec=spec,
+                    step_outputs=step_outputs,
+                )
+                step_doc["input_snapshot"] = input_snapshot
+                algorithm_run = self.create_algorithm_run(
+                    AlgorithmRunCreate(
+                        algorithm_id=step.algorithm_id,
+                        trigger_source="human_workflow",
+                        trigger_context_id=workflow_run_id,
+                        problem_spec_id=workflow.problem_spec_id,
+                        campaign_id=spec.campaign_id,
+                        workflow_run_id=workflow_run_id,
+                        workflow_step_run_id=step_run_id,
+                        input_snapshot=input_snapshot,
+                        reason=f"Workflow step {step.step_id} 执行算法 {step.algorithm_id}",
+                    ),
+                    actor_user_id=actor_user_id,
+                    request_id=request_id,
+                )
+                step_doc.update(
+                    {
+                        "status": algorithm_run.status,
+                        "output_summary": algorithm_run.output_summary,
+                        "algorithm_run_id": algorithm_run.run_id,
+                        "error": algorithm_run.error,
+                        "finished_at": algorithm_run.finished_at,
+                        "updated_at": algorithm_run.updated_at,
+                    }
+                )
+                step_outputs[step.step_id] = algorithm_run.output_summary
+                artifact_refs.extend(algorithm_run.artifact_refs)
+                if algorithm_run.status != "completed":
+                    final_status = "failed"
+                    break
+            except Exception as exc:
+                final_status = "failed"
+                failed_at = utc_now()
+                step_doc.update(
+                    {
+                        "status": "failed",
+                        "error": {"error_type": type(exc).__name__, "message": str(exc), "retryable": False},
+                        "finished_at": failed_at,
+                        "updated_at": failed_at,
+                    }
+                )
+                run_doc["step_runs"].append(step_doc)
+                break
+
+            run_doc["step_runs"].append(step_doc)
+
+        finished_at = utc_now()
+        update_fields = {
+            "status": final_status,
+            "step_runs": run_doc["step_runs"],
+            "artifact_refs": artifact_refs,
+            "finished_at": finished_at,
+            "updated_at": finished_at,
+        }
+        WorkflowRunRepository.update_fields(workflow_run_id, update_fields)
+        run_doc.update(update_fields)
+
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="workflow_run",
+            entity_id=workflow_run_id,
+            event_type=final_status,
+            reason=f"人工 WorkflowRun {final_status}",
+            before={"status": "running"},
+            after={"status": final_status, "step_count": len(run_doc["step_runs"])},
+            request_id=request_id,
+        )
+        return self._doc_to_workflow_run(run_doc)
+
+    def get_workflow_run(self, workflow_run_id: str) -> WorkflowRun:
+        """获取 WorkflowRun 详情。"""
+        doc = WorkflowRunRepository.find_one({"workflow_run_id": workflow_run_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"WorkflowRun '{workflow_run_id}' 不存在")
+        return self._doc_to_workflow_run(doc)
+
+    def list_workflow_runs(
+        self,
+        *,
+        workflow_id: str | None = None,
+        problem_spec_id: str | None = None,
+        execution_decision_id: str | None = None,
+        status: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> WorkflowRunListData:
+        """分页查询 WorkflowRun。"""
+        items, total = WorkflowRunRepository.list_runs(
+            workflow_id=workflow_id,
+            problem_spec_id=problem_spec_id,
+            execution_decision_id=execution_decision_id,
+            status=status,
+            created_by=created_by,
+            page=page,
+            page_size=page_size,
+        )
+        return WorkflowRunListData(
+            items=[self._doc_to_workflow_run(doc) for doc in items],
+            page=page,
+            page_size=page_size,
+            total=total,
+        )
+
+    # ------------------------------------------------------------------
     # AlgorithmRegistry
     # ------------------------------------------------------------------
 
@@ -355,12 +788,15 @@ class ResearchEngineService:
         doc = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
         if not doc:
             raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
+        # 规范化旧 trigger_modes 值（如 "human" -> "human_workflow"）
+        doc["trigger_modes"] = normalize_trigger_modes(doc.get("trigger_modes"))
         return AlgorithmRegistryEntry(**doc)
 
     def list_algorithms(
         self,
         *,
         algorithm_type: str | None = None,
+        algorithm_family: str | None = None,
         material_scope: str | None = None,
         trigger_mode: str | None = None,
         status: str | None = None,
@@ -371,8 +807,9 @@ class ResearchEngineService:
 
         Args:
             algorithm_type: 按算法类型过滤（retriever/predictor/simulator/optimizer）。
+            algorithm_family: 按产品算法族过滤。
             material_scope: 按材料体系过滤。
-            trigger_mode: 按触发方式过滤（human/autoresearch/system）。
+            trigger_mode: 按触发方式过滤（human_workflow/autoresearch/system）。
             status: 按状态过滤。
             page: 页码。
             page_size: 每页条数。
@@ -380,15 +817,25 @@ class ResearchEngineService:
         Returns:
             AlgorithmRegistry 分页列表。
         """
+        self.seed_default_algorithms()
         items, total = AlgorithmRegistryRepository.list_algorithms(
             algorithm_type=algorithm_type,
+            algorithm_family=algorithm_family,
             material_scope=material_scope,
             trigger_mode=trigger_mode,
             status=status,
             page=page,
             page_size=page_size,
         )
-        entries = [AlgorithmRegistryEntry(**doc) for doc in items]
+        entries = [
+            AlgorithmRegistryEntry(
+                **{
+                    **doc,
+                    "trigger_modes": normalize_trigger_modes(doc.get("trigger_modes")),
+                }
+            )
+            for doc in items
+        ]
         return AlgorithmRegistryListData(items=entries, page=page, page_size=page_size, total=total)
 
     # ------------------------------------------------------------------
@@ -402,9 +849,9 @@ class ResearchEngineService:
         actor_user_id: str,
         request_id: str | None = None,
     ) -> AlgorithmRun:
-        """创建并执行人工算法运行。
+        """创建并执行算法运行。
 
-        1. 校验 algorithm_id 存在且支持 human trigger。
+        1. 校验 algorithm_id 存在且支持指定 trigger。
         2. 校验输入快照与 input_schema 一致。
         3. 执行 mock runner 或委托给 ComputationService。
         4. 保存 AlgorithmRun 记录并写入审计事件。
@@ -418,7 +865,7 @@ class ResearchEngineService:
             创建并执行完成的 AlgorithmRun 记录。
 
         Raises:
-            HTTPException: algorithm_id 不存在、不支持 human trigger 或执行失败。
+            HTTPException: algorithm_id 不存在、不支持指定 trigger 或执行失败。
         """
         from app.services.research_engine_algorithm_runner import (
             ComputationSubmitAdapter,
@@ -433,8 +880,8 @@ class ResearchEngineService:
                 detail=f"算法 '{payload.algorithm_id}' 不存在",
             )
 
-        # 2. 校验算法支持 human trigger
-        trigger_modes = algo_doc.get("trigger_modes", [])
+        # 2. 校验算法支持指定 trigger（先规范化旧值）
+        trigger_modes = normalize_trigger_modes(algo_doc.get("trigger_modes"))
         if payload.trigger_source not in trigger_modes:
             raise HTTPException(
                 status_code=400,
@@ -453,6 +900,8 @@ class ResearchEngineService:
             "problem_spec_id": payload.problem_spec_id,
             "problem_spec_version": None,
             "campaign_id": payload.campaign_id,
+            "workflow_run_id": payload.workflow_run_id,
+            "workflow_step_run_id": payload.workflow_step_run_id,
             "research_run_id": payload.research_run_id,
             "stage_run_id": payload.stage_run_id,
             "linked_computation_run_id": None,
@@ -616,6 +1065,7 @@ class ResearchEngineService:
         *,
         problem_spec_id: str | None = None,
         campaign_id: str | None = None,
+        workflow_run_id: str | None = None,
         algorithm_id: str | None = None,
         status: str | None = None,
         trigger_source: str | None = None,
@@ -629,6 +1079,7 @@ class ResearchEngineService:
         Args:
             problem_spec_id: 按 ProblemSpec ID 过滤。
             campaign_id: 按 Campaign ID 过滤。
+            workflow_run_id: 按 WorkflowRun ID 过滤。
             algorithm_id: 按算法 ID 过滤。
             status: 按状态过滤。
             trigger_source: 按触发来源过滤。
@@ -643,6 +1094,7 @@ class ResearchEngineService:
         items, total = AlgorithmRunRepository.list_runs(
             problem_spec_id=problem_spec_id,
             campaign_id=campaign_id,
+            workflow_run_id=workflow_run_id,
             algorithm_id=algorithm_id,
             status=status,
             trigger_source=trigger_source,
@@ -1050,6 +1502,48 @@ class ResearchEngineService:
     # 内部辅助方法
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _resolve_workflow_input_bindings(
+        input_bindings: dict,
+        *,
+        spec: ProblemSpec,
+        step_outputs: dict[str, dict],
+    ) -> dict[str, Any]:
+        """解析 P0 Workflow 输入绑定。"""
+        resolved: dict[str, Any] = {}
+        spec_data = spec.model_dump()
+        for field_name, binding in input_bindings.items():
+            source = binding.source
+            if source in {"manual_input", "literal", "value"}:
+                resolved[field_name] = binding.value
+            elif source == "problem_spec":
+                resolved[field_name] = ResearchEngineService._get_path_value(spec_data, binding.path)
+            elif source in {"workflow_step_output", "upstream_step_output"}:
+                if not binding.step_id:
+                    raise ValueError(f"输入字段 '{field_name}' 缺少上游 step_id")
+                upstream_output = step_outputs.get(binding.step_id)
+                if upstream_output is None:
+                    raise ValueError(f"输入字段 '{field_name}' 引用的上游 step '{binding.step_id}' 尚无输出")
+                resolved[field_name] = ResearchEngineService._get_path_value(upstream_output, binding.path)
+            else:
+                raise ValueError(f"暂不支持输入来源 '{source}'")
+        return resolved
+
+    @staticmethod
+    def _get_path_value(data: dict[str, Any], path: str | None) -> Any:
+        """从 dict/list 中按点路径取值。"""
+        if not path:
+            return data
+        current: Any = data
+        for part in path.split("."):
+            if isinstance(current, dict):
+                current = current.get(part)
+            elif isinstance(current, list) and part.isdigit():
+                current = current[int(part)]
+            else:
+                return None
+        return current
+
     def _submit_computation_from_algorithm(
         self,
         input_snapshot: dict,
@@ -1188,11 +1682,13 @@ class ResearchEngineService:
         return AlgorithmRun(
             run_id=doc["run_id"],
             algorithm_id=doc.get("algorithm_id", ""),
-            trigger_source=doc.get("trigger_source", "human"),
+            trigger_source=doc.get("trigger_source", "human_workflow"),
             trigger_context_id=doc.get("trigger_context_id"),
             problem_spec_id=doc.get("problem_spec_id"),
             problem_spec_version=doc.get("problem_spec_version"),
             campaign_id=doc.get("campaign_id"),
+            workflow_run_id=doc.get("workflow_run_id"),
+            workflow_step_run_id=doc.get("workflow_step_run_id"),
             research_run_id=doc.get("research_run_id"),
             stage_run_id=doc.get("stage_run_id"),
             linked_computation_run_id=doc.get("linked_computation_run_id"),
@@ -1225,14 +1721,15 @@ class ResearchEngineService:
             name=doc.get("name", ""),
             material_family=doc.get("material_family", "fluoropolymer"),
             problem_type=doc.get("problem_type", "formulation_process_optimization"),
-            execution_mode=doc.get("execution_mode", "hybrid"),
+            allowed_execution_modes=doc.get("allowed_execution_modes", ["manual_workbench", "autoresearch"]),
+            decision_status=doc.get("decision_status", "pending_execution_decision"),
             variables=doc.get("variables", []),
             objectives=doc.get("objectives", []),
             constraints=doc.get("constraints", []),
             measurements=doc.get("measurements", []),
             campaign_id=doc.get("campaign_id"),
             description=doc.get("description"),
-            schema_version=doc.get("schema_version", "0.2"),
+            schema_version=doc.get("schema_version", "0.4"),
             created_by=doc.get("created_by", "system"),
             owner_id=doc.get("owner_id"),
             project_id=doc.get("project_id"),
@@ -1241,3 +1738,69 @@ class ResearchEngineService:
             created_at=doc.get("created_at", utc_now()),
             updated_at=doc.get("updated_at", utc_now()),
         )
+
+    @staticmethod
+    def _doc_to_execution_decision(doc: dict) -> ExecutionDecision:
+        """将仓库文档转换为 ExecutionDecision。"""
+        return ExecutionDecision(
+            decision_id=doc["decision_id"],
+            problem_spec_id=doc.get("problem_spec_id", ""),
+            problem_spec_version=doc.get("problem_spec_version", "0.4"),
+            mode=doc.get("mode", "manual_workbench"),
+            reason=doc.get("reason", ""),
+            status=doc.get("status", "active"),
+            initial_context_id=doc.get("initial_context_id"),
+            created_by=doc.get("created_by", "system"),
+            created_at=doc.get("created_at", utc_now()),
+            updated_at=doc.get("updated_at", utc_now()),
+        )
+
+    @staticmethod
+    def _doc_to_manual_workflow(doc: dict) -> ManualAlgorithmWorkflow:
+        """将仓库文档转换为 ManualAlgorithmWorkflow。"""
+        return ManualAlgorithmWorkflow(
+            workflow_id=doc["workflow_id"],
+            problem_spec_id=doc.get("problem_spec_id", ""),
+            execution_decision_id=doc.get("execution_decision_id", ""),
+            name=doc.get("name", ""),
+            steps=doc.get("steps", []),
+            description=doc.get("description"),
+            validation_status=doc.get("validation_status", "validated"),
+            created_by=doc.get("created_by", "system"),
+            owner_id=doc.get("owner_id"),
+            created_at=doc.get("created_at", utc_now()),
+            updated_at=doc.get("updated_at", utc_now()),
+        )
+
+    @staticmethod
+    def _doc_to_workflow_run(doc: dict) -> WorkflowRun:
+        """将仓库文档转换为 WorkflowRun。"""
+        return WorkflowRun(
+            workflow_run_id=doc["workflow_run_id"],
+            workflow_id=doc.get("workflow_id", ""),
+            problem_spec_id=doc.get("problem_spec_id", ""),
+            execution_decision_id=doc.get("execution_decision_id", ""),
+            status=doc.get("status", "queued"),
+            step_runs=[WorkflowStepRun(**item) for item in doc.get("step_runs", [])],
+            input_snapshot=doc.get("input_snapshot", {}),
+            artifact_refs=doc.get("artifact_refs", []),
+            created_by=doc.get("created_by", "system"),
+            created_at=doc.get("created_at", utc_now()),
+            updated_at=doc.get("updated_at", utc_now()),
+            started_at=doc.get("started_at"),
+            finished_at=doc.get("finished_at"),
+        )
+
+    @staticmethod
+    def _problem_objectives_to_optimization(payload: ProblemSpecCreate) -> list[dict[str, Any]]:
+        """将 ProblemSpec 目标映射为 OptimizationCampaign 目标契约。"""
+        direction_map = {"maximize": "max", "minimize": "min"}
+        return [
+            {
+                "name": objective.name,
+                "direction": direction_map.get(objective.direction, "max"),
+                "unit": objective.unit,
+                "required": True,
+            }
+            for objective in payload.objectives
+        ]

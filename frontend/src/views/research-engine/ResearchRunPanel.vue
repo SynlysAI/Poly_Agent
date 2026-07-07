@@ -5,8 +5,10 @@ import { CircleCheck, CircleClose, Clock, Refresh, VideoPause, VideoPlay, CloseB
 
 import {
   advanceResearchRun,
+  createExecutionDecision,
   createResearchRun,
   failResearchRun,
+  getActiveExecutionDecision,
   getApiErrorMessage,
   getResearchRun,
   listProblemSpecs,
@@ -51,6 +53,34 @@ const stageLabels = {
   MODEL_UPDATE: '模型更新',
   ARCHIVE_LEARNING: '经验归档',
 }
+
+const stageDescriptions = {
+  PROBLEM_SPEC: '解析研发任务定义，提取目标、约束与测量条件',
+  KNOWLEDGE_RETRIEVAL: '从文献库和知识图谱中检索相关材料合成路线与性能数据',
+  STRUCTURE_FEATURE: '将分子结构转换为数值描述符（指纹、图形特征等）',
+  COMPUTE_PREDICT: '运行 DFT/xTB 计算或调用预测模型，生成候选分子的性质预测',
+  RECOMMENDATION_ASK: '基于多目标贝叶斯优化推荐下一批实验候选',
+  HUMAN_REVIEW: '人工审批阶段（Gate），审核推荐候选并决定是否进入实验执行',
+  EXPERIMENT_EXECUTION: '将候选方案提交至湿实验平台执行合成与测试',
+  RESULT_TELL: '将实验结果回填至 Campaign，更新候选评分',
+  MODEL_UPDATE: '用新实验数据更新代理模型（GP/ML），提升后续推荐精度',
+  ARCHIVE_LEARNING: '将本次研发过程归档，提取经验写入知识库供后续复用',
+}
+
+const completedStages = computed(() => {
+  if (!currentRun.value?.stage_runs) return 0
+  return currentRun.value.stage_runs.filter(s => s.status === 'completed').length
+})
+const totalStages = computed(() => currentRun.value?.stage_runs?.length || 10)
+const completionPercent = computed(() => {
+  if (!totalStages.value) return 0
+  return Math.round((completedStages.value / totalStages.value) * 100)
+})
+const progressColor = computed(() => {
+  if (currentRun.value?.status === 'completed') return '#16a34a'
+  if (currentRun.value?.status === 'failed') return '#dc2626'
+  return '#3b82f6'
+})
 
 const profileOptions = [
   { label: '氟基高分子', value: 'fluoropolymer' },
@@ -143,7 +173,15 @@ async function handleCreate() {
   }
   actionLoading.value = 'create'
   try {
-    const data = await createResearchRun(newRunForm.value)
+    const decision = await ensureExecutionDecision(
+      newRunForm.value.problem_spec_id,
+      'autoresearch',
+      '启动 AutoResearch 自动编排',
+    )
+    const data = await createResearchRun({
+      ...newRunForm.value,
+      execution_decision_id: decision.decision_id,
+    })
     ElMessage.success('ResearchRun 创建成功')
     showCreateForm.value = false
     selectedRunId.value = data.run_id
@@ -157,6 +195,21 @@ async function handleCreate() {
   }
 }
 
+async function ensureExecutionDecision(problemSpecId, mode, reason) {
+  try {
+    return await createExecutionDecision(problemSpecId, { mode, reason })
+  } catch (error) {
+    if (error.status !== 409) {
+      throw error
+    }
+    const active = await getActiveExecutionDecision(problemSpecId)
+    if (active?.mode === mode) {
+      return active
+    }
+    throw error
+  }
+}
+
 async function handleStart() {
   try {
     const { value } = await ElMessageBox.prompt('请输入启动原因', '启动 ResearchRun', {
@@ -166,7 +219,7 @@ async function handleStart() {
       inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
     })
     actionLoading.value = 'start'
-    const data = await startResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    const data = await startResearchRun(currentRun.value.run_id, { target_status: 'running', reason: value.trim() })
     currentRun.value = data
     emit('research-run-updated', data)
     ElMessage.success('ResearchRun 已启动')
@@ -187,7 +240,7 @@ async function handlePause() {
       inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
     })
     actionLoading.value = 'pause'
-    const data = await pauseResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    const data = await pauseResearchRun(currentRun.value.run_id, { target_status: 'paused', reason: value.trim() })
     currentRun.value = data
     emit('research-run-updated', data)
     ElMessage.success('ResearchRun 已暂停')
@@ -208,7 +261,7 @@ async function handleResume() {
       inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
     })
     actionLoading.value = 'resume'
-    const data = await resumeResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    const data = await resumeResearchRun(currentRun.value.run_id, { target_status: 'running', reason: value.trim() })
     currentRun.value = data
     emit('research-run-updated', data)
     ElMessage.success('ResearchRun 已恢复')
@@ -229,7 +282,7 @@ async function handleAdvance() {
       inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
     })
     actionLoading.value = 'advance'
-    const data = await advanceResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    const data = await advanceResearchRun(currentRun.value.run_id, { target_status: 'running', reason: value.trim() })
     currentRun.value = data
     emit('research-run-updated', data)
     ElMessage.success('ResearchRun 已推进')
@@ -250,7 +303,7 @@ async function handleFail() {
       inputValidator: (v) => Boolean(v?.trim()) || '原因不能为空',
     })
     actionLoading.value = 'fail'
-    const data = await failResearchRun(currentRun.value.run_id, { reason: value.trim() })
+    const data = await failResearchRun(currentRun.value.run_id, { target_status: 'failed', reason: value.trim() })
     currentRun.value = data
     emit('research-run-updated', data)
     ElMessage.success('ResearchRun 已标记为失败')
@@ -356,6 +409,7 @@ onMounted(loadRuns)
 
       <el-descriptions :column="3" border size="small" style="margin:14px 0">
         <el-descriptions-item label="ProblemSpec">{{ currentRun.problem_spec_id }}</el-descriptions-item>
+        <el-descriptions-item label="ExecutionDecision">{{ currentRun.execution_decision_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="Campaign">{{ currentRun.campaign_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="当前阶段">{{ stageLabels[currentRun.current_stage] || currentRun.current_stage || '-' }}</el-descriptions-item>
         <el-descriptions-item label="创建者">{{ currentRun.created_by }}</el-descriptions-item>
@@ -366,6 +420,11 @@ onMounted(loadRuns)
       <!-- Stage 时间线 -->
       <section class="stage-section">
         <h4>阶段推进进度</h4>
+        <!-- 进度条 -->
+        <div v-if="currentRun.stage_runs?.length" class="research-progress">
+          <el-progress :percentage="completionPercent" :color="progressColor" :stroke-width="8" :striped="currentRun.status === 'running'" :striped-flow="currentRun.status === 'running'" />
+          <span class="progress-label">{{ completedStages }}/{{ totalStages }} 阶段完成</span>
+        </div>
         <div v-if="currentRun.stage_runs?.length" class="stage-timeline">
           <div
             v-for="(stage, idx) in currentRun.stage_runs"
@@ -380,9 +439,12 @@ onMounted(loadRuns)
               <div v-if="idx < currentRun.stage_runs.length - 1" class="stage-line" :class="stage.status === 'completed' ? 'line-done' : ''" />
             </div>
             <div class="stage-info">
-              <strong>{{ stageLabels[stage.stage_key] || stage.stage_key }}</strong>
-              <el-tag size="small" :type="stageStatusTag(stage.status)">{{ stageStatusLabel(stage.status) }}</el-tag>
-              <div v-if="stage.status === 'blocked_approval'" style="margin-top:6px">
+              <div class="stage-info-header">
+                <strong :title="stageDescriptions[stage.stage_key] || ''">{{ stageLabels[stage.stage_key] || stage.stage_key }}</strong>
+                <el-tag size="small" :type="stageStatusTag(stage.status)">{{ stageStatusLabel(stage.status) }}</el-tag>
+              </div>
+              <p class="stage-desc-hint">{{ stageDescriptions[stage.stage_key] || '该阶段的具体任务描述待补充' }}</p>
+              <div v-if="stage.status === 'blocked_approval'" style="margin-top:4px">
                 <el-button type="warning" size="small" @click="openGateReview(stage)">审批</el-button>
               </div>
               <div v-if="stage.decisions?.length" class="stage-decisions">
@@ -397,7 +459,12 @@ onMounted(loadRuns)
           </div>
         </div>
         <div v-else class="empty-hint">
-          暂无阶段运行记录
+          <template v-if="currentRun.status === 'draft'">
+            尚未开始任何阶段。点击「<strong>启动</strong>」按钮开始 AutoResearch 十阶段自动推进流程。
+          </template>
+          <template v-else>
+            暂无阶段运行记录
+          </template>
         </div>
       </section>
 
@@ -482,6 +549,21 @@ onMounted(loadRuns)
   font-size: 14px;
 }
 
+.research-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.research-progress .el-progress {
+  flex: 1;
+}
+.progress-label {
+  font-size: 13px;
+  color: var(--app-ink-muted);
+  white-space: nowrap;
+}
+
 .stage-timeline {
   display: flex;
   flex-direction: column;
@@ -549,8 +631,21 @@ onMounted(loadRuns)
   gap: 4px;
 }
 
+.stage-info-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .stage-info strong {
   font-size: 14px;
+}
+
+.stage-desc-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--app-ink-muted);
+  line-height: 1.5;
 }
 
 .stage-decisions {

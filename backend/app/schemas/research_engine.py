@@ -17,11 +17,20 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # 枚举与 Literal 类型
 # =============================================================================
 
-ExecutionMode = Literal["manual", "autoresearch", "hybrid"]
-"""执行模式：manual=纯人工触发，autoresearch=纯自动编排，hybrid=双通道并行。"""
+ExecutionDecisionMode = Literal["manual_workbench", "autoresearch"]
+"""执行决策模式：manual_workbench=人工算法工作台，autoresearch=自动编排。"""
 
-TriggerSource = Literal["human", "autoresearch", "system"]
-"""触发来源：human=人工通道，autoresearch=AutoResearch 编排，system=系统内部触发。"""
+TriggerSource = Literal["human_workflow", "autoresearch", "system"]
+"""触发来源：human_workflow=人工 Workflow，autoresearch=AutoResearch 编排，system=系统内部触发。"""
+
+ProblemSpecDecisionStatus = Literal["pending_execution_decision", "decision_made"]
+"""ProblemSpec 执行决策状态。"""
+
+WorkflowRunStatus = Literal["draft", "queued", "running", "completed", "failed", "cancelled"]
+"""WorkflowRun 运行状态。"""
+
+WorkflowStepRunStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+"""WorkflowStepRun 运行状态。"""
 
 ResearchRunStatus = Literal[
     "draft", "running", "paused", "blocked_approval", "completed", "failed", "archived"
@@ -49,6 +58,15 @@ ResearchStageKey = Literal[
 
 AlgorithmType = Literal["retriever", "predictor", "simulator", "optimizer"]
 """算法能力类型。"""
+
+AlgorithmFamily = Literal[
+    "computation",
+    "wetlab_optimization",
+    "vertical_prediction",
+    "knowledge",
+    "structure",
+]
+"""面向产品入口的算法族。"""
 
 AlgorithmStatus = Literal[
     "active", "pending_encapsulation", "in_development", "frozen", "decommissioned"
@@ -228,7 +246,7 @@ class ProblemSpecMeasurement(BaseModel):
 class ProblemSpecCreate(BaseModel):
     """创建 ProblemSpec 请求。
 
-    支持 execution_mode、变量/目标/约束定义，是材料研发任务的核心入口。
+    支持 allowed_execution_modes、变量/目标/约束定义，是材料研发任务的核心入口。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -236,7 +254,11 @@ class ProblemSpecCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     material_family: MaterialScope = "fluoropolymer"
     problem_type: ProblemType = "formulation_process_optimization"
-    execution_mode: ExecutionMode = "hybrid"
+    allowed_execution_modes: list[ExecutionDecisionMode] = Field(
+        default_factory=lambda: ["manual_workbench", "autoresearch"],
+        min_length=1,
+    )
+    decision_status: ProblemSpecDecisionStatus = "pending_execution_decision"
     variables: list[ProblemSpecVariable] = Field(default_factory=list)
     objectives: list[ProblemSpecObjective] = Field(default_factory=list, min_length=1)
     constraints: list[ProblemSpecConstraint] = Field(default_factory=list)
@@ -253,6 +275,17 @@ class ProblemSpecCreate(BaseModel):
             raise ValueError("ProblemSpec 名称不能为空")
         return normalized
 
+    @field_validator("allowed_execution_modes")
+    @classmethod
+    def validate_allowed_execution_modes(
+        cls, value: list[ExecutionDecisionMode]
+    ) -> list[ExecutionDecisionMode]:
+        """校验可用执行模式。"""
+        unique_modes = list(dict.fromkeys(value))
+        if not unique_modes:
+            raise ValueError("至少需要一个可用执行模式")
+        return unique_modes
+
 
 class ProblemSpec(ProblemSpecCreate):
     """ProblemSpec 完整记录。
@@ -261,7 +294,7 @@ class ProblemSpec(ProblemSpecCreate):
     """
 
     problem_spec_id: str
-    schema_version: str = "0.2"
+    schema_version: str = "0.4"
     created_by: str
     owner_id: str | None = None
     project_id: str | None = None
@@ -275,6 +308,155 @@ class ProblemSpecListData(BaseModel):
     """ProblemSpec 分页响应。"""
 
     items: list[ProblemSpec]
+    page: int
+    page_size: int
+    total: int
+
+
+# =============================================================================
+# ExecutionDecision / ManualWorkflow 相关模型
+# =============================================================================
+
+
+class ExecutionDecisionCreate(BaseModel):
+    """创建执行决策请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: ExecutionDecisionMode
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        """规范化选择原因。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("执行模式选择原因不能为空")
+        return normalized
+
+
+class ExecutionDecision(BaseModel):
+    """执行模式选择记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision_id: str
+    problem_spec_id: str
+    problem_spec_version: str
+    mode: ExecutionDecisionMode
+    reason: str
+    status: str = "active"
+    initial_context_id: str | None = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExecutionDecisionListData(BaseModel):
+    """ExecutionDecision 分页响应。"""
+
+    items: list[ExecutionDecision]
+    page: int
+    page_size: int
+    total: int
+
+
+class WorkflowInputBinding(BaseModel):
+    """Workflow 节点输入绑定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(min_length=1, max_length=80)
+    path: str | None = Field(default=None, max_length=300)
+    value: object | None = None
+    step_id: str | None = Field(default=None, max_length=80)
+
+
+class ManualWorkflowStep(BaseModel):
+    """人工 Workflow 定义中的算法节点。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(min_length=1, max_length=80)
+    algorithm_id: str = Field(min_length=1, max_length=80)
+    input_bindings: dict[str, WorkflowInputBinding] = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
+    output_alias: str | None = Field(default=None, max_length=80)
+
+
+class ManualAlgorithmWorkflowCreate(BaseModel):
+    """创建人工算法 Workflow 请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    problem_spec_id: str = Field(min_length=1, max_length=80)
+    execution_decision_id: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=120)
+    steps: list[ManualWorkflowStep] = Field(min_length=1)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class ManualAlgorithmWorkflow(ManualAlgorithmWorkflowCreate):
+    """人工算法 Workflow 定义。"""
+
+    workflow_id: str
+    validation_status: str = "validated"
+    created_by: str
+    owner_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ManualAlgorithmWorkflowListData(BaseModel):
+    """ManualAlgorithmWorkflow 分页响应。"""
+
+    items: list[ManualAlgorithmWorkflow]
+    page: int
+    page_size: int
+    total: int
+
+
+class WorkflowStepRun(BaseModel):
+    """Workflow 中单个步骤运行记录。"""
+
+    step_run_id: str
+    workflow_run_id: str
+    step_id: str
+    algorithm_id: str
+    status: WorkflowStepRunStatus = "pending"
+    input_snapshot: dict = Field(default_factory=dict)
+    output_summary: dict = Field(default_factory=dict)
+    algorithm_run_id: str | None = None
+    error: dict | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowRun(BaseModel):
+    """人工 Workflow 运行记录。"""
+
+    workflow_run_id: str
+    workflow_id: str
+    problem_spec_id: str
+    execution_decision_id: str
+    status: WorkflowRunStatus = "queued"
+    step_runs: list[WorkflowStepRun] = Field(default_factory=list)
+    input_snapshot: dict = Field(default_factory=dict)
+    artifact_refs: list[dict] = Field(default_factory=list)
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class WorkflowRunListData(BaseModel):
+    """WorkflowRun 分页响应。"""
+
+    items: list[WorkflowRun]
     page: int
     page_size: int
     total: int
@@ -309,12 +491,13 @@ class AlgorithmRegistryEntry(BaseModel):
     algorithm_id: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=120)
     type: AlgorithmType = "predictor"
+    algorithm_family: AlgorithmFamily | None = None
     material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"])
     task_scope: list[ResearchStageKey] = Field(default_factory=list)
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     call_method: str = Field(default="REST", max_length=40)
-    trigger_modes: list[TriggerSource] = Field(default_factory=lambda: ["human"])
+    trigger_modes: list[TriggerSource] = Field(default_factory=lambda: ["human_workflow"])
     runtime_dependency: str | None = Field(default=None, max_length=200)
     version: str = Field(default="1.0.0", max_length=40)
     validation_metric: dict = Field(default_factory=dict)
@@ -361,10 +544,12 @@ class AlgorithmRunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     algorithm_id: str = Field(min_length=1, max_length=80)
-    trigger_source: TriggerSource = "human"
+    trigger_source: TriggerSource = "human_workflow"
     trigger_context_id: str | None = Field(default=None, max_length=80)
     problem_spec_id: str | None = Field(default=None, max_length=80)
     campaign_id: str | None = Field(default=None, max_length=80)
+    workflow_run_id: str | None = Field(default=None, max_length=80)
+    workflow_step_run_id: str | None = Field(default=None, max_length=80)
     research_run_id: str | None = Field(default=None, max_length=80)
     stage_run_id: str | None = Field(default=None, max_length=80)
     input_snapshot: dict = Field(default_factory=dict)
@@ -396,6 +581,8 @@ class AlgorithmRun(BaseModel):
     problem_spec_id: str | None = None
     problem_spec_version: str | None = None
     campaign_id: str | None = None
+    workflow_run_id: str | None = None
+    workflow_step_run_id: str | None = None
     research_run_id: str | None = None
     stage_run_id: str | None = None
     linked_computation_run_id: str | None = None
@@ -495,6 +682,7 @@ class ResearchRunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     problem_spec_id: str = Field(min_length=1, max_length=80)
+    execution_decision_id: str = Field(min_length=1, max_length=80)
     campaign_id: str | None = Field(default=None, max_length=80)
     profile_id: str = Field(default="fluoropolymer", max_length=80)
     max_iterations: int = Field(default=5, ge=1, le=100)
@@ -521,6 +709,7 @@ class ResearchRun(BaseModel):
     run_id: str
     project_id: str | None = None
     problem_spec_id: str
+    execution_decision_id: str | None = None
     campaign_id: str | None = None
     profile_id: str = "fluoropolymer"
     status: ResearchRunStatus = "draft"

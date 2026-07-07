@@ -67,6 +67,7 @@ class ResearchEngineOrchestrator:
         self,
         problem_spec_id: str,
         *,
+        execution_decision_id: str | None = None,
         campaign_id: str | None = None,
         profile_id: str = "fluoropolymer",
         max_iterations: int = 5,
@@ -81,6 +82,7 @@ class ResearchEngineOrchestrator:
 
         Args:
             problem_spec_id: ProblemSpec ID（必填）。
+            execution_decision_id: 关联的 autoresearch 执行决策 ID。
             campaign_id: 关联的 Campaign ID。
             profile_id: 材料 profile ID。
             max_iterations: 最大迭代次数。
@@ -99,6 +101,14 @@ class ResearchEngineOrchestrator:
         from app.services.research_engine_service import ResearchEngineService
         svc = ResearchEngineService()
         ps = svc.get_problem_spec(problem_spec_id)
+        decision = (
+            svc.get_execution_decision(execution_decision_id)
+            if execution_decision_id
+            else svc.get_active_execution_decision(problem_spec_id)
+        )
+        if decision.problem_spec_id != problem_spec_id or decision.mode != "autoresearch":
+            raise HTTPException(status_code=409, detail="ResearchRun 必须关联 autoresearch 执行决策")
+        execution_decision_id = decision.decision_id
 
         now = utc_now()
         run_id = self._new_id("rr")
@@ -115,6 +125,7 @@ class ResearchEngineOrchestrator:
             "run_id": run_id,
             "project_id": ps.project_id,
             "problem_spec_id": problem_spec_id,
+            "execution_decision_id": execution_decision_id,
             "campaign_id": campaign_id or ps.campaign_id,
             "profile_id": profile_id,
             "status": "draft",
@@ -146,12 +157,21 @@ class ResearchEngineOrchestrator:
             before={},
             after={
                 "problem_spec_id": problem_spec_id,
+                "execution_decision_id": execution_decision_id,
                 "profile_id": profile_id,
                 "max_iterations": max_iterations,
                 "stage_count": len(stage_runs),
             },
             request_id=request_id,
         )
+
+        if decision.initial_context_id is None:
+            from app.infra.research_engine_repositories import ExecutionDecisionRepository
+
+            ExecutionDecisionRepository.update_fields(
+                execution_decision_id,
+                {"initial_context_id": run_id, "updated_at": now},
+            )
 
         return self._doc_to_research_run(doc)
 
@@ -1122,6 +1142,7 @@ class ResearchEngineOrchestrator:
             run_id=doc.get("run_id", ""),
             project_id=doc.get("project_id"),
             problem_spec_id=doc.get("problem_spec_id", ""),
+            execution_decision_id=doc.get("execution_decision_id"),
             campaign_id=doc.get("campaign_id"),
             profile_id=doc.get("profile_id", "fluoropolymer"),
             status=doc.get("status", "draft"),

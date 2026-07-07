@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import HTTPException
 
-from app.infra.computation_repositories import AuditEventRepository
+from app.infra.computation_repositories import AuditEventRepository, OptimizationCampaignRepository, utc_now
 from app.schemas.optimization import CampaignCreateRequest
 from app.schemas.optimization import CampaignStatusChangeRequest
 from app.schemas.optimization import CandidateImportRequest
@@ -73,6 +73,30 @@ class OptimizationServiceTest(ComputationTestCase):
         with self.assertRaises(HTTPException) as caught:
             self.service.get_detail(campaign.campaign_id, actor_user_id="user-b", is_admin=False)
         self.assertEqual(caught.exception.status_code, 403)
+
+    def test_legacy_campaign_missing_planner_and_objectives_is_readable(self) -> None:
+        """旧 ResearchEngine 容器 campaign 缺 planner/objectives 时不应导致列表 500。"""
+        now = utc_now()
+        OptimizationCampaignRepository.save(
+            "campaign_id",
+            {
+                "campaign_id": "ps_legacy",
+                "name": "[ResearchEngine] legacy",
+                "status": "draft",
+                "created_by": "tester",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        listing = self.service.list_campaigns(page=1, page_size=20, actor_user_id="tester")
+        detail = self.service.get_detail("ps_legacy", actor_user_id="tester")
+
+        self.assertEqual(listing.total, 1)
+        self.assertEqual(listing.items[0].planner_type, "fallback")
+        self.assertEqual(listing.items[0].objectives[0].name, "objective")
+        self.assertEqual(detail.campaign.source, "research_engine")
+        self.assertEqual(detail.campaign.linked_problem_spec_id, "ps_legacy")
 
     def test_import_candidates_reports_duplicates_and_updates(self) -> None:
         campaign_id, _ = self._create_campaign_with_candidate()

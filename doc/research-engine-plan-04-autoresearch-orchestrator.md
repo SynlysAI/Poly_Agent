@@ -2,7 +2,7 @@
 
 ## 目标
 
-实现材料研发专用 ResearchRun 和 Stage/Gate 状态机。P0 只做固定阶段序列、mock 阶段推进、候选 gate 审批和现有 computation/optimization 复用，不迁移 AutoResearchClaw 原代码。
+实现材料研发专用 ResearchRun 和 Stage/Gate 状态机。AutoResearch 必须从 `autoresearch` ExecutionDecision 进入，不复用人工 Workflow 的启动入口。P0 只做固定阶段序列、mock 阶段推进、候选 gate 审批和现有 computation/optimization 复用，不迁移 AutoResearchClaw 原代码。
 
 ## 范围
 
@@ -22,11 +22,13 @@
 
 ### Task 1：ResearchRun service
 
-**说明：** 创建 ResearchRun，并基于 ProblemSpec 生成默认 stage_runs。
+**说明：** 创建 ResearchRun，并基于 ProblemSpec 和 `autoresearch` ExecutionDecision 生成默认 stage_runs。
 
 **验收标准：**
-- [ ] `create_research_run(problem_spec_id)` 生成 draft run。
+- [ ] `create_research_run(problem_spec_id, execution_decision_id)` 生成 draft run。
+- [ ] execution_decision_id 必须存在且 mode 为 `autoresearch`。
 - [ ] ResearchRun 关联 `problem_spec_id`、`campaign_id`、`profile_id`。
+- [ ] ResearchRun 保存 `execution_decision_id`，用于追溯用户为何进入 AutoResearch。
 - [ ] 默认 stage_runs 按材料版阶段序列生成。
 - [ ] 创建和状态变更写 AuditEvent。
 

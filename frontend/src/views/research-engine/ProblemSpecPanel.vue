@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Plus, View as ViewIcon } from '@element-plus/icons-vue'
+import { Delete, Plus, View as ViewIcon, InfoFilled, ArrowDown } from '@element-plus/icons-vue'
 
 import {
   createProblemSpec,
@@ -27,18 +27,38 @@ const jsonPreviewVisible = ref(false)
 const isNew = ref(false)
 const isViewing = ref(false)
 
-const form = ref({
-  name: '',
-  material_family: 'fluoropolymer',
-  problem_type: 'formulation_process_optimization',
-  execution_mode: 'hybrid',
-  variables: [],
-  objectives: [{ name: '', direction: 'maximize', unit: '', weight: 1.0, description: '' }],
-  constraints: [],
-  measurements: [],
-  campaign_id: null,
-  description: '',
-})
+function createEmptyForm() {
+  return {
+    name: '',
+    material_family: 'fluoropolymer',
+    problem_type: 'formulation_process_optimization',
+    allowed_execution_modes: ['manual_workbench', 'autoresearch'],
+    decision_status: 'pending_execution_decision',
+    variables: [],
+    objectives: [{ name: '', direction: 'maximize', unit: '', weight: 1.0, description: '' }],
+    constraints: [],
+    measurements: [],
+    campaign_id: null,
+    description: '',
+  }
+}
+
+const form = ref(createEmptyForm())
+
+const executionModeOptions = [
+  { label: '人工算法工作台', value: 'manual_workbench' },
+  { label: 'AutoResearch 自动编排', value: 'autoresearch' },
+]
+
+const decisionStatusOptions = [
+  { label: '待选择执行路径', value: 'pending_execution_decision' },
+  { label: '已选择执行路径', value: 'decision_made' },
+]
+
+const decisionStatusLabelMap = {
+  pending_execution_decision: '待选择执行路径',
+  decision_made: '已选择执行路径',
+}
 
 const materialFamilyOptions = [
   { label: '氟基高分子', value: 'fluoropolymer' },
@@ -55,11 +75,118 @@ const problemTypeOptions = [
   { label: '反应条件优化', value: 'reaction_condition_optimization' },
 ]
 
-const executionModeOptions = [
-  { label: '人工通道', value: 'manual' },
-  { label: '自动编排', value: 'autoresearch' },
-  { label: '双通道并行', value: 'hybrid' },
+// ------ 快速模板 ------
+const SPEC_TEMPLATES = [
+  {
+    label: '氟基高分子电解质优化',
+    data: {
+      material_family: 'fluoropolymer',
+      problem_type: 'formulation_process_optimization',
+      allowed_execution_modes: ['manual_workbench', 'autoresearch'],
+      variables: [
+        { name: 'fluorine_content', type: 'continuous', role: 'formulation', unit: 'wt%', bounds: [20, 60], categories: null, description: '氟含量' },
+        { name: 'curing_temp', type: 'continuous', role: 'process', unit: '°C', bounds: [100, 250], categories: null, description: '固化温度' },
+        { name: 'film_thickness', type: 'continuous', role: 'structure', unit: 'μm', bounds: [10, 100], categories: null, description: '膜厚' },
+      ],
+      objectives: [
+        { name: 'ionic_conductivity', direction: 'maximize', unit: 'S/cm', weight: 1.0, description: '离子电导率' },
+        { name: 'mechanical_strength', direction: 'maximize', unit: 'MPa', weight: 0.5, description: '机械强度' },
+      ],
+      constraints: [
+        { name: 'cost_limit', type: 'hard', expression: 'fluorine_content * 2 + curing_temp * 0.5 < 400', description: '综合成本约束' },
+      ],
+      measurements: [
+        { name: 'Ionic Conductivity', condition: '25°C, 100% RH', method: 'EIS 阻抗谱' },
+        { name: 'Tensile Strength', condition: '23°C, 50% RH, 50mm/min', method: '万能试验机' },
+      ],
+      description: '优化氟基高分子电解质的离子电导率与机械强度，控制成本在合理范围内。',
+    },
+  },
+  {
+    label: '碳基复合材料力学优化',
+    data: {
+      material_family: 'carbon_polymer',
+      problem_type: 'structure_property_prediction',
+      allowed_execution_modes: ['manual_workbench'],
+      variables: [
+        { name: 'fiber_content', type: 'continuous', role: 'formulation', unit: 'vol%', bounds: [10, 40], categories: null, description: '纤维含量' },
+        { name: 'molding_pressure', type: 'continuous', role: 'process', unit: 'MPa', bounds: [5, 30], categories: null, description: '成型压力' },
+      ],
+      objectives: [
+        { name: 'tensile_modulus', direction: 'maximize', unit: 'GPa', weight: 1.0, description: '拉伸模量' },
+        { name: 'density', direction: 'minimize', unit: 'g/cm³', weight: 0.3, description: '密度' },
+      ],
+      constraints: [
+        { name: 'min_strength', type: 'hard', expression: 'tensile_modulus > 50', description: '最低模量要求' },
+      ],
+      measurements: [
+        { name: 'Tensile Modulus', condition: '23°C, 标准大气压', method: 'ASTM D638' },
+      ],
+      description: '优化碳纤维增强复合材料的拉伸模量，同时轻量化。',
+    },
+  },
+  {
+    label: '硅基聚合物热稳定性优化',
+    data: {
+      material_family: 'silicon_polymer',
+      problem_type: 'formulation_process_optimization',
+      allowed_execution_modes: ['manual_workbench', 'autoresearch'],
+      variables: [
+        { name: 'siloxane_ratio', type: 'continuous', role: 'formulation', unit: 'mol%', bounds: [30, 70], categories: null, description: '硅氧烷比例' },
+        { name: 'crosslinker_content', type: 'continuous', role: 'formulation', unit: 'wt%', bounds: [0.5, 5], categories: null, description: '交联剂含量' },
+        { name: 'cure_time', type: 'continuous', role: 'process', unit: 'h', bounds: [1, 24], categories: null, description: '固化时间' },
+      ],
+      objectives: [
+        { name: 'tga_onset', direction: 'maximize', unit: '°C', weight: 1.0, description: '热分解起始温度' },
+      ],
+      constraints: [
+        { name: 'tg_range', type: 'hard', expression: 'tga_onset > 300 AND tga_onset < 500', description: '分解温度合理范围' },
+      ],
+      measurements: [
+        { name: 'TGA Decomposition', condition: 'N2 氛围, 10°C/min', method: 'TGA' },
+        { name: 'DSC Tg', condition: 'N2 氛围, 10°C/min', method: 'DSC' },
+      ],
+      description: '提高硅基聚合物热稳定性，同时保持加工性。',
+    },
+  },
+  {
+    label: '氟碳共聚物配方优化',
+    data: {
+      material_family: 'fluoro_carbon_copolymer',
+      problem_type: 'material_discovery',
+      allowed_execution_modes: ['autoresearch'],
+      variables: [
+        { name: 'F_monomer_ratio', type: 'continuous', role: 'formulation', unit: 'mol%', bounds: [10, 80], categories: null, description: '含氟单体比例' },
+        { name: 'initiator_conc', type: 'continuous', role: 'formulation', unit: 'ppm', bounds: [100, 1000], categories: null, description: '引发剂浓度' },
+        { name: 'temp', type: 'discrete', role: 'process', unit: '°C', bounds: [60, 200], categories: null, description: '反应温度' },
+      ],
+      objectives: [
+        { name: 'water_contact_angle', direction: 'maximize', unit: '°', weight: 1.0, description: '疏水性（水接触角）' },
+        { name: 'dielectric_constant', direction: 'minimize', unit: '', weight: 0.8, description: '介电常数' },
+      ],
+      constraints: [],
+      measurements: [
+        { name: 'Contact Angle', condition: '23°C, 去离子水', method: '接触角仪' },
+        { name: 'Dielectric Constant', condition: '1kHz, 23°C', method: '阻抗分析仪' },
+      ],
+      description: '发现新型氟碳共聚物配方，平衡疏水性与介电性能。',
+    },
+  },
 ]
+
+function applyTemplate(template) {
+  const t = template.data
+  form.value.material_family = t.material_family
+  form.value.problem_type = t.problem_type
+  form.value.allowed_execution_modes = [...t.allowed_execution_modes]
+  form.value.decision_status = 'pending_execution_decision'
+  form.value.variables = JSON.parse(JSON.stringify(t.variables))
+  form.value.objectives = JSON.parse(JSON.stringify(t.objectives))
+  form.value.constraints = JSON.parse(JSON.stringify(t.constraints))
+  form.value.measurements = JSON.parse(JSON.stringify(t.measurements))
+  form.value.description = t.description || ''
+  ElMessage.success(`已应用模板: ${template.label}`)
+}
 
 const variableTypeOptions = [
   { label: '连续', value: 'continuous' },
@@ -137,18 +264,7 @@ function selectSpec(specId) {
     isViewing.value = false
     detail.value = null
     selectedSpecId.value = ''
-    form.value = {
-      name: '',
-      material_family: 'fluoropolymer',
-      problem_type: 'formulation_process_optimization',
-      execution_mode: 'hybrid',
-      variables: [],
-      objectives: [{ name: '', direction: 'maximize', unit: '', weight: 1.0, description: '' }],
-      constraints: [],
-      measurements: [],
-      campaign_id: null,
-      description: '',
-    }
+    form.value = createEmptyForm()
     return
   }
   isNew.value = false
@@ -165,7 +281,8 @@ async function loadSpecDetail(specId) {
       name: detail.value.name,
       material_family: detail.value.material_family,
       problem_type: detail.value.problem_type,
-      execution_mode: detail.value.execution_mode,
+      allowed_execution_modes: [...(detail.value.allowed_execution_modes || ['manual_workbench', 'autoresearch'])],
+      decision_status: detail.value.decision_status || 'pending_execution_decision',
       variables: JSON.parse(JSON.stringify(detail.value.variables || [])),
       objectives: JSON.parse(JSON.stringify(detail.value.objectives || [])),
       constraints: JSON.parse(JSON.stringify(detail.value.constraints || [])),
@@ -173,6 +290,7 @@ async function loadSpecDetail(specId) {
       campaign_id: detail.value.campaign_id,
       description: detail.value.description || '',
     }
+    emit('spec-selected', detail.value)
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -241,6 +359,10 @@ function materialFamilyLabel(value) {
   return found?.label || value
 }
 
+function decisionStatusLabel(value) {
+  return decisionStatusLabelMap[value] || value || '-'
+}
+
 loadSpecs()
 loadAlgorithms()
 </script>
@@ -269,6 +391,23 @@ loadAlgorithms()
       <el-tag v-if="detail" :type="statusTag(detail.status)" size="small">
         {{ detail.status === 'draft' ? '草稿' : detail.status === 'frozen' ? '已冻结' : detail.status }}
       </el-tag>
+      <!-- 快速模板 -->
+      <el-dropdown v-if="canEdit" trigger="click" @command="applyTemplate">
+        <el-button size="small" type="warning" plain>
+          快速模板 <el-icon style="margin-left:4px"><ArrowDown /></el-icon>
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item
+              v-for="tpl in SPEC_TEMPLATES"
+              :key="tpl.label"
+              :command="tpl"
+            >
+              {{ tpl.label }}
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </div>
 
     <!-- ProblemSpec 表单 -->
@@ -290,9 +429,14 @@ loadAlgorithms()
               <el-option v-for="item in problemTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
-          <el-form-item label="执行模式" style="flex:1">
-            <el-select v-model="form.execution_mode" :disabled="!canEdit">
+          <el-form-item label="允许执行路径" style="flex:1">
+            <el-select v-model="form.allowed_execution_modes" multiple :disabled="!canEdit">
               <el-option v-for="item in executionModeOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="决策状态" style="flex:1">
+            <el-select v-model="form.decision_status" :disabled="!canEdit">
+              <el-option v-for="item in decisionStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
         </div>
@@ -339,8 +483,27 @@ loadAlgorithms()
 
         <!-- 约束 -->
         <div class="section-label">
-          <span>约束条件</span>
+          <span>约束条件 <el-tag size="small" type="info" effect="plain">可选</el-tag></span>
           <el-button v-if="canEdit" text type="primary" size="small" :icon="Plus" @click="addConstraint">添加约束</el-button>
+        </div>
+        <!-- 空态引导 -->
+        <div v-if="!form.constraints.length" class="empty-section-hint">
+          <div class="empty-hint-header">
+            <el-icon><InfoFilled /></el-icon>
+            <span>尚未定义约束条件。如果不添加约束，优化将在变量的边界范围内自由搜索。</span>
+          </div>
+          <div class="empty-hint-examples">
+            <p class="empty-hint-label">硬约束表达式范例：</p>
+            <ul>
+              <li><code>temperature &lt; 300 AND temperature &gt; 20</code> — 温度范围约束</li>
+              <li><code>fluorine_content &gt; 0.3</code> — 氟含量下限</li>
+              <li><code>concentration &gt;= 0.1 AND concentration &lt;= 0.5</code> — 浓度范围</li>
+              <li><code>molecular_weight BETWEEN 10000 AND 50000</code> — 分子量范围</li>
+              <li><code>cost_per_kg &lt; 50</code> — 成本约束</li>
+            </ul>
+            <p class="empty-hint-syntax">支持的运算符：<code>&lt; &gt; &lt;= &gt;= == != AND OR BETWEEN...AND IN [...]</code></p>
+          </div>
+          <p class="empty-hint-action">点击上方"添加约束"按钮开始定义约束条件。</p>
         </div>
         <div v-for="(c, idx) in form.constraints" :key="'c-' + idx" class="inline-form-row">
           <el-input v-model="c.name" placeholder="约束名" style="width:140px" :disabled="!canEdit" />
@@ -348,19 +511,37 @@ loadAlgorithms()
             <el-option label="硬约束" value="hard" />
             <el-option label="软约束" value="soft" />
           </el-select>
-          <el-input v-model="c.expression" placeholder="表达式" style="flex:1" :disabled="!canEdit" />
+          <el-input v-model="c.expression" placeholder="表达式，如 temperature < 300" style="flex:1" :disabled="!canEdit" />
+          <el-input v-model="c.description" placeholder="描述（可选）" style="width:140px" :disabled="!canEdit" />
           <el-button v-if="canEdit" text type="danger" size="small" :icon="Delete" @click="removeConstraint(idx)" />
         </div>
 
         <!-- 测量条件 -->
         <div class="section-label">
-          <span>测量条件</span>
+          <span>测量条件 <el-tag size="small" type="info" effect="plain">可选</el-tag></span>
           <el-button v-if="canEdit" text type="primary" size="small" :icon="Plus" @click="addMeasurement">添加测量</el-button>
+        </div>
+        <!-- 空态引导 -->
+        <div v-if="!form.measurements.length" class="empty-section-hint">
+          <div class="empty-hint-header">
+            <el-icon><InfoFilled /></el-icon>
+            <span>尚未定义测量条件。如果不填测量条件，算法将仅基于目标函数值进行优化，不区分测量场景。填写测量条件可帮助算法区分不同测试环境下的表现。</span>
+          </div>
+          <div class="empty-hint-examples">
+            <p class="empty-hint-label">测量条件范例：</p>
+            <ul>
+              <li><code>DSC 测量 Tg</code> / 条件: 升温速率 10°C/min, N₂ 氛围 / 方法: DSC</li>
+              <li><code>拉伸强度</code> / 条件: 23°C, 50% RH, 50mm/min / 方法: 万能试验机 (ASTM D638)</li>
+              <li><code>介电常数</code> / 条件: 1kHz, 23°C / 方法: 阻抗分析仪</li>
+              <li><code>TGA 热分解温度</code> / 条件: N₂, 10°C/min / 方法: TGA</li>
+            </ul>
+          </div>
+          <p class="empty-hint-action">点击上方"添加测量"按钮开始定义测量条件。</p>
         </div>
         <div v-for="(m, idx) in form.measurements" :key="'m-' + idx" class="inline-form-row">
           <el-input v-model="m.name" placeholder="测量项名" style="width:140px" :disabled="!canEdit" />
-          <el-input v-model="m.condition" placeholder="条件" style="width:160px" :disabled="!canEdit" />
-          <el-input v-model="m.method" placeholder="方法" style="flex:1" :disabled="!canEdit" />
+          <el-input v-model="m.condition" placeholder="条件，如 23°C, 50% RH" style="width:180px" :disabled="!canEdit" />
+          <el-input v-model="m.method" placeholder="方法，如 DSC / 万能试验机" style="flex:1" :disabled="!canEdit" />
           <el-button v-if="canEdit" text type="danger" size="small" :icon="Delete" @click="removeMeasurement(idx)" />
         </div>
 
@@ -382,6 +563,8 @@ loadAlgorithms()
         <el-descriptions-item label="创建时间">{{ formatDate(detail.created_at) }}</el-descriptions-item>
         <el-descriptions-item label="更新时间">{{ formatDate(detail.updated_at) }}</el-descriptions-item>
         <el-descriptions-item label="冻结版本">{{ detail.frozen_version }}</el-descriptions-item>
+        <el-descriptions-item label="决策状态">{{ decisionStatusLabel(detail.decision_status) }}</el-descriptions-item>
+        <el-descriptions-item label="允许执行路径">{{ (detail.allowed_execution_modes || []).join(', ') }}</el-descriptions-item>
       </el-descriptions>
     </div>
 
@@ -450,5 +633,76 @@ loadAlgorithms()
   word-break: break-word;
   max-height: calc(100vh - 100px);
   overflow: auto;
+}
+
+/* ---- 空态引导 ---- */
+.empty-section-hint {
+  background: rgba(59, 130, 246, 0.04);
+  border: 1px dashed rgba(59, 130, 246, 0.25);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+.empty-hint-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--app-ink-body);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+.empty-hint-header .el-icon {
+  color: #3b82f6;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.empty-hint-examples {
+  background: rgba(255,255,255,0.04);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+}
+.empty-hint-label {
+  margin: 0 0 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--app-ink);
+}
+.empty-hint-examples ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.empty-hint-examples li {
+  font-size: 13px;
+  color: var(--app-ink-body);
+  line-height: 1.8;
+}
+.empty-hint-examples code {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--app-mono-font);
+  font-size: 12px;
+}
+.empty-hint-syntax {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--app-ink-muted);
+}
+.empty-hint-syntax code {
+  background: rgba(124, 58, 237, 0.1);
+  color: #7c3aed;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--app-mono-font);
+  font-size: 11px;
+}
+.empty-hint-action {
+  margin: 0;
+  font-size: 12px;
+  color: var(--app-ink-muted);
+  font-style: italic;
 }
 </style>

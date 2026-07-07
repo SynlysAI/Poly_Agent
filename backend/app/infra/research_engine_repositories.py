@@ -23,8 +23,11 @@ from app.infra.computation_repositories import (
 from app.infra.mongo import (
     get_algorithm_registry_entries_collection,
     get_algorithm_runs_collection,
+    get_execution_decisions_collection,
+    get_manual_algorithm_workflows_collection,
     get_research_problem_specs_collection,
     get_research_runs_collection,
+    get_workflow_runs_collection,
 )
 
 
@@ -147,6 +150,7 @@ class AlgorithmRegistryRepository(BaseRepository):
         cls,
         *,
         algorithm_type: str | None = None,
+        algorithm_family: str | None = None,
         material_scope: str | None = None,
         trigger_mode: str | None = None,
         status: str | None = None,
@@ -157,8 +161,9 @@ class AlgorithmRegistryRepository(BaseRepository):
 
         Args:
             algorithm_type: 按算法类型过滤（retriever/predictor/simulator/optimizer）。
+            algorithm_family: 按产品算法族过滤。
             material_scope: 按材料体系过滤。
-            trigger_mode: 按触发方式过滤（human/autoresearch/system）。
+            trigger_mode: 按触发方式过滤（human_workflow/autoresearch/system）。
             status: 按状态过滤。
             page: 页码。
             page_size: 每页条数。
@@ -169,10 +174,16 @@ class AlgorithmRegistryRepository(BaseRepository):
         filters: dict[str, Any] = {}
         if algorithm_type:
             filters["type"] = algorithm_type
+        if algorithm_family:
+            filters["algorithm_family"] = algorithm_family
         if material_scope:
             filters["material_scope"] = {"$in": [material_scope]}
         if trigger_mode:
-            filters["trigger_modes"] = {"$in": [trigger_mode]}
+            # 兼容旧数据：查询 "human_workflow" 时也匹配旧值 "human"
+            if trigger_mode == "human_workflow":
+                filters["trigger_modes"] = {"$in": ["human_workflow", "human"]}
+            else:
+                filters["trigger_modes"] = {"$in": [trigger_mode]}
         if status:
             filters["status"] = status
 
@@ -195,6 +206,8 @@ class AlgorithmRegistryRepository(BaseRepository):
         simple_filters: dict[str, Any] = {}
         if algorithm_type:
             simple_filters["type"] = algorithm_type
+        if algorithm_family:
+            simple_filters["algorithm_family"] = algorithm_family
         if status:
             simple_filters["status"] = status
 
@@ -213,11 +226,19 @@ class AlgorithmRegistryRepository(BaseRepository):
             ]
 
         # 后置过滤：trigger_modes（检查值是否包含在 trigger_modes 列表中）
+        # 兼容旧数据：查询 "human_workflow" 时也匹配旧值 "human"
         if trigger_mode:
-            rows = [
-                row for row in rows
-                if trigger_mode in (row.get("trigger_modes") or [])
-            ]
+            if trigger_mode == "human_workflow":
+                rows = [
+                    row for row in rows
+                    if "human_workflow" in (row.get("trigger_modes") or [])
+                    or "human" in (row.get("trigger_modes") or [])
+                ]
+            else:
+                rows = [
+                    row for row in rows
+                    if trigger_mode in (row.get("trigger_modes") or [])
+                ]
 
         rows = _sort_documents(rows, "algorithm_id", reverse=False)
         return rows[skip : skip + page_size], len(rows)
@@ -225,6 +246,8 @@ class AlgorithmRegistryRepository(BaseRepository):
     @classmethod
     def seed_defaults(cls, entries: list[dict[str, Any]]) -> int:
         """写入默认算法能力清单条目（幂等：已存在的跳过）。
+
+        同时修复已存在条目中的旧 trigger_modes 值（如 "human" -> "human_workflow"）。
 
         Args:
             entries: 算法条目字典列表。
@@ -238,6 +261,16 @@ class AlgorithmRegistryRepository(BaseRepository):
             if existing is None:
                 cls.save("algorithm_id", entry)
                 count += 1
+            else:
+                # 修复已存在条目的旧 trigger_modes 值
+                existing_modes = existing.get("trigger_modes") or []
+                needs_repair = "human" in existing_modes
+                if needs_repair:
+                    from app.services.research_engine_service import normalize_trigger_modes
+                    repaired = normalize_trigger_modes(existing_modes)
+                    cls.update_fields(entry["algorithm_id"], {"trigger_modes": repaired})
+                if entry.get("algorithm_family") and not existing.get("algorithm_family"):
+                    cls.update_fields(entry["algorithm_id"], {"algorithm_family": entry["algorithm_family"]})
         return count
 
     @classmethod
@@ -270,6 +303,173 @@ class AlgorithmRegistryRepository(BaseRepository):
         return bool(demo_store.mutate(mutate))
 
 
+class ExecutionDecisionRepository(BaseRepository):
+    """ExecutionDecision 仓储。"""
+
+    collection_name = "execution_decisions"
+
+    @classmethod
+    def _collection(cls):
+        return get_execution_decisions_collection()
+
+    @classmethod
+    def list_decisions(
+        cls,
+        *,
+        problem_spec_id: str | None = None,
+        mode: str | None = None,
+        status: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询 ExecutionDecision。"""
+        filters: dict[str, Any] = {}
+        if problem_spec_id:
+            filters["problem_spec_id"] = problem_spec_id
+        if mode:
+            filters["mode"] = mode
+        if status:
+            filters["status"] = status
+        if created_by:
+            filters["created_by"] = created_by
+        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+    @classmethod
+    def find_active(cls, problem_spec_id: str) -> dict[str, Any] | None:
+        """查询 ProblemSpec 当前 active decision。"""
+        return cls.find_one({"problem_spec_id": problem_spec_id, "status": "active"})
+
+    @classmethod
+    def update_fields(cls, decision_id: str, fields: dict[str, Any]) -> bool:
+        """更新 ExecutionDecision 字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"decision_id": decision_id}, {"$set": fields}
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("decision_id") == decision_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+
+class ManualAlgorithmWorkflowRepository(BaseRepository):
+    """ManualAlgorithmWorkflow 仓储。"""
+
+    collection_name = "manual_algorithm_workflows"
+
+    @classmethod
+    def _collection(cls):
+        return get_manual_algorithm_workflows_collection()
+
+    @classmethod
+    def list_workflows(
+        cls,
+        *,
+        problem_spec_id: str | None = None,
+        execution_decision_id: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询人工 Workflow。"""
+        filters: dict[str, Any] = {}
+        if problem_spec_id:
+            filters["problem_spec_id"] = problem_spec_id
+        if execution_decision_id:
+            filters["execution_decision_id"] = execution_decision_id
+        if created_by:
+            filters["created_by"] = created_by
+        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+    @classmethod
+    def update_fields(cls, workflow_id: str, fields: dict[str, Any]) -> bool:
+        """更新人工 Workflow 字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"workflow_id": workflow_id}, {"$set": fields}
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("workflow_id") == workflow_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+
+class WorkflowRunRepository(BaseRepository):
+    """WorkflowRun 仓储。"""
+
+    collection_name = "workflow_runs"
+
+    @classmethod
+    def _collection(cls):
+        return get_workflow_runs_collection()
+
+    @classmethod
+    def list_runs(
+        cls,
+        *,
+        workflow_id: str | None = None,
+        problem_spec_id: str | None = None,
+        execution_decision_id: str | None = None,
+        status: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询 WorkflowRun。"""
+        filters: dict[str, Any] = {}
+        if workflow_id:
+            filters["workflow_id"] = workflow_id
+        if problem_spec_id:
+            filters["problem_spec_id"] = problem_spec_id
+        if execution_decision_id:
+            filters["execution_decision_id"] = execution_decision_id
+        if status:
+            filters["status"] = status
+        if created_by:
+            filters["created_by"] = created_by
+        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+    @classmethod
+    def update_fields(cls, workflow_run_id: str, fields: dict[str, Any]) -> bool:
+        """更新 WorkflowRun 字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"workflow_run_id": workflow_run_id}, {"$set": fields}
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("workflow_run_id") == workflow_run_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+
 class AlgorithmRunRepository(BaseRepository):
     """AlgorithmRun 仓储。
 
@@ -289,6 +489,7 @@ class AlgorithmRunRepository(BaseRepository):
         *,
         problem_spec_id: str | None = None,
         campaign_id: str | None = None,
+        workflow_run_id: str | None = None,
         algorithm_id: str | None = None,
         status: str | None = None,
         trigger_source: str | None = None,
@@ -302,6 +503,7 @@ class AlgorithmRunRepository(BaseRepository):
         Args:
             problem_spec_id: 按 ProblemSpec ID 过滤。
             campaign_id: 按 Campaign ID 过滤。
+            workflow_run_id: 按 WorkflowRun ID 过滤。
             algorithm_id: 按算法 ID 过滤。
             status: 按运行状态过滤。
             trigger_source: 按触发来源过滤。
@@ -318,6 +520,8 @@ class AlgorithmRunRepository(BaseRepository):
             filters["problem_spec_id"] = problem_spec_id
         if campaign_id:
             filters["campaign_id"] = campaign_id
+        if workflow_run_id:
+            filters["workflow_run_id"] = workflow_run_id
         if algorithm_id:
             filters["algorithm_id"] = algorithm_id
         if status:

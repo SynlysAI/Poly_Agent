@@ -1,187 +1,907 @@
 <script setup>
-import { ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, MagicStick, SetUp, Star } from '@element-plus/icons-vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import {
+  Check, ArrowRight, DataAnalysis, MagicStick, Star, SetUp, Document, CircleCheck, CircleClose, Clock,
+} from '@element-plus/icons-vue'
 
+import ProblemSpecPanel from './research-engine/ProblemSpecPanel.vue'
 import AlgorithmRegistryPanel from './research-engine/AlgorithmRegistryPanel.vue'
 import AlgorithmRunPanel from './research-engine/AlgorithmRunPanel.vue'
 import AlgorithmRunDetail from './research-engine/AlgorithmRunDetail.vue'
-import ProblemSpecPanel from './research-engine/ProblemSpecPanel.vue'
 import ResearchRunPanel from './research-engine/ResearchRunPanel.vue'
+import {
+  createExecutionDecision,
+  getActiveExecutionDecision,
+  getApiErrorMessage,
+} from '../api/polyAgentApi'
+import { ElMessage } from 'element-plus'
 
 const route = useRoute()
-const router = useRouter()
 
-const activeTab = ref('problemspec')
+// ── 工作流全局状态 ──
+const currentStep = ref(1)
+const problemSpec = ref(null)
+const executionDecision = ref(null)
+const executionMode = ref(null) // 'manual_workbench' | 'autoresearch'
+const modeSelecting = ref(false)
+const manualWorkflow = ref(null)
+const workflowRun = ref(null)
+const algorithmRun = ref(null)
+const researchRun = ref(null)
 const selectedAlgorithm = ref(null)
-const selectedRunId = ref('')
-const currentProblemSpecId = ref('')
-const currentCampaignId = ref('')
 
-// 从 URL query 中恢复状态
+// 从 URL query 恢复状态
+if (route.query.problem_spec_id) {
+  currentStep.value = 1
+}
 if (route.query.run_id) {
-  selectedRunId.value = String(route.query.run_id)
-  activeTab.value = 'algorithm-runs'
+  algorithmRun.value = { run_id: String(route.query.run_id) }
 }
 if (route.query.research_run_id) {
-  activeTab.value = 'research-run'
-}
-if (route.query.problem_spec_id) {
-  activeTab.value = 'problemspec'
+  currentStep.value = 3
+  executionMode.value = 'autoresearch'
 }
 
+// ── 步骤定义 ──
+const steps = computed(() => [
+  {
+    key: 1,
+    title: '研发任务定义',
+    icon: DataAnalysis,
+    description: '创建/选择/冻结 ProblemSpec',
+    status: stepStatus(1),
+  },
+  {
+    key: 2,
+    title: '执行路径选择',
+    icon: MagicStick,
+    description: '选择 manual_workbench 或 autoresearch',
+    status: stepStatus(2),
+    detail: executionMode.value
+      ? (executionMode.value === 'manual_workbench' ? '人工算法工作台' : 'AutoResearch 自动编排')
+      : null,
+  },
+  {
+    key: 3,
+    title: executionMode.value === 'autoresearch' ? 'AutoResearch 编排' : '人工 Workflow 运行',
+    icon: executionMode.value === 'autoresearch' ? Star : SetUp,
+    description: executionMode.value === 'autoresearch'
+      ? '创建并管理 ResearchRun'
+      : '选择算法、配置参数、运行 Workflow',
+    status: stepStatus(3),
+  },
+  {
+    key: 4,
+    title: '当前运行状态',
+    icon: Clock,
+    description: '查看当前运行步骤与结果',
+    status: stepStatus(4),
+  },
+  {
+    key: 5,
+    title: '追溯/结果汇总',
+    icon: Document,
+    description: '查看完整追溯链与结果摘要',
+    status: stepStatus(5),
+  },
+])
+
+function stepStatus(stepKey) {
+  if (stepKey < currentStep.value) return 'completed'
+  if (stepKey === currentStep.value) return 'active'
+  return 'pending'
+}
+
+const isStepDisabled = (stepKey) => {
+  if (stepKey === 1) return false
+  if (stepKey === 2) return !problemSpec.value
+  if (stepKey === 3) return !executionDecision.value || !executionMode.value
+  if (stepKey === 4) return !(algorithmRun.value || researchRun.value)
+  if (stepKey === 5) return !(algorithmRun.value || researchRun.value)
+  return true
+}
+
+// ── ProblemSpec 事件处理 ──
 function handleSpecSelected(spec) {
-  currentProblemSpecId.value = spec?.problem_spec_id || ''
-  currentCampaignId.value = spec?.campaign_id || ''
+  problemSpec.value = spec
+  if (spec && currentStep.value === 1) {
+    // 自动进入步骤 2
+    currentStep.value = 2
+  }
+}
+
+// ── 执行路径选择 ──
+async function selectExecutionMode(mode) {
+  if (!problemSpec.value) {
+    ElMessage.warning('请先选择或创建 ProblemSpec')
+    return
+  }
+  modeSelecting.value = true
+  try {
+    const decision = await ensureExecutionDecision(
+      problemSpec.value.problem_spec_id,
+      mode,
+      `选择 ${mode === 'manual_workbench' ? '人工算法工作台' : 'AutoResearch 自动编排'} 执行路径`,
+    )
+    executionDecision.value = decision
+    executionMode.value = mode
+    currentStep.value = 3
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    modeSelecting.value = false
+  }
+}
+
+async function ensureExecutionDecision(problemSpecId, mode, reason) {
+  try {
+    return await createExecutionDecision(problemSpecId, { mode, reason })
+  } catch (error) {
+    if (error.status !== 409) throw error
+    const active = await getActiveExecutionDecision(problemSpecId)
+    if (active?.mode === mode) return active
+    throw error
+  }
+}
+
+// ── 算法运行事件 ──
+function handleRunCompleted(run) {
+  algorithmRun.value = run
+  currentStep.value = 4
 }
 
 function handleAlgorithmSelected(algo) {
   selectedAlgorithm.value = algo
-  activeTab.value = 'algorithm-run'
 }
 
-function handleRunCompleted(run) {
-  selectedRunId.value = run?.run_id || ''
-}
-
+// ── ResearchRun 事件 ──
 function handleResearchRunUpdated(run) {
-  // 同步更新状态
+  researchRun.value = run
+  if (run?.status === 'completed' || run?.status === 'failed') {
+    currentStep.value = 5
+  } else if (run?.status !== 'draft') {
+    currentStep.value = 4
+  }
+}
+
+// ── 导航到步骤 ──
+function goToStep(stepKey) {
+  if (isStepDisabled(stepKey)) return
+  currentStep.value = stepKey
+}
+
+// ── 步骤图标组件映射 ──
+function stepIconComponent(step) {
+  if (step.status === 'completed') return CircleCheck
+  if (step.status === 'active') return step.icon
+  return step.icon
 }
 </script>
 
 <template>
-  <div class="research-engine-view">
-    <section class="panel overview-panel">
-      <div class="overview-content">
-        <div>
-          <h3 class="panel-title">ResearchEngine 研发引擎</h3>
-          <p class="panel-subtitle">定义材料研发任务、浏览算法能力清单、人工调用算法工具、启动 AutoResearch 自动编排并审批阶段门禁。</p>
-        </div>
-        <div class="overview-flow">
-          <span><el-icon><DataAnalysis /></el-icon> ProblemSpec</span>
-          <span><el-icon><MagicStick /></el-icon> 算法运行</span>
-          <span><el-icon><Star /></el-icon> 自动编排</span>
-          <span><el-icon><SetUp /></el-icon> Gate 审批</span>
-        </div>
+  <div class="research-engine-workflow">
+    <!-- 顶部概览条 -->
+    <section class="workflow-topbar">
+      <div class="topbar-left">
+        <h3>ResearchEngine 研发引擎</h3>
+        <span class="topbar-subtitle">引导式工作流：从任务定义到结果追溯</span>
+      </div>
+      <div class="topbar-right">
+        <span v-if="problemSpec" class="topbar-badge">
+          <el-icon><Check /></el-icon>
+          {{ problemSpec.name }}
+        </span>
+        <span v-if="executionMode" class="topbar-badge mode-badge">
+          {{ executionMode === 'manual_workbench' ? '人工工作台' : 'AutoResearch' }}
+        </span>
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel-body" style="padding:0">
-        <el-tabs v-model="activeTab">
-          <el-tab-pane label="研发任务定义" name="problemspec">
-            <div style="padding:14px">
-              <ProblemSpecPanel @spec-selected="handleSpecSelected" />
-            </div>
-          </el-tab-pane>
+    <!-- 主体：左侧工作流树 + 右侧工作区 -->
+    <div class="workflow-body">
+      <!-- 左侧工作流树 -->
+      <aside class="workflow-tree">
+        <div class="tree-header">工作流步骤</div>
+        <div class="tree-steps">
+          <div
+            v-for="step in steps"
+            :key="step.key"
+            class="tree-step"
+            :class="{
+              'is-active': step.status === 'active',
+              'is-completed': step.status === 'completed',
+              'is-disabled': isStepDisabled(step.key) && step.status !== 'active',
+            }"
+            @click="goToStep(step.key)"
+          >
+            <!-- 连线 -->
+            <div v-if="step.key > 1" class="step-connector" :class="{ 'connector-done': stepStatus(step.key - 1) === 'completed' }" />
 
-          <el-tab-pane label="算法能力清单" name="algorithms">
-            <div style="padding:14px">
+            <div class="step-node">
+              <div class="step-icon-wrapper">
+                <el-icon :size="18">
+                  <component :is="stepIconComponent(step)" />
+                </el-icon>
+              </div>
+              <div class="step-text">
+                <div class="step-title">{{ step.title }}</div>
+                <div class="step-desc">{{ step.description }}</div>
+                <div v-if="step.detail" class="step-detail">{{ step.detail }}</div>
+              </div>
+              <el-icon v-if="step.status === 'active'" class="step-arrow" :size="14">
+                <ArrowRight />
+              </el-icon>
+            </div>
+          </div>
+        </div>
+
+        <!-- 快速状态摘要 -->
+        <div v-if="problemSpec || researchRun || algorithmRun" class="tree-status">
+          <div class="status-title">当前状态</div>
+          <div v-if="problemSpec" class="status-row">
+            <el-tag size="small" type="success" effect="plain">ProblemSpec</el-tag>
+            <span>{{ problemSpec.status === 'frozen' ? '已冻结' : '草稿' }}</span>
+          </div>
+          <div v-if="executionDecision" class="status-row">
+            <el-tag size="small" type="primary" effect="plain">执行路径</el-tag>
+            <span>{{ executionMode === 'manual_workbench' ? '人工工作台' : 'AutoResearch' }}</span>
+          </div>
+          <div v-if="algorithmRun" class="status-row">
+            <el-tag size="small" type="warning" effect="plain">AlgorithmRun</el-tag>
+            <span>{{ algorithmRun.status || 'completed' }}</span>
+          </div>
+          <div v-if="researchRun" class="status-row">
+            <el-tag size="small" :type="researchRun.status === 'completed' ? 'success' : researchRun.status === 'failed' ? 'danger' : 'warning'" effect="plain">
+              ResearchRun
+            </el-tag>
+            <span>{{ researchRun.status }}</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 右侧工作区 -->
+      <main class="workflow-main">
+        <!-- 步骤 1: 研发任务定义 -->
+        <div v-if="currentStep === 1" class="step-panel">
+          <div class="step-panel-header">
+            <el-icon :size="20"><DataAnalysis /></el-icon>
+            <h4>步骤 1：研发任务定义</h4>
+          </div>
+          <p class="step-panel-desc">创建、编辑或选择已有的 ProblemSpec。冻结后即可进入下一步选择执行路径。</p>
+          <ProblemSpecPanel @spec-selected="handleSpecSelected" />
+        </div>
+
+        <!-- 步骤 2: 执行路径选择 -->
+        <div v-if="currentStep === 2" class="step-panel">
+          <div class="step-panel-header">
+            <el-icon :size="20"><MagicStick /></el-icon>
+            <h4>步骤 2：执行路径选择</h4>
+          </div>
+          <p class="step-panel-desc">
+            为已选择的研发任务指定执行通道：
+            <strong>人工算法工作台</strong> 由用户手动编排算法节点；
+            <strong>AutoResearch 自动编排</strong> 由系统按十阶段自动推进。
+          </p>
+
+          <div v-if="!problemSpec" class="empty-hint">
+            请先在步骤 1 中选择或创建 ProblemSpec
+          </div>
+
+          <div v-else class="mode-choice-grid">
+            <div
+              class="mode-choice-card"
+              :class="{ 'is-selected': executionMode === 'manual_workbench' }"
+              @click="selectExecutionMode('manual_workbench')"
+            >
+              <div class="mode-choice-icon manual-icon">
+                <el-icon :size="24"><MagicStick /></el-icon>
+              </div>
+              <h5>人工算法工作台</h5>
+              <p>从算法清单中选择节点，手动编排 Workflow 并逐个运行。</p>
+              <el-button
+                size="small"
+                type="primary"
+                :loading="modeSelecting"
+                :disabled="!problemSpec"
+              >
+                选择人工模式
+              </el-button>
+            </div>
+
+            <div
+              class="mode-choice-card"
+              :class="{ 'is-selected': executionMode === 'autoresearch' }"
+              @click="selectExecutionMode('autoresearch')"
+            >
+              <div class="mode-choice-icon auto-icon">
+                <el-icon :size="24"><Star /></el-icon>
+              </div>
+              <h5>AutoResearch 自动编排</h5>
+              <p>系统自动按十阶段推进：文献检索 → 结构表示 → 计算预测 → 候选推荐 → Gate 审批 → 实验执行 → 结果回填 → 模型更新 → 经验归档。</p>
+              <el-button
+                size="small"
+                type="success"
+                :loading="modeSelecting"
+                :disabled="!problemSpec"
+              >
+                选择自动模式
+              </el-button>
+            </div>
+          </div>
+
+          <!-- 已选择执行路径后 -->
+          <div v-if="executionDecision && executionMode" class="decision-confirmed">
+            <el-alert
+              :title="`已选择：${executionMode === 'manual_workbench' ? '人工算法工作台' : 'AutoResearch 自动编排'}`"
+              type="success"
+              :closable="false"
+              show-icon
+            >
+              <template #default>
+                <p style="margin:4px 0 0">执行决策 ID: {{ executionDecision.decision_id }}</p>
+                <el-button style="margin-top:8px" type="primary" size="small" @click="currentStep = 3">
+                  进入工作区 <el-icon style="margin-left:4px"><ArrowRight /></el-icon>
+                </el-button>
+              </template>
+            </el-alert>
+          </div>
+        </div>
+
+        <!-- 步骤 3: 分支工作区 -->
+        <div v-if="currentStep === 3" class="step-panel">
+          <!-- 人工 Workflow -->
+          <template v-if="executionMode === 'manual_workbench'">
+            <div class="step-panel-header">
+              <el-icon :size="20"><SetUp /></el-icon>
+              <h4>步骤 3：人工 Workflow 运行</h4>
+            </div>
+            <p class="step-panel-desc">从算法清单中选择算法，配置输入参数，创建 Workflow 并运行。</p>
+
+            <!-- 算法选择区域 -->
+            <div v-if="!selectedAlgorithm" class="algo-select-section">
+              <h5>选择算法</h5>
               <AlgorithmRegistryPanel @run-created="handleAlgorithmSelected" />
             </div>
-          </el-tab-pane>
 
-          <el-tab-pane label="人工算法运行" name="algorithm-run">
-            <div style="padding:14px">
+            <!-- 已选择算法，显示运行面板 -->
+            <div v-else>
+              <div class="selected-algo-bar">
+                <span>已选择算法：<strong>{{ selectedAlgorithm.name }}</strong> ({{ selectedAlgorithm.algorithm_id }})</span>
+                <el-button size="small" @click="selectedAlgorithm = null">重新选择</el-button>
+              </div>
               <div class="two-col">
                 <div class="col-left">
                   <AlgorithmRunPanel
                     :selected-algorithm="selectedAlgorithm"
-                    :problem-spec-id="currentProblemSpecId"
-                    :campaign-id="currentCampaignId"
+                    :problem-spec-id="problemSpec?.problem_spec_id || ''"
+                    :campaign-id="problemSpec?.campaign_id || ''"
                     @run-completed="handleRunCompleted"
                   />
                 </div>
                 <div class="col-right">
-                  <AlgorithmRunDetail v-if="selectedRunId" :run-id="selectedRunId" />
-                  <div v-else class="empty-hint">运行算法后将在此处显示详情</div>
+                  <AlgorithmRunDetail v-if="algorithmRun?.run_id" :run-id="algorithmRun.run_id" />
+                  <div v-else class="empty-hint">运行 Workflow 后将在此处显示 AlgorithmRun 详情</div>
                 </div>
               </div>
             </div>
-          </el-tab-pane>
+          </template>
 
-          <el-tab-pane label="AutoResearch 编排" name="research-run">
-            <div style="padding:14px">
-              <ResearchRunPanel @research-run-updated="handleResearchRunUpdated" />
+          <!-- AutoResearch -->
+          <template v-else-if="executionMode === 'autoresearch'">
+            <div class="step-panel-header">
+              <el-icon :size="20"><Star /></el-icon>
+              <h4>步骤 3：AutoResearch 编排</h4>
             </div>
-          </el-tab-pane>
-        </el-tabs>
-      </div>
-    </section>
+            <p class="step-panel-desc">创建 ResearchRun，启动后系统自动按十阶段推进，Gate 阶段会等待人工审批。</p>
+            <ResearchRunPanel @research-run-updated="handleResearchRunUpdated" />
+          </template>
+
+          <!-- 未选择执行路径 -->
+          <div v-else class="empty-hint">
+            请先在步骤 2 中选择执行路径
+          </div>
+        </div>
+
+        <!-- 步骤 4: 当前运行状态 -->
+        <div v-if="currentStep === 4" class="step-panel">
+          <div class="step-panel-header">
+            <el-icon :size="20"><Clock /></el-icon>
+            <h4>步骤 4：当前运行状态</h4>
+          </div>
+          <p class="step-panel-desc">查看当前正在执行或最近完成的运行结果。</p>
+
+          <!-- AlgorithmRun 结果 -->
+          <template v-if="algorithmRun">
+            <AlgorithmRunDetail v-if="algorithmRun.run_id" :run-id="algorithmRun.run_id" />
+            <div v-else class="empty-hint">暂无 AlgorithmRun 数据</div>
+          </template>
+
+          <!-- ResearchRun 结果 -->
+          <template v-if="researchRun">
+            <div class="run-summary-card">
+              <div class="summary-header">
+                <span>ResearchRun · {{ researchRun.run_id }}</span>
+                <el-tag
+                  :type="researchRun.status === 'completed' ? 'success' : researchRun.status === 'failed' ? 'danger' : 'warning'"
+                >
+                  {{ researchRun.status }}
+                </el-tag>
+              </div>
+              <el-descriptions :column="2" border size="small" style="margin-top:12px">
+                <el-descriptions-item label="ProblemSpec">{{ researchRun.problem_spec_id }}</el-descriptions-item>
+                <el-descriptions-item label="Profile">{{ researchRun.profile_id }}</el-descriptions-item>
+                <el-descriptions-item label="当前阶段">{{ researchRun.current_stage || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="阶段进度">
+                  {{ researchRun.stage_runs?.filter(s => s.status === 'completed').length || 0 }}
+                  /
+                  {{ researchRun.stage_runs?.length || 0 }}
+                </el-descriptions-item>
+              </el-descriptions>
+              <el-button
+                style="margin-top:12px"
+                type="primary"
+                size="small"
+                @click="currentStep = 5"
+              >
+                查看完整追溯链 <el-icon style="margin-left:4px"><ArrowRight /></el-icon>
+              </el-button>
+            </div>
+          </template>
+
+          <div v-if="!algorithmRun && !researchRun" class="empty-hint">
+            暂无运行数据。请先在步骤 3 中创建并执行 Workflow 或 ResearchRun。
+          </div>
+        </div>
+
+        <!-- 步骤 5: 追溯/结果汇总 -->
+        <div v-if="currentStep === 5" class="step-panel">
+          <div class="step-panel-header">
+            <el-icon :size="20"><Document /></el-icon>
+            <h4>步骤 5：追溯与结果汇总</h4>
+          </div>
+          <p class="step-panel-desc">查看完整追溯链，包括审计事件、关联计算任务和观测记录。</p>
+
+          <template v-if="algorithmRun?.run_id">
+            <AlgorithmRunDetail :run-id="algorithmRun.run_id" :show-traceability="true" />
+          </template>
+
+          <template v-if="researchRun?.run_id">
+            <div class="traceability-placeholder">
+              <el-alert
+                title="追溯链"
+                type="info"
+                :closable="false"
+                show-icon
+              >
+                <template #default>
+                  <p>ResearchRun 完整追溯链可通过 API 获取：</p>
+                  <code style="background:#f8fbff;padding:2px 8px;border-radius:4px;font-size:12px">
+                    GET /api/v1/research-engine/research-runs/{{ researchRun.run_id }}/traceability
+                  </code>
+                </template>
+              </el-alert>
+            </div>
+          </template>
+
+          <div v-if="!algorithmRun && !researchRun" class="empty-hint">
+            暂无追溯数据
+          </div>
+        </div>
+      </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.research-engine-view {
+.research-engine-workflow {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  height: calc(100vh - 120px);
+  min-height: 600px;
+  gap: 0;
 }
 
-.overview-panel {
-  padding: 0;
-}
-
-.overview-content {
+/* ── 顶部概览条 ── */
+.workflow-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 18px;
+  padding: 14px 20px;
+  background: #fff;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md) var(--app-radius-md) 0 0;
+  border-bottom: none;
 }
 
-.panel-subtitle {
-  margin: 6px 0 0;
-  color: var(--app-ink-muted);
+.topbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.topbar-left h3 {
+  margin: 0;
+  font-size: 17px;
+  color: var(--app-ink);
+}
+
+.topbar-subtitle {
   font-size: 13px;
+  color: var(--app-ink-muted);
 }
 
-.overview-flow {
+.topbar-right {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
 }
 
-.overview-flow span {
-  min-height: 32px;
-  padding: 6px 10px;
-  border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius-sm);
-  background: #f8fbff;
-  color: var(--app-ink-body);
+.topbar-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--app-radius-sm);
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.mode-badge {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+/* ── 主体两栏布局 ── */
+.workflow-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--app-border-soft);
+  border-top: none;
+  border-radius: 0 0 var(--app-radius-md) var(--app-radius-md);
+  background: #fff;
+  overflow: hidden;
+}
+
+/* ── 左侧工作流树 ── */
+.workflow-tree {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--app-border-soft);
+  background: #fafbfc;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.tree-header {
+  padding: 14px 18px 10px;
+  font-weight: 700;
   font-size: 13px;
+  color: var(--app-ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tree-steps {
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px;
+}
+
+.tree-step {
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tree-step.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.step-connector {
+  width: 2px;
+  height: 18px;
+  background: #e5e7eb;
+  margin-left: 22px;
+}
+
+.connector-done {
+  background: #16a34a;
+}
+
+.step-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--app-radius-md);
+  transition: background 0.15s;
+}
+
+.tree-step.is-active .step-node {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+
+.tree-step.is-completed .step-node {
+  background: transparent;
+}
+
+.tree-step:not(.is-disabled):hover .step-node {
+  background: #f8fbff;
+}
+
+.step-icon-wrapper {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: #e5e7eb;
+  color: #6b7280;
+}
+
+.tree-step.is-active .step-icon-wrapper {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.tree-step.is-completed .step-icon-wrapper {
+  background: #16a34a;
+  color: #fff;
+}
+
+.step-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-title {
   font-weight: 600;
+  font-size: 13px;
+  color: var(--app-ink);
+  line-height: 1.3;
 }
 
-.overview-flow .el-icon {
-  color: var(--app-primary-active);
+.tree-step.is-active .step-title {
+  color: #1d4ed8;
 }
 
+.step-desc {
+  font-size: 11px;
+  color: var(--app-ink-muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.step-detail {
+  font-size: 11px;
+  color: #3b82f6;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+.step-arrow {
+  color: #3b82f6;
+  align-self: center;
+  animation: pulse-right 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-right {
+  0%, 100% { transform: translateX(0); opacity: 0.6; }
+  50% { transform: translateX(4px); opacity: 1; }
+}
+
+/* ── 状态摘要 ── */
+.tree-status {
+  margin-top: auto;
+  padding: 14px 18px;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.status-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--app-ink-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--app-ink-body);
+}
+
+/* ── 右侧工作区 ── */
+.workflow-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+.step-panel {
+  max-width: 960px;
+}
+
+.step-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.step-panel-header h4 {
+  margin: 0;
+  font-size: 17px;
+  color: var(--app-ink);
+}
+
+.step-panel-desc {
+  margin: 6px 0 16px;
+  font-size: 13px;
+  color: var(--app-ink-muted);
+  line-height: 1.6;
+}
+
+/* ── 执行路径选择卡片 ── */
+.mode-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.mode-choice-card {
+  padding: 20px;
+  border: 2px solid var(--app-border-soft);
+  border-radius: var(--app-radius-lg);
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fff;
+}
+
+.mode-choice-card:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.08);
+}
+
+.mode-choice-card.is-selected {
+  border-color: #3b82f6;
+  background: #f8fbff;
+}
+
+.mode-choice-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--app-radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.manual-icon {
+  background: #eff6ff;
+  color: #3b82f6;
+}
+
+.auto-icon {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.mode-choice-card h5 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--app-ink);
+}
+
+.mode-choice-card p {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--app-ink-body);
+  line-height: 1.6;
+}
+
+/* ── 确认提示 ── */
+.decision-confirmed {
+  margin-top: 16px;
+}
+
+/* ── 两栏布局 ── */
 .two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
 }
 
+/* ── 通用 ── */
 .empty-hint {
   color: var(--app-ink-muted);
   font-size: 14px;
   text-align: center;
-  padding: 32px 0;
+  padding: 40px 0;
 }
 
+.run-summary-card {
+  padding: 16px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #f8fbff;
+}
+
+.summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.traceability-placeholder {
+  margin-top: 8px;
+}
+
+/* ── 算法选择区域 ── */
+.algo-select-section h5 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--app-ink);
+}
+
+.selected-algo-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--app-radius-md);
+  font-size: 13px;
+  color: var(--app-ink);
+}
+
+/* ── 响应式 ── */
 @media (max-width: 960px) {
+  .workflow-body {
+    flex-direction: column;
+  }
+
+  .workflow-tree {
+    width: 100%;
+    flex-shrink: 1;
+    max-height: 200px;
+    border-right: none;
+    border-bottom: 1px solid var(--app-border-soft);
+  }
+
   .two-col {
     grid-template-columns: 1fr;
   }
 
-  .overview-content {
+  .mode-choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-topbar {
     flex-direction: column;
     align-items: flex-start;
+    gap: 8px;
   }
 }
 </style>

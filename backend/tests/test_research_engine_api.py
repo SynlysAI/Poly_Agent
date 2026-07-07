@@ -24,7 +24,6 @@ def problem_spec_payload(**overrides) -> dict:
         "name": "氟基高分子测试任务",
         "material_family": "fluoropolymer",
         "problem_type": "formulation_process_optimization",
-        "execution_mode": "hybrid",
         "objectives": [
             {"name": "dielectric_constant", "direction": "maximize", "unit": "dimensionless"},
         ],
@@ -62,7 +61,9 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertEqual(data["code"], 0)
         self.assertTrue(data["data"]["problem_spec_id"].startswith("ps_"))
         self.assertEqual(data["data"]["status"], "draft")
-        self.assertEqual(data["data"]["schema_version"], "0.2")
+        self.assertEqual(data["data"]["schema_version"], "0.4")
+        self.assertEqual(data["data"]["decision_status"], "pending_execution_decision")
+        self.assertEqual(data["data"]["allowed_execution_modes"], ["manual_workbench", "autoresearch"])
 
     def test_create_with_full_fields(self) -> None:
         """包含完整字段的 ProblemSpec 创建成功。"""
@@ -159,7 +160,7 @@ class ProblemSpecApiTest(ComputationTestCase):
 
         update_payload = problem_spec_payload(
             name="更新后的任务名",
-            execution_mode="manual",
+            allowed_execution_modes=["manual_workbench"],
         )
         resp = self.client.patch(
             f"{self.base_url}/problem-specs/{ps_id}",
@@ -169,7 +170,7 @@ class ProblemSpecApiTest(ComputationTestCase):
         data = resp.json()
         self.assertEqual(data["code"], 0)
         self.assertEqual(data["data"]["name"], "更新后的任务名")
-        self.assertEqual(data["data"]["execution_mode"], "manual")
+        self.assertEqual(data["data"]["allowed_execution_modes"], ["manual_workbench"])
 
     def test_freeze_problem_spec(self) -> None:
         """POST /problem-specs/{id}/freeze 冻结成功。"""
@@ -218,20 +219,44 @@ class ProblemSpecApiTest(ComputationTestCase):
         data = resp.json()
         self.assertEqual(data["data"]["campaign_id"], "camp_001")
 
-    def test_all_execution_modes(self) -> None:
-        """三种 execution_mode 均可创建。"""
-        for mode in ["manual", "autoresearch", "hybrid"]:
-            resp = self.client.post(
-                f"{self.base_url}/problem-specs",
-                json=problem_spec_payload(execution_mode=mode, name=f"{mode}模式"),
-            )
-            self.assertEqual(resp.status_code, 200)
-            self.assertEqual(resp.json()["data"]["execution_mode"], mode)
+    def test_execution_mode_field_is_rejected(self) -> None:
+        """v0.4 不再接受旧 execution_mode 字段。"""
+        resp = self.client.post(
+            f"{self.base_url}/problem-specs",
+            json=problem_spec_payload(execution_mode="hybrid", name="旧字段"),
+        )
+        self.assertEqual(resp.status_code, 422)
 
 
 # =============================================================================
 # AlgorithmRegistry API 测试
 # =============================================================================
+
+
+class AlgorithmRegistryAutoSeedApiTest(ComputationTestCase):
+    """覆盖算法清单 API 的默认种子化行为。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.base_url = "/api/v1/research-engine"
+
+    def test_list_algorithms_auto_seeds_empty_registry_with_family(self) -> None:
+        """空库首次请求算法清单时自动返回默认算法族。"""
+        resp = self.client.get(f"{self.base_url}/algorithms")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["code"], 0)
+        self.assertGreaterEqual(data["data"]["total"], 8)
+        families = {item.get("algorithm_family") for item in data["data"]["items"]}
+        self.assertIn("computation", families)
+        self.assertIn("wetlab_optimization", families)
+        self.assertIn("vertical_prediction", families)
+
+        filtered = self.client.get(f"{self.base_url}/algorithms?algorithm_family=computation")
+        self.assertEqual(filtered.status_code, 200)
+        filtered_items = filtered.json()["data"]["items"]
+        self.assertGreaterEqual(len(filtered_items), 1)
+        self.assertTrue(all(item.get("algorithm_family") == "computation" for item in filtered_items))
 
 
 class AlgorithmRegistryApiTest(ComputationTestCase):
@@ -264,11 +289,11 @@ class AlgorithmRegistryApiTest(ComputationTestCase):
 
     def test_list_with_trigger_mode_filter(self) -> None:
         """按触发方式过滤算法。"""
-        resp = self.client.get(f"{self.base_url}/algorithms?trigger_mode=human")
+        resp = self.client.get(f"{self.base_url}/algorithms?trigger_mode=human_workflow")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         for item in data["data"]["items"]:
-            self.assertIn("human", item["trigger_modes"])
+            self.assertIn("human_workflow", item["trigger_modes"])
 
     def test_list_with_status_filter(self) -> None:
         """按状态过滤算法。"""
@@ -366,6 +391,85 @@ class AlgorithmRegistryApiTest(ComputationTestCase):
 
 
 # =============================================================================
+# ExecutionDecision / ManualWorkflow API 测试
+# =============================================================================
+
+
+class ManualWorkflowApiTest(ComputationTestCase):
+    """覆盖 v0.4 执行决策和人工 Workflow API。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.base_url = "/api/v1/research-engine"
+        service = ResearchEngineService()
+        service.seed_default_algorithms()
+        ps_resp = self.client.post(f"{self.base_url}/problem-specs", json=problem_spec_payload())
+        self.assertEqual(ps_resp.status_code, 200)
+        self.ps_id = ps_resp.json()["data"]["problem_spec_id"]
+
+    def test_create_and_get_active_execution_decision(self) -> None:
+        """ProblemSpec 可显式选择 manual_workbench。"""
+        resp = self.client.post(
+            f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions",
+            json={"mode": "manual_workbench", "reason": "API 测试人工编排"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        decision = resp.json()["data"]
+        self.assertEqual(decision["mode"], "manual_workbench")
+
+        active = self.client.get(
+            f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions/active"
+        )
+        self.assertEqual(active.status_code, 200)
+        self.assertEqual(active.json()["data"]["decision_id"], decision["decision_id"])
+
+    def test_manual_workflow_run_creates_algorithm_run(self) -> None:
+        """单节点人工 WorkflowRun 会创建关联 AlgorithmRun。"""
+        decision_resp = self.client.post(
+            f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions",
+            json={"mode": "manual_workbench", "reason": "API 测试单节点 workflow"},
+        )
+        decision_id = decision_resp.json()["data"]["decision_id"]
+
+        workflow_resp = self.client.post(
+            f"{self.base_url}/manual-workflows",
+            json={
+                "problem_spec_id": self.ps_id,
+                "execution_decision_id": decision_id,
+                "name": "API 单节点文献检索",
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "algorithm_id": "literature_mock",
+                        "input_bindings": {
+                            "keywords": {
+                                "source": "manual_input",
+                                "value": "氟基高分子 介电常数",
+                            }
+                        },
+                    }
+                ],
+            },
+        )
+        self.assertEqual(workflow_resp.status_code, 200)
+        workflow_id = workflow_resp.json()["data"]["workflow_id"]
+
+        run_resp = self.client.post(f"{self.base_url}/manual-workflows/{workflow_id}/runs")
+        self.assertEqual(run_resp.status_code, 200)
+        workflow_run = run_resp.json()["data"]
+        self.assertEqual(workflow_run["status"], "completed")
+        self.assertEqual(len(workflow_run["step_runs"]), 1)
+
+        aruns = self.client.get(
+            f"{self.base_url}/algorithm-runs",
+            params={"workflow_run_id": workflow_run["workflow_run_id"]},
+        )
+        self.assertEqual(aruns.status_code, 200)
+        self.assertEqual(aruns.json()["data"]["total"], 1)
+        self.assertEqual(aruns.json()["data"]["items"][0]["trigger_source"], "human_workflow")
+
+
+# =============================================================================
 # 现有路由不受影响测试
 # =============================================================================
 
@@ -415,7 +519,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"keywords": "氟基高分子 介电常数"},
             },
         )
@@ -466,7 +570,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
                 f"{self.base_url}/algorithm-runs",
                 json={
                     "algorithm_id": tc["algorithm_id"],
-                    "trigger_source": "human",
+                    "trigger_source": "human_workflow",
                     "input_snapshot": tc["input_snapshot"],
                 },
             )
@@ -485,7 +589,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "problem_spec_id": "ps_demo_001",
                 "campaign_id": "camp_demo_001",
                 "input_snapshot": {"keywords": "test"},
@@ -502,7 +606,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"keywords": "test"},
                 "reason": "验证人工算法通道闭环",
             },
@@ -517,7 +621,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "nonexistent_algo",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"keywords": "test"},
             },
         )
@@ -541,7 +645,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"material_family": "fluoropolymer"},  # 缺少 keywords
             },
         )
@@ -555,7 +659,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
                 f"{self.base_url}/algorithm-runs",
                 json={
                     "algorithm_id": "literature_mock",
-                    "trigger_source": "human",
+                    "trigger_source": "human_workflow",
                     "input_snapshot": {"keywords": f"test{i}"},
                 },
             )
@@ -574,7 +678,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"keywords": "test"},
             },
         )
@@ -582,7 +686,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "polymer_descriptor_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"smiles": "C=CF"},
             },
         )
@@ -600,7 +704,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"keywords": "test"},
             },
         )
@@ -618,17 +722,17 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"keywords": "test"},
             },
         )
 
-        resp = self.client.get(f"{self.base_url}/algorithm-runs?trigger_source=human")
+        resp = self.client.get(f"{self.base_url}/algorithm-runs?trigger_source=human_workflow")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertGreaterEqual(data["data"]["total"], 1)
         for item in data["data"]["items"]:
-            self.assertEqual(item["trigger_source"], "human")
+            self.assertEqual(item["trigger_source"], "human_workflow")
 
     def test_list_with_empty_filters(self) -> None:
         """无过滤条件时返回所有记录。"""
@@ -636,7 +740,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"keywords": "test"},
             },
         )
@@ -651,7 +755,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "property_predictor_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {
                     "smiles": "C=C(F)F",
                     "target_properties": ["dielectric_constant"],
@@ -667,7 +771,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
         self.assertEqual(data["code"], 0)
         self.assertEqual(data["data"]["run_id"], run_id)
         self.assertEqual(data["data"]["algorithm_id"], "property_predictor_mock")
-        self.assertEqual(data["data"]["trigger_source"], "human")
+        self.assertEqual(data["data"]["trigger_source"], "human_workflow")
         self.assertIn("predictions", data["data"]["output_summary"])
         self.assertIn("input_snapshot", data["data"])
         self.assertIsInstance(data["data"]["artifact_refs"], list)
@@ -678,7 +782,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "mobo_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {
                     "problem_spec_id": "ps_test_001",
                     "objectives": [{"name": "dielectric_constant", "direction": "maximize"}],
@@ -709,7 +813,7 @@ class AlgorithmRunApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "   ",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "input_snapshot": {"keywords": "test"},
             },
         )
@@ -738,7 +842,6 @@ class ResearchRunApiTest(ComputationTestCase):
             json={
                 "name": "ResearchRun API 测试",
                 "material_family": "fluoropolymer",
-                "execution_mode": "hybrid",
                 "objectives": [
                     {"name": "dielectric_constant", "direction": "maximize"},
                 ],
@@ -746,11 +849,18 @@ class ResearchRunApiTest(ComputationTestCase):
         )
         self.assertEqual(create_resp.status_code, 200)
         self.ps_id = create_resp.json()["data"]["problem_spec_id"]
+        decision_resp = self.client.post(
+            f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions",
+            json={"mode": "autoresearch", "reason": "API 测试进入 AutoResearch"},
+        )
+        self.assertEqual(decision_resp.status_code, 200)
+        self.execution_decision_id = decision_resp.json()["data"]["decision_id"]
 
     def _create_research_run(self, **overrides) -> dict:
         """创建 ResearchRun 草稿的辅助方法。"""
         payload = {
             "problem_spec_id": self.ps_id,
+            "execution_decision_id": self.execution_decision_id,
             "profile_id": "fluoropolymer",
         }
         payload.update(overrides)
@@ -931,18 +1041,22 @@ class StageGateApiTest(ComputationTestCase):
             json={
                 "name": "Gate 审批测试",
                 "material_family": "fluoropolymer",
-                "execution_mode": "hybrid",
                 "objectives": [
                     {"name": "dielectric_constant", "direction": "maximize"},
                 ],
             },
         )
         self.ps_id = create_resp.json()["data"]["problem_spec_id"]
+        decision_resp = self.client.post(
+            f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions",
+            json={"mode": "autoresearch", "reason": "Gate API 测试进入 AutoResearch"},
+        )
+        self.execution_decision_id = decision_resp.json()["data"]["decision_id"]
 
         # 创建 ResearchRun 并启动以到达 gate
         rr_resp = self.client.post(
             f"{self.base_url}/research-runs",
-            json={"problem_spec_id": self.ps_id},
+            json={"problem_spec_id": self.ps_id, "execution_decision_id": self.execution_decision_id},
         )
         self.run_id = rr_resp.json()["data"]["run_id"]
 
@@ -1144,6 +1258,11 @@ class TraceabilityApiTest(ComputationTestCase):
 
         # 填充算法种子
         self.svc.seed_default_algorithms()
+        decision_resp = self.client.post(
+            f"{self.base_url}/problem-specs/{self.ps_id}/execution-decisions",
+            json={"mode": "autoresearch", "reason": "Traceability 测试进入 AutoResearch"},
+        )
+        self.autoresearch_decision_id = decision_resp.json()["data"]["decision_id"]
 
     def test_query_audit_by_entity(self) -> None:
         """按 entity_type 和 entity_id 查询审计事件。"""
@@ -1197,7 +1316,7 @@ class TraceabilityApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "literature_mock",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "problem_spec_id": self.ps_id,
                 "input_snapshot": {"keywords": "fluoropolymer"},
                 "reason": "测试追溯链",
@@ -1216,7 +1335,7 @@ class TraceabilityApiTest(ComputationTestCase):
         # 验证 algorithm_run 字段存在
         self.assertIsNotNone(data["algorithm_run"])
         self.assertEqual(data["algorithm_run"]["run_id"], run_id)
-        self.assertEqual(data["algorithm_run"]["trigger_source"], "human")
+        self.assertEqual(data["algorithm_run"]["trigger_source"], "human_workflow")
 
         # 无关联 computation 时应为 None
         self.assertIsNone(data["linked_computation"])
@@ -1233,7 +1352,7 @@ class TraceabilityApiTest(ComputationTestCase):
             f"{self.base_url}/algorithm-runs",
             json={
                 "algorithm_id": "computation_submit_adapter",
-                "trigger_source": "human",
+                "trigger_source": "human_workflow",
                 "problem_spec_id": self.ps_id,
                 "input_snapshot": {
                     "workflow_type": "LOCAL_STRUCTURE",
@@ -1268,6 +1387,7 @@ class TraceabilityApiTest(ComputationTestCase):
             f"{self.base_url}/research-runs",
             json={
                 "problem_spec_id": self.ps_id,
+                "execution_decision_id": self.autoresearch_decision_id,
                 "profile_id": "fluoropolymer",
                 "max_iterations": 3,
                 "batch_size": 5,
@@ -1308,6 +1428,7 @@ class TraceabilityApiTest(ComputationTestCase):
             f"{self.base_url}/research-runs",
             json={
                 "problem_spec_id": self.ps_id,
+                "execution_decision_id": self.autoresearch_decision_id,
                 "profile_id": "fluoropolymer",
                 "max_iterations": 3,
             },
@@ -1350,6 +1471,7 @@ class TraceabilityApiTest(ComputationTestCase):
             f"{self.base_url}/research-runs",
             json={
                 "problem_spec_id": self.ps_id,
+                "execution_decision_id": self.autoresearch_decision_id,
                 "profile_id": "fluoropolymer",
             },
         )

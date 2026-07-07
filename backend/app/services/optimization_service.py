@@ -22,6 +22,7 @@ from app.infra.computation_repositories import (
     OptimizationSuggestionRepository,
     utc_now,
 )
+from app.infra.research_engine_repositories import ResearchProblemSpecRepository
 from app.schemas.computation import ComputationCreateRequest, ComputationParameters, ComputationResources, MoleculeInput
 from app.schemas.optimization import (
     CampaignHistoryData,
@@ -136,7 +137,7 @@ class OptimizationService:
         filters = {} if is_admin or not actor_user_id else {"created_by": actor_user_id}
         items, total = OptimizationCampaignRepository.list_all(filters, page=page, page_size=page_size)
         return CampaignListData(
-            items=[OptimizationCampaign(**item) for item in items],
+            items=[OptimizationCampaign(**self._normalize_campaign_doc(item)) for item in items],
             page=page,
             page_size=page_size,
             total=total,
@@ -195,7 +196,7 @@ class OptimizationService:
             before={"status": campaign.status},
             after={"status": target_status, "reason": payload.reason},
         )
-        return OptimizationCampaign(**OptimizationCampaignRepository.find_one({"campaign_id": campaign_id}))
+        return OptimizationCampaign(**self._normalize_campaign_doc(OptimizationCampaignRepository.find_one({"campaign_id": campaign_id})))
 
     def import_candidates(
         self,
@@ -1132,7 +1133,66 @@ class OptimizationService:
             and campaign.get("created_by") != actor_user_id
         ):
             raise HTTPException(status_code=403, detail="无权限访问该 campaign")
-        return OptimizationCampaign(**campaign)
+        return OptimizationCampaign(**self._normalize_campaign_doc(campaign))
+
+    def _normalize_campaign_doc(self, campaign: dict | None) -> dict:
+        """兼容旧 campaign 文档，避免缺少新增必填字段导致 API 500。"""
+        if campaign is None:
+            return {}
+
+        normalized = dict(campaign)
+        changed: dict[str, object] = {}
+        linked_problem_spec_id = normalized.get("linked_problem_spec_id")
+        if not linked_problem_spec_id and str(normalized.get("campaign_id", "")).startswith("ps_"):
+            linked_problem_spec_id = normalized.get("campaign_id")
+            normalized["linked_problem_spec_id"] = linked_problem_spec_id
+            if not normalized.get("source"):
+                normalized["source"] = "research_engine"
+            changed["linked_problem_spec_id"] = linked_problem_spec_id
+            changed["source"] = normalized["source"]
+
+        if "planner_type" not in normalized or not normalized.get("planner_type"):
+            normalized["planner_type"] = "fallback"
+            changed["planner_type"] = "fallback"
+
+        if "planner_config" not in normalized or normalized.get("planner_config") is None:
+            normalized["planner_config"] = {"batch_size": 1}
+            changed["planner_config"] = normalized["planner_config"]
+
+        if "search_space" not in normalized or normalized.get("search_space") is None:
+            normalized["search_space"] = {"kind": "legacy_or_research_engine", "candidate_count": 0}
+            changed["search_space"] = normalized["search_space"]
+
+        if "objectives" not in normalized or not normalized.get("objectives"):
+            objectives = self._campaign_objectives_from_problem_spec(str(linked_problem_spec_id or ""))
+            normalized["objectives"] = objectives or [{"name": "objective", "direction": "max", "unit": None, "required": True}]
+            changed["objectives"] = normalized["objectives"]
+
+        if changed and normalized.get("campaign_id"):
+            changed["updated_at"] = normalized.get("updated_at", utc_now())
+            OptimizationCampaignRepository.update_fields(str(normalized["campaign_id"]), changed)
+
+        return normalized
+
+    @staticmethod
+    def _campaign_objectives_from_problem_spec(problem_spec_id: str) -> list[dict]:
+        """从关联 ProblemSpec 推导 optimization objectives。"""
+        if not problem_spec_id:
+            return []
+        spec = ResearchProblemSpecRepository.find_one({"problem_spec_id": problem_spec_id})
+        if not spec:
+            return []
+        direction_map = {"maximize": "max", "minimize": "min"}
+        return [
+            {
+                "name": item.get("name", "objective"),
+                "direction": direction_map.get(item.get("direction"), "max"),
+                "unit": item.get("unit"),
+                "required": True,
+            }
+            for item in spec.get("objectives", [])
+            if item.get("name")
+        ]
 
     def _ensure_campaign_access(self, campaign_id: str, *, actor_user_id: str | None, is_admin: bool) -> None:
         """检查 campaign 数据权限。"""
