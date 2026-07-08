@@ -4,9 +4,9 @@
 
 ## 功能概览
 
-### 1. Alchemist — 实验设计与贝叶斯优化
+### 1. Alchemist — 实验设计与贝叶斯优化（内置）
 
-基于贝叶斯优化（主动学习）的实验设计工具，用尽量少的实验次数找到最优实验条件。完整 6 步闭环流程：
+基于贝叶斯优化（主动学习）的实验设计工具，用尽量少的实验次数找到最优实验条件。已从独立服务迁移为 Poly Agent 内置模块，无需额外部署。完整 6 步闭环流程：
 
 | 步骤 | 能力 |
 |------|------|
@@ -99,8 +99,9 @@ Poly_Agent/
 │   ├── app/
 │   │   ├── api/v1/                    # API 路由
 │   │   │   └── endpoints/             # health, auth, admin, optimization
-│   │   │                              #   computations, integrations, llm, alchemist_proxy
+│   │   │                              #   computations, integrations, llm, alchemist
 │   │   │                              #   research_engine, assistant
+│   │   ├── alchemist_core/            # 实验设计核心库（贝叶斯优化/GP/DoE/采集函数）
 │   │   ├── computation_adapters/      # 计算引擎适配器
 │   │   │   ├── base.py                #   adapter 协议
 │   │   │   ├── registry.py            #   统一派发
@@ -109,8 +110,8 @@ Poly_Agent/
 │   │   │   └── orca_compute_engine_laser.py    #   ORCA ComputeEngine Laser
 │   │   ├── core/                      # 配置、令牌认证、日志、LLM 客户端
 │   │   ├── infra/                     # MongoDB 连接、数据仓储、demo store
-│   │   ├── schemas/                   # Pydantic 数据模型 (computation, optimization, research_engine...)
-│   │   ├── services/                  # 业务逻辑 (auth, computation, optimization, research_engine...)
+│   │   ├── schemas/                   # Pydantic 数据模型 (alchemist, computation, optimization, research_engine...)
+│   │   ├── services/                  # 业务逻辑 (alchemist, auth, computation, optimization, research_engine...)
 │   │   ├── workers/                   # computation worker (原子领取、执行、落库)
 │   │   └── main.py                    # FastAPI 入口 (托管前端静态文件)
 │   ├── tests/
