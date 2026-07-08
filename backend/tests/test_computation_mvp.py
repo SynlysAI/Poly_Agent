@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import HTTPException
 
+from app.core.config import settings
 from app.schemas.computation import ComputationCreateRequest
 from app.schemas.optimization import CampaignCreateRequest
 from app.schemas.optimization import CandidateImportRequest
@@ -126,6 +127,38 @@ class ComputationMvpSmokeTest(ComputationTestCase):
         self.assertEqual(audits[0].actor_user_id, "user_auth_download")
         self.assertEqual(audits[0].request_id, "req-auth-download")
         self.assertEqual(audits[0].related_ids["run_id"], created.run_id)
+
+    def test_artifact_api_does_not_expose_storage_uri_or_static_file(self) -> None:
+        service = ComputationService()
+        created = service.create_run(
+            ComputationCreateRequest(
+                workflow_type="LOCAL_STRUCTURE",
+                engine="LOCAL",
+                molecule={"smiles": "CCO", "name": "public-artifact"},
+            ),
+            actor_user_id="artifact_owner",
+            request_id="req-artifact-public",
+        )
+        self._run_local_structure_worker()
+        artifacts = service.list_artifacts(created.run_id, actor_user_id="artifact_owner", is_admin=False)
+        artifact = next(item for item in artifacts if item.artifact_type == "structure_json")
+
+        list_resp = self.client.get(f"/api/v1/computations/{created.run_id}/artifacts")
+        detail_resp = self.client.get(f"/api/v1/artifacts/{artifact.artifact_id}")
+        preview_resp = self.client.get(f"/api/v1/artifacts/{artifact.artifact_id}/preview")
+
+        for response in (list_resp, detail_resp, preview_resp):
+            self.assertEqual(response.status_code, 200)
+            response_text = response.text
+            self.assertNotIn("storage_uri", response_text)
+            self.assertNotIn(str(settings.outputs_root), response_text)
+            self.assertIn("/api/v1/artifacts/", response_text)
+            self.assertIn("/download", response_text)
+
+        artifact_path = service.resolve_artifact_path(artifact)
+        relative_path = artifact_path.relative_to(settings.outputs_root)
+        static_resp = self.client.get(f"/static/outputs/{relative_path.as_posix()}")
+        self.assertEqual(static_resp.status_code, 404)
 
     def test_auth_enabled_scopes_runs_artifacts_campaigns_and_audit(self) -> None:
         computation_service = ComputationService()

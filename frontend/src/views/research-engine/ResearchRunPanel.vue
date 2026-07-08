@@ -12,6 +12,7 @@ import {
   failResearchRun,
   getActiveExecutionDecision,
   getApiErrorMessage,
+  getResearchEngineReadiness,
   getResearchRun,
   listProblemSpecs,
   listResearchRuns,
@@ -31,6 +32,8 @@ const selectedRunId = ref('')
 const currentRun = ref(null)
 const gateDialogVisible = ref(false)
 const gateStage = ref(null)
+const readiness = ref(null)
+const readinessLoading = ref(false)
 
 // 新建 ResearchRun 表单
 const newRunForm = ref({
@@ -87,6 +90,20 @@ const progressColor = computed(() => {
 const pendingApprovalStage = computed(() =>
   (currentRun.value?.stage_runs || []).find(stage => stage.status === 'blocked_approval') || null,
 )
+const readinessItems = computed(() => readiness.value?.items || [])
+const readinessWarnings = computed(() => readinessItems.value.filter(item => item.status !== 'ready'))
+const readinessAlertType = computed(() => {
+  if (!readiness.value) return 'info'
+  if (!readiness.value.can_start) return 'error'
+  if (!readiness.value.ready) return 'warning'
+  return 'success'
+})
+const readinessTitle = computed(() => {
+  if (!readiness.value) return '启动前检查'
+  if (!readiness.value.can_start) return '启动前检查未通过'
+  if (!readiness.value.ready) return `启动前检查：${readinessWarnings.value.length} 项使用 fallback`
+  return '启动前检查已通过'
+})
 
 const profileOptions = [
   { label: '氟基高分子', value: 'fluoropolymer' },
@@ -111,6 +128,16 @@ function stageStatusTag(status) {
 
 function stageStatusLabel(status) {
   const map = { pending: '待执行', running: '执行中', blocked_approval: '等待审批', completed: '已完成', failed: '已失败' }
+  return map[status] || status
+}
+
+function readinessTag(status) {
+  const map = { ready: 'success', warning: 'warning', unavailable: 'danger' }
+  return map[status] || 'info'
+}
+
+function readinessLabel(status) {
+  const map = { ready: '可用', warning: 'Fallback', unavailable: '不可用' }
   return map[status] || status
 }
 
@@ -159,13 +186,37 @@ async function loadProblemSpecs() {
   }
 }
 
+async function loadReadiness() {
+  readinessLoading.value = true
+  try {
+    readiness.value = await getResearchEngineReadiness()
+    return true
+  } catch (error) {
+    readiness.value = null
+    ElMessage.error(getApiErrorMessage(error))
+    return false
+  } finally {
+    readinessLoading.value = false
+  }
+}
+
+async function ensureReadiness() {
+  const checked = await loadReadiness()
+  if (!checked) return false
+  if (readiness.value && !readiness.value.can_start) {
+    ElMessage.error('启动前检查未通过')
+    return false
+  }
+  return true
+}
+
 async function selectRun(runId) {
   selectedRunId.value = runId
   showCreateForm.value = false
   if (runId === '__new__') {
     currentRun.value = null
     showCreateForm.value = true
-    await loadProblemSpecs()
+    await Promise.all([loadProblemSpecs(), loadReadiness()])
     return
   }
   await loadRunDetail(runId)
@@ -188,6 +239,7 @@ async function handleCreate() {
     ElMessage.warning('请选择 ProblemSpec')
     return
   }
+  if (!(await ensureReadiness())) return
   actionLoading.value = 'create'
   try {
     const decision = await ensureExecutionDecision(
@@ -229,6 +281,7 @@ async function ensureExecutionDecision(problemSpecId, mode, reason) {
 
 async function handleStart() {
   try {
+    if (!(await ensureReadiness())) return
     const { value } = await ElMessageBox.prompt('请输入启动原因', '启动 ResearchRun', {
       confirmButtonText: '启动',
       cancelButtonText: '取消',
@@ -374,7 +427,7 @@ watch(
 )
 
 onMounted(async () => {
-  await loadRuns()
+  await Promise.all([loadRuns(), loadReadiness()])
   await openRouteRunIfNeeded()
 })
 </script>
@@ -418,6 +471,26 @@ onMounted(async () => {
     <!-- 创建表单 -->
     <div v-if="showCreateForm" class="create-form">
       <h4>新建 AutoResearch ResearchRun</h4>
+
+      <el-alert
+        v-if="readiness"
+        class="readiness-alert"
+        :title="readinessTitle"
+        :type="readinessAlertType"
+        :closable="false"
+        show-icon
+      >
+        <template #default>
+          <div class="readiness-grid">
+            <div v-for="item in readinessItems" :key="item.service" class="readiness-item">
+              <span class="readiness-name">{{ item.label }}</span>
+              <el-tag size="small" :type="readinessTag(item.status)">{{ readinessLabel(item.status) }}</el-tag>
+              <span class="readiness-message">{{ item.message }}</span>
+            </div>
+          </div>
+          <el-button text size="small" :loading="readinessLoading" @click="loadReadiness">刷新检查</el-button>
+        </template>
+      </el-alert>
 
       <!-- Auto Research 简介提示 -->
       <el-alert
@@ -469,6 +542,24 @@ onMounted(async () => {
 
     <!-- ResearchRun 详情 -->
     <div v-if="currentRun" class="run-detail" v-loading="loading">
+      <el-alert
+        v-if="canStart && readiness"
+        class="readiness-alert"
+        :title="readinessTitle"
+        :type="readinessAlertType"
+        :closable="false"
+        show-icon
+      >
+        <template #default>
+          <div class="readiness-grid compact">
+            <div v-for="item in readinessItems" :key="item.service" class="readiness-item">
+              <span class="readiness-name">{{ item.label }}</span>
+              <el-tag size="small" :type="readinessTag(item.status)">{{ readinessLabel(item.status) }}</el-tag>
+            </div>
+          </div>
+        </template>
+      </el-alert>
+
       <el-alert
         v-if="pendingApprovalStage"
         class="approval-alert"
@@ -621,6 +712,42 @@ onMounted(async () => {
 
 .create-form h4 {
   margin: 0 0 12px;
+}
+
+.readiness-alert {
+  margin-bottom: 14px;
+}
+
+.readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 4px 0 6px;
+}
+
+.readiness-grid.compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.readiness-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.readiness-name {
+  font-weight: 600;
+  color: var(--app-ink);
+  white-space: nowrap;
+}
+
+.readiness-message {
+  min-width: 0;
+  color: var(--app-ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .form-row {
@@ -798,5 +925,16 @@ onMounted(async () => {
   font-size: 13px;
   text-align: center;
   padding: 16px 0;
+}
+
+@media (max-width: 760px) {
+  .readiness-grid,
+  .readiness-grid.compact {
+    grid-template-columns: 1fr;
+  }
+
+  .readiness-message {
+    white-space: normal;
+  }
 }
 </style>

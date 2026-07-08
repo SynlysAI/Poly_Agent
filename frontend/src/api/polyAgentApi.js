@@ -183,6 +183,10 @@ export function retryComputation(runId) {
   return apiClient.post(`/computations/${runId}/retry`).then(unwrapResponse)
 }
 
+export function listGlobalTasks(params = {}) {
+  return apiClient.get('/tasks/center', { params }).then(unwrapResponse)
+}
+
 export function listComputationArtifacts(runId) {
   return apiClient.get(`/computations/${runId}/artifacts`).then(unwrapResponse)
 }
@@ -423,6 +427,10 @@ export function getWorkflowRun(workflowRunId) {
 
 export function createResearchRun(payload) {
   return apiClient.post('/research-engine/research-runs', payload).then(unwrapResponse)
+}
+
+export function getResearchEngineReadiness() {
+  return apiClient.get('/research-engine/readiness').then(unwrapResponse)
 }
 
 export function listResearchRuns(params = {}) {

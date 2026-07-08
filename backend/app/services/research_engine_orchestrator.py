@@ -7,8 +7,11 @@ P0 只做固定阶段序列、mock 阶段推进、候选 gate 审批和现有 co
 
 from __future__ import annotations
 
+import os
+import socket
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -41,6 +44,7 @@ from app.schemas.research_engine import (
     validate_research_run_transition,
     validate_stage_transition,
 )
+from app.services.research_engine_access import ensure_research_engine_doc_access
 from app.services.research_engine_defaults import (
     DEFAULT_STAGE_CONTRACTS,
     DEFAULT_STAGE_SEQUENCE,
@@ -60,6 +64,21 @@ class ResearchEngineOrchestrator:
     - ResearchEngineOrchestrator: ResearchRun、Stage/Gate（自动编排通道）
     """
 
+    @staticmethod
+    def _ensure_run_access(
+        doc: dict,
+        *,
+        actor_user_id: str | None,
+        is_admin: bool,
+    ) -> None:
+        """检查当前用户是否可访问 ResearchRun。"""
+        ensure_research_engine_doc_access(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="ResearchRun",
+        )
+
     # ------------------------------------------------------------------
     # ResearchRun 创建与查询
     # ------------------------------------------------------------------
@@ -75,6 +94,7 @@ class ResearchEngineOrchestrator:
         batch_size: int = 10,
         description: str | None = None,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> ResearchRun:
         """基于 ProblemSpec 创建 ResearchRun 草稿。
@@ -101,11 +121,11 @@ class ResearchEngineOrchestrator:
         # 1. 校验 ProblemSpec 存在
         from app.services.research_engine_service import ResearchEngineService
         svc = ResearchEngineService()
-        ps = svc.get_problem_spec(problem_spec_id)
+        ps = svc.get_problem_spec(problem_spec_id, actor_user_id=actor_user_id, is_admin=is_admin)
         decision = (
-            svc.get_execution_decision(execution_decision_id)
+            svc.get_execution_decision(execution_decision_id, actor_user_id=actor_user_id, is_admin=is_admin)
             if execution_decision_id
-            else svc.get_active_execution_decision(problem_spec_id)
+            else svc.get_active_execution_decision(problem_spec_id, actor_user_id=actor_user_id, is_admin=is_admin)
         )
         if decision.problem_spec_id != problem_spec_id or decision.mode != "autoresearch":
             raise HTTPException(status_code=409, detail="ResearchRun 必须关联 autoresearch 执行决策")
@@ -176,7 +196,13 @@ class ResearchEngineOrchestrator:
 
         return self._doc_to_research_run(doc)
 
-    def get_research_run(self, run_id: str) -> ResearchRun:
+    def get_research_run(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ResearchRun:
         """获取 ResearchRun 详情。
 
         Args:
@@ -191,6 +217,7 @@ class ResearchEngineOrchestrator:
         doc = ResearchRunRepository.find_one({"run_id": run_id})
         if not doc:
             raise HTTPException(status_code=404, detail=f"ResearchRun '{run_id}' 不存在")
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         return self._doc_to_research_run(doc)
 
     def list_research_runs(
@@ -236,11 +263,13 @@ class ResearchEngineOrchestrator:
         run_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str = "归档 AutoResearch 运行",
         request_id: str | None = None,
     ) -> ResearchRun:
         """软删除/归档 ResearchRun，保留阶段、审计和追溯信息。"""
         doc = self._get_run_doc(run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         current_status = doc.get("status", "draft")
         if current_status == "archived":
             return self._doc_to_research_run(doc)
@@ -271,6 +300,7 @@ class ResearchEngineOrchestrator:
         run_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str = "启动 AutoResearch 运行",
         request_id: str | None = None,
     ) -> ResearchRun:
@@ -291,6 +321,7 @@ class ResearchEngineOrchestrator:
             HTTPException: ResearchRun 不存在或状态不允许启动。
         """
         doc = self._get_run_doc(run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         current_status = doc.get("status", "draft")
 
         if current_status != "draft":
@@ -320,7 +351,12 @@ class ResearchEngineOrchestrator:
 
         # 重新获取并推进阶段
         doc = self._get_run_doc(run_id)
-        doc = self._advance_stages(doc, actor_user_id=actor_user_id, request_id=request_id)
+        doc = self._advance_stages(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            request_id=request_id,
+        )
 
         # 重新获取最新状态
         return self._doc_to_research_run(self._get_run_doc(run_id))
@@ -330,6 +366,7 @@ class ResearchEngineOrchestrator:
         run_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str = "继续推进 AutoResearch 阶段",
         request_id: str | None = None,
     ) -> ResearchRun:
@@ -348,6 +385,7 @@ class ResearchEngineOrchestrator:
             HTTPException: ResearchRun 不存在或状态不允许推进。
         """
         doc = self._get_run_doc(run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         current_status = doc.get("status", "draft")
 
         if current_status not in ("running", "blocked_approval"):
@@ -364,7 +402,12 @@ class ResearchEngineOrchestrator:
             })
 
         doc = self._get_run_doc(run_id)
-        doc = self._advance_stages(doc, actor_user_id=actor_user_id, request_id=request_id)
+        doc = self._advance_stages(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            request_id=request_id,
+        )
 
         self._write_audit(
             actor_user_id=actor_user_id,
@@ -384,6 +427,7 @@ class ResearchEngineOrchestrator:
         doc: dict,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> dict:
         """推进阶段：自动完成非 gate 阶段，在 gate 阶段阻塞。
@@ -442,6 +486,7 @@ class ResearchEngineOrchestrator:
                         doc=doc,
                         stage_run=sr,
                         actor_user_id=actor_user_id,
+                        is_admin=is_admin,
                         request_id=request_id,
                     )
                     sr["output_summary"] = stage_output
@@ -633,6 +678,8 @@ class ResearchEngineOrchestrator:
 
     def _stage_algorithm_id(self, stage_key: str) -> str | None:
         """返回 AutoResearch 阶段对应的算法能力 ID。"""
+        if stage_key == "RECOMMENDATION_ASK" and not self._is_alchemist_adapter_ready():
+            return "mobo_mock"
         return {
             "KNOWLEDGE_RETRIEVAL": "literature_rag_adapter",
             "STRUCTURE_FEATURE": "polymer_descriptor_mock",
@@ -640,12 +687,31 @@ class ResearchEngineOrchestrator:
             "RECOMMENDATION_ASK": "mobo_alchemist_adapter",
         }.get(stage_key)
 
+    @staticmethod
+    def _is_alchemist_adapter_ready() -> bool:
+        """快速判断 Alchemist adapter 是否值得进入真实调用路径。"""
+        raw_url = os.getenv("ALCHEMIST_BACKEND_URL", "").strip()
+        if not raw_url:
+            return False
+        parsed = urlparse(raw_url)
+        host = parsed.hostname
+        if not host:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        timeout = float(os.getenv("RESEARCH_ENGINE_PREFLIGHT_TIMEOUT_SECONDS", "0.5"))
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
     def _run_stage_algorithm(
         self,
         *,
         doc: dict,
         stage_run: dict,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> dict:
         """通过 AlgorithmRun 执行 AutoResearch 阶段并回写追溯关联。"""
@@ -674,6 +740,7 @@ class ResearchEngineOrchestrator:
                     reason=f"AutoResearch stage {stage_key} 执行算法 {algorithm_id}",
                 ),
                 actor_user_id=actor_user_id,
+                is_admin=is_admin,
                 request_id=request_id,
             )
             self._link_algorithm_run(doc, stage_run, algorithm_run.run_id)
@@ -683,10 +750,34 @@ class ResearchEngineOrchestrator:
                 "mock_fallback" if algorithm_id.endswith("_mock") else "adapter",
             )
             if output.get("configured") is False:
-                raise RuntimeError(output.get("message") or f"算法 '{algorithm_id}' 未配置")
+                fallback = self._run_mock_stage(stage_run, doc.get("problem_spec_id", ""))
+                fallback.update(
+                    {
+                        "execution_mode": "mock_fallback",
+                        "adapter_configured": False,
+                        "adapter_algorithm_id": algorithm_id,
+                        "adapter_message": output.get("message") or f"算法 '{algorithm_id}' 未配置",
+                    }
+                )
+                AlgorithmRunRepository.update_fields(
+                    algorithm_run.run_id,
+                    {"output_summary": fallback, "updated_at": utc_now()},
+                )
+                return fallback
             return output
-        except Exception:
+        except Exception as exc:
             self._link_latest_algorithm_run(doc, stage_run, algorithm_id)
+            if not algorithm_id.endswith("_mock"):
+                fallback = self._run_mock_stage(stage_run, doc.get("problem_spec_id", ""))
+                fallback.update(
+                    {
+                        "execution_mode": "mock_fallback",
+                        "adapter_configured": False,
+                        "adapter_algorithm_id": algorithm_id,
+                        "adapter_message": str(exc),
+                    }
+                )
+                return fallback
             raise
 
     def _build_stage_algorithm_input(
@@ -735,7 +826,7 @@ class ResearchEngineOrchestrator:
                 "multiplicity": 1,
                 "name": f"{problem_spec.problem_spec_id}-{stage_run['stage_key']}",
             }
-        if algorithm_id == "mobo_alchemist_adapter":
+        if algorithm_id in {"mobo_alchemist_adapter", "mobo_mock"}:
             return {
                 **base,
                 "variables": variables,
@@ -823,6 +914,7 @@ class ResearchEngineOrchestrator:
         stage_run_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str,
         modified_candidates: list[dict] | None = None,
         request_id: str | None = None,
@@ -846,6 +938,7 @@ class ResearchEngineOrchestrator:
             HTTPException: ResearchRun 不存在、StageRun 不存在或状态不允许审批。
         """
         doc = self._get_run_doc(research_run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         sr = self._find_stage_run(doc, stage_run_id)
 
         if sr.get("status") != "blocked_approval":
@@ -899,7 +992,12 @@ class ResearchEngineOrchestrator:
 
         # 继续推进后续阶段
         doc = self._get_run_doc(research_run_id)
-        doc = self._advance_stages(doc, actor_user_id=actor_user_id, request_id=request_id)
+        doc = self._advance_stages(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            request_id=request_id,
+        )
 
         return self._doc_to_research_run(self._get_run_doc(research_run_id))
 
@@ -909,6 +1007,7 @@ class ResearchEngineOrchestrator:
         stage_run_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str,
         request_id: str | None = None,
     ) -> ResearchRun:
@@ -930,6 +1029,7 @@ class ResearchEngineOrchestrator:
             HTTPException: ResearchRun 不存在、StageRun 不存在或状态不允许审批。
         """
         doc = self._get_run_doc(research_run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         sr = self._find_stage_run(doc, stage_run_id)
 
         if sr.get("status") != "blocked_approval":
@@ -1003,6 +1103,7 @@ class ResearchEngineOrchestrator:
         run_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str,
         request_id: str | None = None,
     ) -> ResearchRun:
@@ -1023,6 +1124,7 @@ class ResearchEngineOrchestrator:
             HTTPException: ResearchRun 不存在或状态不允许暂停。
         """
         doc = self._get_run_doc(run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         current_status = doc.get("status", "draft")
 
         if not validate_research_run_transition(current_status, "paused"):
@@ -1058,6 +1160,7 @@ class ResearchEngineOrchestrator:
         run_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str,
         request_id: str | None = None,
     ) -> ResearchRun:
@@ -1078,6 +1181,7 @@ class ResearchEngineOrchestrator:
             HTTPException: ResearchRun 不存在或状态不允许恢复。
         """
         doc = self._get_run_doc(run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         current_status = doc.get("status", "draft")
 
         if current_status != "paused":
@@ -1106,7 +1210,12 @@ class ResearchEngineOrchestrator:
 
         # 恢复后重新推进阶段
         doc = self._get_run_doc(run_id)
-        doc = self._advance_stages(doc, actor_user_id=actor_user_id, request_id=request_id)
+        doc = self._advance_stages(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            request_id=request_id,
+        )
 
         return self._doc_to_research_run(self._get_run_doc(run_id))
 
@@ -1115,6 +1224,7 @@ class ResearchEngineOrchestrator:
         run_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str,
         request_id: str | None = None,
     ) -> ResearchRun:
@@ -1132,6 +1242,7 @@ class ResearchEngineOrchestrator:
             更新后的 ResearchRun。
         """
         doc = self._get_run_doc(run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
         current_status = doc.get("status", "draft")
 
         if current_status in ("completed", "failed", "archived"):

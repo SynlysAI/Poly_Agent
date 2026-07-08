@@ -155,6 +155,7 @@ async def app_lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """创建 FastAPI 应用实例。"""
     global APP_LOGGER
+    settings.validate_deployment_security()
     APP_LOGGER = get_logger("poly_agent.app")
 
     app = FastAPI(
@@ -203,7 +204,6 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(api_router, prefix=settings.api_prefix)
-    app.mount("/static/outputs", StaticFiles(directory=settings.outputs_root), name="outputs")
 
     # 生产模式：托管前端静态文件
     frontend_dist = settings.project_root / "frontend" / "dist"

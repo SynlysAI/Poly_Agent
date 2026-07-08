@@ -780,6 +780,32 @@ class ResearchRunListData(BaseModel):
     total: int
 
 
+class ResearchEngineReadinessItem(BaseModel):
+    """AutoResearch 启动前集成可用性条目。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    service: str
+    label: str
+    status: Literal["ready", "warning", "unavailable"]
+    required: bool = False
+    blocking: bool = False
+    demo_fallback: bool = False
+    message: str
+    details: dict = Field(default_factory=dict)
+
+
+class ResearchEngineReadinessData(BaseModel):
+    """AutoResearch 启动前集成可用性摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ready: bool
+    can_start: bool
+    checked_at: datetime
+    items: list[ResearchEngineReadinessItem]
+
+
 # =============================================================================
 # 状态变更请求模型
 # =============================================================================

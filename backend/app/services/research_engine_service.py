@@ -53,6 +53,7 @@ from app.schemas.research_engine import (
     WorkflowRunListData,
     WorkflowStepRun,
 )
+from app.services.research_engine_access import ensure_research_engine_doc_access
 from app.services.research_engine_defaults import (
     build_adapter_algorithm_registry,
     build_default_algorithm_registry,
@@ -98,6 +99,22 @@ class ResearchEngineService:
     提供 ProblemSpec 生命周期管理和 AlgorithmRegistry 只读查询能力。
     """
 
+    @staticmethod
+    def _ensure_doc_access(
+        doc: dict,
+        *,
+        actor_user_id: str | None,
+        is_admin: bool,
+        resource_label: str = "ResearchEngine 资源",
+    ) -> None:
+        """检查当前用户是否可访问 ResearchEngine 资源。"""
+        ensure_research_engine_doc_access(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label=resource_label,
+        )
+
     # ------------------------------------------------------------------
     # ProblemSpec
     # ------------------------------------------------------------------
@@ -107,6 +124,7 @@ class ResearchEngineService:
         payload: ProblemSpecCreate,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> ProblemSpec:
         """创建 ProblemSpec 草稿。
@@ -194,7 +212,13 @@ class ResearchEngineService:
 
         return self._doc_to_problem_spec(doc)
 
-    def get_problem_spec(self, problem_spec_id: str) -> ProblemSpec:
+    def get_problem_spec(
+        self,
+        problem_spec_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ProblemSpec:
         """获取 ProblemSpec 详情。
 
         Args:
@@ -209,6 +233,12 @@ class ResearchEngineService:
         doc = ResearchProblemSpecRepository.find_one({"problem_spec_id": problem_spec_id})
         if not doc:
             raise HTTPException(status_code=404, detail=f"ProblemSpec '{problem_spec_id}' 不存在")
+        self._ensure_doc_access(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="ProblemSpec",
+        )
         return self._doc_to_problem_spec(doc)
 
     def list_problem_specs(
@@ -254,6 +284,7 @@ class ResearchEngineService:
         problem_spec_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str = "归档材料研发任务",
         request_id: str | None = None,
     ) -> ProblemSpec:
@@ -261,6 +292,12 @@ class ResearchEngineService:
         existing = ResearchProblemSpecRepository.find_one({"problem_spec_id": problem_spec_id})
         if not existing:
             raise HTTPException(status_code=404, detail=f"ProblemSpec '{problem_spec_id}' 不存在")
+        self._ensure_doc_access(
+            existing,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="ProblemSpec",
+        )
         if existing.get("status") == "archived":
             return self._doc_to_problem_spec(existing)
 
@@ -288,6 +325,7 @@ class ResearchEngineService:
         payload: ProblemSpecCreate,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> ProblemSpec:
         """更新 ProblemSpec 草稿。
@@ -309,6 +347,12 @@ class ResearchEngineService:
         existing = ResearchProblemSpecRepository.find_one({"problem_spec_id": problem_spec_id})
         if not existing:
             raise HTTPException(status_code=404, detail=f"ProblemSpec '{problem_spec_id}' 不存在")
+        self._ensure_doc_access(
+            existing,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="ProblemSpec",
+        )
 
         if existing.get("status") == "frozen":
             raise HTTPException(
@@ -364,6 +408,7 @@ class ResearchEngineService:
         problem_spec_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> ProblemSpec:
         """冻结 ProblemSpec。
@@ -384,6 +429,12 @@ class ResearchEngineService:
         existing = ResearchProblemSpecRepository.find_one({"problem_spec_id": problem_spec_id})
         if not existing:
             raise HTTPException(status_code=404, detail=f"ProblemSpec '{problem_spec_id}' 不存在")
+        self._ensure_doc_access(
+            existing,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="ProblemSpec",
+        )
 
         if existing.get("status") == "frozen":
             raise HTTPException(status_code=409, detail=f"ProblemSpec '{problem_spec_id}' 已经冻结")
@@ -425,10 +476,11 @@ class ResearchEngineService:
         payload: ExecutionDecisionCreate,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> ExecutionDecision:
         """为 ProblemSpec 创建显式执行决策。"""
-        spec = self.get_problem_spec(problem_spec_id)
+        spec = self.get_problem_spec(problem_spec_id, actor_user_id=actor_user_id, is_admin=is_admin)
         if payload.mode not in spec.allowed_execution_modes:
             raise HTTPException(
                 status_code=422,
@@ -479,15 +531,34 @@ class ResearchEngineService:
         )
         return self._doc_to_execution_decision(doc)
 
-    def get_execution_decision(self, decision_id: str) -> ExecutionDecision:
+    def get_execution_decision(
+        self,
+        decision_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ExecutionDecision:
         """获取 ExecutionDecision 详情。"""
         doc = ExecutionDecisionRepository.find_one({"decision_id": decision_id})
         if not doc:
             raise HTTPException(status_code=404, detail=f"ExecutionDecision '{decision_id}' 不存在")
+        self._ensure_doc_access(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="ExecutionDecision",
+        )
         return self._doc_to_execution_decision(doc)
 
-    def get_active_execution_decision(self, problem_spec_id: str) -> ExecutionDecision:
+    def get_active_execution_decision(
+        self,
+        problem_spec_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ExecutionDecision:
         """获取 ProblemSpec 当前 active ExecutionDecision。"""
+        self.get_problem_spec(problem_spec_id, actor_user_id=actor_user_id, is_admin=is_admin)
         doc = ExecutionDecisionRepository.find_active(problem_spec_id)
         if not doc:
             raise HTTPException(status_code=404, detail=f"ProblemSpec '{problem_spec_id}' 尚未选择执行模式")
@@ -528,11 +599,16 @@ class ResearchEngineService:
         payload: ManualAlgorithmWorkflowCreate,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> ManualAlgorithmWorkflow:
         """创建人工算法 Workflow 定义。"""
-        spec = self.get_problem_spec(payload.problem_spec_id)
-        decision = self.get_execution_decision(payload.execution_decision_id)
+        spec = self.get_problem_spec(payload.problem_spec_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        decision = self.get_execution_decision(
+            payload.execution_decision_id,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
         if decision.problem_spec_id != payload.problem_spec_id or decision.mode != "manual_workbench":
             raise HTTPException(status_code=409, detail="人工 Workflow 必须关联 manual_workbench 执行决策")
 
@@ -585,11 +661,23 @@ class ResearchEngineService:
         )
         return self._doc_to_manual_workflow(doc)
 
-    def get_manual_workflow(self, workflow_id: str) -> ManualAlgorithmWorkflow:
+    def get_manual_workflow(
+        self,
+        workflow_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ManualAlgorithmWorkflow:
         """获取人工 Workflow 详情。"""
         doc = ManualAlgorithmWorkflowRepository.find_one({"workflow_id": workflow_id})
         if not doc:
             raise HTTPException(status_code=404, detail=f"ManualAlgorithmWorkflow '{workflow_id}' 不存在")
+        self._ensure_doc_access(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="ManualAlgorithmWorkflow",
+        )
         return self._doc_to_manual_workflow(doc)
 
     def list_manual_workflows(
@@ -624,6 +712,7 @@ class ResearchEngineService:
         workflow_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         reason: str = "归档人工算法 Workflow",
         request_id: str | None = None,
     ) -> ManualAlgorithmWorkflow:
@@ -631,6 +720,12 @@ class ResearchEngineService:
         existing = ManualAlgorithmWorkflowRepository.find_one({"workflow_id": workflow_id})
         if not existing:
             raise HTTPException(status_code=404, detail=f"ManualAlgorithmWorkflow '{workflow_id}' 不存在")
+        self._ensure_doc_access(
+            existing,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="ManualAlgorithmWorkflow",
+        )
         if existing.get("status") == "archived":
             return self._doc_to_manual_workflow(existing)
 
@@ -657,11 +752,12 @@ class ResearchEngineService:
         workflow_id: str,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> WorkflowRun:
         """启动人工 WorkflowRun，按 P0 线性步骤逐个生成 AlgorithmRun。"""
-        workflow = self.get_manual_workflow(workflow_id)
-        spec = self.get_problem_spec(workflow.problem_spec_id)
+        workflow = self.get_manual_workflow(workflow_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        spec = self.get_problem_spec(workflow.problem_spec_id, actor_user_id=actor_user_id, is_admin=is_admin)
         now = utc_now()
         workflow_run_id = self._new_id("wfr")
         run_doc = {
@@ -733,6 +829,7 @@ class ResearchEngineService:
                         reason=f"Workflow step {step.step_id} 执行算法 {step.algorithm_id}",
                     ),
                     actor_user_id=actor_user_id,
+                    is_admin=is_admin,
                     request_id=request_id,
                 )
                 step_doc.update(
@@ -789,11 +886,23 @@ class ResearchEngineService:
         )
         return self._doc_to_workflow_run(run_doc)
 
-    def get_workflow_run(self, workflow_run_id: str) -> WorkflowRun:
+    def get_workflow_run(
+        self,
+        workflow_run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> WorkflowRun:
         """获取 WorkflowRun 详情。"""
         doc = WorkflowRunRepository.find_one({"workflow_run_id": workflow_run_id})
         if not doc:
             raise HTTPException(status_code=404, detail=f"WorkflowRun '{workflow_run_id}' 不存在")
+        self._ensure_doc_access(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="WorkflowRun",
+        )
         return self._doc_to_workflow_run(doc)
 
     def list_workflow_runs(
@@ -1114,6 +1223,7 @@ class ResearchEngineService:
         payload: AlgorithmRunCreate,
         *,
         actor_user_id: str,
+        is_admin: bool = False,
         request_id: str | None = None,
     ) -> AlgorithmRun:
         """创建并执行算法运行。
@@ -1146,6 +1256,10 @@ class ResearchEngineService:
                 status_code=404,
                 detail=f"算法 '{payload.algorithm_id}' 不存在",
             )
+        if payload.problem_spec_id and not is_admin:
+            self.get_problem_spec(payload.problem_spec_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        if payload.workflow_run_id and not is_admin:
+            self.get_workflow_run(payload.workflow_run_id, actor_user_id=actor_user_id, is_admin=is_admin)
 
         # 2. 校验算法支持指定 trigger（先规范化旧值）
         trigger_modes = normalize_trigger_modes(algo_doc.get("trigger_modes"))
@@ -1310,7 +1424,13 @@ class ResearchEngineService:
         # 返回最终结果
         return self._doc_to_algorithm_run(run_doc)
 
-    def get_algorithm_run(self, run_id: str) -> AlgorithmRun:
+    def get_algorithm_run(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> AlgorithmRun:
         """获取 AlgorithmRun 详情。
 
         Args:
@@ -1325,6 +1445,12 @@ class ResearchEngineService:
         doc = AlgorithmRunRepository.find_one({"run_id": run_id})
         if not doc:
             raise HTTPException(status_code=404, detail=f"AlgorithmRun '{run_id}' 不存在")
+        self._ensure_doc_access(
+            doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+            resource_label="AlgorithmRun",
+        )
         return self._doc_to_algorithm_run(doc)
 
     def list_algorithm_runs(
@@ -1385,6 +1511,8 @@ class ResearchEngineService:
         event_type: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
     ) -> EntityAuditListData:
         """按实体类型和 ID 聚合查询审计事件。
 
@@ -1403,13 +1531,27 @@ class ResearchEngineService:
         """
         from app.infra.computation_repositories import AuditEventRepository
 
+        lookup_page = page
+        lookup_size = page_size
+        if actor_user_id and not is_admin:
+            lookup_page = 1
+            lookup_size = 10000
         items, total = AuditEventRepository.list_events(
             entity_type=entity_type,
             entity_id=entity_id,
             event_type=event_type,
-            page=page,
-            page_size=page_size,
+            page=lookup_page,
+            page_size=lookup_size,
         )
+        if actor_user_id and not is_admin:
+            items = [
+                item
+                for item in items
+                if self._is_audit_event_visible_to_user(item, actor_user_id=actor_user_id)
+            ]
+            total = len(items)
+            start = (page - 1) * page_size
+            items = items[start : start + page_size]
 
         audit_items = [
             AuditEventItem(
@@ -1434,7 +1576,13 @@ class ResearchEngineService:
             total=total,
         )
 
-    def get_algorithm_run_traceability(self, run_id: str) -> AlgorithmRunTraceability:
+    def get_algorithm_run_traceability(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> AlgorithmRunTraceability:
         """聚合 AlgorithmRun 完整追溯链。
 
         返回算法运行记录、关联的计算任务产物和审计事件。
@@ -1448,12 +1596,16 @@ class ResearchEngineService:
         Raises:
             HTTPException: AlgorithmRun 不存在。
         """
-        algo_run = self.get_algorithm_run(run_id)
+        algo_run = self.get_algorithm_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
 
         # 查询关联的 computation run
         linked_computation = None
         if algo_run.linked_computation_run_id:
-            linked_computation = self._resolve_computation_ref(algo_run.linked_computation_run_id)
+            linked_computation = self._resolve_computation_ref(
+                algo_run.linked_computation_run_id,
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
+            )
 
         # 聚合审计事件（该 AlgorithmRun 的 + 关联 computation 的）
         audit_events: list[AuditEventItem] = []
@@ -1462,6 +1614,8 @@ class ResearchEngineService:
             entity_id=run_id,
             page=1,
             page_size=100,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
         )
         audit_events.extend(audit_result.items)
 
@@ -1472,6 +1626,8 @@ class ResearchEngineService:
                 entity_id=algo_run.linked_computation_run_id,
                 page=1,
                 page_size=50,
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
             )
             audit_events.extend(comp_audit.items)
 
@@ -1484,7 +1640,13 @@ class ResearchEngineService:
             audit_events=audit_events,
         )
 
-    def get_research_run_traceability(self, run_id: str) -> ResearchRunTraceability:
+    def get_research_run_traceability(
+        self,
+        run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> ResearchRunTraceability:
         """聚合 ResearchRun 完整追溯链。
 
         返回 AutoResearch 运行记录、阶段时间线、关联算法运行、
@@ -1502,13 +1664,13 @@ class ResearchEngineService:
         from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
 
         orchestrator = ResearchEngineOrchestrator()
-        research_run = orchestrator.get_research_run(run_id)
+        research_run = orchestrator.get_research_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
 
         # 查询关联的算法运行
         linked_algo_runs: list[AlgorithmRun] = []
         for arun_id in research_run.linked_algorithm_runs:
             try:
-                linked_algo_runs.append(self.get_algorithm_run(arun_id))
+                linked_algo_runs.append(self.get_algorithm_run(arun_id, actor_user_id=actor_user_id, is_admin=is_admin))
             except HTTPException:
                 pass  # 已被清理的引用跳过
 
@@ -1530,7 +1692,11 @@ class ResearchEngineService:
         # 查询关联的计算任务
         linked_computations: list[LinkedComputationRef] = []
         for comp_id in computation_ids:
-            ref = self._resolve_computation_ref(comp_id)
+            ref = self._resolve_computation_ref(
+                comp_id,
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
+            )
             if ref:
                 linked_computations.append(ref)
 
@@ -1551,6 +1717,8 @@ class ResearchEngineService:
             entity_id=run_id,
             page=1,
             page_size=100,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
         )
         all_audit_events.extend(rr_audit.items)
 
@@ -1561,6 +1729,8 @@ class ResearchEngineService:
                 entity_id=sr.stage_run_id,
                 page=1,
                 page_size=50,
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
             )
             all_audit_events.extend(sr_audit.items)
 
@@ -1571,6 +1741,8 @@ class ResearchEngineService:
                 entity_id=arun.run_id,
                 page=1,
                 page_size=30,
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
             )
             all_audit_events.extend(ar_audit.items)
 
@@ -1589,6 +1761,9 @@ class ResearchEngineService:
         self,
         research_run_id: str,
         stage_run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
     ) -> StageRunTraceability:
         """聚合 StageRun 完整追溯链。
 
@@ -1607,7 +1782,11 @@ class ResearchEngineService:
         from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
 
         orchestrator = ResearchEngineOrchestrator()
-        research_run = orchestrator.get_research_run(research_run_id)
+        research_run = orchestrator.get_research_run(
+            research_run_id,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
 
         # 查找目标阶段
         target_sr = None
@@ -1626,7 +1805,7 @@ class ResearchEngineService:
         linked_algo_runs: list[AlgorithmRun] = []
         for arun_id in target_sr.linked_algorithm_runs:
             try:
-                linked_algo_runs.append(self.get_algorithm_run(arun_id))
+                linked_algo_runs.append(self.get_algorithm_run(arun_id, actor_user_id=actor_user_id, is_admin=is_admin))
             except HTTPException:
                 pass
 
@@ -1634,7 +1813,11 @@ class ResearchEngineService:
         linked_computations: list[LinkedComputationRef] = []
         for arun in linked_algo_runs:
             if arun.linked_computation_run_id:
-                ref = self._resolve_computation_ref(arun.linked_computation_run_id)
+                ref = self._resolve_computation_ref(
+                    arun.linked_computation_run_id,
+                    actor_user_id=actor_user_id,
+                    is_admin=is_admin,
+                )
                 if ref:
                     linked_computations.append(ref)
 
@@ -1645,6 +1828,8 @@ class ResearchEngineService:
             entity_id=stage_run_id,
             page=1,
             page_size=100,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
         )
         audit_events.extend(sr_audit.items)
 
@@ -1654,6 +1839,8 @@ class ResearchEngineService:
                 entity_id=arun.run_id,
                 page=1,
                 page_size=30,
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
             )
             audit_events.extend(ar_audit.items)
 
@@ -1671,7 +1858,12 @@ class ResearchEngineService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _resolve_computation_ref(computation_run_id: str) -> LinkedComputationRef | None:
+    def _resolve_computation_ref(
+        computation_run_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> LinkedComputationRef | None:
         """解析计算任务引用。
 
         从 ComputationRun 中提取摘要信息，不暴露本地文件绝对路径。
@@ -1684,8 +1876,14 @@ class ResearchEngineService:
         """
         from app.infra.computation_repositories import ComputationRunRepository
         from app.infra.computation_repositories import ComputationArtifactRepository
+        from app.services.computation_service import ComputationService
 
         try:
+            run = ComputationService().get_run(
+                computation_run_id,
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
+            )
             doc = ComputationRunRepository.find_one({"run_id": computation_run_id})
             if not doc:
                 return None
@@ -1705,10 +1903,10 @@ class ResearchEngineService:
                     })
 
             return LinkedComputationRef(
-                run_id=doc.get("run_id", ""),
-                workflow_type=doc.get("workflow_type"),
-                engine=doc.get("engine"),
-                status=doc.get("status"),
+                run_id=run.run_id,
+                workflow_type=run.workflow_type,
+                engine=run.engine,
+                status=run.status,
                 input_snapshot={
                     "smiles": doc.get("molecule", {}).get("smiles", "") if isinstance(doc.get("molecule"), dict) else "",
                     "name": doc.get("molecule", {}).get("name", "") if isinstance(doc.get("molecule"), dict) else "",
@@ -1764,6 +1962,49 @@ class ResearchEngineService:
             ]
         except Exception:
             return []
+
+    def _is_audit_event_visible_to_user(self, event: dict, *, actor_user_id: str) -> bool:
+        """判断审计事件是否属于当前 ResearchEngine 用户可见范围。"""
+        if event.get("actor_user_id") == actor_user_id:
+            return True
+
+        entity_type = event.get("entity_type")
+        entity_id = event.get("entity_id")
+        doc: dict | None = None
+        if entity_type == "problem_spec":
+            doc = ResearchProblemSpecRepository.find_one({"problem_spec_id": entity_id})
+        elif entity_type == "execution_decision":
+            doc = ExecutionDecisionRepository.find_one({"decision_id": entity_id})
+        elif entity_type == "manual_algorithm_workflow":
+            doc = ManualAlgorithmWorkflowRepository.find_one({"workflow_id": entity_id})
+        elif entity_type == "workflow_run":
+            doc = WorkflowRunRepository.find_one({"workflow_run_id": entity_id})
+        elif entity_type == "algorithm_run":
+            doc = AlgorithmRunRepository.find_one({"run_id": entity_id})
+        elif entity_type == "research_run":
+            doc = ResearchRunRepository.find_one({"run_id": entity_id})
+        elif entity_type == "research_stage_run":
+            items, _ = ResearchRunRepository.list_runs(page=1, page_size=10000, include_archived=True)
+            for run_doc in items:
+                if any(sr.get("stage_run_id") == entity_id for sr in run_doc.get("stage_runs", [])):
+                    doc = run_doc
+                    break
+
+        if doc and (doc.get("owner_id") or doc.get("created_by")) == actor_user_id:
+            return True
+
+        related_ids = event.get("related_ids") or {}
+        research_run_id = related_ids.get("research_run_id")
+        if research_run_id:
+            run = ResearchRunRepository.find_one({"run_id": research_run_id})
+            if run and (run.get("owner_id") or run.get("created_by")) == actor_user_id:
+                return True
+        problem_spec_id = related_ids.get("problem_spec_id")
+        if problem_spec_id:
+            spec = ResearchProblemSpecRepository.find_one({"problem_spec_id": problem_spec_id})
+            if spec and (spec.get("owner_id") or spec.get("created_by")) == actor_user_id:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # 内部辅助方法

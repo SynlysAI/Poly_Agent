@@ -194,6 +194,51 @@ class ComputationArtifact(BaseModel):
     created_at: datetime
 
 
+class ComputationArtifactResponse(BaseModel):
+    """计算 artifact 公开响应元数据。"""
+
+    artifact_id: str
+    run_id: str
+    step_key: str
+    artifact_type: ArtifactType
+    name: str
+    mime_type: str
+    size_bytes: int
+    checksum_sha256: str
+    download_url: str
+    parser_name: str | None = None
+    parser_version: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+
+
+class ArtifactListResponseData(BaseModel):
+    """artifact 公开列表响应。"""
+
+    items: list[ComputationArtifactResponse]
+
+
+class ArtifactPreviewResponseData(BaseModel):
+    """artifact 公开预览响应。"""
+
+    artifact: ComputationArtifactResponse
+    preview: dict | str
+
+
+class ArtifactStructureResponseData(BaseModel):
+    """结构 artifact 公开响应。"""
+
+    artifact: ComputationArtifactResponse
+    structure: dict
+
+
+class ArtifactSpectrumResponseData(BaseModel):
+    """光谱/曲线 artifact 公开响应。"""
+
+    artifact: ComputationArtifactResponse
+    spectrum: dict
+
+
 class ArtifactListData(BaseModel):
     """artifact 列表响应。"""
 

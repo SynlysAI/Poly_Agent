@@ -1,6 +1,5 @@
 <script setup>
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import Plotly from 'plotly.js-dist'
 import {
   getCalibrationCurveData,
   getContourData,
@@ -28,6 +27,8 @@ const TITLE_FONT = { size: 14 }
 const GRID_COLOR = '#e5e7eb'
 const PRIMARY_COLOR = '#3b82f6'
 const REFERENCE_COLOR = '#ef4444'
+let plotlyModule = null
+let plotlyPromise = null
 
 const props = defineProps({
   sessionId: { type: String, required: true },
@@ -84,6 +85,16 @@ const realVariables = computed(() =>
   variables.value.filter(v => v.type === 'real')
 )
 const chartHeight = computed(() => (isContour.value ? '560px' : '470px'))
+
+/** 按需加载 Plotly，避免进入 Alchemist 前同步打进主包。 */
+async function loadPlotly() {
+  if (plotlyModule) return plotlyModule
+  if (!plotlyPromise) {
+    plotlyPromise = import('plotly.js-dist').then(module => module.default || module)
+  }
+  plotlyModule = await plotlyPromise
+  return plotlyModule
+}
 
 /** 获取当前 Session 中可用于可视化的变量。 */
 async function loadVariables() {
@@ -165,6 +176,7 @@ async function renderVisualization() {
   }
   const result = builders[selectedViz.value]?.()
   if (!result) return
+  const Plotly = await loadPlotly()
   await Plotly.react(chartContainer.value, result.data, result.layout, {
     ...PLOT_CONFIG,
     toImageButtonOptions: {
@@ -176,8 +188,8 @@ async function renderVisualization() {
 
 /** 清理当前 Plotly 实例。 */
 function purgeChart() {
-  if (chartContainer.value) {
-    Plotly.purge(chartContainer.value)
+  if (chartContainer.value && plotlyModule) {
+    plotlyModule.purge(chartContainer.value)
   }
 }
 
