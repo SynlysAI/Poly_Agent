@@ -89,7 +89,9 @@ class ResearchProblemSpecRepository(BaseRepository):
             return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
 
         demo_filters = dict(filters)
-        exclude_archived = demo_filters.pop("status", None) == {"$ne": "archived"}
+        exclude_archived = demo_filters.get("status") == {"$ne": "archived"}
+        if exclude_archived:
+            demo_filters.pop("status", None)
         items, total = cls.list_all(demo_filters, sort_field="created_at", reverse=True, page=1, page_size=10000)
         if exclude_archived:
             items = [item for item in items if item.get("status") != "archived"]
@@ -426,7 +428,9 @@ class ManualAlgorithmWorkflowRepository(BaseRepository):
             return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
 
         demo_filters = dict(filters)
-        exclude_archived = demo_filters.pop("status", None) == {"$ne": "archived"}
+        exclude_archived = demo_filters.get("status") == {"$ne": "archived"}
+        if exclude_archived:
+            demo_filters.pop("status", None)
         items, total = cls.list_all(demo_filters, sort_field="created_at", reverse=True, page=1, page_size=10000)
         if exclude_archived:
             items = [item for item in items if item.get("status") != "archived"]
@@ -685,7 +689,9 @@ class ResearchRunRepository(BaseRepository):
             return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
 
         demo_filters = dict(filters)
-        exclude_archived = demo_filters.pop("status", None) == {"$ne": "archived"}
+        exclude_archived = demo_filters.get("status") == {"$ne": "archived"}
+        if exclude_archived:
+            demo_filters.pop("status", None)
         items, total = cls.list_all(demo_filters, sort_field="created_at", reverse=True, page=1, page_size=10000)
         if exclude_archived:
             items = [item for item in items if item.get("status") != "archived"]

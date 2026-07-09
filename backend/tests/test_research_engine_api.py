@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,6 +17,8 @@ except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 from app.services.research_engine_service import ResearchEngineService
+from app.core.auth import get_current_user
+from app.main import app
 
 
 def problem_spec_payload(**overrides) -> dict:
@@ -139,6 +142,132 @@ class ProblemSpecApiTest(ComputationTestCase):
         archived_resp = self.client.get(f"{self.base_url}/problem-specs?status=archived")
         archived_ids = [item["problem_spec_id"] for item in archived_resp.json()["data"]["items"]]
         self.assertIn(ps_id, archived_ids)
+
+    def test_readiness_reports_optional_demo_fallbacks_before_start(self) -> None:
+        """AutoResearch 启动前可见 RAG/Alchemist 等集成可用性。"""
+        with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False):
+            resp = self.client.get(f"{self.base_url}/readiness")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        by_service = {item["service"]: item for item in data["items"]}
+
+        self.assertFalse(data["ready"])
+        self.assertTrue(data["can_start"])
+        self.assertEqual(by_service["literature-rag"]["status"], "warning")
+        self.assertTrue(by_service["literature-rag"]["demo_fallback"])
+        self.assertFalse(by_service["literature-rag"]["blocking"])
+        self.assertEqual(by_service["artifact-store"]["status"], "ready")
+        self.assertEqual(by_service["computation-engine"]["status"], "ready")
+        self.assertEqual(by_service["alchemist-backend"]["status"], "warning")
+
+
+class ResearchEngineAccessControlApiTest(ComputationTestCase):
+    """覆盖 ResearchEngine ID 直连访问的所有权校验。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.base_url = "/api/v1/research-engine"
+        ResearchEngineService().seed_default_algorithms()
+
+    def tearDown(self) -> None:
+        app.dependency_overrides.pop(get_current_user, None)
+        super().tearDown()
+
+    @staticmethod
+    def _login_as(user_id: str, role: str = "user") -> None:
+        app.dependency_overrides[get_current_user] = lambda: {
+            "user_id": user_id,
+            "username": user_id,
+            "role": role,
+            "status": "active",
+        }
+
+    def _create_owned_research_run(self) -> tuple[str, str, str]:
+        self._login_as("user-a")
+        ps_resp = self.client.post(
+            f"{self.base_url}/problem-specs",
+            json=problem_spec_payload(
+                name="用户 A 的 AutoResearch",
+                allowed_execution_modes=["autoresearch"],
+            ),
+        )
+        self.assertEqual(ps_resp.status_code, 200)
+        ps_id = ps_resp.json()["data"]["problem_spec_id"]
+
+        decision_resp = self.client.post(
+            f"{self.base_url}/problem-specs/{ps_id}/execution-decisions",
+            json={"mode": "autoresearch", "reason": "访问控制测试"},
+        )
+        self.assertEqual(decision_resp.status_code, 200)
+        decision_id = decision_resp.json()["data"]["decision_id"]
+
+        run_resp = self.client.post(
+            f"{self.base_url}/research-runs",
+            json={
+                "problem_spec_id": ps_id,
+                "execution_decision_id": decision_id,
+                "profile_id": "fluoropolymer",
+                "max_iterations": 1,
+                "batch_size": 5,
+            },
+        )
+        self.assertEqual(run_resp.status_code, 200)
+        run_id = run_resp.json()["data"]["run_id"]
+        return ps_id, decision_id, run_id
+
+    def test_id_based_operations_require_owner_or_admin(self) -> None:
+        ps_id, _decision_id, run_id = self._create_owned_research_run()
+
+        self._login_as("user-b")
+        forbidden_requests = [
+            self.client.get(f"{self.base_url}/problem-specs/{ps_id}"),
+            self.client.post(f"{self.base_url}/problem-specs/{ps_id}:archive", json={"reason": "try"}),
+            self.client.get(f"{self.base_url}/research-runs/{run_id}"),
+            self.client.post(f"{self.base_url}/research-runs/{run_id}:archive", json={"reason": "try"}),
+            self.client.post(f"{self.base_url}/research-runs/{run_id}/start", json={"target_status": "running", "reason": "try"}),
+            self.client.post(f"{self.base_url}/research-runs/{run_id}/advance", json={"target_status": "running", "reason": "try"}),
+            self.client.post(f"{self.base_url}/research-runs/{run_id}/pause", json={"target_status": "paused", "reason": "try"}),
+            self.client.post(f"{self.base_url}/research-runs/{run_id}/fail", json={"target_status": "failed", "reason": "try"}),
+            self.client.get(f"{self.base_url}/research-runs/{run_id}/traceability"),
+        ]
+        for response in forbidden_requests:
+            self.assertEqual(response.status_code, 403, response.text)
+
+        audit_resp = self.client.get(
+            f"{self.base_url}/audit",
+            params={"entity_type": "research_run", "entity_id": run_id},
+        )
+        self.assertEqual(audit_resp.status_code, 200)
+        self.assertEqual(audit_resp.json()["data"]["total"], 0)
+
+        self._login_as("user-a")
+        start_resp = self.client.post(
+            f"{self.base_url}/research-runs/{run_id}/start",
+            json={"target_status": "running", "reason": "owner start"},
+        )
+        self.assertEqual(start_resp.status_code, 200)
+        gate = next(
+            stage
+            for stage in start_resp.json()["data"]["stage_runs"]
+            if stage["status"] == "blocked_approval"
+        )
+
+        self._login_as("user-b")
+        approve_resp = self.client.post(
+            f"{self.base_url}/research-runs/{run_id}/stages/{gate['stage_run_id']}/approve",
+            json={"stage_key": gate["stage_key"], "decision": "approved", "reason": "try"},
+        )
+        reject_resp = self.client.post(
+            f"{self.base_url}/research-runs/{run_id}/stages/{gate['stage_run_id']}/reject",
+            json={"stage_key": gate["stage_key"], "decision": "rejected", "reason": "try"},
+        )
+        self.assertEqual(approve_resp.status_code, 403)
+        self.assertEqual(reject_resp.status_code, 403)
+
+        self._login_as("admin", role="admin")
+        admin_detail = self.client.get(f"{self.base_url}/research-runs/{run_id}")
+        self.assertEqual(admin_detail.status_code, 200)
 
     def test_list_with_filters(self) -> None:
         """按状态和材料体系过滤。"""
@@ -1175,12 +1304,12 @@ class StageGateApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["code"], 0)
-        self.assertEqual(data["data"]["status"], "failed")
+        self.assertEqual(data["data"]["status"], "blocked_approval")
         knowledge_stage = next(
             sr for sr in data["data"]["stage_runs"]
             if sr["stage_key"] == "KNOWLEDGE_RETRIEVAL"
         )
-        self.assertEqual(knowledge_stage["status"], "failed")
+        self.assertEqual(knowledge_stage["status"], "completed")
         self.assertGreater(len(knowledge_stage["linked_algorithm_runs"]), 0)
 
     def test_reject_gate(self) -> None:

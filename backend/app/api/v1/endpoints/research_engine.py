@@ -30,6 +30,7 @@ from app.schemas.research_engine import (
     ResearchRun,
     ResearchRunCreate,
     ResearchRunListData,
+    ResearchEngineReadinessData,
     ResearchRunStatusChangeRequest,
     ResearchRunTraceability,
     ResearchEngineExampleInstantiateResult,
@@ -40,11 +41,13 @@ from app.schemas.research_engine import (
     WorkflowRunListData,
 )
 from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
+from app.services.research_engine_readiness_service import ResearchEngineReadinessService
 from app.services.research_engine_service import ResearchEngineService
 
 router = APIRouter(prefix="/research-engine", tags=["research-engine"])
 service = ResearchEngineService()
 orchestrator = ResearchEngineOrchestrator()
+readiness_service = ResearchEngineReadinessService()
 
 
 def _actor_user_id(current_user: dict[str, str] | None) -> str:
@@ -52,9 +55,30 @@ def _actor_user_id(current_user: dict[str, str] | None) -> str:
     return current_user["user_id"] if current_user else "demo_user"
 
 
+def _access_user_id(current_user: dict[str, str] | None) -> str | None:
+    """解析用于数据权限过滤的用户 ID。"""
+    return current_user["user_id"] if current_user else None
+
+
+def _is_admin(current_user: dict[str, str] | None) -> bool:
+    """判断当前用户是否管理员。"""
+    return bool(current_user and current_user.get("role") == "admin")
+
+
+def _has_full_access(current_user: dict[str, str] | None) -> bool:
+    """未开启登录或管理员登录时不做用户级资源过滤。"""
+    return current_user is None or _is_admin(current_user)
+
+
 def _request_id(request: Request) -> str | None:
     """读取请求追踪 ID。"""
     return getattr(request.state, "request_id", None) or request.headers.get("x-request-id")
+
+
+@router.get("/readiness", response_model=ApiResponse[ResearchEngineReadinessData])
+def get_research_engine_readiness() -> ApiResponse[ResearchEngineReadinessData]:
+    """获取 AutoResearch 启动前集成可用性摘要。"""
+    return ApiResponse(code=0, message="ok", data=readiness_service.get_readiness())
 
 
 # =============================================================================
@@ -76,6 +100,7 @@ def create_problem_spec(
     data = service.create_problem_spec(
         payload,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
@@ -101,7 +126,7 @@ def list_problem_specs(
         data=service.list_problem_specs(
             project_id=project_id,
             campaign_id=campaign_id,
-            created_by=current_user["user_id"] if current_user else None,
+            created_by=None if _is_admin(current_user) else _access_user_id(current_user),
             status=status,
             material_family=material_family,
             page=page,
@@ -121,6 +146,7 @@ def archive_problem_spec(
     data = service.archive_problem_spec(
         problem_spec_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason if payload else "用户归档研发任务",
         request_id=_request_id(request),
     )
@@ -133,7 +159,11 @@ def get_problem_spec(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[ProblemSpec]:
     """获取 ProblemSpec 详情。"""
-    data = service.get_problem_spec(problem_spec_id)
+    data = service.get_problem_spec(
+        problem_spec_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -152,6 +182,7 @@ def update_problem_spec(
         problem_spec_id,
         payload,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
@@ -170,6 +201,7 @@ def freeze_problem_spec(
     data = service.freeze_problem_spec(
         problem_spec_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
@@ -195,6 +227,7 @@ def create_execution_decision(
         problem_spec_id,
         payload,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
@@ -217,7 +250,7 @@ def list_execution_decisions(
         problem_spec_id=problem_spec_id,
         mode=mode,
         status=status,
-        created_by=current_user["user_id"] if current_user else None,
+        created_by=None if _is_admin(current_user) else _access_user_id(current_user),
         page=page,
         page_size=page_size,
     )
@@ -233,7 +266,11 @@ def get_active_execution_decision(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[ExecutionDecision]:
     """查询 ProblemSpec 当前 active 执行决策。"""
-    data = service.get_active_execution_decision(problem_spec_id)
+    data = service.get_active_execution_decision(
+        problem_spec_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -351,7 +388,7 @@ def list_manual_workflows(
         problem_spec_id=problem_spec_id,
         execution_decision_id=execution_decision_id,
         status=status,
-        created_by=current_user["user_id"] if current_user else None,
+        created_by=None if _is_admin(current_user) else _access_user_id(current_user),
         page=page,
         page_size=page_size,
     )
@@ -369,6 +406,7 @@ def archive_manual_workflow(
     data = service.archive_manual_workflow(
         workflow_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason if payload else "用户归档人工 Workflow",
         request_id=_request_id(request),
     )
@@ -381,7 +419,11 @@ def get_manual_workflow(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[ManualAlgorithmWorkflow]:
     """获取人工算法 Workflow 详情。"""
-    data = service.get_manual_workflow(workflow_id)
+    data = service.get_manual_workflow(
+        workflow_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -395,6 +437,7 @@ def start_workflow_run(
     data = service.start_workflow_run(
         workflow_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
@@ -416,7 +459,7 @@ def list_workflow_runs(
         problem_spec_id=problem_spec_id,
         execution_decision_id=execution_decision_id,
         status=status,
-        created_by=current_user["user_id"] if current_user else None,
+        created_by=None if _is_admin(current_user) else _access_user_id(current_user),
         page=page,
         page_size=page_size,
     )
@@ -429,7 +472,11 @@ def get_workflow_run(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[WorkflowRun]:
     """获取 WorkflowRun 详情。"""
-    data = service.get_workflow_run(workflow_run_id)
+    data = service.get_workflow_run(
+        workflow_run_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -449,6 +496,7 @@ def create_algorithm_run(
     data = service.create_algorithm_run(
         payload,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
@@ -482,7 +530,7 @@ def list_algorithm_runs(
             status=status,
             trigger_source=trigger_source,
             research_run_id=research_run_id,
-            created_by=current_user["user_id"] if current_user else None,
+            created_by=None if _is_admin(current_user) else _access_user_id(current_user),
             page=page,
             page_size=page_size,
         ),
@@ -498,7 +546,11 @@ def get_algorithm_run(
 
     响应包含 input_snapshot、output_summary、artifact_refs、错误信息和审计事件引用。
     """
-    data = service.get_algorithm_run(run_id)
+    data = service.get_algorithm_run(
+        run_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -527,6 +579,7 @@ def create_research_run(
         batch_size=payload.batch_size,
         description=payload.description,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
@@ -553,7 +606,7 @@ def list_research_runs(
             problem_spec_id=problem_spec_id,
             campaign_id=campaign_id,
             status=status,
-            created_by=current_user["user_id"] if current_user else None,
+            created_by=None if _is_admin(current_user) else _access_user_id(current_user),
             project_id=project_id,
             page=page,
             page_size=page_size,
@@ -572,6 +625,7 @@ def archive_research_run(
     data = orchestrator.archive_research_run(
         run_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason if payload else "用户归档 AutoResearch 运行",
         request_id=_request_id(request),
     )
@@ -587,7 +641,11 @@ def get_research_run(
 
     包含完整阶段序列、当前阶段状态、gate 审批记录和 checkpoint 信息。
     """
-    data = orchestrator.get_research_run(run_id)
+    data = orchestrator.get_research_run(
+        run_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -612,6 +670,7 @@ def start_research_run(
     data = orchestrator.start_research_run(
         run_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason,
         request_id=_request_id(request),
     )
@@ -632,6 +691,7 @@ def advance_research_run(
     data = orchestrator.advance_research_run(
         run_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason,
         request_id=_request_id(request),
     )
@@ -652,6 +712,7 @@ def pause_research_run(
     data = orchestrator.pause_research_run(
         run_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason,
         request_id=_request_id(request),
     )
@@ -672,6 +733,7 @@ def resume_research_run(
     data = orchestrator.resume_research_run(
         run_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason,
         request_id=_request_id(request),
     )
@@ -692,6 +754,7 @@ def fail_research_run(
     data = orchestrator.fail_research_run(
         run_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason,
         request_id=_request_id(request),
     )
@@ -723,6 +786,7 @@ def approve_stage(
         research_run_id=run_id,
         stage_run_id=stage_run_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason,
         request_id=_request_id(request),
     )
@@ -749,6 +813,7 @@ def reject_stage(
         research_run_id=run_id,
         stage_run_id=stage_run_id,
         actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
         reason=payload.reason,
         request_id=_request_id(request),
     )
@@ -780,6 +845,8 @@ def query_audit_events(
         event_type=event_type,
         page=page,
         page_size=page_size,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
     )
     return ApiResponse(code=0, message="ok", data=data)
 
@@ -796,7 +863,11 @@ def get_algorithm_run_traceability(
 
     聚合算法运行记录、自有 artifact、关联计算任务产物和审计事件。
     """
-    data = service.get_algorithm_run_traceability(run_id)
+    data = service.get_algorithm_run_traceability(
+        run_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -813,7 +884,11 @@ def get_research_run_traceability(
     聚合 AutoResearch 运行记录、阶段时间线、关联算法运行、
     关联计算任务、关联观测和所有审计事件。
     """
-    data = service.get_research_run_traceability(run_id)
+    data = service.get_research_run_traceability(
+        run_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -833,5 +908,7 @@ def get_stage_run_traceability(
     data = service.get_stage_run_traceability(
         research_run_id=run_id,
         stage_run_id=stage_run_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
     )
     return ApiResponse(code=0, message="ok", data=data)

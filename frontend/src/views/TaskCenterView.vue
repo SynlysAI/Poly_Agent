@@ -4,32 +4,25 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search, View, Finished } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, listAlgorithmRuns, listCampaigns, listComputations, listResearchRuns } from '../api/polyAgentApi'
+import { getApiErrorMessage, listGlobalTasks } from '../api/polyAgentApi'
 import {
   TASK_MODULES,
   getTaskModule,
-  isResearchEngineContainerCampaign,
-  mapAlgorithmRunToGlobalTask,
-  mapCampaignToGlobalTask,
-  mapComputationRunToGlobalTask,
-  mapResearchRunToGlobalTask,
 } from '../tasks/taskModules'
 
 const router = useRouter()
 const route = useRoute()
 const loading = ref(false)
-const computationRows = ref([])
-const campaignRows = ref([])
-const algorithmRuns = ref([])
-const researchRuns = ref([])
+const taskRows = ref([])
 const total = ref(0)
+const summary = ref({ total: 0, running: 0, completed: 0, pending: 0 })
 
 const filters = reactive({
   module_id: route.query.module_id ? String(route.query.module_id) : '',
   status: route.query.status ? String(route.query.status) : '',
   keyword: route.query.keyword ? String(route.query.keyword) : '',
-  page: 1,
-  page_size: 20,
+  page: route.query.page ? Number(route.query.page) || 1 : 1,
+  page_size: route.query.page_size ? Number(route.query.page_size) || 20 : 20,
 })
 
 const moduleOptions = computed(() => [
@@ -50,34 +43,7 @@ const statusOptions = [
   { label: 'Blocked Approval', value: 'blocked_approval' },
 ]
 
-const taskRows = computed(() => {
-  const rows = [
-    ...computationRows.value.map(mapComputationRunToGlobalTask),
-    ...campaignRows.value.filter((item) => !isResearchEngineContainerCampaign(item)).map(mapCampaignToGlobalTask),
-    ...algorithmRuns.value.map(mapAlgorithmRunToGlobalTask),
-    ...researchRuns.value.map(mapResearchRunToGlobalTask),
-  ].sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
-  const normalizedKeyword = filters.keyword.trim().toLowerCase()
-  return rows.filter((row) => {
-    const matchesModule = !filters.module_id || row.module_id === filters.module_id
-    const matchesStatus = !filters.status || row.status === filters.status
-    const haystack = `${row.task_id} ${row.task_type} ${row.module_name} ${row.title} ${row.summary}`.toLowerCase()
-    const matchesKeyword = !normalizedKeyword || haystack.includes(normalizedKeyword)
-    return matchesModule && matchesStatus && matchesKeyword
-  })
-})
-
 const unavailableModules = computed(() => TASK_MODULES.filter((item) => !item.routes?.center && item.status === 'coming'))
-
-const summary = computed(() => {
-  const counts = { total: taskRows.value.length, running: 0, completed: 0, pending: 0 }
-  for (const item of taskRows.value) {
-    if (item.status === 'running') counts.running += 1
-    if (item.status === 'completed') counts.completed += 1
-    if (item.status === 'queued' || item.status === 'blocked_approval') counts.pending += 1
-  }
-  return counts
-})
 
 function getStatusTag(status) {
   const map = { queued: 'info', running: 'warning', completed: 'success', failed: 'danger', cancelled: 'info', draft: 'info', paused: 'info', archived: 'info', blocked_approval: 'danger' }
@@ -94,17 +60,16 @@ function formatDate(value) {
 async function loadTasks() {
   loading.value = true
   try {
-    const [computations, campaigns, algoRuns, researchRunsData] = await Promise.all([
-      listComputations({ page: filters.page, page_size: filters.page_size }),
-      listCampaigns({ page: filters.page, page_size: filters.page_size }),
-      listAlgorithmRuns({ page: filters.page, page_size: filters.page_size }).catch(() => ({ items: [], total: 0 })),
-      listResearchRuns({ page: filters.page, page_size: filters.page_size }).catch(() => ({ items: [], total: 0 })),
-    ])
-    computationRows.value = computations.items || []
-    campaignRows.value = campaigns.items || []
-    algorithmRuns.value = algoRuns.items || []
-    researchRuns.value = researchRunsData.items || []
-    total.value = (computations.total || 0) + (campaigns.total || 0) + (algoRuns.total || 0) + (researchRunsData.total || 0)
+    const data = await listGlobalTasks({
+      module_id: filters.module_id || undefined,
+      status: filters.status || undefined,
+      keyword: filters.keyword.trim() || undefined,
+      page: filters.page,
+      page_size: filters.page_size,
+    })
+    taskRows.value = data.items || []
+    total.value = data.total || 0
+    summary.value = data.summary || { total: total.value, running: 0, completed: 0, pending: 0 }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -134,8 +99,23 @@ function syncFiltersToRoute() {
       ...(filters.module_id ? { module_id: filters.module_id } : {}),
       ...(filters.status ? { status: filters.status } : {}),
       ...(filters.keyword.trim() ? { keyword: filters.keyword.trim() } : {}),
+      ...(filters.page > 1 ? { page: filters.page } : {}),
+      ...(filters.page_size !== 20 ? { page_size: filters.page_size } : {}),
     },
   })
+}
+
+function handlePageChange(page) {
+  filters.page = page
+  syncFiltersToRoute()
+  loadTasks()
+}
+
+function handleSizeChange(pageSize) {
+  filters.page_size = pageSize
+  filters.page = 1
+  syncFiltersToRoute()
+  loadTasks()
 }
 
 function openTask(row) {
@@ -250,6 +230,18 @@ onMounted(() => {
             </template>
           </el-table-column>
         </el-table>
+
+        <div class="pagination-row">
+          <el-pagination
+            v-model:current-page="filters.page"
+            v-model:page-size="filters.page_size"
+            :page-sizes="[10, 20, 50, 100]"
+            :total="total"
+            layout="total, sizes, prev, pager, next"
+            @current-change="handlePageChange"
+            @size-change="handleSizeChange"
+          />
+        </div>
       </div>
     </section>
 
@@ -346,6 +338,12 @@ onMounted(() => {
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
 }
 
 .unavailable-grid {

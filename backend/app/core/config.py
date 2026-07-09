@@ -11,6 +11,11 @@ from dotenv import load_dotenv
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(BACKEND_ROOT / ".env")
 
+LOCAL_APP_ENVS = {"dev", "development", "local", "test", "testing", "ci"}
+DEFAULT_AUTH_USERNAME = "admin"
+DEFAULT_AUTH_PASSWORD = "admin123456"
+MIN_AUTH_SECRET_LENGTH = 32
+
 
 class Settings:
     """配置对象。"""
@@ -60,8 +65,8 @@ class Settings:
             "yes",
             "on",
         }
-        self.auth_username: str = os.getenv("AUTH_USERNAME", "admin")
-        self.auth_password: str = os.getenv("AUTH_PASSWORD", "admin123456")
+        self.auth_username: str = os.getenv("AUTH_USERNAME", DEFAULT_AUTH_USERNAME)
+        self.auth_password: str = os.getenv("AUTH_PASSWORD", DEFAULT_AUTH_PASSWORD)
         self.auth_secret: str = os.getenv("AUTH_SECRET", "")
         self.auth_token_expire_hours: int = int(os.getenv("AUTH_TOKEN_EXPIRE_HOURS", "12"))
         self.auth_bootstrap_enabled: bool = os.getenv("AUTH_BOOTSTRAP_ENABLED", "true").strip().lower() in {
@@ -98,10 +103,13 @@ class Settings:
         self.stale_reaper_interval_seconds: int = int(os.getenv("STALE_REAPER_INTERVAL_SECONDS", "60"))
         # 后台 reaper 任务运行间隔
 
-        # ALchemist 主动学习工具后端地址
-        self.alchemist_backend_url: str = os.getenv(
-            "ALCHEMIST_BACKEND_URL", "http://127.0.0.1:8004/api/v1"
+        # ALchemist 实验设计运行时目录
+        self.alchemist_runtime_root: Path = self._resolve_project_path(
+            os.getenv("ALCHEMIST_RUNTIME_ROOT", str(self.runtime_root / "alchemist"))
         )
+
+        # Edison Scientific 文献搜索 API Key
+        self.edison_api_key: str = os.getenv("EDISON_API_KEY", "")
 
         # LLM 配置（仅从环境变量读取，无默认值）
         self.llm_api_key: str = os.getenv("LLM_API_KEY", "")
@@ -129,6 +137,29 @@ class Settings:
         if target_path.is_absolute():
             return target_path
         return (self.project_root / target_path).resolve()
+
+    def validate_deployment_security(self) -> None:
+        """Enforce authentication settings outside local/test environments."""
+        if self.app_env.strip().lower() in LOCAL_APP_ENVS:
+            return
+
+        errors: list[str] = []
+        if not self.auth_enabled:
+            errors.append("AUTH_ENABLED must be true")
+        if self.auth_username == DEFAULT_AUTH_USERNAME:
+            errors.append("AUTH_USERNAME must be changed from the default")
+        if self.auth_password == DEFAULT_AUTH_PASSWORD:
+            errors.append("AUTH_PASSWORD must be changed from the default")
+        if len(self.auth_secret) < MIN_AUTH_SECRET_LENGTH:
+            errors.append(f"AUTH_SECRET must be at least {MIN_AUTH_SECRET_LENGTH} characters")
+        if self.auth_secret in {"", "change-me", "changeme", "secret", "default"}:
+            errors.append("AUTH_SECRET must be a non-default random value")
+        if errors:
+            raise RuntimeError(
+                "Unsafe deployment configuration for APP_ENV="
+                f"{self.app_env!r}: "
+                + "; ".join(errors)
+            )
 
     @property
     def mongodb_uri(self) -> str:

@@ -6,14 +6,16 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
 
 from app.core.auth import get_current_user, require_admin
+from app.core.config import settings
 from app.schemas.common import ApiResponse
 from app.schemas.computation import (
-    ArtifactListData,
-    ArtifactPreviewData,
-    ArtifactStructureData,
-    ArtifactSpectrumData,
+    ArtifactListResponseData,
+    ArtifactPreviewResponseData,
+    ArtifactStructureResponseData,
+    ArtifactSpectrumResponseData,
     AuditEventListData,
     ComputationArtifact,
+    ComputationArtifactResponse,
     ComputationCreateData,
     ComputationCreateRequest,
     ComputationListData,
@@ -44,6 +46,30 @@ def _is_admin(current_user: dict[str, str] | None) -> bool:
 def _request_id(request: Request) -> str | None:
     """读取请求追踪 ID。"""
     return getattr(request.state, "request_id", None) or request.headers.get("x-request-id")
+
+
+def _artifact_download_url(artifact_id: str) -> str:
+    """生成受控 artifact 下载 URL。"""
+    return f"{settings.api_prefix}/artifacts/{artifact_id}/download"
+
+
+def _public_artifact(artifact: ComputationArtifact) -> ComputationArtifactResponse:
+    """转换为不暴露本地 storage_uri 的 artifact 响应。"""
+    return ComputationArtifactResponse(
+        artifact_id=artifact.artifact_id,
+        run_id=artifact.run_id,
+        step_key=artifact.step_key,
+        artifact_type=artifact.artifact_type,
+        name=artifact.name,
+        mime_type=artifact.mime_type,
+        size_bytes=artifact.size_bytes,
+        checksum_sha256=artifact.checksum_sha256,
+        download_url=_artifact_download_url(artifact.artifact_id),
+        parser_name=artifact.parser_name,
+        parser_version=artifact.parser_version,
+        metadata=artifact.metadata,
+        created_at=artifact.created_at,
+    )
 
 
 @router.post("/computations", response_model=ApiResponse[ComputationCreateData])
@@ -142,91 +168,91 @@ def fail_stale_computation(
     return ApiResponse(code=0, message="ok", data=data)
 
 
-@router.get("/computations/{run_id}/artifacts", response_model=ApiResponse[ArtifactListData])
+@router.get("/computations/{run_id}/artifacts", response_model=ApiResponse[ArtifactListResponseData])
 def list_computation_artifacts(
     run_id: str,
     current_user: dict[str, str] | None = Depends(get_current_user),
-) -> ApiResponse[ArtifactListData]:
+) -> ApiResponse[ArtifactListResponseData]:
     """查询任务 artifacts。"""
+    artifacts = service.list_artifacts(
+        run_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_is_admin(current_user),
+    )
     return ApiResponse(
         code=0,
         message="ok",
-        data=ArtifactListData(
-            items=service.list_artifacts(
-                run_id,
-                actor_user_id=_access_user_id(current_user),
-                is_admin=_is_admin(current_user),
-            )
-        ),
+        data=ArtifactListResponseData(items=[_public_artifact(item) for item in artifacts]),
     )
 
 
-@router.get("/artifacts/{artifact_id}", response_model=ApiResponse[ComputationArtifact])
+@router.get("/artifacts/{artifact_id}", response_model=ApiResponse[ComputationArtifactResponse])
 def get_artifact(
     artifact_id: str,
     current_user: dict[str, str] | None = Depends(get_current_user),
-) -> ApiResponse[ComputationArtifact]:
+) -> ApiResponse[ComputationArtifactResponse]:
     """查询 artifact 元数据。"""
+    artifact = service.get_artifact(
+        artifact_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_is_admin(current_user),
+    )
     return ApiResponse(
         code=0,
         message="ok",
-        data=service.get_artifact(
-            artifact_id,
-            actor_user_id=_access_user_id(current_user),
-            is_admin=_is_admin(current_user),
-        ),
+        data=_public_artifact(artifact),
     )
 
 
-@router.get("/artifacts/{artifact_id}/preview", response_model=ApiResponse[ArtifactPreviewData])
+@router.get("/artifacts/{artifact_id}/preview", response_model=ApiResponse[ArtifactPreviewResponseData])
 def preview_artifact(
     artifact_id: str,
     current_user: dict[str, str] | None = Depends(get_current_user),
-) -> ApiResponse[ArtifactPreviewData]:
+) -> ApiResponse[ArtifactPreviewResponseData]:
     """预览 artifact。"""
-    return ApiResponse(
-        code=0,
-        message="ok",
-        data=service.preview_artifact(
-            artifact_id,
-            actor_user_id=_access_user_id(current_user),
-            is_admin=_is_admin(current_user),
-        ),
+    preview = service.preview_artifact(
+        artifact_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_is_admin(current_user),
     )
+    data = ArtifactPreviewResponseData(artifact=_public_artifact(preview.artifact), preview=preview.preview)
+    return ApiResponse(code=0, message="ok", data=data)
 
 
-@router.get("/artifacts/{artifact_id}/structure", response_model=ApiResponse[ArtifactStructureData])
+@router.get("/artifacts/{artifact_id}/structure", response_model=ApiResponse[ArtifactStructureResponseData])
 def get_artifact_structure(
     artifact_id: str,
     current_user: dict[str, str] | None = Depends(get_current_user),
-) -> ApiResponse[ArtifactStructureData]:
+) -> ApiResponse[ArtifactStructureResponseData]:
     """读取结构 artifact。"""
-    return ApiResponse(
-        code=0,
-        message="ok",
-        data=service.get_artifact_structure(
-            artifact_id,
-            actor_user_id=_access_user_id(current_user),
-            is_admin=_is_admin(current_user),
-        ),
+    structure = service.get_artifact_structure(
+        artifact_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_is_admin(current_user),
     )
+    data = ArtifactStructureResponseData(
+        artifact=_public_artifact(structure.artifact),
+        structure=structure.structure,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
 
 
-@router.get("/artifacts/{artifact_id}/spectrum", response_model=ApiResponse[ArtifactSpectrumData])
+@router.get("/artifacts/{artifact_id}/spectrum", response_model=ApiResponse[ArtifactSpectrumResponseData])
 def get_artifact_spectrum(
     artifact_id: str,
     current_user: dict[str, str] | None = Depends(get_current_user),
-) -> ApiResponse[ArtifactSpectrumData]:
+) -> ApiResponse[ArtifactSpectrumResponseData]:
     """读取光谱/指标 artifact。"""
-    return ApiResponse(
-        code=0,
-        message="ok",
-        data=service.get_artifact_spectrum(
-            artifact_id,
-            actor_user_id=_access_user_id(current_user),
-            is_admin=_is_admin(current_user),
-        ),
+    spectrum = service.get_artifact_spectrum(
+        artifact_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_is_admin(current_user),
     )
+    data = ArtifactSpectrumResponseData(
+        artifact=_public_artifact(spectrum.artifact),
+        spectrum=spectrum.spectrum,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.get("/artifacts/{artifact_id}/download")

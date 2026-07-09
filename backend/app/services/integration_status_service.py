@@ -9,7 +9,6 @@ import importlib.metadata
 import importlib.util
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.services.integration_config_service import IntegrationConfigService
@@ -129,23 +128,13 @@ class IntegrationStatusService:
             return False
 
     def _alchemist_status(self, checked_at: str) -> dict:
-        parsed = urlparse(settings.alchemist_backend_url)
-        host = parsed.hostname or "127.0.0.1"
-        if parsed.port:
-            port = parsed.port
-        elif parsed.scheme == "https":
-            port = 443
-        else:
-            port = 80
-        available = self._can_connect(host, port)
         return {
             "service": "alchemist-backend",
-            "status": "up" if available else "not_configured",
+            "status": "built_in",
             "checked_at": checked_at,
             "details": {
-                "url": settings.alchemist_backend_url,
-                "host": host,
-                "port": port,
+                "message": "ALchemist 实验设计与优化已内置到 Poly Agent 后端，无需外部服务",
+                "model_storage": str(settings.alchemist_runtime_root),
             },
         }
 

@@ -126,6 +126,11 @@ export function getExperiments(sessionId) {
   return alchemistClient.get(`/sessions/${sessionId}/experiments`).then(r => r.data)
 }
 
+/** 删除指定索引的实验数据 */
+export function deleteExperiment(sessionId, rowIndex) {
+  return alchemistClient.delete(`/sessions/${sessionId}/experiments/${rowIndex}`).then(r => r.data)
+}
+
 /** 获取实验数据摘要 */
 export function getExperimentsSummary(sessionId) {
   return alchemistClient.get(`/sessions/${sessionId}/experiments/summary`).then(r => r.data)
