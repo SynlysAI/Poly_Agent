@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Fold, Expand, SwitchButton,
-  Monitor, DataAnalysis, Histogram, ChatLineRound, SetUp, FolderOpened, Aim, MagicStick,
+  Monitor, DataAnalysis, Histogram, Collection, SetUp, Aim, MagicStick,
 } from '@element-plus/icons-vue'
 
 import { getAuthStatus, getApiErrorMessage, getCurrentUser } from './api/polyAgentApi'
@@ -21,8 +21,6 @@ const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
 const APP_VERSION = '0.1.0'
 const BRAND_LOGO_SRC = '/brand/JG-logo.png'
 const BRAND_PARTNER_TEXT = '智储大装置｜嘉庚实验室｜厦门大学｜苏州实验室｜浦江实验室'
-
-const canAccessAdminFeatures = computed(() => !authState.authEnabled || authState.role === 'admin')
 
 const currentUserDisplayName = computed(() => {
   if (!authState.authEnabled) return '管理员'
@@ -41,12 +39,13 @@ const isAuthPublicRoute = computed(() => AUTH_PUBLIC_PATHS.has(route.path))
 
 const HEADER_SECTION_ROUTE_MAP = {
   '任务提交': '/tasks/submit',
+  '知识库': '/knowledge',
   '任务中心': '/tasks/center',
   '计算智能': '/tasks/submit',
+  '数据管理': '/database/data-catalog',
   '湿实验优化': '/tasks/submit',
   '研发引擎': '/research-engine',
   '工具服务': '/tools',
-  '系统管理': '/database',
 }
 
 const currentBreadcrumbItems = computed(() => {
@@ -66,6 +65,7 @@ const activeMenu = computed(() => {
   const current = route.path
   if (current.startsWith('/computations/submit')) return '/tasks/submit'
   if (current.startsWith('/computations/runs')) return '/tasks/center'
+  if (current === '/data-catalog' || current.startsWith('/database/data-catalog')) return '/database/data-catalog'
   // 湿实验优化路径不再有独立菜单，归入任务提交
   if (current.startsWith('/optimization')) return '/tasks/submit'
   // 问答对话归入工作台
@@ -221,6 +221,10 @@ onBeforeUnmount(() => {
             <el-icon><Aim /></el-icon>
             <span>任务提交</span>
           </el-menu-item>
+          <el-menu-item index="/knowledge">
+            <el-icon><Collection /></el-icon>
+            <span>知识库</span>
+          </el-menu-item>
           <el-menu-item index="/tasks/center">
             <el-icon><Histogram /></el-icon>
             <span>任务中心</span>
@@ -229,9 +233,9 @@ onBeforeUnmount(() => {
             <el-icon><SetUp /></el-icon>
             <span>工具服务</span>
           </el-menu-item>
-          <el-menu-item v-if="canAccessAdminFeatures" index="/database">
-            <el-icon><FolderOpened /></el-icon>
-            <span>数据库管理</span>
+          <el-menu-item index="/database/data-catalog">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>数据管理</span>
           </el-menu-item>
         </el-menu>
       </div>

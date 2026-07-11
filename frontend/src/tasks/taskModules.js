@@ -55,13 +55,16 @@ export const TASK_MODULES = [
     id: 'vertical-prediction',
     name: '垂类预测模型',
     category: '预测模型',
-    status: 'coming',
-    statusText: '即将上线',
+    status: 'online',
+    statusText: '在线',
     icon: DataAnalysis,
-    description: '聚合物热、力学、流变等垂类模型入口，后续接入模型服务。',
-    primaryActionText: '查看模型',
-    centerActionText: '任务管理',
-    routes: {},
+    description: '上传、部署、管理和调用聚合物热、力学、流变等垂类预测算法，追溯运行版本和结果。',
+    primaryActionText: '进入预测工作台',
+    centerActionText: '算法与运行管理',
+    routes: {
+      submit: '/vertical-prediction',
+      center: '/vertical-prediction',
+    },
   },
 ]
 

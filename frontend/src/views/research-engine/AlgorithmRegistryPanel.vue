@@ -111,12 +111,36 @@ function typeLabel(type) {
 }
 
 function statusTag(status) {
-  const map = { active: 'success', pending_encapsulation: 'warning', in_development: 'info', frozen: 'info', decommissioned: 'danger' }
+  const map = {
+    active: 'success',
+    pending_encapsulation: 'warning',
+    in_development: 'info',
+    frozen: 'info',
+    decommissioned: 'danger',
+    uploaded: 'info',
+    validated: 'success',
+    built: 'success',
+    deployed_staging: 'warning',
+    validation_failed: 'danger',
+    build_failed: 'danger',
+  }
   return map[status] || 'info'
 }
 
 function statusLabel(status) {
-  const map = { active: '已接入', pending_encapsulation: '待封装', in_development: '开发中', frozen: '冻结', decommissioned: '下线' }
+  const map = {
+    active: '已接入',
+    pending_encapsulation: '待封装',
+    in_development: '开发中',
+    frozen: '冻结',
+    decommissioned: '下线',
+    uploaded: '已上传',
+    validated: '已校验',
+    built: '已构建',
+    deployed_staging: '待激活',
+    validation_failed: '校验失败',
+    build_failed: '构建失败',
+  }
   return map[status] || status
 }
 
@@ -266,6 +290,7 @@ onMounted(loadData)
           <el-tag size="small" effect="plain" :type="familyTag(algo.algorithm_family)">{{ familyLabel(algo.algorithm_family) }}</el-tag>
           <el-tag size="small" effect="plain">{{ materialScopeLabel(algo.material_scope) }}</el-tag>
           <el-tag size="small" effect="plain" :type="statusTag(algo.status)">{{ statusLabel(algo.status) }}</el-tag>
+          <el-tag v-if="algo.source === 'uploaded_package'" size="small" effect="plain" type="success">上传</el-tag>
           <el-tag v-if="isDemoAlgorithm(algo)" size="small" effect="plain" type="info">演示</el-tag>
         </div>
         <div class="algo-actions">
@@ -302,7 +327,9 @@ onMounted(loadData)
             <el-tag size="small" :type="statusTag(detail.status)">{{ statusLabel(detail.status) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="版本">{{ detail.version }}</el-descriptions-item>
+          <el-descriptions-item label="Active Version">{{ detail.active_version_id || '-' }}</el-descriptions-item>
           <el-descriptions-item label="调用方式">{{ detail.call_method }}</el-descriptions-item>
+          <el-descriptions-item label="来源">{{ detail.source || 'builtin' }}</el-descriptions-item>
           <el-descriptions-item label="运行依赖">{{ detail.runtime_dependency || '无' }}</el-descriptions-item>
           <el-descriptions-item label="负责人">{{ detail.owner || '-' }}</el-descriptions-item>
           <el-descriptions-item label="材料范围">{{ materialScopeLabel(detail.material_scope) }}</el-descriptions-item>
@@ -319,6 +346,7 @@ onMounted(loadData)
         <pre v-if="detail.validation_metric && Object.keys(detail.validation_metric).length" class="schema-json">{{ JSON.stringify(detail.validation_metric, null, 2) }}</pre>
       </template>
     </el-drawer>
+
   </div>
 </template>
 

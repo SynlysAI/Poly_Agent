@@ -29,8 +29,13 @@ COLLECTION_NAMES = [
     "manual_algorithm_workflows",
     "workflow_runs",
     "algorithm_registry_entries",
+    "algorithm_packages",
+    "algorithm_versions",
     "algorithm_runs",
     "research_runs",
+    "report_jobs",
+    "report_artifacts",
+    "ai4ms.Poly_Agent",
 ]
 
 

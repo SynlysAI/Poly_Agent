@@ -107,6 +107,7 @@ class Settings:
         self.alchemist_runtime_root: Path = self._resolve_project_path(
             os.getenv("ALCHEMIST_RUNTIME_ROOT", str(self.runtime_root / "alchemist"))
         )
+        self.alchemist_backend_url: str = os.getenv("ALCHEMIST_BACKEND_URL", "http://127.0.0.1:5101")
 
         # Edison Scientific 文献搜索 API Key
         self.edison_api_key: str = os.getenv("EDISON_API_KEY", "")
@@ -116,13 +117,94 @@ class Settings:
         self.llm_base_url: str = os.getenv("LLM_BASE_URL", "")
         self.llm_model: str = os.getenv("LLM_MODEL", "")
 
+        # Report generation 配置
+        self.reports_enabled: bool = os.getenv("REPORTS_ENABLED", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.report_output_root: Path = self._resolve_project_path(
+            os.getenv("REPORT_OUTPUT_ROOT", str(self.runtime_root / "reports"))
+        )
+        self.report_llm_provider: str = os.getenv("REPORT_LLM_PROVIDER", "openai_responses").strip() or "openai_responses"
+        self.report_llm_fallback_providers: list[str] = [
+            item.strip()
+            for item in os.getenv("REPORT_LLM_FALLBACK_PROVIDERS", "openai_compatible,local_ollama").split(",")
+            if item.strip()
+        ]
+        self.report_skill_pipeline_default: str = (
+            os.getenv("REPORT_SKILL_PIPELINE_DEFAULT", "nature_research_report_zh").strip()
+            or "nature_research_report_zh"
+        )
+        self.report_skill_allowlist: list[str] = [
+            item.strip()
+            for item in os.getenv(
+                "REPORT_SKILL_ALLOWLIST",
+                "nature-writing,nature-polishing,nature-data,nature-reviewer,nature-academic-search,nature-citation,nature-figure,nature-reader",
+            ).split(",")
+            if item.strip()
+        ]
+        self.report_skill_strict_mode: bool = os.getenv("REPORT_SKILL_STRICT_MODE", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.report_llm_api_key: str = os.getenv("REPORT_LLM_API_KEY", self.llm_api_key or os.getenv("OPENAI_API_KEY", ""))
+        self.report_llm_base_url: str = os.getenv("REPORT_LLM_BASE_URL", self.llm_base_url)
+        self.report_llm_model: str = os.getenv("REPORT_LLM_MODEL", self.llm_model)
+        self.report_llm_timeout_seconds: int = int(os.getenv("REPORT_LLM_TIMEOUT_SECONDS", "180"))
+        self.report_llm_max_retries: int = int(os.getenv("REPORT_LLM_MAX_RETRIES", "2"))
+        self.report_llm_store: bool = os.getenv("REPORT_LLM_STORE", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.report_ollama_base_url: str = os.getenv("REPORT_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+        self.report_ollama_model: str = os.getenv("REPORT_OLLAMA_MODEL", "")
+        self.report_codex_bin: str = os.getenv("REPORT_CODEX_BIN", "codex").strip() or "codex"
+        self.report_codex_api_key: str = os.getenv("REPORT_CODEX_API_KEY", os.getenv("CODEX_API_KEY", ""))
+        self.report_codex_model: str = os.getenv("REPORT_CODEX_MODEL", "")
+        self.report_codex_timeout_seconds: int = int(os.getenv("REPORT_CODEX_TIMEOUT_SECONDS", "600"))
+        self.report_codex_sandbox_workdir: Path = self._resolve_project_path(
+            os.getenv("REPORT_CODEX_SANDBOX_WORKDIR", str(self.runtime_root / "reports"))
+        )
+        self.report_latex_engine: str = os.getenv("REPORT_LATEX_ENGINE", "xelatex").strip() or "xelatex"
+        self.report_pdf_timeout_seconds: int = int(os.getenv("REPORT_PDF_TIMEOUT_SECONDS", "120"))
+        self.report_keep_intermediate: bool = os.getenv("REPORT_KEEP_INTERMEDIATE", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
         # 统一认证（AI4MS）数据库配置
         self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "")
         self.auth_database: str = os.getenv("AUTH_MONGODB_DATABASE", "ai4ms")
 
+        # 只读材料数据资产 MongoDB 配置
+        self.data_asset_mongodb_uri: str = os.getenv("DATA_ASSET_MONGODB_URI", "").strip()
+        self.data_asset_mongodb_database: str = os.getenv("DATA_ASSET_MONGODB_DATABASE", "ai4ms").strip() or "ai4ms"
+
+        # MinIO / S3 数据目录配置
+        self.minio_endpoint: str = os.getenv("MINIO_ENDPOINT", "").strip()
+        self.minio_access_key: str = os.getenv("MINIO_ACCESS_KEY", "").strip()
+        self.minio_secret_key: str = os.getenv("MINIO_SECRET_KEY", "").strip()
+        self.minio_bucket: str = os.getenv("MINIO_BUCKET", "polymer-data").strip() or "polymer-data"
+        self.minio_secure: bool = os.getenv("MINIO_SECURE", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.data_catalog_cache_ttl_seconds: int = int(os.getenv("DATA_CATALOG_CACHE_TTL_SECONDS", "900"))
+
         self.upload_root.mkdir(parents=True, exist_ok=True)
         self.outputs_root.mkdir(parents=True, exist_ok=True)
         self.logs_root.mkdir(parents=True, exist_ok=True)
+        self.report_output_root.mkdir(parents=True, exist_ok=True)
 
     def _resolve_project_path(self, raw_path: str) -> Path:
         """按项目根目录解析路径配置。

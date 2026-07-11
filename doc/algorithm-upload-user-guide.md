@@ -1,0 +1,86 @@
+# Poly Agent 算法上传部署用户指南
+
+当前入口：`任务提交 -> 垂类预测模型`，对应路由 `/vertical-prediction`。
+
+工作台包含四个 Tab：
+
+- `上传部署`：上传 Python 脚本或标准 ZIP，下载模板，完成校验、构建、部署和激活。
+- `算法管理`：查看版本、package SHA256、image digest 和状态，执行部署、激活、回滚、冻结和下线。
+- `测试调用`：根据版本 `input_schema` 填写参数，调用指定版本并查看输出、artifact 和耗时。
+- `运行记录`：按算法、版本、状态和日期查找 AlgorithmRun，并查看输入输出与 digest。
+
+ResearchEngine 只调用已治理的算法，不再提供算法上传入口。
+
+## 使用方式
+
+P0 支持三种入口：
+
+- 网页打包助手：上传原始 `.py`、`requirements.txt` 和样例输入，页面生成标准 ZIP。
+- 标准 ZIP 上传：下载模板或用 CLI 生成 ZIP 后上传。
+- 本地 CLI：适合算法工程师在代码目录中打包。
+
+## Python 入口契约
+
+```python
+def load(context: dict) -> object | None:
+    return None
+
+def predict(inputs: dict, context: dict, model: object | None = None) -> dict:
+    return {"prediction": {}}
+```
+
+P0 只支持 Python 3.11。上传包不能包含 Dockerfile、`.env`、shell 脚本、宿主机路径或路径穿越。
+
+## CLI 示例
+
+```bash
+python scripts/pack_algorithm.py \
+  --algorithm-id vertical_tg_predictor_demo \
+  --name "Polymer Tg Predictor Demo" \
+  --version 0.1.0 \
+  --entrypoint src.handler:predict \
+  --loader src.handler:load \
+  --source-dir examples/algorithm_upload/vertical_tg_predictor_demo \
+  --requirements examples/algorithm_upload/vertical_tg_predictor_demo/requirements.txt \
+  --sample-input examples/algorithm_upload/vertical_tg_predictor_demo/tests/sample_input.json \
+  --output /tmp/vertical_tg_predictor_demo-0.1.0.zip
+```
+
+网页工作台在提交后按顺序执行：校验、构建、部署、激活。激活版本会进入 AlgorithmRegistry，并可在垂类预测模型、人工 Workflow 和 AutoResearch 中调用。
+
+## 网页打包助手
+
+1. 在“上传部署”选择“上传 Python 脚本”。
+2. 填写算法 ID、名称、版本、类型、材料范围、触发方式、入口函数和加载函数。
+3. 在输入/输出契约表格中维护字段名、类型、必填、单位、枚举和范围。
+4. 上传 `.py` 文件和可选的 `requirements.txt`。
+5. 填写样例输入 JSON。格式错误会在提交前提示。
+6. 检查页面生成的 `polyagent.algorithm.yaml` 预览，然后点击“校验、部署并激活”。
+7. 完成后可下载平台生成的标准 ZIP，用于留档或再次上传。
+
+## 版本治理
+
+- `部署`：将已构建版本登记到本机 adapter staging。
+- `激活`：设置 AlgorithmRegistry 的 active version；原 active 版本退回待激活状态。
+- `回滚`：重新激活一个历史 staging 版本。
+- `冻结`：保留版本与历史记录，但禁止新任务选择。
+- `下线`：将版本标记为 decommissioned；历史 AlgorithmRun 仍保留追溯信息。
+
+冻结或下线的版本不能用于新的测试调用、人工 Workflow 或 AutoResearch。
+
+## 当前执行边界
+
+P0.1-P0.3 已完成。当前构建和部署仍使用 `local_python_adapter`，`image_digest` 为可追踪摘要占位符，并非真实 Docker 镜像摘要。Docker/BuildKit、独立 `/health`/`/predict` 容器服务、资源隔离和日志治理属于后续 P0.4-P0.5。
+
+## 标准 ZIP 结构
+
+```text
+polyagent.algorithm.yaml
+requirements.txt
+src/handler.py
+tests/sample_input.json
+README.md
+model/
+```
+
+`polyagent.algorithm.yaml` 由网页打包助手或 CLI 生成。高级用户可以手写，但字段必须与页面展示的契约一致。

@@ -37,6 +37,17 @@ def _get_auth_database() -> Database:
     return _get_auth_client()[settings.auth_database]
 
 
+@lru_cache(maxsize=1)
+def get_data_asset_client() -> MongoClient:
+    """获取只读材料数据资产 MongoDB 客户端。"""
+    return MongoClient(settings.data_asset_mongodb_uri, serverSelectionTimeoutMS=5000)
+
+
+def get_data_asset_database() -> Database:
+    """获取只读材料数据资产数据库对象。"""
+    return get_data_asset_client()[settings.data_asset_mongodb_database]
+
+
 def get_users_collection() -> Collection:
     """获取统一认证（AI4MS）users 集合。"""
     return _get_auth_database()["users"]
@@ -117,6 +128,16 @@ def get_algorithm_registry_entries_collection() -> Collection:
     return get_database()["algorithm_registry_entries"]
 
 
+def get_algorithm_packages_collection() -> Collection:
+    """获取 algorithm_packages 集合。"""
+    return get_database()["algorithm_packages"]
+
+
+def get_algorithm_versions_collection() -> Collection:
+    """获取 algorithm_versions 集合。"""
+    return get_database()["algorithm_versions"]
+
+
 def get_algorithm_runs_collection() -> Collection:
     """获取 algorithm_runs 集合。"""
     return get_database()["algorithm_runs"]
@@ -125,6 +146,16 @@ def get_algorithm_runs_collection() -> Collection:
 def get_research_runs_collection() -> Collection:
     """获取 research_runs 集合。"""
     return get_database()["research_runs"]
+
+
+def get_report_jobs_collection() -> Collection:
+    """获取 report_jobs 集合。"""
+    return get_database()["report_jobs"]
+
+
+def get_report_artifacts_collection() -> Collection:
+    """获取 report_artifacts 集合。"""
+    return get_database()["report_artifacts"]
 
 
 def get_alchemist_sessions_collection() -> Collection:

@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from app.core.config import settings
 from app.schemas.research_engine import ResearchEngineReadinessData, ResearchEngineReadinessItem
 from app.services.integration_status_service import IntegrationStatusService
+from app.services.knowledge_service import KnowledgeService
 
 
 class ResearchEngineReadinessService:
@@ -86,60 +83,26 @@ class ResearchEngineReadinessService:
         )
 
     def _rag_readiness(self) -> ResearchEngineReadinessItem:
-        index_path = Path(
-            os.getenv(
-                "RESEARCH_ENGINE_RAG_INDEX",
-                str(settings.runtime_root / "rag" / "literature_index.json"),
-            )
-        )
-        details: dict[str, Any] = {"index_path": str(index_path)}
-        if not index_path.exists():
+        health = KnowledgeService().health()
+        details: dict[str, Any] = {"systems": health.systems}
+        if health.configured:
             return ResearchEngineReadinessItem(
                 service="literature-rag",
-                label="文献 RAG",
-                status="warning",
+                label="知识库 RAG",
+                status="ready",
                 required=False,
                 blocking=False,
-                demo_fallback=True,
-                message="本地文献索引未配置，文献检索将使用 demo fallback。",
-                details=details,
-            )
-
-        try:
-            raw = json.loads(index_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return ResearchEngineReadinessItem(
-                service="literature-rag",
-                label="文献 RAG",
-                status="warning",
-                required=False,
-                blocking=False,
-                demo_fallback=True,
-                message="本地文献索引无法读取，文献检索将使用 demo fallback。",
-                details={**details, "error": str(exc)},
-            )
-
-        documents = raw.get("documents", raw) if isinstance(raw, dict) else raw
-        count = len(documents) if isinstance(documents, list) else 0
-        details["document_count"] = count
-        if count <= 0:
-            return ResearchEngineReadinessItem(
-                service="literature-rag",
-                label="文献 RAG",
-                status="warning",
-                required=False,
-                blocking=False,
-                demo_fallback=True,
-                message="本地文献索引为空，文献检索将使用 demo fallback。",
+                demo_fallback=False,
+                message=health.message,
                 details=details,
             )
         return ResearchEngineReadinessItem(
             service="literature-rag",
-            label="文献 RAG",
-            status="ready",
+            label="知识库 RAG",
+            status="warning",
             required=False,
             blocking=False,
-            demo_fallback=False,
-            message=f"已加载 {count} 条文献索引。",
+            demo_fallback=health.demo_available,
+            message=health.message,
             details=details,
         )

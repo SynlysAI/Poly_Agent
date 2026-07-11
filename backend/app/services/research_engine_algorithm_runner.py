@@ -12,7 +12,6 @@ import json
 import os
 import random
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,6 +19,8 @@ import httpx
 from app.core.config import settings
 from app.infra.computation_repositories import utc_now
 from app.infra.research_engine_repositories import AlgorithmRegistryRepository
+from app.schemas.knowledge import KnowledgeQueryRequest
+from app.services.knowledge_service import KnowledgeService
 
 
 class BaseMockRunner:
@@ -609,113 +610,43 @@ class ComputationSubmitAdapter(BaseMockRunner):
 
 
 # =============================================================================
-# 6. literature_rag_adapter：本地 RAG 文献库检索
+# 6. literature_rag_adapter / knowledge_graph_adapter：知识库服务适配器
 # =============================================================================
 
 
 class LiteratureRAGAdapter(BaseMockRunner):
-    """本地 RAG 文献库检索适配器。
-
-    读取 .runtime/rag/literature_index.json，未配置或空库时返回明确状态。
-    支持的索引格式为 list[dict] 或 {"documents": list[dict]}。
-    """
+    """KnowledgeService-backed RAG adapter."""
 
     algorithm_id = "literature_rag_adapter"
 
     def run(self, input_snapshot: dict) -> dict:
-        query = input_snapshot.get("query", "").strip()
+        query = str(input_snapshot.get("query", "")).strip()
         top_k = int(input_snapshot.get("top_k", 5) or 5)
-        index_path = Path(os.getenv(
-            "RESEARCH_ENGINE_RAG_INDEX",
-            str(settings.runtime_root / "rag" / "literature_index.json"),
-        ))
+        payload = KnowledgeQueryRequest(
+            system_id=str(input_snapshot.get("system_id") or "ai4s_fluoropolymer"),
+            question=query,
+            mode=input_snapshot.get("mode") or "hybrid",
+            top_k=top_k,
+            include_graph_context=bool(input_snapshot.get("include_graph_context", True)),
+        )
+        output = KnowledgeService().query(payload).model_dump()
+        # Backward-compatible aliases for existing ResearchEngine stage contracts.
+        output.setdefault("knowledge_cards", output.get("hits", []))
+        output.setdefault("candidate_sources", output.get("citations", []))
+        output.setdefault("literature_summary", output.get("answer", ""))
+        return output
 
-        if not index_path.exists():
-            return {
-                "configured": False,
-                "hits": [],
-                "answer": "",
-                "message": f"未配置文献库：请创建本地 RAG 索引 {index_path}",
-                "index_path": str(index_path),
-            }
 
-        try:
-            raw = json.loads(index_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise ValueError(f"文献 RAG 索引无法读取: {exc}") from exc
+class KnowledgeGraphAdapter(BaseMockRunner):
+    """KnowledgeService-backed graph/subgraph adapter."""
 
-        documents = raw.get("documents", raw) if isinstance(raw, dict) else raw
-        if not isinstance(documents, list) or not documents:
-            return {
-                "configured": False,
-                "hits": [],
-                "answer": "",
-                "message": "文献库为空：请导入论文摘要、片段或知识卡片后重试",
-                "index_path": str(index_path),
-            }
+    algorithm_id = "knowledge_graph_adapter"
 
-        query_tokens = self._tokenize(query)
-        scored: list[tuple[float, dict[str, Any]]] = []
-        for doc in documents:
-            if not isinstance(doc, dict):
-                continue
-            text = " ".join(str(doc.get(key, "")) for key in ("title", "abstract", "content", "summary", "keywords"))
-            material_family = input_snapshot.get("material_family")
-            target_properties = input_snapshot.get("target_properties") or []
-            score = self._score(text, query_tokens)
-            if material_family and material_family in text:
-                score += 1.0
-            for prop in target_properties:
-                if str(prop) in text:
-                    score += 0.5
-            if score > 0:
-                scored.append((score, doc))
-
-        scored.sort(key=lambda item: item[0], reverse=True)
-        hits = [
-            {
-                "rank": idx + 1,
-                "score": round(score, 4),
-                "title": doc.get("title") or doc.get("id") or f"document_{idx + 1}",
-                "source": doc.get("source") or doc.get("doi") or doc.get("url"),
-                "snippet": self._snippet(doc),
-                "metadata": doc.get("metadata", {}),
-            }
-            for idx, (score, doc) in enumerate(scored[:top_k])
-        ]
-
-        if not hits:
-            return {
-                "configured": True,
-                "hits": [],
-                "answer": "",
-                "message": "文献库已配置，但没有命中当前查询",
-                "index_path": str(index_path),
-            }
-
-        answer = "；".join(hit["snippet"] for hit in hits[:3] if hit.get("snippet"))
-        return {
-            "configured": True,
-            "hits": hits,
-            "answer": answer,
-            "message": f"命中 {len(hits)} 条文献片段",
-            "index_path": str(index_path),
-        }
-
-    @staticmethod
-    def _tokenize(text: str) -> set[str]:
-        normalized = text.lower().replace("/", " ").replace(",", " ")
-        return {token for token in normalized.split() if token}
-
-    @staticmethod
-    def _score(text: str, tokens: set[str]) -> float:
-        lower = text.lower()
-        return float(sum(1 for token in tokens if token in lower))
-
-    @staticmethod
-    def _snippet(doc: dict[str, Any]) -> str:
-        text = str(doc.get("summary") or doc.get("abstract") or doc.get("content") or "")
-        return text[:280]
+    def run(self, input_snapshot: dict) -> dict:
+        system_id = str(input_snapshot.get("system_id") or "ai4s_fluoropolymer")
+        query = str(input_snapshot.get("query") or "").strip() or None
+        limit = int(input_snapshot.get("limit", 30) or 30)
+        return KnowledgeService().get_subgraph(system_id, query=query, limit=limit).model_dump()
 
 
 # =============================================================================
@@ -915,6 +846,7 @@ def _build_registry() -> dict[str, BaseMockRunner]:
         MOBOMockRunner(),
         ComputationSubmitAdapter(),
         LiteratureRAGAdapter(),
+        KnowledgeGraphAdapter(),
         VerticalPredictorAdapter(),
         MOBOAlchemistAdapter(),
     ]

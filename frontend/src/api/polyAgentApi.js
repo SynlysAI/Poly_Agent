@@ -293,6 +293,28 @@ export function getIntegrationStatus() {
   return apiClient.get('/integrations/status').then(unwrapResponse)
 }
 
+// ── 数据目录 API ──
+
+export function getDataCatalogOverview() {
+  return apiClient.get('/data-catalog/overview').then(unwrapResponse)
+}
+
+export function listDataCatalogDatasets() {
+  return apiClient.get('/data-catalog/datasets').then(unwrapResponse)
+}
+
+export function listDataCatalogMongoCollections() {
+  return apiClient.get('/data-catalog/mongo-collections').then(unwrapResponse)
+}
+
+export function listDataCatalogCollectionRecords(collectionName, params = {}) {
+  return apiClient.get(`/data-catalog/mongo-collections/${encodeURIComponent(collectionName)}/records`, { params }).then(unwrapResponse)
+}
+
+export function getDataCatalogCollectionRecord(collectionName, recordId) {
+  return apiClient.get(`/data-catalog/mongo-collections/${encodeURIComponent(collectionName)}/records/${encodeURIComponent(recordId)}`).then(unwrapResponse)
+}
+
 export function listIntegrationConfigs() {
   return apiClient.get('/integrations/configs').then(unwrapResponse)
 }
@@ -303,6 +325,28 @@ export function upsertIntegrationConfig(serviceKey, payload) {
 
 export function checkIntegrationConfig(serviceKey) {
   return apiClient.post(`/integrations/configs/${serviceKey}/check`).then(unwrapResponse)
+}
+
+// ── Knowledge Base API ──
+
+export function listKnowledgeSystems() {
+  return apiClient.get('/knowledge-bases/systems').then(unwrapResponse)
+}
+
+export function getKnowledgeHealth() {
+  return apiClient.get('/knowledge-bases/health').then(unwrapResponse)
+}
+
+export function queryKnowledgeBase(payload) {
+  return apiClient.post('/knowledge-bases/query', payload).then(unwrapResponse)
+}
+
+export function getKnowledgeGraph(systemId) {
+  return apiClient.get(`/knowledge-bases/${systemId}/graph`).then(unwrapResponse)
+}
+
+export function getKnowledgeSubgraph(systemId, params = {}) {
+  return apiClient.get(`/knowledge-bases/${systemId}/graph/subgraph`, { params }).then(unwrapResponse)
 }
 
 // ── LLM API ──
@@ -367,6 +411,74 @@ export function listAlgorithms(params = {}) {
 
 export function getAlgorithm(algorithmId) {
   return apiClient.get(`/research-engine/algorithms/${algorithmId}`).then(unwrapResponse)
+}
+
+export function downloadAlgorithmPackageTemplate() {
+  return apiClient
+    .get('/research-engine/algorithm-packages/template', { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], 'polyagent-algorithm-template.zip'),
+      contentType: response.headers['content-type'] || 'application/zip',
+    }))
+}
+
+export function packAlgorithmPackage(formData) {
+  return apiClient.post('/research-engine/algorithm-packages:pack', formData).then(unwrapResponse)
+}
+
+export function uploadAlgorithmPackage(formData) {
+  return apiClient.post('/research-engine/algorithm-packages', formData).then(unwrapResponse)
+}
+
+export function getAlgorithmPackage(packageId) {
+  return apiClient.get(`/research-engine/algorithm-packages/${packageId}`).then(unwrapResponse)
+}
+
+export function listAlgorithmPackages(params = {}) {
+  return apiClient.get('/research-engine/algorithm-packages', { params }).then(unwrapResponse)
+}
+
+export function downloadAlgorithmPackage(packageId, fallbackName = 'algorithm-package.zip') {
+  return apiClient
+    .get(`/research-engine/algorithm-packages/${packageId}/download`, { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], fallbackName),
+      contentType: response.headers['content-type'] || 'application/zip',
+    }))
+}
+
+export function validateAlgorithmPackage(packageId) {
+  return apiClient.post(`/research-engine/algorithm-packages/${packageId}:validate`).then(unwrapResponse)
+}
+
+export function buildAlgorithmPackage(packageId) {
+  return apiClient.post(`/research-engine/algorithm-packages/${packageId}:build`).then(unwrapResponse)
+}
+
+export function listAlgorithmVersions(algorithmId, params = {}) {
+  return apiClient.get(`/research-engine/algorithms/${algorithmId}/versions`, { params }).then(unwrapResponse)
+}
+
+export function deployAlgorithmVersion(algorithmId, versionId) {
+  return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:deploy`).then(unwrapResponse)
+}
+
+export function activateAlgorithmVersion(algorithmId, versionId) {
+  return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:activate`).then(unwrapResponse)
+}
+
+export function rollbackAlgorithmVersion(algorithmId, versionId) {
+  return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:rollback`).then(unwrapResponse)
+}
+
+export function freezeAlgorithmVersion(algorithmId, versionId) {
+  return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:freeze`).then(unwrapResponse)
+}
+
+export function decommissionAlgorithmVersion(algorithmId, versionId) {
+  return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:decommission`).then(unwrapResponse)
 }
 
 // ── ResearchEngine Examples ──
@@ -481,6 +593,42 @@ export function getResearchRunTraceability(runId) {
 
 export function getStageRunTraceability(runId, stageRunId) {
   return apiClient.get(`/research-engine/research-runs/${runId}/stages/${stageRunId}/traceability`).then(unwrapResponse)
+}
+
+// ── Report Generation API ──
+
+export function getReportReadiness() {
+  return apiClient.get('/reports/readiness').then(unwrapResponse)
+}
+
+export function createReport(payload) {
+  return apiClient.post('/reports', payload).then(unwrapResponse)
+}
+
+export function getReport(reportId) {
+  return apiClient.get(`/reports/${encodeURIComponent(reportId)}`).then(unwrapResponse)
+}
+
+export function listReports(params = {}) {
+  return apiClient.get('/reports', { params }).then(unwrapResponse)
+}
+
+export function cancelReport(reportId) {
+  return apiClient.post(`/reports/${encodeURIComponent(reportId)}/cancel`).then(unwrapResponse)
+}
+
+export function retryReport(reportId) {
+  return apiClient.post(`/reports/${encodeURIComponent(reportId)}/retry`).then(unwrapResponse)
+}
+
+export function downloadReportArtifact(reportId, artifactId, fallbackName = 'report.dat') {
+  return apiClient
+    .get(`/reports/${encodeURIComponent(reportId)}/artifacts/${encodeURIComponent(artifactId)}/download`, { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], fallbackName),
+      contentType: response.headers['content-type'] || 'application/octet-stream',
+    }))
 }
 
 // ── Structured Assistant API ──

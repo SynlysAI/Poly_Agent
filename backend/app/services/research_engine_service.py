@@ -25,6 +25,7 @@ from app.infra.research_engine_repositories import (
     ResearchRunRepository,
     WorkflowRunRepository,
 )
+from app.services.research_engine_algorithm_package_service import AlgorithmPackageService
 from app.schemas.research_engine import (
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
@@ -1270,6 +1271,14 @@ class ResearchEngineService:
                 f"支持的触发方式: {trigger_modes}",
             )
 
+        package_service = AlgorithmPackageService()
+        algorithm_version = package_service.resolve_active_version(
+            payload.algorithm_id,
+            payload.algorithm_version_id,
+        )
+        if algorithm_version and algorithm_version.algorithm_id != payload.algorithm_id:
+            raise HTTPException(status_code=409, detail="算法版本与 algorithm_id 不匹配")
+
         # 3. 创建 AlgorithmRun（初始状态 queued）
         now = utc_now()
         run_id = self._new_id("arun")
@@ -1285,6 +1294,10 @@ class ResearchEngineService:
             "workflow_step_run_id": payload.workflow_step_run_id,
             "research_run_id": payload.research_run_id,
             "stage_run_id": payload.stage_run_id,
+            "algorithm_version_id": algorithm_version.version_id if algorithm_version else None,
+            "package_sha256": algorithm_version.package_sha256 if algorithm_version else None,
+            "image_digest": algorithm_version.image_digest if algorithm_version else None,
+            "runtime_snapshot": algorithm_version.runtime if algorithm_version else {},
             "linked_computation_run_id": None,
             "linked_suggestion_id": None,
             "linked_observation_id": None,
@@ -1332,18 +1345,34 @@ class ResearchEngineService:
 
             # 查找 runner
             runner = get_runner(payload.algorithm_id)
-            if runner is None:
+            if runner is None and algorithm_version is None:
                 raise HTTPException(
                     status_code=501,
                     detail=f"算法 '{payload.algorithm_id}' 尚未实现执行器",
                 )
 
-            # 校验输入
-            runner.validate_input(payload.input_snapshot)
+            if runner is None and algorithm_version is not None:
+                self._validate_uploaded_algorithm_input(
+                    payload.input_snapshot,
+                    algorithm_version.input_schema.model_dump(),
+                )
+                output_summary = package_service.run_version(algorithm_version, payload.input_snapshot)
+                artifact_specs = [
+                    {
+                        "type": "json_artifact",
+                        "name": f"{payload.algorithm_id}_{algorithm_version.version}_output",
+                        "content": output_summary,
+                        "content_type": "application/json",
+                        "description": "上传算法运行输出",
+                    }
+                ]
+            else:
+                # 校验输入
+                runner.validate_input(payload.input_snapshot)
 
-            # 执行算法
-            output_summary = runner.run(payload.input_snapshot)
-            artifact_specs = runner.get_artifact_specs(output_summary)
+                # 执行算法
+                output_summary = runner.run(payload.input_snapshot)
+                artifact_specs = runner.get_artifact_specs(output_summary)
 
             # 处理 computation_submit_adapter 的特殊逻辑
             linked_computation_run_id = None
@@ -2199,6 +2228,10 @@ class ResearchEngineService:
             workflow_step_run_id=doc.get("workflow_step_run_id"),
             research_run_id=doc.get("research_run_id"),
             stage_run_id=doc.get("stage_run_id"),
+            algorithm_version_id=doc.get("algorithm_version_id"),
+            package_sha256=doc.get("package_sha256"),
+            image_digest=doc.get("image_digest"),
+            runtime_snapshot=doc.get("runtime_snapshot", {}),
             linked_computation_run_id=doc.get("linked_computation_run_id"),
             linked_suggestion_id=doc.get("linked_suggestion_id"),
             linked_observation_id=doc.get("linked_observation_id"),
@@ -2213,6 +2246,21 @@ class ResearchEngineService:
             started_at=doc.get("started_at"),
             finished_at=doc.get("finished_at"),
         )
+
+    @staticmethod
+    def _validate_uploaded_algorithm_input(input_snapshot: dict, input_schema: dict) -> None:
+        """按上传算法契约做最小输入校验。"""
+        for field in input_schema.get("required") or []:
+            if field not in input_snapshot or input_snapshot.get(field) is None:
+                raise HTTPException(status_code=422, detail=f"缺少必填字段: {field}")
+        options = input_schema.get("field_options") or {}
+        for field, allowed in options.items():
+            if field in input_snapshot and allowed:
+                value = input_snapshot[field]
+                values = value if isinstance(value, list) else [value]
+                for item in values:
+                    if item not in allowed:
+                        raise HTTPException(status_code=422, detail=f"字段 '{field}' 值不在允许范围内")
 
     @staticmethod
     def _doc_to_problem_spec(doc: dict) -> ProblemSpec:
