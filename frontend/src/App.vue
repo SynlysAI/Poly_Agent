@@ -221,13 +221,13 @@ onBeforeUnmount(() => {
             <el-icon><Aim /></el-icon>
             <span>任务提交</span>
           </el-menu-item>
-          <el-menu-item index="/knowledge">
-            <el-icon><Collection /></el-icon>
-            <span>知识库</span>
-          </el-menu-item>
           <el-menu-item index="/tasks/center">
             <el-icon><Histogram /></el-icon>
             <span>任务中心</span>
+          </el-menu-item>
+          <el-menu-item index="/knowledge">
+            <el-icon><Collection /></el-icon>
+            <span>知识库</span>
           </el-menu-item>
           <el-menu-item index="/tools">
             <el-icon><SetUp /></el-icon>
