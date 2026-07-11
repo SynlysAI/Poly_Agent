@@ -8,6 +8,7 @@ python-dotenv==1.2.1
 httpx==0.28.1
 openai==1.99.6
 PyYAML==6.0.3
+playwright==1.59.0
 
 # ALchemist 实验设计依赖
 numpy

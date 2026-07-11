@@ -1,79 +1,44 @@
-"""PDF compiler for LaTeX report artifacts."""
+"""HTML-to-PDF renderer backed by Playwright Chromium."""
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from playwright.sync_api import sync_playwright
+
 
 class PdfCompiler:
-    """Compile LaTeX files to PDF when a local toolchain is available."""
+    """Print controlled HTML to a PDF file."""
 
-    def __init__(self, *, engine: str = "xelatex", timeout_seconds: int = 120) -> None:
-        self.engine = engine
+    def __init__(self, *, timeout_seconds: int = 120) -> None:
         self.timeout_seconds = timeout_seconds
 
-    def compile(self, tex_path: Path, *, output_dir: Path) -> dict[str, Any]:
+    def compile(self, html: str, *, output_dir: Path) -> dict[str, Any]:
         output_dir.mkdir(parents=True, exist_ok=True)
-        command = self._command(tex_path, output_dir)
-        if not command:
-            return {
-                "status": "failed",
-                "pdf_path": None,
-                "log": f"LaTeX engine not found: {self.engine}",
-            }
+        pdf_path = output_dir / "report.pdf"
         try:
-            completed = subprocess.run(
-                command,
-                cwd=output_dir,
-                text=True,
-                capture_output=True,
-                timeout=self.timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.set_default_timeout(self.timeout_seconds * 1000)
+                page.set_content(html, wait_until="load")
+                page.pdf(path=str(pdf_path), format="A4", print_background=True, prefer_css_page_size=True)
+                browser.close()
+        except Exception as exc:
             return {
                 "status": "failed",
                 "pdf_path": None,
-                "log": f"PDF compilation timed out after {self.timeout_seconds}s: {exc}",
+                "log": f"HTML-to-PDF rendering failed: {type(exc).__name__}: {exc}",
             }
-
-        pdf_path = output_dir / f"{tex_path.stem}.pdf"
-        log = (completed.stdout or "") + "\n" + (completed.stderr or "")
-        if completed.returncode == 0 and pdf_path.exists():
+        if pdf_path.exists() and pdf_path.read_bytes().startswith(b"%PDF"):
             return {
                 "status": "completed",
                 "pdf_path": pdf_path,
-                "log": log,
+                "log": "Playwright Chromium rendered report.pdf",
             }
         return {
             "status": "failed",
             "pdf_path": None,
-            "log": log or f"PDF compilation failed with exit code {completed.returncode}",
+            "log": "HTML-to-PDF renderer did not produce a valid PDF file.",
         }
-
-    def _command(self, tex_path: Path, output_dir: Path) -> list[str] | None:
-        latexmk = shutil.which("latexmk")
-        if latexmk:
-            return [
-                latexmk,
-                "-xelatex",
-                "-interaction=nonstopmode",
-                "-halt-on-error",
-                "-shell-escape=0",
-                f"-outdir={output_dir}",
-                str(tex_path),
-            ]
-        engine_path = shutil.which(self.engine)
-        if not engine_path:
-            return None
-        return [
-            engine_path,
-            "-interaction=nonstopmode",
-            "-halt-on-error",
-            "-no-shell-escape",
-            f"-output-directory={output_dir}",
-            str(tex_path),
-        ]

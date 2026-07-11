@@ -106,7 +106,7 @@ class ReportApiTest(unittest.TestCase):
                     "subject_id": "ar_api_001",
                     "template_id": "algorithm_run_summary_zh",
                     "language": "zh-CN",
-                    "formats": ["markdown", "latex"],
+                    "formats": ["markdown"],
                     "provider": "mock",
                     "skill_pipeline_id": "nature_research_report_zh",
                     "scope": {},
@@ -124,7 +124,7 @@ class ReportApiTest(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         artifact_types = {item["artifact_type"] for item in job["artifact_refs"]}
         self.assertIn("markdown", artifact_types)
-        self.assertIn("latex", artifact_types)
+        self.assertNotIn("latex", artifact_types)
 
         list_resp = self.client.get(
             "/api/v1/reports",
@@ -140,6 +140,11 @@ class ReportApiTest(unittest.TestCase):
         self.assertEqual(download_resp.status_code, 200)
         self.assertIn(b"#", download_resp.content)
 
+        preview_resp = self.client.get(f"/api/v1/reports/{job['report_id']}/preview")
+        self.assertEqual(preview_resp.status_code, 200)
+        self.assertIn("# 研发运行报告", preview_resp.json()["data"]["content"])
+        self.assertEqual(preview_resp.json()["data"]["model"], "mock-report-model")
+
         events, total = AuditEventRepository.list_events(
             entity_type="report",
             entity_id=job["report_id"],
@@ -153,6 +158,19 @@ class ReportApiTest(unittest.TestCase):
         self.assertIn("report.context_collected", event_types)
         self.assertIn("report.generated", event_types)
         self.assertIn("report.downloaded", event_types)
+
+    def test_create_report_rejects_latex_format(self) -> None:
+        response = self.client.post(
+            "/api/v1/reports",
+            json={
+                "subject_type": "algorithm_run",
+                "subject_id": "ar_api_001",
+                "formats": ["latex"],
+                "provider": "mock",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_cancel_queued_report(self) -> None:
         with patch("app.services.report_service.ReportService.execute_report_job", return_value=None):

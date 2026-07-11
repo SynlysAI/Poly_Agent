@@ -18,7 +18,7 @@ from app.infra.report_repositories import ReportArtifactRepository, ReportJobRep
 from app.schemas.reports import ReportCreateRequest, ReportReadinessData
 from app.services.report_context_service import ReportContextService
 from app.services.report_providers.registry import ReportProviderRegistry
-from app.services.report_renderers.latex import LatexReportRenderer
+from app.services.report_renderers.html import HtmlReportRenderer
 from app.services.report_renderers.markdown import MarkdownReportRenderer
 from app.services.report_renderers.pdf import PdfCompiler
 from app.services.report_skill_orchestrator import ReportSkillOrchestrator
@@ -69,6 +69,8 @@ class ReportService:
         """Create a queued report job."""
         if not settings.reports_enabled:
             raise HTTPException(status_code=503, detail="报告生成功能未启用")
+        if request.provider == "mock" and settings.require_mongodb:
+            raise HTTPException(status_code=400, detail="正式环境不允许使用 mock 报告 provider")
         self._validate_subject_type(request.subject_type)
         self._validate_template_and_pipeline(request.template_id, request.skill_pipeline_id)
         self._ensure_subject_access(request.subject_type, request.subject_id, actor_user_id=actor_user_id, is_admin=is_admin)
@@ -223,7 +225,7 @@ class ReportService:
                     "model": getattr(provider, "model", None),
                     "skill_runs": result["skill_runs"],
                     "status": "converting",
-                    "stage": "latex",
+                    "stage": "quality_check",
                     "progress": 70,
                 },
             )
@@ -418,6 +420,35 @@ class ReportService:
         )
         return artifact, candidate
 
+    def get_markdown_preview(
+        self,
+        report_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> dict[str, Any]:
+        """Return Markdown content for an authorized report without exposing storage paths."""
+        job = self.get_report_job(report_id, actor_user_id=actor_user_id, is_admin=is_admin)
+        markdown_ref = next(
+            (item for item in job.get("artifact_refs") or [] if item.get("artifact_type") == "markdown"),
+            None,
+        )
+        if not markdown_ref:
+            raise HTTPException(status_code=404, detail="报告尚无 Markdown 内容")
+        artifact = ReportArtifactRepository.find_by_artifact_id(markdown_ref["artifact_id"])
+        if not artifact:
+            raise HTTPException(status_code=404, detail="Markdown artifact 不存在")
+        root = settings.report_output_root.resolve()
+        path = (root / str(artifact.get("storage_uri", ""))).resolve()
+        if not self._is_relative_to(path, root) or not path.is_file():
+            raise HTTPException(status_code=404, detail="Markdown artifact 文件不存在")
+        return {
+            "report_id": report_id,
+            "content": path.read_text(encoding="utf-8"),
+            "provider": job.get("provider"),
+            "model": job.get("model"),
+        }
+
     def _render_artifacts(
         self,
         *,
@@ -433,24 +464,12 @@ class ReportService:
                 content=MarkdownReportRenderer().render(structured_report),
             )
 
-        latex_content: str | None = None
-        tex_path: Path | None = None
-        if "latex" in formats or "pdf" in formats:
-            latex_content = LatexReportRenderer().render(structured_report)
-            latex_artifact = self.create_artifact(
-                report_id=report_id,
-                artifact_type="latex",
-                filename="report.tex",
-                content=latex_content,
-            )
-            tex_path = settings.report_output_root / report_id / latex_artifact["filename"]
-
-        if "pdf" in formats and tex_path is not None:
+        if "pdf" in formats:
             ReportJobRepository.update_status(report_id, status="converting", stage="pdf", progress=85)
-            result = PdfCompiler(
-                engine=settings.report_latex_engine,
-                timeout_seconds=settings.report_pdf_timeout_seconds,
-            ).compile(tex_path, output_dir=settings.report_output_root / report_id)
+            result = PdfCompiler(timeout_seconds=settings.report_pdf_timeout_seconds).compile(
+                HtmlReportRenderer().render(structured_report),
+                output_dir=settings.report_output_root / report_id,
+            )
             if result["status"] == "completed" and result["pdf_path"]:
                 self.create_artifact(
                     report_id=report_id,
@@ -465,11 +484,12 @@ class ReportService:
                     filename="pdf-compile.log",
                     content=result.get("log") or "PDF compilation failed.",
                 )
+                raise RuntimeError(result.get("log") or "PDF generation failed")
 
     def get_readiness(self) -> ReportReadinessData:
         """Return sanitized report-generation readiness."""
         warnings: list[str] = []
-        provider = str(settings.report_llm_provider or "openai_responses")
+        provider = str(settings.report_llm_provider or "openai_compatible")
         pipeline = str(settings.report_skill_pipeline_default or "nature_research_report_zh")
 
         output_root_ready = self._ensure_output_root(settings.report_output_root, warnings)
@@ -483,9 +503,9 @@ class ReportService:
         if default_template not in SUPPORTED_TEMPLATES:
             warnings.append(f"默认报告模板不可用: {default_template}")
 
-        latex_ready = bool(shutil.which("latexmk") or shutil.which(settings.report_latex_engine))
-        if not latex_ready:
-            warnings.append("LaTeX 工具链不可用，PDF 输出会降级为 Markdown/LaTeX artifact。")
+        pdf_ready = self._playwright_pdf_ready()
+        if not pdf_ready:
+            warnings.append("Playwright Chromium 不可用，PDF 输出将失败。")
 
         codex_ready = None
         if provider == "codex_exec":
@@ -506,11 +526,22 @@ class ReportService:
             provider_ready=provider_ready,
             skill_pipeline=pipeline,
             skill_pipeline_ready=pipeline_ready,
-            latex_ready=latex_ready,
+            latex_ready=False,
+            pdf_ready=pdf_ready,
             codex_ready=codex_ready,
             ollama_ready=ollama_ready,
             warnings=warnings,
         )
+
+    @staticmethod
+    def _playwright_pdf_ready() -> bool:
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as playwright:
+                return Path(playwright.chromium.executable_path).exists()
+        except Exception:
+            return False
 
     def _ensure_output_root(self, output_root: Path, warnings: list[str]) -> bool:
         try:

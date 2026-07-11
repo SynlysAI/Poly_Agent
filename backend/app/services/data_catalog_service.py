@@ -33,6 +33,9 @@ from app.schemas.data_catalog import (
     DataCatalogRecordSummary,
     DataCatalogSourceStatus,
     DataCatalogMongoCollectionListData,
+    DataCatalogRelationshipEdge,
+    DataCatalogRelationshipNode,
+    DataCatalogRelationshipsData,
 )
 
 
@@ -140,6 +143,7 @@ _OBJECT_STATUS_CACHE: dict[str, tuple[float, dict[str, list[DataCatalogObjectInf
 SENSITIVE_FIELD_PATTERNS = ("secret", "token", "password", "api_key", "access_key", "credential", "authorization")
 POLY_AGENT_SOURCE_ID = "poly_agent"
 MATERIAL_SOURCE_ID = "ai4ms"
+MATERIAL_COLLECTION_KEY = "ai4ms.Poly_Agent"
 
 
 @dataclass(frozen=True)
@@ -513,6 +517,97 @@ class DataCatalogService:
         for definition in MONGO_COLLECTION_DEFINITIONS:
             items.append(self._collection_summary_from_mongo(definition))
         return DataCatalogMongoCollectionListData(items=items, total=len(items))
+
+    def material_record_exists(self, material_record_id: str) -> bool:
+        """Return whether a cross-database material reference is valid."""
+        if not settings.require_mongodb:
+            return any(
+                str(item.get("polymer_record_id")) == material_record_id
+                for item in demo_store.load().get(MATERIAL_COLLECTION_KEY, [])
+            )
+        if not settings.data_asset_mongodb_uri:
+            return False
+        try:
+            return bool(get_data_asset_database()["Poly_Agent"].count_documents({"polymer_record_id": material_record_id}, limit=1))
+        except PyMongoError:
+            return False
+
+    def get_relationships(self) -> DataCatalogRelationshipsData:
+        """Aggregate only relationships backed by persisted foreign-key values."""
+        if not settings.require_mongodb:
+            data = demo_store.load()
+            collections = {
+                "materials": data.get(MATERIAL_COLLECTION_KEY, []),
+                "computations": data.get("computation_runs", []),
+                "computation_artifacts": data.get("computation_artifacts", []),
+                "research_runs": data.get("research_runs", []),
+                "algorithm_runs": data.get("algorithm_runs", []),
+                "report_jobs": data.get("report_jobs", []),
+                "report_artifacts": data.get("report_artifacts", []),
+            }
+        else:
+            business = get_database()
+            material_rows = []
+            if settings.data_asset_mongodb_uri:
+                try:
+                    material_rows = list(get_data_asset_database()["Poly_Agent"].find({}, {"_id": 0, "polymer_record_id": 1}))
+                except PyMongoError:
+                    material_rows = []
+            collections = {
+                "materials": material_rows,
+                "computations": list(business["computation_runs"].find({}, {"_id": 0, "run_id": 1, "material_record_id": 1})),
+                "computation_artifacts": list(business["computation_artifacts"].find({}, {"_id": 0, "run_id": 1})),
+                "research_runs": list(business["research_runs"].find({}, {"_id": 0, "run_id": 1})),
+                "algorithm_runs": list(business["algorithm_runs"].find({}, {"_id": 0, "research_run_id": 1})),
+                "report_jobs": list(business["report_jobs"].find({}, {"_id": 0, "report_id": 1})),
+                "report_artifacts": list(business["report_artifacts"].find({}, {"_id": 0, "report_id": 1})),
+            }
+
+        material_ids = {str(item.get("polymer_record_id")) for item in collections["materials"] if item.get("polymer_record_id")}
+        computation_ids = {str(item.get("run_id")) for item in collections["computations"] if item.get("run_id")}
+        research_ids = {str(item.get("run_id")) for item in collections["research_runs"] if item.get("run_id")}
+        report_ids = {str(item.get("report_id")) for item in collections["report_jobs"] if item.get("report_id")}
+        material_links = sum(1 for item in collections["computations"] if item.get("material_record_id") in material_ids)
+        computation_artifact_links = sum(1 for item in collections["computation_artifacts"] if item.get("run_id") in computation_ids)
+        research_algorithm_links = sum(1 for item in collections["algorithm_runs"] if item.get("research_run_id") in research_ids)
+        report_artifact_links = sum(1 for item in collections["report_artifacts"] if item.get("report_id") in report_ids)
+
+        node_specs = [
+            ("materials", "高分子材料", "materials"),
+            ("computations", "计算任务", "computations"),
+            ("computation_artifacts", "计算产物", "computation_artifacts"),
+            ("research_runs", "ResearchRun", "research_runs"),
+            ("algorithm_runs", "AlgorithmRun", "algorithm_runs"),
+            ("report_jobs", "报告任务", "report_jobs"),
+            ("report_artifacts", "报告产物", "report_artifacts"),
+        ]
+        nodes = [
+            DataCatalogRelationshipNode(node_id=node_id, label=label, record_count=len(collections[key]))
+            for node_id, label, key in node_specs
+        ]
+
+        def edge(source: str, target: str, linked: int, target_key: str, source_field: str, target_field: str):
+            target_total = len(collections[target_key])
+            return DataCatalogRelationshipEdge(
+                source=source,
+                target=target,
+                linked_count=linked,
+                target_coverage=(linked / target_total) if target_total else 0,
+                source_field=source_field,
+                target_field=target_field,
+            )
+
+        return DataCatalogRelationshipsData(
+            nodes=nodes,
+            edges=[
+                edge("materials", "computations", material_links, "computations", "polymer_record_id", "material_record_id"),
+                edge("computations", "computation_artifacts", computation_artifact_links, "computation_artifacts", "run_id", "run_id"),
+                edge("research_runs", "algorithm_runs", research_algorithm_links, "algorithm_runs", "run_id", "research_run_id"),
+                edge("report_jobs", "report_artifacts", report_artifact_links, "report_artifacts", "report_id", "report_id"),
+            ],
+            generated_at=datetime.now(timezone.utc),
+            notes=["关系数仅来自已持久化外键；未关联历史记录不做推测。"],
+        )
 
     def _list_demo_mongo_collections(self) -> DataCatalogMongoCollectionListData:
         data = demo_store.load()

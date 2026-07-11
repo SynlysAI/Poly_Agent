@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 ReportSubjectType = Literal["algorithm_run", "research_run", "workflow_run", "computation_run"]
 ReportFormat = Literal["markdown", "latex", "pdf"]
+ReportCreateFormat = Literal["markdown", "pdf"]
 ReportStatus = Literal["queued", "running", "converting", "completed", "failed", "cancelled"]
 ReportStage = Literal[
     "context",
@@ -58,7 +59,7 @@ class ReportCreateRequest(BaseModel):
     subject_id: str = Field(min_length=1, max_length=120)
     template_id: str = Field(default="research_run_summary_zh", min_length=1, max_length=120)
     language: Literal["zh-CN", "en-US"] = "zh-CN"
-    formats: list[ReportFormat] = Field(default_factory=lambda: ["markdown", "latex", "pdf"])
+    formats: list[ReportCreateFormat] = Field(default_factory=lambda: ["markdown", "pdf"])
     provider: ReportProvider | Literal["auto"] = "auto"
     skill_pipeline_id: str = Field(default="nature_research_report_zh", min_length=1, max_length=160)
     scope: ReportScope = Field(default_factory=ReportScope)
@@ -66,12 +67,60 @@ class ReportCreateRequest(BaseModel):
 
     @field_validator("formats")
     @classmethod
-    def validate_formats(cls, value: list[ReportFormat]) -> list[ReportFormat]:
+    def validate_formats(cls, value: list[ReportCreateFormat]) -> list[ReportCreateFormat]:
         """Require at least one unique output format."""
         deduped = list(dict.fromkeys(value))
         if not deduped:
             raise ValueError("formats 至少选择一种输出格式")
         return deduped
+
+
+class StructuredFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    finding: str = Field(min_length=1)
+    evidence: list[str] = Field(min_length=1)
+    confidence: str | None = None
+
+
+class StructuredResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    evidence: list[str] = Field(default_factory=list)
+
+
+class StructuredReport(BaseModel):
+    """Validated LLM output used by all report renderers."""
+
+    model_config = ConfigDict(extra="allow")
+
+    title: str = Field(min_length=1)
+    abstract: str = Field(min_length=1)
+    key_findings: list[StructuredFinding] = Field(min_length=1)
+    methods: list[str] = Field(min_length=1)
+    results: list[StructuredResult] = Field(min_length=1)
+    limitations: list[str] = Field(min_length=1)
+    next_steps: list[str] = Field(min_length=1)
+    traceability: dict = Field(default_factory=dict)
+    tables: list[dict] = Field(default_factory=list)
+    figure_placeholders: list[dict] = Field(default_factory=list)
+    appendices: list[dict] = Field(default_factory=list)
+
+    @field_validator("methods", "limitations", "next_steps")
+    @classmethod
+    def validate_non_empty_items(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        if not normalized:
+            raise ValueError("报告章节不能是空内容")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_grounding(self):
+        if not any(item.evidence for item in self.key_findings):
+            raise ValueError("关键发现必须包含追溯证据")
+        return self
 
 
 class ReportRetryRequest(BaseModel):
@@ -159,6 +208,7 @@ class ReportReadinessData(BaseModel):
     skill_pipeline: str
     skill_pipeline_ready: bool
     latex_ready: bool
+    pdf_ready: bool
     codex_ready: bool | None = None
     ollama_ready: bool | None = None
     warnings: list[str] = Field(default_factory=list)

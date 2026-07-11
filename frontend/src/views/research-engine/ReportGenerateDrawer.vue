@@ -50,7 +50,7 @@ function defaultForm() {
     skill_pipeline_id: 'nature_research_report_zh',
     provider: 'auto',
     language: 'zh-CN',
-    formats: ['markdown', 'latex', 'pdf'],
+    formats: ['markdown', 'pdf'],
     scope: {
       include_stages: true,
       include_algorithm_runs: true,
@@ -123,7 +123,6 @@ function submit() {
         <el-form-item label="输出格式">
           <el-checkbox-group v-model="form.formats">
             <el-checkbox-button value="markdown">Markdown</el-checkbox-button>
-            <el-checkbox-button value="latex">LaTeX</el-checkbox-button>
             <el-checkbox-button value="pdf">PDF</el-checkbox-button>
           </el-checkbox-group>
         </el-form-item>
@@ -149,17 +148,6 @@ function submit() {
 
         <el-collapse>
           <el-collapse-item title="高级配置" name="advanced">
-            <el-form-item label="Provider">
-              <el-select v-model="form.provider" style="width: 100%">
-                <el-option label="Auto" value="auto" />
-                <el-option label="OpenAI Responses" value="openai_responses" />
-                <el-option label="OpenAI-compatible" value="openai_compatible" />
-                <el-option label="Local Ollama" value="local_ollama" />
-                <el-option label="Codex exec" value="codex_exec" />
-                <el-option label="Custom HTTP" value="custom_http" />
-                <el-option label="Mock" value="mock" />
-              </el-select>
-            </el-form-item>
             <el-form-item label="Skill 流水线">
               <el-select v-model="form.skill_pipeline_id" style="width: 100%">
                 <el-option label="Nature 研发报告" value="nature_research_report_zh" />

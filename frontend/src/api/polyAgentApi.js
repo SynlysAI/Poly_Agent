@@ -307,6 +307,10 @@ export function listDataCatalogMongoCollections() {
   return apiClient.get('/data-catalog/mongo-collections').then(unwrapResponse)
 }
 
+export function getDataCatalogRelationships() {
+  return apiClient.get('/data-catalog/relationships').then(unwrapResponse)
+}
+
 export function listDataCatalogCollectionRecords(collectionName, params = {}) {
   return apiClient.get(`/data-catalog/mongo-collections/${encodeURIComponent(collectionName)}/records`, { params }).then(unwrapResponse)
 }
@@ -339,6 +343,47 @@ export function getKnowledgeHealth() {
 
 export function queryKnowledgeBase(payload) {
   return apiClient.post('/knowledge-bases/query', payload).then(unwrapResponse)
+}
+
+export function generateKnowledgeSuggestions(systemId) {
+  return apiClient.post(`/knowledge-bases/${encodeURIComponent(systemId)}/suggested-questions`).then(unwrapResponse)
+}
+
+export async function streamKnowledgeQuery(payload, onEvent) {
+  const headers = { 'Content-Type': 'application/json', 'X-Request-Id': generateRequestId() }
+  const authHeader = getAuthorizationHeader()
+  if (authHeader) headers.Authorization = authHeader
+  const response = await fetch(`${resolvedBaseUrl}/knowledge-bases/query/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`
+    try {
+      const data = await response.json()
+      message = data.detail || data.message || message
+    } catch {
+      // Keep the HTTP status when the response is not JSON.
+    }
+    const error = createApiError('http', message)
+    error.status = response.status
+    throw error
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line))
+    }
+    if (done) break
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer))
 }
 
 export function getKnowledgeGraph(systemId) {
@@ -607,6 +652,10 @@ export function createReport(payload) {
 
 export function getReport(reportId) {
   return apiClient.get(`/reports/${encodeURIComponent(reportId)}`).then(unwrapResponse)
+}
+
+export function getReportPreview(reportId) {
+  return apiClient.get(`/reports/${encodeURIComponent(reportId)}/preview`).then(unwrapResponse)
 }
 
 export function listReports(params = {}) {

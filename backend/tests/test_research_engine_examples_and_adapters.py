@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,6 +19,14 @@ except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 from app.schemas.research_engine import AlgorithmRunCreate
+from app.schemas.knowledge import (
+    KnowledgeGraphData,
+    KnowledgeGraphNode,
+    KnowledgeGraphStats,
+    KnowledgeHit,
+    KnowledgeQueryResponse,
+)
+from app.services.knowledge_service import KnowledgeService
 from app.services.research_engine_algorithm_runner import get_runner
 from app.services.research_engine_service import ResearchEngineService
 
@@ -64,37 +73,43 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         self.service = ResearchEngineService()
         self.service.seed_default_algorithms()
 
-    def test_literature_rag_adapter_returns_demo_hits_when_lightrag_unconfigured(self):
+    def test_literature_rag_adapter_rejects_unconfigured_lightrag(self):
         old_base_url = os.environ.pop("KNOWLEDGE_RAG_BASE_URL", None)
         try:
-            run = self.service.create_algorithm_run(
-                AlgorithmRunCreate(
-                    algorithm_id="literature_rag_adapter",
-                    input_snapshot={"query": "fluoropolymer dielectric", "top_k": 3},
-                ),
-                actor_user_id="tester",
-            )
+            with self.assertRaises(HTTPException) as ctx:
+                self.service.create_algorithm_run(
+                    AlgorithmRunCreate(
+                        algorithm_id="literature_rag_adapter",
+                        input_snapshot={"query": "fluoropolymer dielectric", "top_k": 3},
+                    ),
+                    actor_user_id="tester",
+                )
         finally:
             if old_base_url is not None:
                 os.environ["KNOWLEDGE_RAG_BASE_URL"] = old_base_url
-        self.assertEqual(run.status, "completed")
-        self.assertFalse(run.output_summary["configured"])
-        self.assertGreaterEqual(len(run.output_summary["hits"]), 1)
-        self.assertIn("citations", run.output_summary)
-        self.assertIn("graph_context", run.output_summary)
+        self.assertEqual(ctx.exception.status_code, 503)
 
     def test_knowledge_graph_adapter_returns_subgraph(self):
-        run = self.service.create_algorithm_run(
-            AlgorithmRunCreate(
-                algorithm_id="knowledge_graph_adapter",
-                input_snapshot={
-                    "system_id": "ai4s_fluoropolymer",
-                    "query": "fluoropolymer dielectric",
-                    "limit": 4,
-                },
-            ),
-            actor_user_id="tester",
+        graph = KnowledgeGraphData(
+            system_id="ai4s_fluoropolymer",
+            nodes=[KnowledgeGraphNode(id="pvdf", label="PVDF", type="Polymer", properties={"source_id": "chunk-1"})],
+            edges=[],
+            stats=KnowledgeGraphStats(entity_count=1, relation_count=0, document_count=1),
+            configured=True,
+            provenance={"provider": "lightrag"},
         )
+        with patch.object(KnowledgeService, "get_subgraph", return_value=graph):
+            run = self.service.create_algorithm_run(
+                AlgorithmRunCreate(
+                    algorithm_id="knowledge_graph_adapter",
+                    input_snapshot={
+                        "system_id": "ai4s_fluoropolymer",
+                        "query": "fluoropolymer dielectric",
+                        "limit": 4,
+                    },
+                ),
+                actor_user_id="tester",
+            )
         self.assertEqual(run.status, "completed")
         self.assertTrue(run.output_summary["configured"])
         self.assertLessEqual(len(run.output_summary["nodes"]), 4)
@@ -141,6 +156,7 @@ class ResearchEngineAdapterTest(ComputationTestCase):
                             "query": "fluoropolymer dielectric",
                             "material_family": "fluoropolymer",
                             "top_k": 3,
+                            "include_graph_context": False,
                         },
                     ),
                     actor_user_id="tester",
@@ -162,19 +178,28 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         self.assertIn("KNOWLEDGE_RETRIEVAL", graph.task_scope)
 
     def test_literature_rag_adapter_preserves_existing_top_k_contract(self):
-        run = self.service.create_algorithm_run(
-            AlgorithmRunCreate(
-                algorithm_id="literature_rag_adapter",
-                input_snapshot={
-                    "query": "fluoropolymer dielectric",
-                    "material_family": "fluoropolymer",
-                    "top_k": 3,
-                },
-            ),
-            actor_user_id="tester",
+        response = KnowledgeQueryResponse(
+            system_id="ai4s_fluoropolymer",
+            question="fluoropolymer dielectric",
+            mode="hybrid",
+            answer="Grounded answer",
+            hits=[KnowledgeHit(source_id=f"source-{index}", title=f"Hit {index}", snippet="evidence") for index in range(3)],
+            configured=True,
         )
+        with patch.object(KnowledgeService, "query", return_value=response):
+            run = self.service.create_algorithm_run(
+                AlgorithmRunCreate(
+                    algorithm_id="literature_rag_adapter",
+                    input_snapshot={
+                        "query": "fluoropolymer dielectric",
+                        "material_family": "fluoropolymer",
+                        "top_k": 3,
+                    },
+                ),
+                actor_user_id="tester",
+            )
         self.assertEqual(run.status, "completed")
-        self.assertFalse(run.output_summary["configured"])
+        self.assertTrue(run.output_summary["configured"])
         self.assertLessEqual(len(run.output_summary["hits"]), 3)
 
     def test_vertical_predictor_adapter_requires_service_url(self):

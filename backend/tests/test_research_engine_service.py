@@ -702,12 +702,16 @@ class AlgorithmRunServiceTest(ComputationTestCase):
 
     def test_create_run_with_problem_spec_and_campaign(self) -> None:
         """创建 AlgorithmRun 时关联 problem_spec_id 和 campaign_id。"""
+        problem_spec = self.service.create_problem_spec(
+            ProblemSpecCreate(**problem_spec_payload(name="算法运行关联任务")),
+            actor_user_id="tester",
+        )
         run = self._create_run(
             "literature_mock",
-            problem_spec_id="ps_demo_001",
+            problem_spec_id=problem_spec.problem_spec_id,
             campaign_id="camp_demo_001",
         )
-        self.assertEqual(run["problem_spec_id"], "ps_demo_001")
+        self.assertEqual(run["problem_spec_id"], problem_spec.problem_spec_id)
         self.assertEqual(run["campaign_id"], "camp_demo_001")
 
     def test_create_run_saves_input_snapshot(self) -> None:
@@ -799,13 +803,21 @@ class AlgorithmRunServiceTest(ComputationTestCase):
 
     def test_list_by_problem_spec(self) -> None:
         """按 problem_spec_id 过滤 AlgorithmRun。"""
-        self._create_run("literature_mock", problem_spec_id="ps_filter_001")
-        self._create_run("literature_mock", problem_spec_id="ps_filter_002")
+        first = self.service.create_problem_spec(
+            ProblemSpecCreate(**problem_spec_payload(name="筛选任务一")),
+            actor_user_id="tester",
+        )
+        second = self.service.create_problem_spec(
+            ProblemSpecCreate(**problem_spec_payload(name="筛选任务二")),
+            actor_user_id="tester",
+        )
+        self._create_run("literature_mock", problem_spec_id=first.problem_spec_id)
+        self._create_run("literature_mock", problem_spec_id=second.problem_spec_id)
 
-        result = self.service.list_algorithm_runs(problem_spec_id="ps_filter_001")
+        result = self.service.list_algorithm_runs(problem_spec_id=first.problem_spec_id)
         self.assertGreaterEqual(result.total, 1)
         for item in result.items:
-            self.assertEqual(item.problem_spec_id, "ps_filter_001")
+            self.assertEqual(item.problem_spec_id, first.problem_spec_id)
 
     def test_list_by_campaign(self) -> None:
         """按 campaign_id 过滤 AlgorithmRun。"""

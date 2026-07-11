@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.report_renderers.latex import LatexReportRenderer
+from app.services.report_renderers.html import HtmlReportRenderer
 from app.services.report_renderers.markdown import MarkdownReportRenderer
 from app.services.report_renderers.pdf import PdfCompiler
 
@@ -38,22 +38,17 @@ class ReportRendererTest(unittest.TestCase):
         self.assertIn("## 阶段过程与追溯", markdown)
         self.assertIn("## 下一步建议", markdown)
 
-    def test_latex_renderer_outputs_ctex_document(self) -> None:
-        latex = LatexReportRenderer().render(STRUCTURED_REPORT)
+    def test_html_renderer_outputs_printable_document(self) -> None:
+        html = HtmlReportRenderer().render(STRUCTURED_REPORT)
 
-        self.assertIn("\\documentclass", latex)
-        self.assertIn("\\usepackage{ctex}", latex)
-        self.assertIn("\\section{摘要}", latex)
-        self.assertIn("研发运行报告", latex)
+        self.assertIn("<!doctype html>", html)
+        self.assertIn("@page", html)
+        self.assertIn("研发运行报告", html)
 
-    def test_pdf_compiler_missing_engine_returns_failed_log(self) -> None:
+    def test_pdf_compiler_outputs_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            tex_path = tmp_path / "report.tex"
-            tex_path.write_text("\\documentclass{article}\\begin{document}x\\end{document}", encoding="utf-8")
+            result = PdfCompiler().compile(HtmlReportRenderer().render(STRUCTURED_REPORT), output_dir=tmp_path)
 
-            result = PdfCompiler(engine="__missing_xelatex__").compile(tex_path, output_dir=tmp_path)
-
-            self.assertEqual(result["status"], "failed")
-            self.assertIn("LaTeX engine not found", result["log"])
-            self.assertIsNone(result["pdf_path"])
+            self.assertEqual(result["status"], "completed")
+            self.assertTrue(result["pdf_path"].read_bytes().startswith(b"%PDF"))

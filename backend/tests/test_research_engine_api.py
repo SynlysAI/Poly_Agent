@@ -157,7 +157,7 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertFalse(data["ready"])
         self.assertTrue(data["can_start"])
         self.assertEqual(by_service["literature-rag"]["status"], "warning")
-        self.assertTrue(by_service["literature-rag"]["demo_fallback"])
+        self.assertFalse(by_service["literature-rag"]["demo_fallback"])
         self.assertFalse(by_service["literature-rag"]["blocking"])
         self.assertEqual(by_service["artifact-store"]["status"], "ready")
         self.assertEqual(by_service["computation-engine"]["status"], "ready")

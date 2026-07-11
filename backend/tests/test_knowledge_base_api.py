@@ -22,7 +22,7 @@ class KnowledgeBaseApiTest(ComputationTestCase):
         super().setUp()
         self.base_url = "/api/v1/knowledge-bases"
 
-    def test_list_systems_returns_ai4s_demo_system(self):
+    def test_list_systems_returns_configurable_ai4s_system(self):
         resp = self.client.get(f"{self.base_url}/systems")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
@@ -30,9 +30,9 @@ class KnowledgeBaseApiTest(ComputationTestCase):
         system_ids = {item["system_id"] for item in data["items"]}
         self.assertIn("ai4s_fluoropolymer", system_ids)
         demo = next(item for item in data["items"] if item["system_id"] == "ai4s_fluoropolymer")
-        self.assertGreaterEqual(demo["document_count"], 20)
+        self.assertFalse(demo["is_demo"])
 
-    def test_query_without_lightrag_uses_demo_data_without_leaking_paths(self):
+    def test_query_without_lightrag_returns_service_unavailable(self):
         old_base_url = os.environ.pop("KNOWLEDGE_RAG_BASE_URL", None)
         try:
             resp = self.client.post(
@@ -48,44 +48,50 @@ class KnowledgeBaseApiTest(ComputationTestCase):
             if old_base_url is not None:
                 os.environ["KNOWLEDGE_RAG_BASE_URL"] = old_base_url
 
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()["data"]
-        self.assertFalse(data["configured"])
-        self.assertEqual(data["system_id"], "ai4s_fluoropolymer")
-        self.assertGreaterEqual(len(data["hits"]), 1)
-        self.assertGreaterEqual(len(data["citations"]), 1)
-        self.assertGreaterEqual(len(data["graph_context"]["nodes"]), 1)
-        self.assertIn("### 结论", data["answer"])
-        self.assertIn("https://doi.org/", data["answer"])
-        self.assertTrue(any(item.get("doi") and item.get("url") for item in data["citations"]))
-        response_text = resp.text
-        self.assertNotIn("KNOWLEDGE_RAG_API_KEY", response_text)
-        self.assertNotIn("storage_uri", response_text)
-        self.assertNotIn(str(self.runtime_root), response_text)
+        self.assertEqual(resp.status_code, 503)
+        self.assertNotIn("demo", resp.text.lower())
 
-    def test_graph_endpoint_returns_stable_nodes_edges_stats(self):
+    def test_graph_endpoint_requires_query(self):
         resp = self.client.get(f"{self.base_url}/ai4s_fluoropolymer/graph")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()["data"]
-        self.assertEqual(data["system_id"], "ai4s_fluoropolymer")
-        self.assertGreaterEqual(data["stats"]["entity_count"], 30)
-        self.assertGreaterEqual(data["stats"]["relation_count"], 60)
-        self.assertGreaterEqual(data["stats"]["document_count"], 20)
-        self.assertTrue(all("id" in item and "label" in item and "type" in item for item in data["nodes"]))
-        self.assertTrue(all("source" in item and "target" in item and "type" in item for item in data["edges"]))
-        self.assertTrue(any(item["type"] == "Paper" and item["properties"].get("doi") for item in data["nodes"]))
+        self.assertEqual(resp.status_code, 400)
 
-    def test_subgraph_filters_by_query(self):
-        resp = self.client.get(
-            f"{self.base_url}/ai4s_fluoropolymer/graph/subgraph",
-            params={"query": "dielectric fluoropolymer", "limit": 4},
-        )
+    def test_subgraph_uses_lightrag_and_requires_provenance(self):
+        os.environ["KNOWLEDGE_RAG_BASE_URL"] = "http://lightrag.test"
+
+        class FakeResponse:
+            def __init__(self, data): self._data = data
+            def raise_for_status(self): return None
+            def json(self): return self._data
+
+        class FakeClient:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def get(self, path, params=None):
+                if path == "/graph/label/search": return FakeResponse(["PVDF"])
+                return FakeResponse({
+                    "nodes": [
+                        {"id": "pvdf", "label": "PVDF", "entity_type": "Polymer", "source_id": "chunk_1"},
+                        {"id": "loss", "label": "Dielectric loss", "entity_type": "Property", "source_id": "chunk_2"},
+                        {"id": "unverified", "label": "Unverified"},
+                    ],
+                    "edges": [
+                        {"source": "pvdf", "target": "loss", "relation": "HAS_PROPERTY", "chunk_id": "chunk_1"},
+                    ],
+                })
+
+        try:
+            with patch("app.services.knowledge_service.httpx.Client", return_value=FakeClient()):
+                resp = self.client.get(
+                    f"{self.base_url}/ai4s_fluoropolymer/graph/subgraph",
+                    params={"query": "dielectric fluoropolymer", "limit": 4},
+                )
+        finally:
+            os.environ.pop("KNOWLEDGE_RAG_BASE_URL", None)
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
-        self.assertLessEqual(len(data["nodes"]), 4)
-        labels = " ".join(item["label"].lower() for item in data["nodes"])
-        self.assertTrue("fluoropolymer" in labels or "dielectric" in labels)
-        self.assertGreaterEqual(len(data["edges"]), 1)
+        self.assertEqual(len(data["nodes"]), 2)
+        self.assertEqual(len(data["edges"]), 1)
+        self.assertEqual(data["provenance"]["provider"], "lightrag")
 
     def test_query_uses_lightrag_when_configured(self):
         os.environ["KNOWLEDGE_RAG_BASE_URL"] = "http://lightrag.test"
@@ -140,6 +146,7 @@ class KnowledgeBaseApiTest(ComputationTestCase):
                         "system_id": "ai4s_fluoropolymer",
                         "question": "fluoropolymer dielectric",
                         "top_k": 2,
+                        "include_graph_context": False,
                     },
                 )
         finally:

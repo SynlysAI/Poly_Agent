@@ -127,10 +127,10 @@ class Settings:
         self.report_output_root: Path = self._resolve_project_path(
             os.getenv("REPORT_OUTPUT_ROOT", str(self.runtime_root / "reports"))
         )
-        self.report_llm_provider: str = os.getenv("REPORT_LLM_PROVIDER", "openai_responses").strip() or "openai_responses"
+        self.report_llm_provider: str = os.getenv("REPORT_LLM_PROVIDER", "openai_compatible").strip() or "openai_compatible"
         self.report_llm_fallback_providers: list[str] = [
             item.strip()
-            for item in os.getenv("REPORT_LLM_FALLBACK_PROVIDERS", "openai_compatible,local_ollama").split(",")
+            for item in os.getenv("REPORT_LLM_FALLBACK_PROVIDERS", "").split(",")
             if item.strip()
         ]
         self.report_skill_pipeline_default: str = (

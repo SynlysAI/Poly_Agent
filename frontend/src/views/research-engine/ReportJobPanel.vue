@@ -1,6 +1,9 @@
 <script setup>
-import { computed } from 'vue'
-import { Download, Refresh, RefreshRight } from '@element-plus/icons-vue'
+import { computed, ref } from 'vue'
+import { Document, Download, Refresh, RefreshRight } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+
+import { getApiErrorMessage, getReportPreview } from '../../api/polyAgentApi'
 
 const props = defineProps({
   jobs: {
@@ -16,6 +19,9 @@ const props = defineProps({
 const emit = defineEmits(['refresh', 'retry', 'download'])
 
 const hasJobs = computed(() => props.jobs.length > 0)
+const previewReportId = ref('')
+const previewLoading = ref(false)
+const previewContent = ref('')
 
 function statusType(status) {
   const map = {
@@ -37,7 +43,25 @@ function formatDate(value) {
 }
 
 function downloadableArtifacts(job) {
-  return (job.artifact_refs || []).filter(item => ['markdown', 'latex', 'pdf', 'log'].includes(item.artifact_type))
+  return (job.artifact_refs || []).filter(item => ['markdown', 'pdf', 'log'].includes(item.artifact_type))
+}
+
+async function togglePreview(job) {
+  if (previewReportId.value === job.report_id) {
+    previewReportId.value = ''
+    previewContent.value = ''
+    return
+  }
+  previewLoading.value = true
+  try {
+    const data = await getReportPreview(job.report_id)
+    previewReportId.value = job.report_id
+    previewContent.value = data.content || ''
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    previewLoading.value = false
+  }
 }
 </script>
 
@@ -59,11 +83,21 @@ function downloadableArtifacts(job) {
           <div class="job-meta">
             <span>{{ job.report_id }}</span>
             <span>{{ job.stage }} · {{ job.progress }}%</span>
+            <span>{{ job.provider }} · {{ job.model || '未配置模型' }}</span>
             <span>{{ formatDate(job.created_at) }}</span>
           </div>
           <div v-if="job.error?.message" class="job-error">{{ job.error.message }}</div>
         </div>
         <div class="job-actions">
+          <el-button
+            v-if="job.status === 'completed' && (job.artifact_refs || []).some(item => item.artifact_type === 'markdown')"
+            size="small"
+            :icon="Document"
+            :loading="previewLoading && previewReportId !== job.report_id"
+            @click="togglePreview(job)"
+          >
+            {{ previewReportId === job.report_id ? '收起' : '预览' }}
+          </el-button>
           <el-dropdown v-if="downloadableArtifacts(job).length" trigger="click">
             <el-button size="small" :icon="Download">下载</el-button>
             <template #dropdown>
@@ -87,6 +121,7 @@ function downloadableArtifacts(job) {
             重试
           </el-button>
         </div>
+        <pre v-if="previewReportId === job.report_id" class="report-preview">{{ previewContent }}</pre>
       </article>
     </div>
   </section>
@@ -135,6 +170,7 @@ function downloadableArtifacts(job) {
   padding: 10px;
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
+  flex-wrap: wrap;
 }
 
 .report-job-item + .report-job-item {
@@ -175,6 +211,19 @@ function downloadableArtifacts(job) {
 
 .job-actions {
   flex-shrink: 0;
+}
+
+.report-preview {
+  flex-basis: 100%;
+  max-height: 420px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border-top: 1px solid var(--app-border-soft);
+  background: #f8fafc;
+  color: var(--app-ink);
+  font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 720px) {

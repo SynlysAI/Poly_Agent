@@ -113,6 +113,7 @@ class KnowledgeGraphData(BaseModel):
     stats: KnowledgeGraphStats
     configured: bool = True
     message: str = "ok"
+    provenance: dict = Field(default_factory=dict)
 
 
 class KnowledgeQueryRequest(BaseModel):
@@ -149,6 +150,16 @@ class KnowledgeQueryResponse(BaseModel):
     graph_context: KnowledgeGraphData | None = None
     configured: bool = False
     message: str = ""
+
+
+class KnowledgeSuggestedQuestions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    system_id: str
+    questions: list[str] = Field(min_length=1, max_length=6)
+    provider: str
+    model: str
+    generated_at: str
 
 
 class KnowledgeHealthData(BaseModel):

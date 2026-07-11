@@ -13,11 +13,11 @@ import {
 
 import {
   getApiErrorMessage,
-  getKnowledgeGraph,
   getKnowledgeHealth,
   getKnowledgeSubgraph,
+  generateKnowledgeSuggestions,
   listKnowledgeSystems,
-  queryKnowledgeBase,
+  streamKnowledgeQuery,
 } from '../api/polyAgentApi'
 
 const route = useRoute()
@@ -33,16 +33,19 @@ const graphLoading = ref(false)
 const answer = ref(null)
 const graph = ref(null)
 const selectedNodeId = ref('')
+const suggestedQuestions = ref([])
+const suggestionsLoading = ref(false)
+const queryTrace = ref([])
 
 const queryForm = reactive({
-  question: '如何提高氟聚合物介电性能和热稳定性？',
+  question: '',
   mode: 'hybrid',
   top_k: 5,
   include_graph_context: true,
 })
 
 const graphForm = reactive({
-  query: 'fluoropolymer dielectric',
+  query: '',
   limit: 30,
 })
 
@@ -62,7 +65,7 @@ const systemMetricItems = computed(() => [
   { label: '文档', value: selectedSystem.value?.document_count || graphStats.value.document_count || 0 },
   { label: '实体', value: selectedSystem.value?.entity_count || graphStats.value.entity_count || 0 },
   { label: '关系', value: selectedSystem.value?.relation_count || graphStats.value.relation_count || 0 },
-  { label: '运行模式', value: health.value?.configured ? 'LightRAG' : 'Demo' },
+  { label: '运行模式', value: health.value?.configured ? 'LightRAG' : '不可用' },
 ])
 const graphTypeCounts = computed(() => {
   const counts = {}
@@ -185,9 +188,6 @@ function linkSegments(segments) {
 
 watch(activeModule, (module) => {
   router.replace({ query: { ...route.query, module } })
-  if (module === 'graph' && !graph.value) {
-    loadGraph()
-  }
 })
 
 watch(
@@ -209,7 +209,7 @@ function statusTagType(status) {
 function healthLabel() {
   if (!health.value) return '状态检查中'
   if (health.value.configured) return 'LightRAG 已连接'
-  return 'Demo 数据可用'
+  return '真实知识源不可用'
 }
 
 function nodeTypeTag(type) {
@@ -240,7 +240,6 @@ async function loadBootstrap() {
       selectedSystemId.value = systems.value[0].system_id
     }
     health.value = healthData
-    await Promise.all([runQuery(), loadGraph()])
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -251,19 +250,33 @@ async function loadBootstrap() {
 async function runQuery() {
   if (!selectedSystemId.value || !queryForm.question.trim()) return
   queryLoading.value = true
+  answer.value = { answer: '', hits: [], citations: [], configured: true, message: 'LightRAG 流式检索' }
+  graph.value = null
+  queryTrace.value = []
   try {
-    answer.value = await queryKnowledgeBase({
+    await streamKnowledgeQuery({
       system_id: selectedSystemId.value,
       question: queryForm.question,
       mode: queryForm.mode,
       top_k: queryForm.top_k,
       include_graph_context: queryForm.include_graph_context,
+    }, (event) => {
+      if (event.label) {
+        queryTrace.value.push({ event: event.event, label: event.label, elapsed_ms: event.elapsed_ms })
+      }
+      if (event.event === 'evidence') {
+        answer.value.hits = event.hits || []
+        answer.value.citations = event.citations || []
+      }
+      if (event.event === 'answer_delta') {
+        answer.value.answer += event.content || ''
+      }
+      if (event.event === 'failed') {
+        throw new Error(event.message || 'LightRAG 检索失败')
+      }
     })
-    if (answer.value?.graph_context) {
-      graph.value = answer.value.graph_context
-      selectedNodeId.value = graph.value.nodes?.[0]?.id || ''
-    }
   } catch (error) {
+    answer.value = null
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     queryLoading.value = false
@@ -271,12 +284,13 @@ async function runQuery() {
 }
 
 async function loadGraph() {
-  if (!selectedSystemId.value) return
+  if (!selectedSystemId.value || !graphForm.query.trim()) {
+    ElMessage.warning('请输入实体或关键词后加载真实子图')
+    return
+  }
   graphLoading.value = true
   try {
-    graph.value = graphForm.query.trim()
-      ? await getKnowledgeSubgraph(selectedSystemId.value, { query: graphForm.query, limit: graphForm.limit })
-      : await getKnowledgeGraph(selectedSystemId.value)
+    graph.value = await getKnowledgeSubgraph(selectedSystemId.value, { query: graphForm.query, limit: graphForm.limit })
     selectedNodeId.value = graph.value.nodes?.[0]?.id || ''
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -285,8 +299,31 @@ async function loadGraph() {
   }
 }
 
+function resetWorkspace() {
+  answer.value = null
+  graph.value = null
+  selectedNodeId.value = ''
+  queryTrace.value = []
+  suggestedQuestions.value = []
+}
+
 async function refreshAll() {
-  await Promise.all([runQuery(), loadGraph()])
+  resetWorkspace()
+  await loadBootstrap()
+}
+
+async function loadSuggestedQuestions() {
+  if (!selectedSystemId.value) return
+  suggestionsLoading.value = true
+  try {
+    const data = await generateKnowledgeSuggestions(selectedSystemId.value)
+    suggestedQuestions.value = data.questions || []
+  } catch (error) {
+    suggestedQuestions.value = []
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    suggestionsLoading.value = false
+  }
 }
 
 function selectNode(nodeId) {
@@ -305,7 +342,7 @@ onMounted(loadBootstrap)
           <p class="panel-subtitle">在同一工作区完成知识检索、证据核查和图谱关系浏览。</p>
         </div>
         <div class="header-actions">
-          <el-select v-model="selectedSystemId" class="system-select" @change="refreshAll">
+          <el-select v-model="selectedSystemId" class="system-select" @change="resetWorkspace">
             <el-option
               v-for="system in systems"
               :key="system.system_id"
@@ -372,9 +409,13 @@ onMounted(loadBootstrap)
                       { label: 'Mix', value: 'mix' },
                     ]"
                   />
+                  <small class="control-help">
+                    naive 纯向量；local 局部实体；global 全局主题；hybrid 局部+全局；mix 图谱+向量。
+                  </small>
                 </el-form-item>
                 <el-form-item label="Top K">
                   <el-input-number v-model="queryForm.top_k" :min="1" :max="20" />
+                  <small class="control-help">重排后最多送入回答阶段的证据条数，不等于最终引用数。</small>
                 </el-form-item>
               </div>
               <el-checkbox v-model="queryForm.include_graph_context">返回图谱上下文</el-checkbox>
@@ -383,14 +424,18 @@ onMounted(loadBootstrap)
               </div>
             </el-form>
             <div class="query-hints">
-              <span>建议检索</span>
-              <button type="button" @click="queryForm.question = 'PVDF 氟聚合物如何兼顾介电常数、击穿强度和热稳定性？'">PVDF 介电优化</button>
-              <button type="button" @click="queryForm.question = '机器学习如何辅助高温聚合物介电材料筛选？'">AI4S 高温筛选</button>
-              <button type="button" @click="queryForm.question = '多层结构和交联策略对储能密度有什么作用？'">结构策略</button>
+              <span>AI 建议问题</span>
+              <el-button size="small" :loading="suggestionsLoading" @click="loadSuggestedQuestions">生成建议</el-button>
+              <button v-for="question in suggestedQuestions" :key="question" type="button" @click="queryForm.question = question">{{ question }}</button>
             </div>
           </section>
 
           <section class="answer-pane" v-loading="queryLoading">
+            <div v-if="queryTrace.length" class="query-trace" aria-live="polite">
+              <span v-for="item in queryTrace" :key="`${item.event}-${item.elapsed_ms}`">
+                {{ item.label }} · {{ item.elapsed_ms }} ms
+              </span>
+            </div>
             <div v-if="answer" class="answer-content">
               <div class="answer-topline">
                 <el-tag :type="answer.configured ? 'success' : 'warning'" effect="plain">
@@ -479,7 +524,7 @@ onMounted(loadBootstrap)
                 <template #prefix><el-icon><Search /></el-icon></template>
               </el-input>
               <el-input-number v-model="graphForm.limit" :min="1" :max="100" />
-              <el-button type="primary" :loading="graphLoading" @click="loadGraph">加载子图</el-button>
+              <el-button type="primary" :loading="graphLoading" :disabled="!graphForm.query.trim()" @click="loadGraph">加载子图</el-button>
             </div>
           </section>
 
@@ -1124,6 +1169,28 @@ onMounted(loadBootstrap)
 .edge-item span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.control-help {
+  display: block;
+  margin-top: 6px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.query-trace {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--app-border-soft);
+  background: #f8fafc;
+}
+
+.query-trace span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
 }
 
 @media (max-width: 1100px) {

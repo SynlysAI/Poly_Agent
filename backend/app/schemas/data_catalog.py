@@ -107,6 +107,28 @@ class DataCatalogMongoCollectionListData(BaseModel):
     total: int
 
 
+class DataCatalogRelationshipNode(BaseModel):
+    node_id: str
+    label: str
+    record_count: int
+
+
+class DataCatalogRelationshipEdge(BaseModel):
+    source: str
+    target: str
+    linked_count: int
+    target_coverage: float = Field(ge=0, le=1)
+    source_field: str
+    target_field: str
+
+
+class DataCatalogRelationshipsData(BaseModel):
+    nodes: list[DataCatalogRelationshipNode]
+    edges: list[DataCatalogRelationshipEdge]
+    generated_at: datetime
+    notes: list[str] = Field(default_factory=list)
+
+
 class DataCatalogRecordSummary(BaseModel):
     """Mongo 集合记录摘要。"""
 

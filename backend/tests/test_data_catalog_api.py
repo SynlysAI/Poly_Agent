@@ -80,6 +80,36 @@ class DataCatalogServiceTest(unittest.TestCase):
         self.assertEqual(len(data.items), 3)
         self.assertFalse(any(obj.exists for dataset in data.items for obj in dataset.objects))
 
+    def test_relationships_only_count_persisted_foreign_keys(self) -> None:
+        original = demo_store.load()
+        try:
+            demo_store.save({
+                "ai4ms.Poly_Agent": [{"polymer_record_id": "mat-1"}],
+                "computation_runs": [
+                    {"run_id": "comp-1", "material_record_id": "mat-1"},
+                    {"run_id": "comp-2"},
+                ],
+                "computation_artifacts": [
+                    {"artifact_id": "a-1", "run_id": "comp-1"},
+                    {"artifact_id": "a-x", "run_id": "missing"},
+                ],
+                "research_runs": [{"run_id": "rr-1"}],
+                "algorithm_runs": [{"run_id": "ar-1", "research_run_id": "rr-1"}],
+                "report_jobs": [{"report_id": "report-1"}],
+                "report_artifacts": [{"artifact_id": "ra-1", "report_id": "report-1"}],
+            })
+            with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+                data = DataCatalogService().get_relationships()
+        finally:
+            demo_store.save(original)
+
+        edges = {(item.source, item.target): item for item in data.edges}
+        self.assertEqual(edges[("materials", "computations")].linked_count, 1)
+        self.assertEqual(edges[("computations", "computation_artifacts")].linked_count, 1)
+        self.assertEqual(edges[("research_runs", "algorithm_runs")].linked_count, 1)
+        self.assertEqual(edges[("report_jobs", "report_artifacts")].linked_count, 1)
+        self.assertEqual(edges[("materials", "computations")].target_coverage, 0.5)
+
 
 class DataCatalogApiTest(unittest.TestCase):
     """覆盖数据目录 API 响应契约。"""

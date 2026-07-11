@@ -57,6 +57,11 @@ class ComputationService:
                 status_code=400,
                 detail=f"不支持的计算 workflow/engine 组合：{payload.workflow_type}/{payload.engine}",
             )
+        if payload.material_record_id:
+            from app.services.data_catalog_service import DataCatalogService
+
+            if not DataCatalogService().material_record_exists(payload.material_record_id):
+                raise HTTPException(status_code=422, detail="material_record_id 不存在或材料数据源不可用")
         now = utc_now()
         run_id = self._new_id("comp")
         run = ComputationRun(
@@ -78,6 +83,8 @@ class ComputationService:
             source=payload.source,
             campaign_id=payload.campaign_id,
             suggestion_id=payload.suggestion_id,
+            material_record_id=payload.material_record_id,
+            dataset_id=payload.dataset_id,
         )
         ComputationRunRepository.save("run_id", run.model_dump(mode="python"))
         self._audit(
@@ -87,7 +94,12 @@ class ComputationService:
             entity_type="computation_run",
             entity_id=run_id,
             after={"status": "queued"},
-            related_ids={"campaign_id": payload.campaign_id, "suggestion_id": payload.suggestion_id},
+            related_ids={
+                "campaign_id": payload.campaign_id,
+                "suggestion_id": payload.suggestion_id,
+                "material_record_id": payload.material_record_id,
+                "dataset_id": payload.dataset_id,
+            },
         )
         return ComputationCreateData(run_id=run_id, status="queued")
 

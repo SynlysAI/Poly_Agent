@@ -16,6 +16,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import {
   getApiErrorMessage,
   getDataCatalogOverview,
+  getDataCatalogRelationships,
   getDataCatalogCollectionRecord,
   listDataCatalogCollectionRecords,
   listDataCatalogDatasets,
@@ -44,6 +45,7 @@ const recordsLoading = ref(false)
 const detailLoading = ref(false)
 const activeTab = ref(['analysis', 'mongo', 'relations'].includes(String(route.query.tab)) ? String(route.query.tab) : 'analysis')
 const overview = ref(null)
+const relationships = ref({ nodes: [], edges: [], notes: [] })
 const datasets = ref([])
 const mongoCollections = ref([])
 const legacyObjects = ref([])
@@ -135,23 +137,27 @@ const collectionTreemapOption = computed(() => ({
 }))
 
 const sourceSankeyOption = computed(() => {
-  const links = []
-  const nodes = [
-    { name: '材料数据' },
-    { name: '计算任务' },
-    { name: '计算产物' },
-    { name: '研发流程' },
-    { name: '优化闭环' },
-    { name: '报告产物' },
-  ]
-  links.push({ source: '材料数据', target: '计算任务', value: Math.max(1, materialCollection.value?.count || 1) })
-  links.push({ source: '计算任务', target: '计算产物', value: Math.max(1, computationArtifactCollection.value?.count || 1) })
-  links.push({ source: '计算任务', target: '研发流程', value: Math.max(1, groupCollectionCount('研发流程与算法')) })
-  links.push({ source: '计算任务', target: '优化闭环', value: Math.max(1, groupCollectionCount('优化闭环')) })
-  links.push({ source: '研发流程', target: '报告产物', value: Math.max(1, groupCollectionCount('报告产物')) })
+  const labels = Object.fromEntries((relationships.value.nodes || []).map(item => [item.node_id, item.label]))
+  const nodes = (relationships.value.nodes || []).map(item => ({ name: item.label, value: item.record_count }))
+  const links = (relationships.value.edges || [])
+    .filter(item => item.linked_count > 0)
+    .map(item => ({
+      source: labels[item.source] || item.source,
+      target: labels[item.target] || item.target,
+      value: item.linked_count,
+      coverage: item.target_coverage,
+      sourceField: item.source_field,
+      targetField: item.target_field,
+    }))
   return {
     color: ['#3b82f6', '#16a34a', '#d97706', '#0891b2', '#64748b'],
-    tooltip: { trigger: 'item', triggerOn: 'mousemove' },
+    tooltip: {
+      trigger: 'item',
+      triggerOn: 'mousemove',
+      formatter: (item) => item.dataType === 'edge'
+        ? `${item.data.source} → ${item.data.target}<br/>真实关联 ${formatNumber(item.data.value)} 条<br/>目标覆盖率 ${(item.data.coverage * 100).toFixed(1)}%<br/>${item.data.sourceField} ↔ ${item.data.targetField}`
+        : `${item.name}<br/>集合记录 ${formatNumber(item.data.value || 0)} 条`,
+    },
     series: [{
       type: 'sankey',
       emphasis: { focus: 'adjacency' },
@@ -411,15 +417,17 @@ function syncRouteQuery(extra = {}) {
 async function loadDataCatalog() {
   loading.value = true
   try {
-    const [overviewData, datasetData, mongoData] = await Promise.all([
+    const [overviewData, datasetData, mongoData, relationshipData] = await Promise.all([
       getDataCatalogOverview(),
       listDataCatalogDatasets(),
       listDataCatalogMongoCollections(),
+      getDataCatalogRelationships(),
     ])
     overview.value = overviewData
     datasets.value = datasetData.items || []
     legacyObjects.value = datasetData.legacy_objects || overviewData.legacy_objects || []
     mongoCollections.value = mongoData.items || []
+    relationships.value = relationshipData
     await loadAnalysisSamples()
     if (selectedCollectionName.value) await loadCollectionRecords()
   } catch (error) {
@@ -574,7 +582,7 @@ onMounted(async () => {
     </el-collapse>
 
     <el-tabs v-model="activeTab" class="catalog-tabs">
-      <el-tab-pane label="数据分析" name="analysis">
+      <el-tab-pane label="数据分析" name="analysis" lazy>
         <div class="analysis-layout">
           <section class="catalog-section analysis-main">
             <div class="section-heading">
@@ -622,7 +630,7 @@ onMounted(async () => {
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="数据表" name="mongo">
+      <el-tab-pane label="数据表" name="mongo" lazy>
         <div class="mongo-layout">
           <section class="catalog-section collection-browser">
             <div class="section-heading">
@@ -735,19 +743,20 @@ onMounted(async () => {
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="数据关系" name="relations">
+      <el-tab-pane label="数据关系" name="relations" lazy>
         <div class="relation-grid">
           <section class="catalog-section relation-main">
             <div class="section-heading">
-              <h2>数据源关系</h2>
+              <h2>集合记录量（条）</h2>
             </div>
-            <v-chart class="relation-chart" :option="sourceSankeyOption" autoresize />
+            <v-chart class="relation-chart" :option="collectionTreemapOption" autoresize />
           </section>
           <section class="catalog-section">
             <div class="section-heading">
-              <h2>集合规模</h2>
+              <h2>已验证跨集合关联（条）</h2>
             </div>
-            <v-chart class="relation-chart" :option="collectionTreemapOption" autoresize />
+            <v-chart class="relation-chart" :option="sourceSankeyOption" autoresize />
+            <p class="relationship-note">{{ relationships.notes?.[0] || '仅展示数据库中可验证的外键关系。' }}</p>
           </section>
         </div>
       </el-tab-pane>
@@ -1035,6 +1044,13 @@ onMounted(async () => {
 
 .relation-main .relation-chart {
   height: 420px;
+}
+
+.relationship-note {
+  margin: 0 0 10px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .collection-browser {

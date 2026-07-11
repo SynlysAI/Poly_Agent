@@ -12,6 +12,7 @@ from app.schemas.data_catalog import (
     DataCatalogDatasetListData,
     DataCatalogMongoCollectionListData,
     DataCatalogOverviewData,
+    DataCatalogRelationshipsData,
 )
 from app.services.data_catalog_service import DataCatalogService
 
@@ -35,6 +36,12 @@ def list_data_catalog_datasets() -> ApiResponse[DataCatalogDatasetListData]:
 def list_data_catalog_mongo_collections() -> ApiResponse[DataCatalogMongoCollectionListData]:
     """查询 MongoDB 结构化集合说明。"""
     return ApiResponse(code=0, message="ok", data=DataCatalogService().list_mongo_collections())
+
+
+@router.get("/relationships", response_model=ApiResponse[DataCatalogRelationshipsData])
+def get_data_catalog_relationships() -> ApiResponse[DataCatalogRelationshipsData]:
+    """Return verified cross-collection relationship counts."""
+    return ApiResponse(data=DataCatalogService().get_relationships())
 
 
 def _require_record_drilldown_access(current_user: dict[str, str] | None) -> None:

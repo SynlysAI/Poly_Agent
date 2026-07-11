@@ -119,6 +119,21 @@ def get_report(
     )
 
 
+@router.get("/{report_id}/preview", response_model=ApiResponse[dict])
+def preview_report(
+    report_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[dict]:
+    """Return the generated Markdown report for in-app preview."""
+    return ApiResponse(
+        data=ReportService().get_markdown_preview(
+            report_id,
+            actor_user_id=_access_user_id(current_user),
+            is_admin=_is_admin(current_user),
+        )
+    )
+
+
 @router.post("/{report_id}/cancel", response_model=ApiResponse[ReportJob])
 def cancel_report(
     report_id: str,

@@ -105,6 +105,11 @@ const hasActiveReportJobs = computed(() =>
 )
 
 const reportPrimaryButtonText = computed(() => (hasActiveReportJobs.value ? '生成中' : '生成报告'))
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const isCurrentRunTerminal = computed(() => {
+  const status = researchRun.value?.status || workflowRun.value?.status || algorithmRun.value?.status
+  return TERMINAL_RUN_STATUSES.has(status)
+})
 
 if (route.query.run_id) {
   algorithmRun.value = { run_id: String(route.query.run_id) }
@@ -173,7 +178,7 @@ const isStepDisabled = (stepKey) => {
   if (stepKey === 2) return !problemSpec.value
   if (stepKey === 3) return !executionDecision.value || !executionMode.value
   if (stepKey === 4) return !(algorithmRun.value || researchRun.value)
-  if (stepKey === 5) return !(algorithmRun.value || researchRun.value)
+  if (stepKey === 5) return !isCurrentRunTerminal.value
   return true
 }
 
@@ -223,7 +228,7 @@ async function ensureExecutionDecision(problemSpecId, mode, reason) {
 // ── 算法运行事件 ──
 function handleRunCompleted(run) {
   algorithmRun.value = run
-  currentStep.value = 4
+  currentStep.value = TERMINAL_RUN_STATUSES.has(run?.status) ? 5 : 4
 }
 
 function handleAlgorithmSelected(algo) {
@@ -241,13 +246,13 @@ function handlePipelineConfirmed(steps) {
 function handlePipelineRunCompleted(result) {
   workflowRun.value = result.workflowRun || null
   algorithmRun.value = result.stepResults?.[0] || result
-  currentStep.value = 4
+  currentStep.value = TERMINAL_RUN_STATUSES.has(workflowRun.value?.status) ? 5 : 4
 }
 
 // ── ResearchRun 事件 ──
 function handleResearchRunUpdated(run) {
   researchRun.value = run
-  if (run?.status === 'completed' || run?.status === 'failed') {
+  if (TERMINAL_RUN_STATUSES.has(run?.status)) {
     currentStep.value = 5
     loadResearchTraceability()
   } else if (route.query.action !== 'approve' && run?.status !== 'draft') {
@@ -874,6 +879,7 @@ watch(
                 </el-descriptions-item>
               </el-descriptions>
               <el-button
+                v-if="isCurrentRunTerminal"
                 style="margin-top:12px"
                 type="primary"
                 size="small"
