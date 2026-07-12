@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import io
 import sys
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -155,11 +157,194 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertFalse(data["ready"])
         self.assertTrue(data["can_start"])
         self.assertEqual(by_service["literature-rag"]["status"], "warning")
-        self.assertTrue(by_service["literature-rag"]["demo_fallback"])
+        self.assertFalse(by_service["literature-rag"]["demo_fallback"])
         self.assertFalse(by_service["literature-rag"]["blocking"])
         self.assertEqual(by_service["artifact-store"]["status"], "ready")
         self.assertEqual(by_service["computation-engine"]["status"], "ready")
         self.assertEqual(by_service["alchemist-backend"]["status"], "warning")
+
+
+class AlgorithmPackageApiTest(ComputationTestCase):
+    """覆盖用户上传算法包 P0 生命周期。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.base_url = "/api/v1/research-engine"
+
+    def test_template_upload_validate_build_deploy_activate_and_run(self) -> None:
+        """模板 ZIP 可完整进入 active，并被 AlgorithmRun 调用。"""
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+        self.assertEqual(template_resp.status_code, 200)
+        self.assertEqual(template_resp.headers["content-type"], "application/zip")
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("demo.zip", template_resp.content, "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package_id = upload_resp.json()["data"]["package_id"]
+        self.assertEqual(upload_resp.json()["data"]["status"], "uploaded")
+
+        download_resp = self.client.get(f"{self.base_url}/algorithm-packages/{package_id}/download")
+        self.assertEqual(download_resp.status_code, 200, download_resp.text)
+        self.assertEqual(download_resp.headers["content-type"], "application/zip")
+        with zipfile.ZipFile(io.BytesIO(download_resp.content)) as downloaded_zip:
+            self.assertIn("polyagent.algorithm.yaml", downloaded_zip.namelist())
+        reupload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("downloaded-demo.zip", download_resp.content, "application/zip")},
+        )
+        self.assertEqual(reupload_resp.status_code, 200, reupload_resp.text)
+        self.assertEqual(reupload_resp.json()["data"]["package_sha256"], upload_resp.json()["data"]["package_sha256"])
+
+        validate_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:validate")
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        package_data = validate_resp.json()["data"]
+        self.assertEqual(package_data["status"], "validated")
+        version_id = package_data["version_id"]
+
+        build_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:build")
+        self.assertEqual(build_resp.status_code, 200, build_resp.text)
+        self.assertEqual(build_resp.json()["data"]["status"], "built")
+        self.assertTrue(build_resp.json()["data"]["image_digest"].startswith("sha256:"))
+
+        deploy_resp = self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}:deploy"
+        )
+        self.assertEqual(deploy_resp.status_code, 200, deploy_resp.text)
+        self.assertEqual(deploy_resp.json()["data"]["status"], "deployed_staging")
+
+        activate_resp = self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}:activate"
+        )
+        self.assertEqual(activate_resp.status_code, 200, activate_resp.text)
+        self.assertEqual(activate_resp.json()["data"]["status"], "active")
+
+        algorithm_resp = self.client.get(f"{self.base_url}/algorithms/vertical_tg_predictor_demo")
+        self.assertEqual(algorithm_resp.status_code, 200)
+        self.assertEqual(algorithm_resp.json()["data"]["active_version_id"], version_id)
+        self.assertEqual(algorithm_resp.json()["data"]["source"], "uploaded_package")
+
+        run_resp = self.client.post(
+            f"{self.base_url}/algorithm-runs",
+            json={
+                "algorithm_id": "vertical_tg_predictor_demo",
+                "trigger_source": "human_workflow",
+                "input_snapshot": {"smiles": "C=C(F)F", "temperature_c": 25},
+            },
+        )
+        self.assertEqual(run_resp.status_code, 200, run_resp.text)
+        run_data = run_resp.json()["data"]
+        self.assertEqual(run_data["status"], "completed")
+        self.assertEqual(run_data["algorithm_version_id"], version_id)
+        self.assertIn("prediction", run_data["output_summary"])
+        self.assertIn("feature_summary", run_data["output_summary"])
+
+    def test_upload_rejects_zip_path_traversal_on_validate(self) -> None:
+        """ZIP 路径穿越在校验阶段被拒绝。"""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("../evil.py", "print('bad')")
+            zf.writestr("polyagent.algorithm.yaml", "contract_version: '0.1'\n")
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("bad.zip", buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package_id = upload_resp.json()["data"]["package_id"]
+
+        validate_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:validate")
+        self.assertEqual(validate_resp.status_code, 422)
+
+        detail_resp = self.client.get(f"{self.base_url}/algorithm-packages/{package_id}")
+        self.assertEqual(detail_resp.json()["data"]["status"], "validation_failed")
+
+    def test_version_activation_freeze_and_decommission_govern_new_runs(self) -> None:
+        """版本切换保持单一 active，冻结和下线版本不能再被显式调用。"""
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+
+        first_upload = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("first.zip", template_resp.content, "application/zip")},
+        )
+        first_package_id = first_upload.json()["data"]["package_id"]
+        first_validate = self.client.post(f"{self.base_url}/algorithm-packages/{first_package_id}:validate")
+        first_version_id = first_validate.json()["data"]["version_id"]
+        self.client.post(f"{self.base_url}/algorithm-packages/{first_package_id}:build")
+        self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{first_version_id}:deploy"
+        )
+        self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{first_version_id}:activate"
+        )
+
+        second_buffer = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(template_resp.content)) as source_zip:
+            with zipfile.ZipFile(second_buffer, "w") as target_zip:
+                for member in source_zip.infolist():
+                    content = source_zip.read(member.filename)
+                    if member.filename == "polyagent.algorithm.yaml":
+                        content = content.replace(b"version: 0.1.0", b"version: 0.2.0")
+                    target_zip.writestr(member, content)
+
+        second_upload = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("second.zip", second_buffer.getvalue(), "application/zip")},
+        )
+        second_package_id = second_upload.json()["data"]["package_id"]
+        second_validate = self.client.post(f"{self.base_url}/algorithm-packages/{second_package_id}:validate")
+        second_version_id = second_validate.json()["data"]["version_id"]
+        self.client.post(f"{self.base_url}/algorithm-packages/{second_package_id}:build")
+        self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{second_version_id}:deploy"
+        )
+        activate_resp = self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{second_version_id}:activate"
+        )
+        self.assertEqual(activate_resp.status_code, 200, activate_resp.text)
+
+        versions_resp = self.client.get(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions",
+            params={"page_size": 20},
+        )
+        versions = {item["version_id"]: item for item in versions_resp.json()["data"]["items"]}
+        self.assertEqual(versions[second_version_id]["status"], "active")
+        self.assertEqual(versions[first_version_id]["status"], "deployed_staging")
+
+        freeze_resp = self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{first_version_id}:freeze"
+        )
+        self.assertEqual(freeze_resp.status_code, 200, freeze_resp.text)
+        self.assertEqual(freeze_resp.json()["data"]["status"], "frozen")
+
+        frozen_run = self.client.post(
+            f"{self.base_url}/algorithm-runs",
+            json={
+                "algorithm_id": "vertical_tg_predictor_demo",
+                "algorithm_version_id": first_version_id,
+                "trigger_source": "human_workflow",
+                "input_snapshot": {"smiles": "C=C(F)F"},
+            },
+        )
+        self.assertEqual(frozen_run.status_code, 409, frozen_run.text)
+
+        decommission_resp = self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{first_version_id}:decommission"
+        )
+        self.assertEqual(decommission_resp.status_code, 200, decommission_resp.text)
+        self.assertEqual(decommission_resp.json()["data"]["status"], "decommissioned")
+
+        decommissioned_run = self.client.post(
+            f"{self.base_url}/algorithm-runs",
+            json={
+                "algorithm_id": "vertical_tg_predictor_demo",
+                "algorithm_version_id": first_version_id,
+                "trigger_source": "human_workflow",
+                "input_snapshot": {"smiles": "C=C(F)F"},
+            },
+        )
+        self.assertEqual(decommissioned_run.status_code, 409, decommissioned_run.text)
 
 
 class ResearchEngineAccessControlApiTest(ComputationTestCase):

@@ -70,7 +70,6 @@ for port in "${PORTS[@]}"; do
   kill_repo_port "$port"
 done
 
-kill_repo_pattern "uvicorn app.main:app"
 kill_repo_pattern "frontend/node_modules/.bin/vite"
 kill_repo_pattern "app.workers.computation_worker"
 

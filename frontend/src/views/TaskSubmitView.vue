@@ -75,13 +75,20 @@ const taskCategories = [
     icon: DataAnalysis,
     entries: [
       {
-        id: 'vertical-prediction',
-        name: '垂类预测模型',
-        description: '聚合物热学、力学、流变等垂类性质预测模型入口，后续接入模型服务。',
-        actionText: '即将上线',
-        route: null,
-        tags: ['热学性能', '力学性能', '流变性能', '即将上线'],
-        comingSoon: true,
+        id: 'vertical-upload',
+        name: '垂类模型上传部署',
+        description: '上传 Python 脚本或标准 ZIP，生成算法契约，并完成校验、构建、部署与激活。',
+        actionText: '上传部署',
+        route: '/vertical-prediction?tab=upload',
+        tags: ['Python', 'ZIP', '契约生成', '部署激活'],
+      },
+      {
+        id: 'vertical-management',
+        name: '模型管理中心',
+        description: '统一管理算法版本、指定版本发起预测调用，并追溯输入、输出、artifact 与运行状态。',
+        actionText: '进入管理中心',
+        route: '/vertical-prediction?tab=management',
+        tags: ['算法管理', '任务调用', '运行记录', '版本治理'],
       },
     ],
   },
@@ -158,7 +165,7 @@ onMounted(() => {
       <div class="panel-header launcher-header">
         <div>
           <h3 class="panel-title">任务提交</h3>
-          <p class="panel-subtitle">统一的工具调用入口。计算任务、湿实验优化和垂类模型都从这里进入。</p>
+          <p class="panel-subtitle">统一的任务型工具入口。计算任务、湿实验优化和垂类预测模型都从这里进入。</p>
         </div>
       </div>
       <div class="panel-body">

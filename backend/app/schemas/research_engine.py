@@ -84,6 +84,22 @@ GateDecision = Literal["approved", "rejected", "modified"]
 AlgorithmRunStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 """AlgorithmRun 运行状态。"""
 
+AlgorithmPackageStatus = Literal[
+    "uploaded",
+    "validating",
+    "validated",
+    "validation_failed",
+    "building",
+    "build_failed",
+    "built",
+    "deploying",
+    "deployed_staging",
+    "active",
+    "frozen",
+    "decommissioned",
+]
+"""用户上传算法包/版本生命周期状态。"""
+
 ProblemType = Literal[
     "formulation_process_optimization",
     "structure_property_prediction",
@@ -513,6 +529,9 @@ class AlgorithmRegistryEntry(BaseModel):
     owner: str | None = Field(default=None, max_length=80)
     status: AlgorithmStatus = "active"
     description: str | None = Field(default=None, max_length=1000)
+    active_version_id: str | None = Field(default=None, max_length=120)
+    source: str = Field(default="builtin", max_length=40)
+    deployment_status: str | None = Field(default=None, max_length=40)
 
     @field_validator("algorithm_id")
     @classmethod
@@ -537,6 +556,104 @@ class AlgorithmRegistryListData(BaseModel):
     """AlgorithmRegistry 分页响应。"""
 
     items: list[AlgorithmRegistryEntry]
+    page: int
+    page_size: int
+    total: int
+
+
+class AlgorithmPackageCreate(BaseModel):
+    """网页打包助手提交的算法元信息。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm_id: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=40)
+    algorithm_family: AlgorithmFamily = "vertical_prediction"
+    type: AlgorithmType = "predictor"
+    material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"], min_length=1)
+    task_scope: list[ResearchStageKey] = Field(default_factory=lambda: ["COMPUTE_PREDICT"])
+    trigger_modes: list[TriggerSource] = Field(default_factory=lambda: ["human_workflow", "autoresearch"])
+    entrypoint: str = Field(default="src.handler:predict", max_length=200)
+    loader: str | None = Field(default=None, max_length=200)
+    input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    runtime: dict = Field(default_factory=dict)
+    sample_input: dict = Field(default_factory=dict)
+    description: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("algorithm_id")
+    @classmethod
+    def normalize_package_algorithm_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("算法 ID 不能为空")
+        return normalized
+
+
+class AlgorithmPackage(BaseModel):
+    """用户上传算法包记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str
+    algorithm_id: str | None = None
+    version: str | None = None
+    version_id: str | None = None
+    status: AlgorithmPackageStatus = "uploaded"
+    package_sha256: str
+    filename: str
+    storage_uri: str
+    size_bytes: int
+    validation_errors: list[dict] = Field(default_factory=list)
+    validation_logs: list[str] = Field(default_factory=list)
+    build_logs: list[str] = Field(default_factory=list)
+    deployment_logs: list[str] = Field(default_factory=list)
+    image_digest: str | None = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlgorithmVersion(BaseModel):
+    """不可变算法版本记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version_id: str
+    package_id: str
+    algorithm_id: str
+    name: str
+    version: str
+    package_sha256: str
+    image_digest: str | None = None
+    status: AlgorithmPackageStatus = "validated"
+    runtime: dict = Field(default_factory=dict)
+    input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    entrypoint: str
+    loader: str | None = None
+    package_path: str
+    deployment: dict = Field(default_factory=dict)
+    contract: dict = Field(default_factory=dict)
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlgorithmPackageListData(BaseModel):
+    """算法包分页响应。"""
+
+    items: list[AlgorithmPackage]
+    page: int
+    page_size: int
+    total: int
+
+
+class AlgorithmVersionListData(BaseModel):
+    """算法版本分页响应。"""
+
+    items: list[AlgorithmVersion]
     page: int
     page_size: int
     total: int
@@ -595,6 +712,7 @@ class AlgorithmRunCreate(BaseModel):
     research_run_id: str | None = Field(default=None, max_length=80)
     stage_run_id: str | None = Field(default=None, max_length=80)
     input_snapshot: dict = Field(default_factory=dict)
+    algorithm_version_id: str | None = Field(default=None, max_length=120)
     reason: str | None = Field(default=None, max_length=1000)
 
     @field_validator("algorithm_id")
@@ -627,6 +745,10 @@ class AlgorithmRun(BaseModel):
     workflow_step_run_id: str | None = None
     research_run_id: str | None = None
     stage_run_id: str | None = None
+    algorithm_version_id: str | None = None
+    package_sha256: str | None = None
+    image_digest: str | None = None
+    runtime_snapshot: dict = Field(default_factory=dict)
     linked_computation_run_id: str | None = None
     linked_suggestion_id: str | None = None
     linked_observation_id: str | None = None

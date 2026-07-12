@@ -21,8 +21,10 @@ from app.infra.computation_repositories import (
     demo_store,
 )
 from app.infra.mongo import (
+    get_algorithm_packages_collection,
     get_algorithm_registry_entries_collection,
     get_algorithm_runs_collection,
+    get_algorithm_versions_collection,
     get_execution_decisions_collection,
     get_manual_algorithm_workflows_collection,
     get_research_problem_specs_collection,
@@ -295,6 +297,9 @@ class AlgorithmRegistryRepository(BaseRepository):
                         "owner",
                         "status",
                         "description",
+                        "active_version_id",
+                        "source",
+                        "deployment_status",
                     )
                     if key in entry and entry.get(key) != existing.get(key)
                 }
@@ -330,6 +335,104 @@ class AlgorithmRegistryRepository(BaseRepository):
             return False
 
         return bool(demo_store.mutate(mutate))
+
+
+class AlgorithmPackageRepository(BaseRepository):
+    """上传算法包仓储。"""
+
+    collection_name = "algorithm_packages"
+
+    @classmethod
+    def _collection(cls):
+        return get_algorithm_packages_collection()
+
+    @classmethod
+    def update_fields(cls, package_id: str, fields: dict[str, Any]) -> bool:
+        """更新算法包字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one({"package_id": package_id}, {"$set": fields})
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("package_id") == package_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def list_packages(
+        cls,
+        *,
+        algorithm_id: str | None = None,
+        status: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询算法上传包。"""
+        filters: dict[str, Any] = {}
+        if algorithm_id:
+            filters["algorithm_id"] = algorithm_id
+        if status:
+            filters["status"] = status
+        if created_by:
+            filters["created_by"] = created_by
+        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+
+class AlgorithmVersionRepository(BaseRepository):
+    """上传算法版本仓储。"""
+
+    collection_name = "algorithm_versions"
+
+    @classmethod
+    def _collection(cls):
+        return get_algorithm_versions_collection()
+
+    @classmethod
+    def update_fields(cls, version_id: str, fields: dict[str, Any]) -> bool:
+        """更新算法版本字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one({"version_id": version_id}, {"$set": fields})
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("version_id") == version_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def list_versions(
+        cls,
+        *,
+        algorithm_id: str | None = None,
+        status: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询算法版本。"""
+        filters: dict[str, Any] = {}
+        if algorithm_id:
+            filters["algorithm_id"] = algorithm_id
+        if status:
+            filters["status"] = status
+        if created_by:
+            filters["created_by"] = created_by
+        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
 
 
 class ExecutionDecisionRepository(BaseRepository):

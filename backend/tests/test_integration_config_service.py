@@ -116,9 +116,8 @@ class IntegrationConfigServiceTest(ComputationTestCase):
 
         by_service = {item["service"]: item for item in items}
 
-        self.assertEqual(by_service["alchemist-backend"]["status"], "down")
-        self.assertTrue(by_service["alchemist-backend"]["details"]["configured"])
-        self.assertTrue(by_service["alchemist-backend"]["details"]["enabled"])
+        self.assertEqual(by_service["alchemist-backend"]["status"], "built_in")
+        self.assertIn("已内置", by_service["alchemist-backend"]["details"]["message"])
 
     def test_disabled_persisted_config_marks_status_disabled(self) -> None:
         self.service.upsert_config(
@@ -178,6 +177,5 @@ class IntegrationConfigServiceTest(ComputationTestCase):
         by_service = {item["service"]: item for item in items}
 
         self.assertIn("alchemist-backend", by_service)
-        self.assertEqual(by_service["alchemist-backend"]["status"], "not_configured")
-        self.assertEqual(by_service["alchemist-backend"]["details"]["host"], "127.0.0.1")
-        self.assertEqual(by_service["alchemist-backend"]["details"]["port"], 8004)
+        self.assertEqual(by_service["alchemist-backend"]["status"], "built_in")
+        self.assertIn("无需外部服务", by_service["alchemist-backend"]["details"]["message"])

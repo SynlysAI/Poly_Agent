@@ -750,6 +750,14 @@ class ResearchEngineOrchestrator:
                 "mock_fallback" if algorithm_id.endswith("_mock") else "adapter",
             )
             if output.get("configured") is False:
+                if self._has_nonblocking_demo_output(algorithm_id, output):
+                    output["execution_mode"] = "demo_fallback"
+                    output["adapter_configured"] = False
+                    AlgorithmRunRepository.update_fields(
+                        algorithm_run.run_id,
+                        {"output_summary": output, "updated_at": utc_now()},
+                    )
+                    return output
                 fallback = self._run_mock_stage(stage_run, doc.get("problem_spec_id", ""))
                 fallback.update(
                     {
@@ -779,6 +787,13 @@ class ResearchEngineOrchestrator:
                 )
                 return fallback
             raise
+
+    @staticmethod
+    def _has_nonblocking_demo_output(algorithm_id: str, output: dict) -> bool:
+        """Return whether an unconfigured adapter still produced usable demo evidence."""
+        if algorithm_id != "literature_rag_adapter":
+            return False
+        return bool(output.get("hits") or output.get("citations") or output.get("graph_context"))
 
     def _build_stage_algorithm_input(
         self,

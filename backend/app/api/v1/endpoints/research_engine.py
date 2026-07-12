@@ -5,17 +5,25 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import json
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response
 
 from app.core.auth import get_current_user
 from app.schemas.common import ApiResponse
 from app.schemas.research_engine import (
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
+    AlgorithmPackage,
+    AlgorithmPackageCreate,
+    AlgorithmPackageListData,
     AlgorithmRun,
     AlgorithmRunCreate,
     AlgorithmRunListData,
     AlgorithmRunTraceability,
+    AlgorithmVersion,
+    AlgorithmVersionListData,
     ArchiveRequest,
     EntityAuditListData,
     ExecutionDecision,
@@ -40,6 +48,7 @@ from app.schemas.research_engine import (
     WorkflowRun,
     WorkflowRunListData,
 )
+from app.services.research_engine_algorithm_package_service import AlgorithmPackageService
 from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
 from app.services.research_engine_readiness_service import ResearchEngineReadinessService
 from app.services.research_engine_service import ResearchEngineService
@@ -48,6 +57,7 @@ router = APIRouter(prefix="/research-engine", tags=["research-engine"])
 service = ResearchEngineService()
 orchestrator = ResearchEngineOrchestrator()
 readiness_service = ResearchEngineReadinessService()
+package_service = AlgorithmPackageService()
 
 
 def _actor_user_id(current_user: dict[str, str] | None) -> str:
@@ -79,6 +89,205 @@ def _request_id(request: Request) -> str | None:
 def get_research_engine_readiness() -> ApiResponse[ResearchEngineReadinessData]:
     """获取 AutoResearch 启动前集成可用性摘要。"""
     return ApiResponse(code=0, message="ok", data=readiness_service.get_readiness())
+
+
+# =============================================================================
+# AlgorithmPackage API
+# =============================================================================
+
+
+def _json_form_object(raw: str | None, fallback: object) -> object:
+    """解析 multipart 中的 JSON 字段。"""
+    if raw is None or raw == "":
+        return fallback
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"JSON 字段格式错误: {exc.msg}") from exc
+
+
+@router.get("/algorithm-packages/template")
+def download_algorithm_package_template() -> Response:
+    """下载标准算法模板 ZIP。"""
+    content = package_service.create_template_zip()
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=polyagent-algorithm-template.zip"},
+    )
+
+
+@router.post("/algorithm-packages:pack", response_model=ApiResponse[AlgorithmPackage])
+async def pack_algorithm_package(
+    request: Request,
+    algorithm_id: str = Form(...),
+    name: str = Form(...),
+    version: str = Form(...),
+    algorithm_family: str = Form(default="vertical_prediction"),
+    type: str = Form(default="predictor"),
+    material_scope: str = Form(default='["universal"]'),
+    task_scope: str = Form(default='["COMPUTE_PREDICT"]'),
+    trigger_modes: str = Form(default='["human_workflow","autoresearch"]'),
+    entrypoint: str = Form(default="src.handler:predict"),
+    loader: str | None = Form(default=None),
+    input_schema: str = Form(default='{"fields":{"smiles":"string"},"required":["smiles"]}'),
+    output_schema: str = Form(default='{"fields":{"prediction":"object"},"required":["prediction"]}'),
+    runtime: str = Form(default='{"python":"3.11","resources":{"cpu":1,"memory":"1Gi","gpu":false},"timeout_seconds":30}'),
+    sample_input: str = Form(default='{"smiles":"C=C(F)F"}'),
+    description: str | None = Form(default=None),
+    files: list[UploadFile] = File(default=[]),
+    requirements: UploadFile | None = File(default=None),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmPackage]:
+    """网页打包助手：原始 Python 文件 + 表单生成标准 ZIP 并保存。"""
+    payload = AlgorithmPackageCreate(
+        algorithm_id=algorithm_id,
+        name=name,
+        version=version,
+        algorithm_family=algorithm_family,
+        type=type,
+        material_scope=_json_form_object(material_scope, ["universal"]),
+        task_scope=_json_form_object(task_scope, ["COMPUTE_PREDICT"]),
+        trigger_modes=_json_form_object(trigger_modes, ["human_workflow", "autoresearch"]),
+        entrypoint=entrypoint,
+        loader=loader or None,
+        input_schema=_json_form_object(input_schema, {}),
+        output_schema=_json_form_object(output_schema, {}),
+        runtime=_json_form_object(runtime, {}),
+        sample_input=_json_form_object(sample_input, {}),
+        description=description,
+    )
+    source_files: dict[str, bytes] = {}
+    for upload in files:
+        if not upload.filename:
+            continue
+        source_files[upload.filename] = await upload.read()
+    requirements_bytes = await requirements.read() if requirements else None
+    zip_bytes = package_service.pack_from_sources(
+        payload,
+        source_files=source_files,
+        requirements=requirements_bytes,
+    )
+    data = package_service.upload_package(
+        filename=f"{payload.algorithm_id}-{payload.version}.zip",
+        content=zip_bytes,
+        actor_user_id=_actor_user_id(current_user),
+    )
+    data = package_service.validate_package(data.package_id)
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/algorithm-packages", response_model=ApiResponse[AlgorithmPackage])
+async def upload_algorithm_package(
+    file: UploadFile = File(...),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmPackage]:
+    """上传标准 ZIP 算法包。"""
+    content = await file.read()
+    data = package_service.upload_package(
+        filename=file.filename or "algorithm-package.zip",
+        content=content,
+        actor_user_id=_actor_user_id(current_user),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/algorithm-packages", response_model=ApiResponse[AlgorithmPackageListData])
+def list_algorithm_packages(
+    algorithm_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmPackageListData]:
+    """查询上传算法包。"""
+    data = package_service.list_packages(
+        algorithm_id=algorithm_id,
+        status=status,
+        created_by=None if _has_full_access(current_user) else _access_user_id(current_user),
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/algorithm-packages/{package_id}", response_model=ApiResponse[AlgorithmPackage])
+def get_algorithm_package(package_id: str) -> ApiResponse[AlgorithmPackage]:
+    """查看算法包状态。"""
+    return ApiResponse(code=0, message="ok", data=package_service.get_package(package_id))
+
+
+@router.get("/algorithm-packages/{package_id}/download")
+def download_algorithm_package(package_id: str) -> Response:
+    """下载已上传或由平台生成的标准算法 ZIP。"""
+    filename, content = package_service.download_package(package_id)
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/algorithm-packages/{package_id}:validate", response_model=ApiResponse[AlgorithmPackage])
+def validate_algorithm_package(package_id: str) -> ApiResponse[AlgorithmPackage]:
+    """校验算法包并生成 AlgorithmVersion。"""
+    return ApiResponse(code=0, message="ok", data=package_service.validate_package(package_id))
+
+
+@router.post("/algorithm-packages/{package_id}:build", response_model=ApiResponse[AlgorithmPackage])
+def build_algorithm_package(package_id: str) -> ApiResponse[AlgorithmPackage]:
+    """构建算法包。P0 记录本机 adapter build 状态。"""
+    return ApiResponse(code=0, message="ok", data=package_service.build_package(package_id))
+
+
+@router.get("/algorithms/{algorithm_id}/versions", response_model=ApiResponse[AlgorithmVersionListData])
+def list_algorithm_versions(
+    algorithm_id: str,
+    status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> ApiResponse[AlgorithmVersionListData]:
+    """查询指定算法的版本。"""
+    data = package_service.list_versions(
+        algorithm_id=algorithm_id,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/algorithms/{algorithm_id}/versions/{version_id}:deploy", response_model=ApiResponse[AlgorithmVersion])
+def deploy_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+    """部署算法版本到 P0 本机 adapter。"""
+    return ApiResponse(code=0, message="ok", data=package_service.deploy_version(algorithm_id, version_id))
+
+
+@router.post("/algorithms/{algorithm_id}/versions/{version_id}:activate", response_model=ApiResponse[AlgorithmVersion])
+def activate_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+    """激活算法版本。"""
+    return ApiResponse(code=0, message="ok", data=package_service.activate_version(algorithm_id, version_id))
+
+
+@router.post("/algorithms/{algorithm_id}/versions/{version_id}:rollback", response_model=ApiResponse[AlgorithmVersion])
+def rollback_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+    """回滚到指定历史版本。"""
+    return ApiResponse(code=0, message="ok", data=package_service.rollback_version(algorithm_id, version_id))
+
+
+@router.post("/algorithms/{algorithm_id}/versions/{version_id}:freeze", response_model=ApiResponse[AlgorithmVersion])
+def freeze_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+    """冻结指定算法版本。"""
+    return ApiResponse(code=0, message="ok", data=package_service.freeze_version(algorithm_id, version_id))
+
+
+@router.post(
+    "/algorithms/{algorithm_id}/versions/{version_id}:decommission",
+    response_model=ApiResponse[AlgorithmVersion],
+)
+def decommission_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+    """下线指定算法版本。"""
+    return ApiResponse(code=0, message="ok", data=package_service.decommission_version(algorithm_id, version_id))
 
 
 # =============================================================================

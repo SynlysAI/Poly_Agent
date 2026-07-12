@@ -1,0 +1,41 @@
+services:
+  api:
+    profiles: ["demo"]
+    build: .
+    env_file: ${LITERATURE_RAG_ENV_FILE:-.env.example}
+    ports: ["8200:8200"]
+    depends_on: [mongo, minio, neo4j]
+    restart: unless-stopped
+  worker:
+    profiles: ["demo"]
+    build: .
+    env_file: ${LITERATURE_RAG_ENV_FILE:-.env.example}
+    command: ["python", "-m", "app.worker"]
+    depends_on: [mongo, minio, neo4j]
+    restart: unless-stopped
+  mongo:
+    profiles: ["demo"]
+    image: mongo:7
+    volumes: ["rag-mongo:/data/db"]
+  minio:
+    profiles: ["demo"]
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: ${LITERATURE_RAG_MINIO_SECRET_KEY:-replace-with-minio-secret}
+    ports: ["9001:9001"]
+    volumes: ["rag-minio:/data"]
+  neo4j:
+    profiles: ["demo"]
+    image: neo4j:5.22.0
+    environment:
+      NEO4J_AUTH: neo4j/${LITERATURE_RAG_NEO4J_PASSWORD:-replace-with-neo4j-password}
+      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+    ports: ["7474:7474"]
+    volumes: ["rag-neo4j:/data"]
+
+volumes:
+  rag-mongo:
+  rag-minio:
+  rag-neo4j:

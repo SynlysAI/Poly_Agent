@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Check, ArrowRight, DataAnalysis, MagicStick, Star, SetUp, Document, CircleCheck, CircleClose, Clock, Collection,
@@ -12,15 +12,22 @@ import AlgorithmRunDetail from './research-engine/AlgorithmRunDetail.vue'
 import PipelineRunPanel from './research-engine/PipelineRunPanel.vue'
 import ResearchRunPanel from './research-engine/ResearchRunPanel.vue'
 import GateReviewDialog from './research-engine/GateReviewDialog.vue'
+import ReportGenerateDrawer from './research-engine/ReportGenerateDrawer.vue'
+import ReportJobPanel from './research-engine/ReportJobPanel.vue'
 import {
+  createReport,
   createExecutionDecision,
+  downloadReportArtifact,
   getActiveExecutionDecision,
   getApiErrorMessage,
   getManualWorkflow,
   getProblemSpec,
+  getResearchRun,
   getResearchRunTraceability,
   instantiateResearchEngineExample,
+  listReports,
   listResearchEngineExamples,
+  retryReport,
 } from '../api/polyAgentApi'
 import { ElMessage } from 'element-plus'
 
@@ -47,6 +54,12 @@ const gateDialogVisible = ref(false)
 const gateStage = ref(null)
 const researchTraceability = ref(null)
 const traceabilityLoading = ref(false)
+const reportDrawerVisible = ref(false)
+const reportJobs = ref([])
+const reportJobsLoading = ref(false)
+const reportSubmitting = ref(false)
+let reportPollingTimer = null
+const REPORT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 
 const stageLabels = {
   PROBLEM_SPEC: '问题定义',
@@ -64,6 +77,39 @@ const stageLabels = {
 const pendingResearchApprovalStage = computed(() =>
   (researchRun.value?.stage_runs || []).find(stage => stage.status === 'blocked_approval') || null,
 )
+
+const reportSubject = computed(() => {
+  if (researchRun.value?.run_id) {
+    return {
+      subject_type: 'research_run',
+      subject_id: researchRun.value.run_id,
+      status: researchRun.value.status,
+    }
+  }
+  if (algorithmRun.value?.run_id) {
+    return {
+      subject_type: 'algorithm_run',
+      subject_id: algorithmRun.value.run_id,
+      status: algorithmRun.value.status,
+    }
+  }
+  return null
+})
+
+const reportSubjectKey = computed(() =>
+  reportSubject.value ? `${reportSubject.value.subject_type}:${reportSubject.value.subject_id}` : '',
+)
+
+const hasActiveReportJobs = computed(() =>
+  reportJobs.value.some(job => !REPORT_TERMINAL_STATUSES.has(job.status)),
+)
+
+const reportPrimaryButtonText = computed(() => (hasActiveReportJobs.value ? '生成中' : '生成报告'))
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const isCurrentRunTerminal = computed(() => {
+  const status = researchRun.value?.status || workflowRun.value?.status || algorithmRun.value?.status
+  return TERMINAL_RUN_STATUSES.has(status)
+})
 
 if (route.query.run_id) {
   algorithmRun.value = { run_id: String(route.query.run_id) }
@@ -132,7 +178,7 @@ const isStepDisabled = (stepKey) => {
   if (stepKey === 2) return !problemSpec.value
   if (stepKey === 3) return !executionDecision.value || !executionMode.value
   if (stepKey === 4) return !(algorithmRun.value || researchRun.value)
-  if (stepKey === 5) return !(algorithmRun.value || researchRun.value)
+  if (stepKey === 5) return !isCurrentRunTerminal.value
   return true
 }
 
@@ -182,7 +228,7 @@ async function ensureExecutionDecision(problemSpecId, mode, reason) {
 // ── 算法运行事件 ──
 function handleRunCompleted(run) {
   algorithmRun.value = run
-  currentStep.value = 4
+  currentStep.value = TERMINAL_RUN_STATUSES.has(run?.status) ? 5 : 4
 }
 
 function handleAlgorithmSelected(algo) {
@@ -200,13 +246,13 @@ function handlePipelineConfirmed(steps) {
 function handlePipelineRunCompleted(result) {
   workflowRun.value = result.workflowRun || null
   algorithmRun.value = result.stepResults?.[0] || result
-  currentStep.value = 4
+  currentStep.value = TERMINAL_RUN_STATUSES.has(workflowRun.value?.status) ? 5 : 4
 }
 
 // ── ResearchRun 事件 ──
 function handleResearchRunUpdated(run) {
   researchRun.value = run
-  if (run?.status === 'completed' || run?.status === 'failed') {
+  if (TERMINAL_RUN_STATUSES.has(run?.status)) {
     currentStep.value = 5
     loadResearchTraceability()
   } else if (route.query.action !== 'approve' && run?.status !== 'draft') {
@@ -256,6 +302,115 @@ async function loadResearchTraceability() {
   }
 }
 
+async function loadReportJobs(options = {}) {
+  if (!reportSubject.value) {
+    reportJobs.value = []
+    return
+  }
+  if (reportJobsLoading.value) return
+  reportJobsLoading.value = true
+  try {
+    const data = await listReports({
+      subject_type: reportSubject.value.subject_type,
+      subject_id: reportSubject.value.subject_id,
+      page: 1,
+      page_size: 10,
+    })
+    reportJobs.value = data.items || []
+  } catch (error) {
+    if (!options.silent) {
+      ElMessage.error(getApiErrorMessage(error))
+    }
+  } finally {
+    reportJobsLoading.value = false
+  }
+}
+
+function openReportDrawer() {
+  if (!reportSubject.value) {
+    ElMessage.warning('暂无可生成报告的运行对象')
+    return
+  }
+  reportDrawerVisible.value = true
+}
+
+async function handleReportSubmit(payload) {
+  reportSubmitting.value = true
+  try {
+    await createReport(payload)
+    reportDrawerVisible.value = false
+    ElMessage.success('报告任务已创建')
+    await loadReportJobs()
+    syncReportPolling()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    reportSubmitting.value = false
+  }
+}
+
+async function handleReportRetry(job) {
+  reportJobsLoading.value = true
+  try {
+    await retryReport(job.report_id)
+    ElMessage.success('报告任务已重试')
+    await loadReportJobs()
+    syncReportPolling()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    reportJobsLoading.value = false
+  }
+}
+
+async function handleReportDownload(job, artifact) {
+  try {
+    const data = await downloadReportArtifact(job.report_id, artifact.artifact_id, artifact.filename)
+    saveBlob(data.blob, data.filename)
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  }
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename || 'report.dat'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+function startReportPolling() {
+  if (reportPollingTimer) return
+  reportPollingTimer = window.setInterval(async () => {
+    if (currentStep.value !== 5 || !reportSubject.value) {
+      stopReportPolling()
+      return
+    }
+    await loadReportJobs({ silent: true })
+    if (!hasActiveReportJobs.value) {
+      stopReportPolling()
+    }
+  }, 2500)
+}
+
+function stopReportPolling() {
+  if (!reportPollingTimer) return
+  window.clearInterval(reportPollingTimer)
+  reportPollingTimer = null
+}
+
+function syncReportPolling() {
+  if (currentStep.value === 5 && reportSubject.value && hasActiveReportJobs.value) {
+    startReportPolling()
+  } else {
+    stopReportPolling()
+  }
+}
+
 function statusTag(status) {
   const map = { draft: 'info', running: 'warning', paused: 'info', blocked_approval: 'danger', completed: 'success', failed: 'danger', archived: 'info', pending: 'info' }
   return map[status] || 'info'
@@ -286,6 +441,7 @@ function workflowStepsFromWorkflow(workflow) {
 async function restoreRouteState() {
   const problemSpecId = route.query.problem_spec_id ? String(route.query.problem_spec_id) : ''
   const workflowId = route.query.workflow_id ? String(route.query.workflow_id) : ''
+  const researchRunId = route.query.research_run_id ? String(route.query.research_run_id) : ''
   const mode = route.query.mode ? String(route.query.mode) : ''
 
   try {
@@ -315,6 +471,24 @@ async function restoreRouteState() {
       selectedAlgorithm.value = null
       pipelineSteps.value = workflowStepsFromWorkflow(workflow)
       currentStep.value = 3
+    }
+
+    if (researchRunId) {
+      const run = await getResearchRun(researchRunId)
+      researchRun.value = run
+      algorithmRun.value = null
+      executionMode.value = 'autoresearch'
+      if (!problemSpec.value && run.problem_spec_id) {
+        problemSpec.value = await getProblemSpec(run.problem_spec_id)
+      }
+      executionDecision.value = executionDecision.value || {
+        decision_id: run.execution_decision_id || '',
+        mode: 'autoresearch',
+      }
+      currentStep.value = run.status === 'completed' || run.status === 'failed' ? 5 : 4
+      if (currentStep.value === 5) {
+        await loadResearchTraceability()
+      }
     }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -386,6 +560,10 @@ onMounted(() => {
   restoreRouteState()
 })
 
+onUnmounted(() => {
+  stopReportPolling()
+})
+
 watch(
   () => [route.query.problem_spec_id, route.query.workflow_id, route.query.research_run_id, route.query.mode],
   () => {
@@ -399,6 +577,22 @@ watch(
     if (currentStep.value === 5 && researchRun.value?.run_id) {
       loadResearchTraceability()
     }
+  },
+)
+
+watch(
+  () => [currentStep.value, reportSubjectKey.value],
+  () => {
+    if (currentStep.value === 5 && reportSubject.value) {
+      loadReportJobs()
+    }
+  },
+)
+
+watch(
+  () => [currentStep.value, reportSubjectKey.value, hasActiveReportJobs.value],
+  () => {
+    syncReportPolling()
   },
 )
 </script>
@@ -685,6 +879,7 @@ watch(
                 </el-descriptions-item>
               </el-descriptions>
               <el-button
+                v-if="isCurrentRunTerminal"
                 style="margin-top:12px"
                 type="primary"
                 size="small"
@@ -718,11 +913,30 @@ watch(
 
         <!-- 步骤 5: 追溯/结果汇总 -->
         <div v-if="currentStep === 5" class="step-panel">
-          <div class="step-panel-header">
-            <el-icon :size="20"><Document /></el-icon>
-            <h4>步骤 5：追溯与结果汇总</h4>
+          <div class="step-panel-header step-panel-header-with-actions">
+            <div class="step-panel-title">
+              <el-icon :size="20"><Document /></el-icon>
+              <h4>步骤 5：追溯与结果汇总</h4>
+            </div>
+            <el-button
+              type="primary"
+              :icon="Document"
+              :disabled="!reportSubject"
+              @click="hasActiveReportJobs ? loadReportJobs() : openReportDrawer()"
+            >
+              {{ reportPrimaryButtonText }}
+            </el-button>
           </div>
           <p class="step-panel-desc">查看完整追溯链，包括审计事件、关联计算任务和观测记录。</p>
+
+          <ReportJobPanel
+            v-if="reportSubject"
+            :jobs="reportJobs"
+            :loading="reportJobsLoading"
+            @refresh="loadReportJobs"
+            @retry="handleReportRetry"
+            @download="handleReportDownload"
+          />
 
           <template v-if="algorithmRun?.run_id">
             <AlgorithmRunDetail :run-id="algorithmRun.run_id" :show-traceability="true" />
@@ -845,6 +1059,13 @@ watch(
         </article>
       </div>
     </el-dialog>
+
+    <ReportGenerateDrawer
+      v-model="reportDrawerVisible"
+      :subject="reportSubject"
+      :submitting="reportSubmitting"
+      @submit="handleReportSubmit"
+    />
 
     <GateReviewDialog
       :visible="gateDialogVisible"
@@ -1141,6 +1362,18 @@ watch(
   align-items: center;
   gap: 10px;
   margin-bottom: 4px;
+}
+
+.step-panel-header-with-actions {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.step-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .step-panel-header h4 {

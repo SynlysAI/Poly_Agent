@@ -57,7 +57,7 @@ Auto Research（自动研发）是 Poly Agent 高分子材料AI研发平台的**
 1. 点击 **"启动"** 按钮，输入启动原因（如"开始氟基高分子优化"）。
 2. ResearchRun 状态先变为 `running`，随后进入第一个 P0 Gate：`PROBLEM_SPEC`。
 3. 当 `PROBLEM_SPEC` 阶段状态变为 `blocked_approval` 时，需要先完成人工审批；批准后系统才会继续推进文献检索、结构表示、计算预测等非 Gate 阶段。
-   - 当前代码会优先调用登记的阶段适配器，例如 `KNOWLEDGE_RETRIEVAL` 使用 `literature_rag_adapter`。如果外部索引或模型服务未配置，运行可能进入 `failed`，需要先完成服务配置或切换到后续 P1 的 mock fallback 策略。
+   - 当前代码会优先调用登记的阶段适配器，例如 `KNOWLEDGE_RETRIEVAL` 使用 `literature_rag_adapter`。如果 `KNOWLEDGE_RAG_BASE_URL` 未配置，知识检索会返回标注为 `demo_source` 的 AI4S demo 结果并继续推进；接入 LightRAG 后会优先使用真实知识库服务。
 4. 查看**阶段时间线**了解进度：
    - 已完成阶段：绿色对勾图标
    - 运行中阶段：蓝色圆点
@@ -169,7 +169,7 @@ A: 失败后无法恢复。你需要：
 2. 重新创建 ResearchRun（使用同一个 ProblemSpec）
 3. 或通过 API 追溯链接查看详细的审计事件
 
-如果失败发生在 `KNOWLEDGE_RETRIEVAL`、`COMPUTE_PREDICT` 或 `RECOMMENDATION_ASK` 等自动阶段，优先检查对应适配器是否已配置。例如 `literature_rag_adapter` 需要外部文献索引，`mobo_alchemist_adapter` 需要 Alchemist 服务。
+如果失败发生在 `KNOWLEDGE_RETRIEVAL`、`COMPUTE_PREDICT` 或 `RECOMMENDATION_ASK` 等自动阶段，优先检查对应适配器状态。例如 `literature_rag_adapter` 可在未配置 LightRAG 时返回 AI4S demo fallback；`mobo_alchemist_adapter` 需要 Alchemist 服务或 demo fallback。
 
 ### Q: 可以同时运行多个 ResearchRun 吗？
 

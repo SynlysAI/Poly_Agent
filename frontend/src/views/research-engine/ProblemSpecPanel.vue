@@ -28,6 +28,35 @@ const detail = ref(null)
 const algorithms = ref([])
 const jsonPreviewVisible = ref(false)
 
+// 校验错误映射
+const fieldErrors = ref({})
+
+function parseValidationErrors(errors) {
+  if (!Array.isArray(errors)) return {}
+  const map = {}
+  for (const e of errors) {
+    const loc = (e.loc || []).slice(1)
+    const key = loc.map(seg => (typeof seg === 'number' ? String(seg) : seg)).join('.')
+    if (!map[key]) map[key] = e.msg
+  }
+  return map
+}
+
+function clearFieldErrors() { fieldErrors.value = {} }
+
+function arraySectionError(prefix) {
+  const msgs = []
+  for (const [key, msg] of Object.entries(fieldErrors.value)) {
+    if (key === prefix) {
+      msgs.push(msg)
+    } else if (key.startsWith(prefix + '.')) {
+      const rest = key.slice(prefix.length + 1)
+      msgs.push(`[${rest}] ${msg}`)
+    }
+  }
+  return msgs.length ? msgs.join('；') : ''
+}
+
 // 新模式还是编辑模式
 const isNew = ref(false)
 const isViewing = ref(false)
@@ -317,6 +346,7 @@ watch(
 
 async function handleSave() {
   saving.value = true
+  clearFieldErrors()
   try {
     const payload = {
       ...form.value,
@@ -337,6 +367,9 @@ async function handleSave() {
       ElMessage.success('研发任务已更新')
     }
   } catch (error) {
+    if (error.status === 422 && Array.isArray(error.errors)) {
+      fieldErrors.value = parseValidationErrors(error.errors)
+    }
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     saving.value = false
@@ -466,11 +499,11 @@ loadAlgorithms()
     <div v-if="isNew || detail" class="spec-form" v-loading="loading">
       <el-form label-position="top">
         <div class="form-row">
-          <el-form-item label="研发任务名称" style="flex:2">
-            <el-input v-model="form.name" placeholder="例如：氟基高分子电解质优化" :disabled="!canEdit" />
+          <el-form-item label="研发任务名称" style="flex:2" :error="fieldErrors.name">
+            <el-input v-model="form.name" placeholder="例如：氟基高分子电解质优化" :disabled="!canEdit" @input="delete fieldErrors.name" />
           </el-form-item>
-          <el-form-item label="材料体系" style="flex:1">
-            <el-select v-model="form.material_family" :disabled="!canEdit">
+          <el-form-item label="材料体系" style="flex:1" :error="fieldErrors.material_family">
+            <el-select v-model="form.material_family" :disabled="!canEdit" @change="delete fieldErrors.material_family">
               <el-option v-for="item in materialFamilyOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
@@ -492,13 +525,14 @@ loadAlgorithms()
             </el-select>
           </el-form-item>
         </div>
-        <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" :rows="2" placeholder="简要描述研发目标与背景" :disabled="!canEdit" />
+        <el-form-item label="描述" :error="fieldErrors.description">
+          <el-input v-model="form.description" type="textarea" :rows="2" placeholder="简要描述研发目标与背景" :disabled="!canEdit" @input="delete fieldErrors.description" />
         </el-form-item>
 
         <!-- 变量 -->
         <div class="section-label">
           <span>变量定义</span>
+          <span v-if="arraySectionError('variables')" class="section-error">{{ arraySectionError('variables') }}</span>
           <el-button v-if="canEdit" text type="primary" size="small" :icon="Plus" @click="addVariable">添加变量</el-button>
         </div>
         <div v-for="(v, idx) in form.variables" :key="'var-' + idx" class="inline-form-row">
@@ -519,6 +553,7 @@ loadAlgorithms()
         <!-- 目标 -->
         <div class="section-label">
           <span>优化目标</span>
+          <span v-if="arraySectionError('objectives')" class="section-error">{{ arraySectionError('objectives') }}</span>
           <el-button v-if="canEdit" text type="primary" size="small" :icon="Plus" @click="addObjective">添加目标</el-button>
         </div>
         <div v-for="(obj, idx) in form.objectives" :key="'obj-' + idx" class="inline-form-row">
@@ -536,6 +571,7 @@ loadAlgorithms()
         <!-- 约束 -->
         <div class="section-label">
           <span>约束条件 <el-tag size="small" type="info" effect="plain">可选</el-tag></span>
+          <span v-if="arraySectionError('constraints')" class="section-error">{{ arraySectionError('constraints') }}</span>
           <el-button v-if="canEdit" text type="primary" size="small" :icon="Plus" @click="addConstraint">添加约束</el-button>
         </div>
         <!-- 空态引导 -->
@@ -571,6 +607,7 @@ loadAlgorithms()
         <!-- 测量条件 -->
         <div class="section-label">
           <span>测量条件 <el-tag size="small" type="info" effect="plain">可选</el-tag></span>
+          <span v-if="arraySectionError('measurements')" class="section-error">{{ arraySectionError('measurements') }}</span>
           <el-button v-if="canEdit" text type="primary" size="small" :icon="Plus" @click="addMeasurement">添加测量</el-button>
         </div>
         <!-- 空态引导 -->
@@ -661,6 +698,17 @@ loadAlgorithms()
 .form-row {
   display: flex;
   gap: 16px;
+}
+
+.section-error {
+  color: var(--el-color-danger);
+  font-size: 12px;
+  font-weight: 400;
+  flex: 1;
+  margin: 0 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .section-label {

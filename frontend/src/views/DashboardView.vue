@@ -16,7 +16,6 @@ import {
   mapAlgorithmRunToGlobalTask, mapCampaignToGlobalTask,
   mapComputationRunToGlobalTask, mapResearchRunToGlobalTask,
 } from '../tasks/taskModules'
-import { authState } from '../auth/authState'
 
 const router = useRouter()
 const loading = ref(false)
@@ -268,10 +267,8 @@ function handleChatKeydown(event) {
 }
 
 // ------ Module Cards ------
-const canAccessAdminFeatures = computed(() => !authState.authEnabled || authState.role === 'admin')
-
 const moduleCards = computed(() => {
-  const cards = [
+  return [
     {
       id: 'research-engine',
       icon: MagicStick,
@@ -308,19 +305,16 @@ const moduleCards = computed(() => {
       route: '/tools',
       color: '#d97706',
     },
-  ]
-  if (canAccessAdminFeatures.value) {
-    cards.push({
+    {
       id: 'database',
       icon: FolderOpened,
-      title: '数据库管理',
-      description: '系统数据库管理，包含用户、邀请码和审计日志。',
-      highlights: ['用户与权限管理', '邀请码管理', '审计日志查询'],
-      route: '/database',
+      title: '数据管理',
+      description: '统一查看材料数据资产、计算结果和 Mongo 结构化索引。',
+      highlights: ['材料数据分级分类', '计算数据下钻', '物性覆盖分析'],
+      route: '/database/data-catalog',
       color: '#dc2626',
-    })
-  }
-  return cards
+    },
+  ]
 })
 
 // ------ Data Loading ------

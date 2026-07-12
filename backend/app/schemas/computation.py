@@ -121,6 +121,8 @@ class ComputationCreateRequest(BaseModel):
     source: str | None = Field(default=None, max_length=80)
     campaign_id: str | None = Field(default=None, max_length=80)
     suggestion_id: str | None = Field(default=None, max_length=80)
+    material_record_id: str | None = Field(default=None, max_length=120)
+    dataset_id: str | None = Field(default=None, max_length=120)
 
 
 class ComputationStep(BaseModel):
@@ -158,6 +160,8 @@ class ComputationRun(BaseModel):
     source: str | None = None
     campaign_id: str | None = None
     suggestion_id: str | None = None
+    material_record_id: str | None = None
+    dataset_id: str | None = None
 
 
 class ComputationCreateData(BaseModel):
