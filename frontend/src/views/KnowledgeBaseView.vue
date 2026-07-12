@@ -401,6 +401,8 @@ onMounted(loadBootstrap)
                 <el-form-item label="模式">
                   <el-segmented
                     v-model="queryForm.mode"
+                    class="knowledge-mode-segmented"
+                    block
                     :options="[
                       { label: 'Hybrid', value: 'hybrid' },
                       { label: 'Local', value: 'local' },
@@ -773,8 +775,16 @@ onMounted(loadBootstrap)
 
 .control-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+.control-grid :deep(.el-form-item) {
+  min-width: 0;
+}
+
+.knowledge-mode-segmented {
+  width: 100%;
 }
 
 .query-actions {
