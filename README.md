@@ -1,6 +1,6 @@
 # Poly Agent — 高分子智能分析平台
 
-**Poly Agent** 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec Agent](https://github.com/SynlysAI/Spec_Agent) 同属一个产品线。平台围绕高分子材料研发场景，提供实验设计与贝叶斯优化（Alchemist）、计算智能任务管理（ComputeEngine Computation）、AI 驱动材料研发引擎（ResearchEngine）和产品内助手，帮助材料科学家系统化地定义研发任务、管理计算任务、编排算法工作流并追踪优化闭环。
+**Poly Agent** 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec Agent](https://github.com/SynlysAI/Spec_Agent) 同属一个产品线。平台围绕高分子材料研发场景，提供实验设计与贝叶斯优化（Alchemist）、计算智能任务管理（ComputeEngine Computation）、AI 驱动材料研发引擎（ResearchEngine）、文献知识库 RAG + 知识图谱和产品内助手，帮助材料科学家系统化地定义研发任务、管理计算任务、编排算法工作流并追踪优化闭环。
 
 ## 功能概览
 
@@ -51,11 +51,25 @@
 | 示例流程 | 支持一键实例化人工计算 Workflow 示例和 AutoResearch 审批示例 |
 | 追溯与审计 | 提供 ResearchRun / StageRun / AlgorithmRun traceability API，聚合运行记录、产物、关联计算任务和审计事件 |
 
-当前可直接复用现有 ComputationService 的 `LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER` workflow；文献 RAG、垂类预测和 MOBO Alchemist 适配器已登记为生产候选能力，但仍依赖外部服务配置。mock 算法仅用于演示和闭环验收，不代表真实生产模型。
+当前可直接复用现有 ComputationService 的 `LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER` workflow；文献 RAG 已通过 `services/literature-rag/` 独立服务接入，垂类预测和 MOBO Alchemist 适配器仍依赖外部服务配置。mock 算法仅用于演示和闭环验收，不代表真实生产模型。
 
 > 操作指南见 [doc/autoresearch-user-guide.md](doc/autoresearch-user-guide.md)，P0 进度与边界见 [doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md)，设计方案见 [doc/research-engine-and-auto-research-design.md](doc/research-engine-and-auto-research-design.md)
 
-### 4. 基础功能
+### 4. Knowledge Base — 文献 RAG + 知识图谱
+
+知识库工作台通过 Poly Agent 后端统一接入 `services/literature-rag/` 独立服务，当前默认 KrF 248 nm 光刻胶文献库。
+
+| 能力 | 说明 |
+|------|------|
+| 文献问答 | 支持知识增强检索问答、流式返回证据和回答；无 LLM 时返回可追溯证据摘要 |
+| 中文检索 | 对 KrF、光刻胶、文献/论文/文档等中英文混合查询做领域词扩展 |
+| 文档清单 | 支持“列出全部文档/文献/论文”类问题，返回已索引文献清单 |
+| 知识图谱 | memory demo 返回论文-片段子图；production 路径接入 Neo4j + 向量索引 |
+| 安全边界 | API 只返回安全元数据，不暴露 API key、object key、storage URI 或 embedding |
+
+> 独立服务说明见 [services/literature-rag/README.md](services/literature-rag/README.md)，产品设计见 [doc/knowledge-base-rag-kg-product-design.md](doc/knowledge-base-rag-kg-product-design.md)
+
+### 5. 基础功能
 
 - **认证体系**：与 AI4MS 门户共享账户体系，HMAC-SHA256 令牌 + 邀请码注册，支持门户 SSO 免登录
 - **产品内助手**：`/assistant/chat` 基于项目实时事实回答入口、算法清单、计算任务和 AutoResearch 审批问题，并返回结构化跳转动作
@@ -69,6 +83,7 @@
 | Alchemist 实验设计与优化 | ✅ MVP 完成 | ~95% |
 | ComputeEngine 计算智能 | ✅ MVP 基本完成 | ~92-95% |
 | ResearchEngine | ✅ P0 已完成 / ⚠️ 有已知测试缺口 | 双通道闭环、前端工作台、追溯和示例流程可用 |
+| Knowledge Base 文献 RAG + 图谱 | ✅ 独立服务已接入 | KrF memory demo 可用；production 接 MongoDB/MinIO/Neo4j |
 | 认证与基础功能 | ✅ 完成 | ~95% |
 | 产品内助手 | ✅ 基础可用 | 基于项目事实的入口引导、审批引导和算法说明 |
 | 真实外部系统接入 (ORCA/HPC/SpecLabOS) | 📋 规划中 | 后续阶段 |
@@ -88,6 +103,7 @@
 | 后端 | Python 3.12 + FastAPI + MongoDB |
 | 前端 | Vue 3 + Element Plus + Vite |
 | 计算引擎 | RDKit, OpenBabel, xTB, ORCA (fixture), BoTorch, scikit-learn |
+| 文献知识库 | FastAPI 独立服务；memory demo；production 支持 MongoDB + MinIO + Neo4j |
 | 认证 | HMAC-SHA256 令牌，与 AI4MS 门户共享账户体系 |
 | 部署 | PM2, Conda |
 
@@ -100,7 +116,7 @@ Poly_Agent/
 │   │   ├── api/v1/                    # API 路由
 │   │   │   └── endpoints/             # health, auth, admin, optimization
 │   │   │                              #   computations, integrations, llm, alchemist
-│   │   │                              #   research_engine, assistant
+│   │   │                              #   research_engine, assistant, knowledge
 │   │   ├── alchemist_core/            # 实验设计核心库（贝叶斯优化/GP/DoE/采集函数）
 │   │   ├── computation_adapters/      # 计算引擎适配器
 │   │   │   ├── base.py                #   adapter 协议
@@ -135,6 +151,7 @@ Poly_Agent/
 │   │   │   ├── DatabaseManagementView.vue # 数据库管理 (管理员)
 │   │   │   ├── DialogueView.vue          # 问答对话
 │   │   │   ├── AlchemistToolView.vue     # Alchemist 工具入口
+│   │   │   ├── KnowledgeBaseView.vue      # 文献 RAG + 知识图谱工作台
 │   │   │   ├── ResearchEngineView.vue    # ResearchEngine 双通道工作台
 │   │   │   ├── alchemist/               # Alchemist 子面板 (变量/实验/建模/采集/可视化)
 │   │   │   └── research-engine/          # ProblemSpec、算法清单、Workflow、ResearchRun、Gate 审批面板
@@ -156,8 +173,11 @@ Poly_Agent/
 │   ├── autoresearch-user-guide.md        # AutoResearch 使用指南
 │   ├── research-engine-and-auto-research-design.md # ResearchEngine 技术方案
 │   ├── research-engine-progress-and-plan.md       # ResearchEngine P0 进度与验收
+│   ├── knowledge-base-rag-kg-product-design.md    # 知识库 RAG + 图谱当前设计
 │   ├── research-engine-plan-00-roadmap.md         # ResearchEngine 实施路线图
 │   └── research-engine-plan-01~06-*.md            # ResearchEngine 各阶段计划
+├── services/
+│   └── literature-rag/                # 独立文献 RAG / GraphRAG 服务
 ├── refer/                             # 参考资料 (AutoResearchClaw, ComputeEngine, SpecLabOS)
 ├── scripts/                           # 部署与运维脚本
 ├── deploy/                            # 部署配置
@@ -201,6 +221,16 @@ bash scripts/stop_poly_agent_services.sh
 - 后端：`http://127.0.0.1:5101`
 
 前端开发服务器会自动把 `/api` 和 `/static` 代理到后端。
+
+知识库功能需要独立 Literature RAG 服务。开发环境可单独启动 memory demo：
+
+```bash
+export LITERATURE_RAG_QUERY_API_KEY=query-demo
+export LITERATURE_RAG_ADMIN_API_KEY=admin-demo
+python -m uvicorn app.main:app --app-dir services/literature-rag --host 127.0.0.1 --port 8200
+```
+
+Poly Agent 后端在本地 `APP_ENV=dev` 时会自动探测 `127.0.0.1:8200`；生产环境请显式配置 `LITERATURE_RAG_BASE_URL` 和 `LITERATURE_RAG_QUERY_API_KEY`。
 
 ### 4. 生产部署
 

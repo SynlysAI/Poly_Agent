@@ -1,0 +1,14 @@
+[
+  {"id":"krf-01","type":"fact","question":"What role does a photoacid generator play in a chemically amplified KrF resist?"},
+  {"id":"krf-02","type":"comparison","question":"How do positive and negative chemically amplified KrF resists differ in image formation?"},
+  {"id":"krf-03","type":"process","question":"How does post-exposure bake temperature affect KrF resist critical dimension?"},
+  {"id":"krf-04","type":"materials","question":"Which polymer resin structures have been used to improve KrF resist resolution?"},
+  {"id":"krf-05","type":"process","question":"What causes insoluble surface residues during KrF resist development?"},
+  {"id":"krf-06","type":"comparison","question":"How do KrF and ArF resist polymer requirements differ?"},
+  {"id":"krf-07","type":"metric","question":"Which factors control dissolution contrast in 248 nm photoresists?"},
+  {"id":"krf-08","type":"materials","question":"What advantages do polymeric sulfonium photoacid generators provide?"},
+  {"id":"krf-09","type":"multi_hop","question":"Which resin and process combinations improve both KrF sensitivity and pattern profile?"},
+  {"id":"krf-10","type":"multi_hop","question":"What trade-offs are reported between etch resistance, resolution and sensitivity?"},
+  {"id":"krf-11","type":"provenance","question":"Which papers report acid-trap approaches for KrF pattern-profile control?"},
+  {"id":"krf-12","type":"unanswerable","question":"What is the clinical dosage of a KrF photoresist polymer?","expected":"insufficient_evidence"}
+]

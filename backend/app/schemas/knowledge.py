@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 KnowledgeQueryMode = Literal["hybrid", "local", "global", "naive", "mix"]
+KnowledgeSystemStatus = Literal["ready", "indexing", "empty", "warning", "unavailable"]
 
 
 class KnowledgeSystem(BaseModel):
@@ -15,8 +16,8 @@ class KnowledgeSystem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    system_id: str
-    name: str
+    system_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
     domain: str
     material_family: str
     description: str
@@ -25,6 +26,14 @@ class KnowledgeSystem(BaseModel):
     document_count: int = 0
     entity_count: int = 0
     relation_count: int = 0
+    data_source_id: str | None = None
+    provider: str | None = None
+    corpus_id: str | None = None
+    status: KnowledgeSystemStatus = "unavailable"
+    capabilities: list[str] = Field(default_factory=list)
+    health_message: str = ""
+    last_indexed_at: str | None = None
+    indexed_document_count: int = 0
 
 
 class KnowledgeSystemListData(BaseModel):
@@ -32,6 +41,7 @@ class KnowledgeSystemListData(BaseModel):
 
     items: list[KnowledgeSystem]
     total: int
+    default_system_id: str | None = None
 
 
 class KnowledgeHit(BaseModel):
@@ -121,7 +131,7 @@ class KnowledgeQueryRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    system_id: str = "ai4s_fluoropolymer"
+    system_id: str = Field(min_length=1, max_length=120)
     question: str = Field(min_length=1, max_length=2000)
     mode: KnowledgeQueryMode = "hybrid"
     top_k: int = Field(default=5, ge=1, le=20)

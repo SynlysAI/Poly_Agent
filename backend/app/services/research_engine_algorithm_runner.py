@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from fastapi import HTTPException
 
 from app.core.config import settings
 from app.infra.computation_repositories import utc_now
@@ -622,19 +623,33 @@ class LiteratureRAGAdapter(BaseMockRunner):
     def run(self, input_snapshot: dict) -> dict:
         query = str(input_snapshot.get("query", "")).strip()
         top_k = int(input_snapshot.get("top_k", 5) or 5)
+        knowledge_service = KnowledgeService()
         payload = KnowledgeQueryRequest(
-            system_id=str(input_snapshot.get("system_id") or "ai4s_fluoropolymer"),
+            system_id=self._resolve_system_id(input_snapshot, knowledge_service),
             question=query,
             mode=input_snapshot.get("mode") or "hybrid",
             top_k=top_k,
             include_graph_context=bool(input_snapshot.get("include_graph_context", True)),
         )
-        output = KnowledgeService().query(payload).model_dump()
+        output = knowledge_service.query(payload).model_dump()
         # Backward-compatible aliases for existing ResearchEngine stage contracts.
         output.setdefault("knowledge_cards", output.get("hits", []))
         output.setdefault("candidate_sources", output.get("citations", []))
         output.setdefault("literature_summary", output.get("answer", ""))
         return output
+
+    @staticmethod
+    def _resolve_system_id(input_snapshot: dict, knowledge_service: KnowledgeService) -> str:
+        explicit = str(input_snapshot.get("system_id") or "").strip()
+        if explicit:
+            return explicit
+        preferred = os.getenv("KNOWLEDGE_DEFAULT_SYSTEM_ID", "").strip()
+        systems = knowledge_service.list_systems().items
+        if preferred and any(item.system_id == preferred for item in systems):
+            return preferred
+        if systems:
+            return systems[0].system_id
+        raise HTTPException(status_code=503, detail="Literature RAG 服务未配置或未发现可用知识库体系")
 
 
 class KnowledgeGraphAdapter(BaseMockRunner):
@@ -643,10 +658,11 @@ class KnowledgeGraphAdapter(BaseMockRunner):
     algorithm_id = "knowledge_graph_adapter"
 
     def run(self, input_snapshot: dict) -> dict:
-        system_id = str(input_snapshot.get("system_id") or "ai4s_fluoropolymer")
+        knowledge_service = KnowledgeService()
+        system_id = LiteratureRAGAdapter._resolve_system_id(input_snapshot, knowledge_service)
         query = str(input_snapshot.get("query") or "").strip() or None
         limit = int(input_snapshot.get("limit", 30) or 30)
-        return KnowledgeService().get_subgraph(system_id, query=query, limit=limit).model_dump()
+        return knowledge_service.get_subgraph(system_id, query=query, limit=limit).model_dump()
 
 
 # =============================================================================

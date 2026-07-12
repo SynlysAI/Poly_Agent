@@ -402,7 +402,7 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             task_scope=["KNOWLEDGE_RETRIEVAL"],
             input_schema=AlgorithmIOSchema(
                 fields={
-                    "system_id": "string - 知识库体系 ID，默认 ai4s_fluoropolymer",
+                    "system_id": "string - 知识库体系 ID；由 /knowledge-bases/systems 动态加载",
                     "query": "string - RAG 检索问题或关键词（必填）",
                     "material_family": "string - 材料体系",
                     "target_properties": "list[string] - 目标性质列表",
@@ -413,7 +413,6 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                 required=["query"],
                 constraints={"top_k": {"min": 1, "max": 20}},
                 field_defaults={
-                    "system_id": "ai4s_fluoropolymer",
                     "material_family": "fluoropolymer",
                     "target_properties": [],
                     "mode": "hybrid",
@@ -430,7 +429,6 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
                     "include_graph_context": {"widget": "checkbox"},
                 },
                 field_options={
-                    "system_id": ["ai4s_fluoropolymer"],
                     "material_family": ["fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"],
                     "target_properties": ["dielectric_constant", "thermal_stability", "tensile_strength", "conductivity", "elastic_modulus", "hydrophobicity", "glass_transition_temperature"],
                     "mode": ["hybrid", "local", "global", "naive", "mix"],
@@ -438,7 +436,7 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             ),
             output_schema=AlgorithmIOSchema(
                 fields={
-                    "configured": "bool - 是否已配置 LightRAG 或可用 demo 知识库",
+                    "configured": "bool - 是否已配置独立 Literature RAG 服务",
                     "hits": "list[object] - 命中文献片段/知识卡片",
                     "citations": "list[object] - 引用来源",
                     "graph_context": "object - 查询相关图谱上下文",
@@ -449,12 +447,12 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             ),
             call_method="REST",
             trigger_modes=["human_workflow", "autoresearch"],
-            runtime_dependency="PolyAgent KnowledgeService；可选 KNOWLEDGE_RAG_BASE_URL 指向 LightRAG",
+            runtime_dependency="PolyAgent KnowledgeService；LITERATURE_RAG_BASE_URL 指向独立文献 RAG 服务",
             version="1.1.0",
             validation_metric={"retrieval": "knowledge_service_contract"},
             owner="research_engine_team",
             status="active",
-            description="通过 PolyAgent 知识库服务查询 LightRAG；未配置时返回标注为 demo_source 的 AI4S demo 知识库结果。",
+            description="通过 PolyAgent 知识库服务查询独立文献 RAG；未配置时明确返回服务不可用。",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="knowledge_graph_adapter",
@@ -465,19 +463,19 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             task_scope=["KNOWLEDGE_RETRIEVAL"],
             input_schema=AlgorithmIOSchema(
                 fields={
-                    "system_id": "string - 知识库体系 ID，默认 ai4s_fluoropolymer",
+                    "system_id": "string - 知识库体系 ID；由 /knowledge-bases/systems 动态加载",
                     "query": "string - 子图检索关键词（可选）",
                     "limit": "int - 最大节点数（默认 30）",
                 },
                 required=[],
                 constraints={"limit": {"min": 1, "max": 100}},
-                field_defaults={"system_id": "ai4s_fluoropolymer", "query": "", "limit": 30},
+                field_defaults={"query": "", "limit": 30},
                 ui_hints={
                     "system_id": {"widget": "select"},
                     "query": {"widget": "text", "placeholder": "fluoropolymer dielectric"},
                     "limit": {"widget": "number"},
                 },
-                field_options={"system_id": ["ai4s_fluoropolymer"]},
+                field_options={},
             ),
             output_schema=AlgorithmIOSchema(
                 fields={
@@ -491,7 +489,7 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             ),
             call_method="REST",
             trigger_modes=["human_workflow", "autoresearch"],
-            runtime_dependency="PolyAgent KnowledgeService graph API；后续可接 Neo4j/LightRAG graph routes",
+            runtime_dependency="PolyAgent KnowledgeService graph API；独立服务使用 Neo4j 图谱",
             version="1.0.0",
             validation_metric={"graph_contract": "nodes_edges_stats"},
             owner="research_engine_team",

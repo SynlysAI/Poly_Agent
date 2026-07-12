@@ -74,7 +74,10 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         self.service.seed_default_algorithms()
 
     def test_literature_rag_adapter_rejects_unconfigured_lightrag(self):
+        old_app_env = os.environ.get("APP_ENV")
         old_base_url = os.environ.pop("KNOWLEDGE_RAG_BASE_URL", None)
+        old_literature_base_url = os.environ.pop("LITERATURE_RAG_BASE_URL", None)
+        os.environ["APP_ENV"] = "production"
         try:
             with self.assertRaises(HTTPException) as ctx:
                 self.service.create_algorithm_run(
@@ -87,6 +90,12 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         finally:
             if old_base_url is not None:
                 os.environ["KNOWLEDGE_RAG_BASE_URL"] = old_base_url
+            if old_literature_base_url is not None:
+                os.environ["LITERATURE_RAG_BASE_URL"] = old_literature_base_url
+            if old_app_env is None:
+                os.environ.pop("APP_ENV", None)
+            else:
+                os.environ["APP_ENV"] = old_app_env
         self.assertEqual(ctx.exception.status_code, 503)
 
     def test_knowledge_graph_adapter_returns_subgraph(self):
@@ -96,7 +105,7 @@ class ResearchEngineAdapterTest(ComputationTestCase):
             edges=[],
             stats=KnowledgeGraphStats(entity_count=1, relation_count=0, document_count=1),
             configured=True,
-            provenance={"provider": "lightrag"},
+            provenance={"provider": "literature-rag"},
         )
         with patch.object(KnowledgeService, "get_subgraph", return_value=graph):
             run = self.service.create_algorithm_run(
@@ -115,8 +124,8 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         self.assertLessEqual(len(run.output_summary["nodes"]), 4)
         self.assertIn("stats", run.output_summary)
 
-    def test_literature_rag_adapter_uses_knowledge_service_lightrag_path(self):
-        os.environ["KNOWLEDGE_RAG_BASE_URL"] = "http://lightrag.test"
+    def test_literature_rag_adapter_uses_standalone_service_contract(self):
+        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
 
         class FakeResponse:
             def __init__(self, data):
@@ -142,10 +151,25 @@ class ResearchEngineAdapterTest(ComputationTestCase):
 
             def post(self, path, json=None):
                 self.calls.append((path, json))
-                return FakeResponse({
-                    "response": "LightRAG adapter answer",
-                    "references": [{"reference_id": "ref_1", "content": "fluoropolymer dielectric", "file_path": "demo"}],
-                })
+                return FakeResponse({"data": {
+                    "corpus_id": "krf_photoresist",
+                    "question": json["question"],
+                    "mode": json["mode"],
+                    "answer": "Literature RAG adapter answer",
+                    "hits": [{"source_id": "ref_1", "title": "KrF paper", "snippet": "PAG evidence",
+                              "doi": "10.1000/krf", "url": "https://doi.org/10.1000/krf", "score": 0.9}],
+                    "citations": [{"source_id": "ref_1", "title": "KrF paper", "doi": "10.1000/krf",
+                                   "url": "https://doi.org/10.1000/krf", "chunk_id": "chunk_00001"}],
+                    "graph_context": None,
+                    "configured": True,
+                    "message": "ok",
+                }})
+
+            def get(self, path, params=None):
+                return FakeResponse({"data": {"items": [{
+                    "corpus_id": "krf_photoresist", "name": "KrF", "domain": "polymer_lithography",
+                    "material_family": "krf_photoresist", "description": "KrF corpus",
+                }], "total": 1}})
 
         try:
             with patch("app.services.knowledge_service.httpx.Client", FakeClient):
@@ -162,11 +186,11 @@ class ResearchEngineAdapterTest(ComputationTestCase):
                     actor_user_id="tester",
                 )
         finally:
-            os.environ.pop("KNOWLEDGE_RAG_BASE_URL", None)
+            os.environ.pop("LITERATURE_RAG_BASE_URL", None)
 
         self.assertEqual(run.status, "completed")
         self.assertTrue(run.output_summary["configured"])
-        self.assertEqual(run.output_summary["answer"], "LightRAG adapter answer")
+        self.assertEqual(run.output_summary["answer"], "Literature RAG adapter answer")
 
     def test_algorithm_registry_contains_knowledge_graph_adapter(self):
         data = self.service.list_algorithms(algorithm_family="knowledge", page=1, page_size=20)
@@ -191,6 +215,7 @@ class ResearchEngineAdapterTest(ComputationTestCase):
                 AlgorithmRunCreate(
                     algorithm_id="literature_rag_adapter",
                     input_snapshot={
+                        "system_id": "ai4s_fluoropolymer",
                         "query": "fluoropolymer dielectric",
                         "material_family": "fluoropolymer",
                         "top_k": 3,

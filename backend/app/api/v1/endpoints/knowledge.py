@@ -29,21 +29,21 @@ def list_knowledge_systems() -> ApiResponse[KnowledgeSystemListData]:
 
 @router.get("/health", response_model=ApiResponse[KnowledgeHealthData])
 def get_knowledge_health() -> ApiResponse[KnowledgeHealthData]:
-    """Return LightRAG readiness and demo availability."""
+    """Return standalone literature RAG readiness."""
     return ApiResponse(code=0, message="ok", data=service.health())
 
 
 @router.post("/query", response_model=ApiResponse[KnowledgeQueryResponse])
 def query_knowledge_base(payload: KnowledgeQueryRequest) -> ApiResponse[KnowledgeQueryResponse]:
-    """Run a RAG query through LightRAG or the AI4S demo knowledge base."""
+    """Run a query through the standalone literature RAG service."""
     return ApiResponse(code=0, message="ok", data=service.query(payload))
 
 
 @router.post("/query/stream")
 def stream_knowledge_query(payload: KnowledgeQueryRequest) -> StreamingResponse:
-    """Stream observable retrieval stages and LightRAG answer chunks as NDJSON."""
+    """Stream observable retrieval stages and answer chunks as NDJSON."""
     if not service._base_url():
-        raise HTTPException(status_code=503, detail="LightRAG 未配置")
+        raise HTTPException(status_code=503, detail="Literature RAG 服务未配置")
     return StreamingResponse(service.stream_query(payload), media_type="application/x-ndjson")
 
 

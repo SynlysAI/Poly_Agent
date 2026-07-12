@@ -17,6 +17,7 @@ import {
   getKnowledgeSubgraph,
   generateKnowledgeSuggestions,
   listKnowledgeSystems,
+  queryKnowledgeBase,
   streamKnowledgeQuery,
 } from '../api/polyAgentApi'
 
@@ -26,7 +27,7 @@ const router = useRouter()
 const systems = ref([])
 const health = ref(null)
 const activeModule = ref(route.query.module === 'graph' ? 'graph' : 'rag')
-const selectedSystemId = ref('ai4s_fluoropolymer')
+const selectedSystemId = ref(typeof route.query.system === 'string' ? route.query.system : '')
 const loadingSystems = ref(false)
 const queryLoading = ref(false)
 const graphLoading = ref(false)
@@ -50,23 +51,50 @@ const graphForm = reactive({
 })
 
 const selectedSystem = computed(() =>
-  systems.value.find((item) => item.system_id === selectedSystemId.value) || systems.value[0] || null,
+  systems.value.find((item) => item.system_id === selectedSystemId.value) || null,
 )
+const hasSystems = computed(() => systems.value.length > 0)
 
 const graphNodes = computed(() => graph.value?.nodes || [])
 const graphEdges = computed(() => graph.value?.edges || [])
 const graphStats = computed(() => graph.value?.stats || { entity_count: 0, relation_count: 0, document_count: 0 })
+const graphSummaryStats = computed(() => graph.value?.stats || {
+  entity_count: selectedSystem.value?.entity_count || 0,
+  relation_count: selectedSystem.value?.relation_count || 0,
+  document_count: selectedSystem.value?.indexed_document_count || selectedSystem.value?.document_count || 0,
+})
+const graphSummaryScope = computed(() => graph.value ? '当前子图' : '体系总量')
 const selectedNode = computed(() => graphNodes.value.find((item) => item.id === selectedNodeId.value) || graphNodes.value[0] || null)
 const selectedNodeEdges = computed(() =>
   graphEdges.value.filter((item) => item.source === selectedNode.value?.id || item.target === selectedNode.value?.id),
 )
 const answerBlocks = computed(() => parseMarkdownBlocks(answer.value?.answer || ''))
 const systemMetricItems = computed(() => [
-  { label: '文档', value: selectedSystem.value?.document_count || graphStats.value.document_count || 0 },
+  { label: '文档', value: selectedSystem.value?.indexed_document_count || selectedSystem.value?.document_count || graphStats.value.document_count || 0 },
   { label: '实体', value: selectedSystem.value?.entity_count || graphStats.value.entity_count || 0 },
   { label: '关系', value: selectedSystem.value?.relation_count || graphStats.value.relation_count || 0 },
-  { label: '运行模式', value: health.value?.configured ? 'LightRAG' : '不可用' },
+  { label: '索引状态', value: systemStatusLabel(selectedSystem.value?.status || health.value?.status) },
 ])
+const currentStatus = computed(() => selectedSystem.value?.status || health.value?.status || 'unavailable')
+const currentStatusMessage = computed(() =>
+  normalizeKnowledgeMessage(selectedSystem.value?.health_message || health.value?.message || queryUnavailableMessage.value),
+)
+const canRunQuery = computed(() => hasCapability(selectedSystem.value, 'query') && selectedSystem.value?.status === 'ready')
+const canStreamQuery = computed(() => canRunQuery.value && hasCapability(selectedSystem.value, 'streaming'))
+const canLoadGraph = computed(() => hasCapability(selectedSystem.value, 'graph') && selectedSystem.value?.status === 'ready')
+const canUseGraphContext = computed(() => canRunQuery.value && canLoadGraph.value)
+const canLoadSuggestions = computed(() => hasCapability(selectedSystem.value, 'suggestions') && selectedSystem.value?.status === 'ready')
+const queryUnavailableMessage = computed(() => {
+  if (loadingSystems.value) return '正在检查知识库服务。'
+  if (!health.value?.configured && !hasSystems.value) return '知识库服务未配置。'
+  if (!hasSystems.value) return '未发现可用知识库体系。'
+  if (!selectedSystem.value) return '请选择知识库体系。'
+  if (selectedSystem.value.status === 'indexing') return '当前知识库体系正在索引，完成后可检索。'
+  if (selectedSystem.value.status === 'empty') return '当前知识库体系尚未完成索引。'
+  if (selectedSystem.value.status !== 'ready') return '当前知识库体系暂不可用。'
+  if (!hasCapability(selectedSystem.value, 'query')) return '当前知识库体系未提供问答能力。'
+  return '选择知识体系并输入问题后开始检索。'
+})
 const graphTypeCounts = computed(() => {
   const counts = {}
   graphNodes.value.forEach((node) => {
@@ -75,40 +103,27 @@ const graphTypeCounts = computed(() => {
   return Object.entries(counts).map(([type, count]) => ({ type, count }))
 })
 const topCitations = computed(() => answer.value?.citations?.filter((item) => citationUrl(item)).slice(0, 8) || [])
-
-const nodePositions = computed(() => {
-  const nodes = graphNodes.value
-  const positions = {}
-  if (!nodes.length) return positions
-  const lanes = [
-    { x: 13, types: ['Material', 'Polymer', 'Monomer'] },
-    { x: 35, types: ['Strategy', 'Method'] },
-    { x: 58, types: ['Property', 'Application'] },
-    { x: 82, types: ['Paper', 'Dataset'] },
-  ]
-  const laneFor = (node) => lanes.find((lane) => lane.types.includes(node.type)) || lanes[lanes.length - 1]
-  lanes.forEach((lane) => {
-    const laneNodes = nodes.filter((node) => laneFor(node) === lane)
-    const step = laneNodes.length > 1 ? 76 / (laneNodes.length - 1) : 0
-    laneNodes.forEach((node, index) => {
-      positions[node.id] = {
-        x: lane.x,
-        y: laneNodes.length === 1 ? 50 : 12 + index * step,
-      }
-    })
-  })
-  return positions
+const answerGraphContext = computed(() => answer.value?.graph_context || null)
+const canOpenAnswerGraph = computed(() => (answerGraphContext.value?.nodes || []).length > 0)
+const graphEmptyMessage = computed(() => {
+  if (!canLoadGraph.value) return '该知识库体系未提供可用图谱。'
+  if (!graph.value) return '尚未加载子图，输入关键词或使用默认关键词加载。'
+  return '当前关键词未匹配到图谱节点。'
 })
-
-const visibleEdges = computed(() =>
-  graphEdges.value
-    .map((edge) => ({
-      ...edge,
-      sourcePos: nodePositions.value[edge.source],
-      targetPos: nodePositions.value[edge.target],
-    }))
-    .filter((edge) => edge.sourcePos && edge.targetPos),
-)
+const graphLanes = computed(() => {
+  const lanes = [
+    { key: 'materials', label: 'Materials', types: ['Material', 'Polymer', 'Resin', 'Monomer', 'PhotoacidGenerator', 'Additive'], nodes: [] },
+    { key: 'strategies', label: 'Strategies', types: ['Strategy', 'Method', 'ProcessCondition'], nodes: [] },
+    { key: 'properties', label: 'Properties', types: ['Property', 'LithographyMetric', 'Application'], nodes: [] },
+    { key: 'papers', label: 'Papers & Chunks', types: ['Paper', 'Dataset', 'Chunk'], nodes: [] },
+  ]
+  graphNodes.value.forEach((node) => {
+    const lane = lanes.find((item) => item.types.includes(node.type)) || lanes[lanes.length - 1]
+    lane.nodes.push(node)
+  })
+  return lanes
+})
+const selectedNodeSourceUrl = computed(() => selectedNode.value?.properties?.source_url || citationUrl(selectedNode.value?.properties || {}))
 
 function parseMarkdownLinks(text) {
   const segments = []
@@ -182,12 +197,39 @@ function shortSource(hit) {
   return parts.join(' · ') || hit.source_id
 }
 
+function sourceLevel(hit) {
+  const sourceKind = hit?.metadata?.source_kind
+  const labels = {
+    authorized_upload: '授权全文',
+    publisher_oa: '出版社 OA',
+    openalex_oa: 'OpenAlex OA',
+    unpaywall: 'Unpaywall OA',
+    pmc: 'PMC',
+    europe_pmc: 'Europe PMC',
+  }
+  return labels[sourceKind] || '可追溯来源'
+}
+
 function linkSegments(segments) {
   return segments || []
 }
 
+function normalizeKnowledgeMessage(message) {
+  return String(message || '')
+    .replace(/LightRAG\s*服务/gi, '知识库服务')
+    .replace(/LightRAG/gi, '知识库服务')
+    .replace(/Literature RAG\s*服务/gi, '知识库服务')
+    .replace(/Literature RAG/gi, '知识库服务')
+    .replace(/文献 RAG\s*服务/g, '知识库服务')
+    .replace(/文献 RAG/g, '知识库服务')
+    .replace(/知识库服务\s+/g, '知识库服务')
+}
+
 watch(activeModule, (module) => {
-  router.replace({ query: { ...route.query, module } })
+  updateRouteQuery({ module })
+  if (module === 'graph') {
+    ensureGraphLoaded()
+  }
 })
 
 watch(
@@ -200,16 +242,81 @@ watch(
   },
 )
 
+watch(
+  () => route.query.system,
+  (systemId) => {
+    const nextSystemId = typeof systemId === 'string' ? systemId : ''
+    if (nextSystemId && systems.value.some((item) => item.system_id === nextSystemId) && nextSystemId !== selectedSystemId.value) {
+      selectedSystemId.value = nextSystemId
+      resetWorkspace()
+    }
+  },
+)
+
+watch(
+  canUseGraphContext,
+  (enabled) => {
+    queryForm.include_graph_context = Boolean(enabled)
+  },
+  { immediate: true },
+)
+
+watch(canLoadGraph, (enabled) => {
+  if (enabled && activeModule.value === 'graph') {
+    ensureGraphLoaded()
+  }
+})
+
 function statusTagType(status) {
   if (status === 'ready') return 'success'
-  if (status === 'warning') return 'warning'
+  if (['warning', 'indexing', 'empty'].includes(status)) return 'warning'
   return 'danger'
 }
 
-function healthLabel() {
-  if (!health.value) return '状态检查中'
-  if (health.value.configured) return 'LightRAG 已连接'
-  return '真实知识源不可用'
+function systemStatusLabel(status) {
+  const labels = {
+    ready: '已连接',
+    indexing: '索引中',
+    empty: '未索引',
+    warning: '需检查',
+    unavailable: '不可用',
+  }
+  return labels[status] || '未知'
+}
+
+function hasCapability(system, capability) {
+  return Array.isArray(system?.capabilities) && system.capabilities.includes(capability)
+}
+
+function updateRouteQuery(patch) {
+  const nextQuery = { ...route.query, ...patch }
+  Object.keys(nextQuery).forEach((key) => {
+    if (!nextQuery[key]) delete nextQuery[key]
+  })
+  router.replace({ query: nextQuery })
+}
+
+function selectInitialSystem(systemData) {
+  const items = systemData.items || []
+  const routeSystemId = typeof route.query.system === 'string' ? route.query.system : ''
+  const defaultSystemId = systemData.default_system_id || ''
+  const candidates = [
+    routeSystemId,
+    defaultSystemId,
+    items.find((item) => item.status === 'ready')?.system_id,
+    items[0]?.system_id,
+  ].filter(Boolean)
+  const nextSystemId = candidates.find((systemId) => items.some((item) => item.system_id === systemId)) || ''
+  selectedSystemId.value = nextSystemId
+  updateRouteQuery({ system: nextSystemId || undefined })
+}
+
+function handleSystemChange() {
+  resetWorkspace()
+  updateRouteQuery({ system: selectedSystemId.value || undefined })
+  if (activeModule.value === 'graph') {
+    ensureGraphLoaded()
+  }
 }
 
 function nodeTypeTag(type) {
@@ -236,56 +343,95 @@ async function loadBootstrap() {
       getKnowledgeHealth().catch(() => null),
     ])
     systems.value = systemData.items || []
-    if (systems.value.length && !systems.value.some((item) => item.system_id === selectedSystemId.value)) {
-      selectedSystemId.value = systems.value[0].system_id
-    }
     health.value = healthData
+    selectInitialSystem(systemData)
+    if (activeModule.value === 'graph') {
+      await ensureGraphLoaded()
+    }
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    ElMessage.error(normalizeKnowledgeMessage(getApiErrorMessage(error)))
   } finally {
     loadingSystems.value = false
   }
 }
 
+function defaultGraphQuery() {
+  const tags = selectedSystem.value?.tags || []
+  const krfTag = tags.find((tag) => /krf/i.test(tag))
+  return krfTag || tags[0] || selectedSystem.value?.material_family || selectedSystem.value?.name || ''
+}
+
+async function ensureGraphLoaded() {
+  if (!canLoadGraph.value || graph.value || graphLoading.value) return
+  if (!graphForm.query.trim()) {
+    graphForm.query = defaultGraphQuery()
+  }
+  if (graphForm.query.trim()) {
+    await loadGraph({ silent: true })
+  }
+}
+
 async function runQuery() {
-  if (!selectedSystemId.value || !queryForm.question.trim()) return
+  if (!canRunQuery.value || !selectedSystemId.value || !queryForm.question.trim()) return
   queryLoading.value = true
-  answer.value = { answer: '', hits: [], citations: [], configured: true, message: 'LightRAG 流式检索' }
+  answer.value = { answer: '', hits: [], citations: [], configured: true, message: canStreamQuery.value ? '知识库流式检索' : '知识库检索' }
   graph.value = null
   queryTrace.value = []
+  const payload = {
+    system_id: selectedSystemId.value,
+    question: queryForm.question,
+    mode: queryForm.mode,
+    top_k: queryForm.top_k,
+    include_graph_context: canUseGraphContext.value && queryForm.include_graph_context,
+  }
   try {
-    await streamKnowledgeQuery({
-      system_id: selectedSystemId.value,
-      question: queryForm.question,
-      mode: queryForm.mode,
-      top_k: queryForm.top_k,
-      include_graph_context: queryForm.include_graph_context,
-    }, (event) => {
-      if (event.label) {
-        queryTrace.value.push({ event: event.event, label: event.label, elapsed_ms: event.elapsed_ms })
+    if (canStreamQuery.value) {
+      await streamKnowledgeQuery(payload, (event) => {
+        if (event.label) {
+          queryTrace.value.push({ event: event.event, label: event.label, elapsed_ms: event.elapsed_ms })
+        }
+        if (event.event === 'evidence') {
+          answer.value.hits = event.hits || []
+          answer.value.citations = event.citations || []
+          answer.value.graph_context = event.graph_context || null
+          graph.value = event.graph_context || null
+          selectedNodeId.value = graph.value?.nodes?.[0]?.id || ''
+        }
+        if (event.event === 'answer_delta') {
+          answer.value.answer += event.content || ''
+        }
+        if (event.event === 'failed') {
+          throw new Error(normalizeKnowledgeMessage(event.message || '知识库检索失败'))
+        }
+      })
+    } else {
+      const data = await queryKnowledgeBase(payload)
+      answer.value = {
+        ...data,
+        hits: data?.hits || [],
+        citations: data?.citations || [],
+        answer: data?.answer || '',
+        configured: data?.configured ?? true,
+        message: normalizeKnowledgeMessage(data?.message || '知识库检索完成'),
       }
-      if (event.event === 'evidence') {
-        answer.value.hits = event.hits || []
-        answer.value.citations = event.citations || []
-      }
-      if (event.event === 'answer_delta') {
-        answer.value.answer += event.content || ''
-      }
-      if (event.event === 'failed') {
-        throw new Error(event.message || 'LightRAG 检索失败')
-      }
-    })
+      graph.value = data?.graph_context || null
+      selectedNodeId.value = graph.value?.nodes?.[0]?.id || ''
+    }
   } catch (error) {
     answer.value = null
-    ElMessage.error(getApiErrorMessage(error))
+    ElMessage.error(normalizeKnowledgeMessage(getApiErrorMessage(error)))
   } finally {
     queryLoading.value = false
   }
 }
 
-async function loadGraph() {
+async function loadGraph({ silent = false } = {}) {
+  if (!canLoadGraph.value) {
+    if (!silent) ElMessage.warning('当前知识库体系未提供可用图谱能力')
+    return
+  }
   if (!selectedSystemId.value || !graphForm.query.trim()) {
-    ElMessage.warning('请输入实体或关键词后加载真实子图')
+    if (!silent) ElMessage.warning('请输入实体或关键词后加载真实子图')
     return
   }
   graphLoading.value = true
@@ -293,7 +439,7 @@ async function loadGraph() {
     graph.value = await getKnowledgeSubgraph(selectedSystemId.value, { query: graphForm.query, limit: graphForm.limit })
     selectedNodeId.value = graph.value.nodes?.[0]?.id || ''
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    ElMessage.error(normalizeKnowledgeMessage(getApiErrorMessage(error)))
   } finally {
     graphLoading.value = false
   }
@@ -307,20 +453,28 @@ function resetWorkspace() {
   suggestedQuestions.value = []
 }
 
+function openAnswerGraphContext() {
+  if (!canOpenAnswerGraph.value) return
+  graph.value = answerGraphContext.value
+  selectedNodeId.value = graph.value.nodes?.[0]?.id || ''
+  graphForm.query = queryForm.question
+  activeModule.value = 'graph'
+}
+
 async function refreshAll() {
   resetWorkspace()
   await loadBootstrap()
 }
 
 async function loadSuggestedQuestions() {
-  if (!selectedSystemId.value) return
+  if (!canLoadSuggestions.value || !selectedSystemId.value) return
   suggestionsLoading.value = true
   try {
     const data = await generateKnowledgeSuggestions(selectedSystemId.value)
     suggestedQuestions.value = data.questions || []
   } catch (error) {
     suggestedQuestions.value = []
-    ElMessage.error(getApiErrorMessage(error))
+    ElMessage.error(normalizeKnowledgeMessage(getApiErrorMessage(error)))
   } finally {
     suggestionsLoading.value = false
   }
@@ -342,31 +496,53 @@ onMounted(loadBootstrap)
           <p class="panel-subtitle">在同一工作区完成知识检索、证据核查和图谱关系浏览。</p>
         </div>
         <div class="header-actions">
-          <el-select v-model="selectedSystemId" class="system-select" @change="resetWorkspace">
+          <el-select
+            v-model="selectedSystemId"
+            class="system-select"
+            :disabled="!hasSystems"
+            placeholder="暂无可用知识库体系"
+            @change="handleSystemChange"
+          >
             <el-option
               v-for="system in systems"
               :key="system.system_id"
               :label="system.name"
               :value="system.system_id"
-            />
+            >
+              <div class="system-option">
+                <div>
+                  <strong>{{ system.name }}</strong>
+                  <small>{{ system.provider || 'unknown' }}:{{ system.corpus_id || system.system_id }} · {{ system.indexed_document_count || system.document_count || 0 }} docs</small>
+                </div>
+                <el-tag size="small" :type="statusTagType(system.status)" effect="plain">{{ systemStatusLabel(system.status) }}</el-tag>
+              </div>
+            </el-option>
           </el-select>
-          <el-tag v-if="health" :type="statusTagType(health.status)" effect="plain">
-            {{ healthLabel() }}
+          <el-tag v-if="health || selectedSystem" :type="statusTagType(currentStatus)" effect="plain">
+            {{ systemStatusLabel(currentStatus) }}
           </el-tag>
+          <span class="status-message">{{ currentStatusMessage }}</span>
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
         </div>
       </div>
 
       <div class="panel-body knowledge-body">
         <div class="system-overview">
-          <div class="system-meta">
+          <div v-if="selectedSystem" class="system-meta">
             <el-icon><Collection /></el-icon>
             <div>
-              <strong>{{ selectedSystem?.name || 'AI4S 氟聚合物材料体系' }}</strong>
-              <small>{{ selectedSystem?.description || '氟聚合物介电、热稳定与 AI4S 设计知识库' }}</small>
+              <strong>{{ selectedSystem.name }}</strong>
+              <small>{{ selectedSystem.description || selectedSystem.data_source_id || selectedSystem.system_id }}</small>
             </div>
           </div>
-          <div class="system-metrics">
+          <div v-else class="system-meta">
+            <el-icon><Collection /></el-icon>
+            <div>
+              <strong>未发现知识库体系</strong>
+              <small>{{ currentStatusMessage }}</small>
+            </div>
+          </div>
+          <div v-if="selectedSystem" class="system-metrics">
             <div v-for="item in systemMetricItems" :key="item.label" class="system-metric">
               <span>{{ item.label }}</span>
               <strong>{{ item.value }}</strong>
@@ -395,7 +571,7 @@ onMounted(loadBootstrap)
             </div>
             <el-form label-position="top">
               <el-form-item label="问题">
-                <el-input v-model="queryForm.question" type="textarea" :rows="7" maxlength="2000" show-word-limit />
+                <el-input v-model="queryForm.question" type="textarea" :rows="7" maxlength="2000" show-word-limit :disabled="!canRunQuery" />
               </el-form-item>
               <div class="control-grid">
                 <el-form-item label="模式">
@@ -403,6 +579,7 @@ onMounted(loadBootstrap)
                     v-model="queryForm.mode"
                     class="knowledge-mode-segmented"
                     block
+                    :disabled="!canRunQuery"
                     :options="[
                       { label: 'Hybrid', value: 'hybrid' },
                       { label: 'Local', value: 'local' },
@@ -416,18 +593,18 @@ onMounted(loadBootstrap)
                   </small>
                 </el-form-item>
                 <el-form-item label="Top K">
-                  <el-input-number v-model="queryForm.top_k" :min="1" :max="20" />
+                  <el-input-number v-model="queryForm.top_k" :min="1" :max="20" :disabled="!canRunQuery" />
                   <small class="control-help">重排后最多送入回答阶段的证据条数，不等于最终引用数。</small>
                 </el-form-item>
               </div>
-              <el-checkbox v-model="queryForm.include_graph_context">返回图谱上下文</el-checkbox>
+              <el-checkbox v-model="queryForm.include_graph_context" :disabled="!canUseGraphContext">返回图谱上下文</el-checkbox>
               <div class="query-actions">
-                <el-button type="primary" :loading="queryLoading" :icon="Search" @click="runQuery">检索问答</el-button>
+                <el-button type="primary" :loading="queryLoading" :icon="Search" :disabled="!canRunQuery || !queryForm.question.trim()" @click="runQuery">检索问答</el-button>
               </div>
             </el-form>
             <div class="query-hints">
               <span>AI 建议问题</span>
-              <el-button size="small" :loading="suggestionsLoading" @click="loadSuggestedQuestions">生成建议</el-button>
+              <el-button size="small" :loading="suggestionsLoading" :disabled="!canLoadSuggestions" @click="loadSuggestedQuestions">生成建议</el-button>
               <button v-for="question in suggestedQuestions" :key="question" type="button" @click="queryForm.question = question">{{ question }}</button>
             </div>
           </section>
@@ -449,7 +626,17 @@ onMounted(loadBootstrap)
                 <article class="semantic-answer">
                   <div class="section-title-row answer-title-row">
                     <h4>综合回答</h4>
-                    <span>{{ queryForm.mode }} · Top {{ queryForm.top_k }}</span>
+                    <div class="answer-title-actions">
+                      <el-button
+                        v-if="canOpenAnswerGraph"
+                        size="small"
+                        :icon="Connection"
+                        @click="openAnswerGraphContext"
+                      >
+                        查看图谱上下文
+                      </el-button>
+                      <span>{{ queryForm.mode }} · Top {{ queryForm.top_k }}</span>
+                    </div>
                   </div>
                   <template v-for="(block, index) in answerBlocks" :key="`${block.type}-${index}`">
                     <h4 v-if="block.type === 'heading'">{{ block.text }}</h4>
@@ -485,6 +672,7 @@ onMounted(loadBootstrap)
                   >
                     <strong>{{ citation.title }}</strong>
                     <small>{{ citationMeta(citation) || citation.doi }}</small>
+                    <span class="source-link-label">打开原文/PDF</span>
                   </a>
                   <span v-if="!topCitations.length" class="muted-text">本次回答没有可用论文链接。</span>
                 </aside>
@@ -502,15 +690,15 @@ onMounted(loadBootstrap)
                   </div>
                   <p>{{ hit.snippet }}</p>
                   <div class="hit-footer">
-                    <small>{{ shortSource(hit) }}</small>
-                    <a v-if="citationUrl(hit)" :href="citationUrl(hit)" target="_blank" rel="noreferrer">DOI / Source</a>
+                    <small>{{ shortSource(hit) }} · {{ sourceLevel(hit) }}</small>
+                    <a v-if="citationUrl(hit)" :href="citationUrl(hit)" target="_blank" rel="noreferrer">打开原文/PDF</a>
                   </div>
                 </article>
               </div>
             </div>
             <div v-else class="empty-state">
               <el-icon><DataAnalysis /></el-icon>
-              <span>选择知识体系并输入问题后开始检索。</span>
+              <span>{{ queryUnavailableMessage }}</span>
             </div>
           </section>
         </div>
@@ -522,26 +710,26 @@ onMounted(loadBootstrap)
               <strong>子图检索</strong>
             </div>
             <div class="graph-controls">
-              <el-input v-model="graphForm.query" placeholder="检索实体、论文、性质或方法" clearable @keyup.enter="loadGraph">
+              <el-input v-model="graphForm.query" placeholder="检索实体、论文、性质或方法" clearable :disabled="!canLoadGraph" @keyup.enter="loadGraph">
                 <template #prefix><el-icon><Search /></el-icon></template>
               </el-input>
-              <el-input-number v-model="graphForm.limit" :min="1" :max="100" />
-              <el-button type="primary" :loading="graphLoading" :disabled="!graphForm.query.trim()" @click="loadGraph">加载子图</el-button>
+              <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canLoadGraph" />
+              <el-button type="primary" :loading="graphLoading" :disabled="!canLoadGraph || !graphForm.query.trim()" @click="loadGraph">加载子图</el-button>
             </div>
           </section>
 
           <section class="graph-summary">
             <div>
-              <span>Entities</span>
-              <strong>{{ graphStats.entity_count }}</strong>
+              <span>Entities · {{ graphSummaryScope }}</span>
+              <strong>{{ graphSummaryStats.entity_count }}</strong>
             </div>
             <div>
-              <span>Relations</span>
-              <strong>{{ graphStats.relation_count }}</strong>
+              <span>Relations · {{ graphSummaryScope }}</span>
+              <strong>{{ graphSummaryStats.relation_count }}</strong>
             </div>
             <div>
-              <span>Documents</span>
-              <strong>{{ graphStats.document_count }}</strong>
+              <span>Documents · {{ graphSummaryScope }}</span>
+              <strong>{{ graphSummaryStats.document_count }}</strong>
             </div>
             <div class="type-legend">
               <el-tag v-for="item in graphTypeCounts" :key="item.type" size="small" effect="plain" :type="nodeTypeTag(item.type)">
@@ -551,38 +739,30 @@ onMounted(loadBootstrap)
           </section>
 
           <section class="graph-workspace" v-loading="graphLoading">
-            <div class="graph-canvas">
-              <div class="graph-lane-labels" aria-hidden="true">
-                <span>Materials</span>
-                <span>Strategies</span>
-                <span>Properties</span>
-                <span>Papers</span>
+            <div class="graph-board">
+              <div v-for="lane in graphLanes" :key="lane.key" class="graph-lane">
+                <div class="graph-lane-header">
+                  <span>{{ lane.label }}</span>
+                  <strong>{{ lane.nodes.length }}</strong>
+                </div>
+                <div class="graph-lane-body">
+                  <button
+                    v-for="node in lane.nodes"
+                    :key="node.id"
+                    type="button"
+                    class="graph-node"
+                    :class="{ active: node.id === selectedNode?.id }"
+                    @click="selectNode(node.id)"
+                  >
+                    <span>{{ node.label }}</span>
+                    <small>{{ node.type }}</small>
+                  </button>
+                  <span v-if="!lane.nodes.length" class="lane-empty">无节点</span>
+                </div>
               </div>
-              <svg class="graph-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                <line
-                  v-for="edge in visibleEdges"
-                  :key="edge.id"
-                  :x1="edge.sourcePos.x"
-                  :y1="edge.sourcePos.y"
-                  :x2="edge.targetPos.x"
-                  :y2="edge.targetPos.y"
-                />
-              </svg>
-              <button
-                v-for="node in graphNodes"
-                :key="node.id"
-                type="button"
-                class="graph-node"
-                :class="{ active: node.id === selectedNode?.id }"
-                :style="{ left: `${nodePositions[node.id]?.x || 50}%`, top: `${nodePositions[node.id]?.y || 50}%` }"
-                @click="selectNode(node.id)"
-              >
-                <span>{{ node.label }}</span>
-                <small>{{ node.type }}</small>
-              </button>
               <div v-if="!graphNodes.length" class="empty-state">
                 <el-icon><Connection /></el-icon>
-                <span>暂无图谱节点。</span>
+                <span>{{ graphEmptyMessage }}</span>
               </div>
             </div>
 
@@ -591,6 +771,15 @@ onMounted(loadBootstrap)
                 <h4>{{ selectedNode?.label || '节点详情' }}</h4>
                 <el-tag v-if="selectedNode" :type="nodeTypeTag(selectedNode.type)" effect="plain">{{ selectedNode.type }}</el-tag>
               </div>
+              <a
+                v-if="selectedNodeSourceUrl"
+                class="node-source-link"
+                :href="selectedNodeSourceUrl"
+                target="_blank"
+                rel="noreferrer"
+              >
+                打开原文/PDF
+              </a>
               <el-descriptions v-if="selectedNode" :column="1" size="small" border>
                 <el-descriptions-item label="ID">{{ selectedNode.id }}</el-descriptions-item>
                 <el-descriptions-item label="Score">{{ selectedNode.score }}</el-descriptions-item>
@@ -657,7 +846,38 @@ onMounted(loadBootstrap)
 }
 
 .system-select {
-  width: 260px;
+  width: 320px;
+}
+
+.system-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.system-option div {
+  min-width: 0;
+}
+
+.system-option strong,
+.system-option small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-option small,
+.status-message {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.status-message {
+  max-width: 260px;
+  overflow-wrap: anywhere;
 }
 
 .knowledge-body {
@@ -787,6 +1007,21 @@ onMounted(loadBootstrap)
   width: 100%;
 }
 
+.knowledge-mode-segmented :deep(.el-segmented__group) {
+  width: 100%;
+}
+
+.knowledge-mode-segmented :deep(.el-segmented__item) {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.knowledge-mode-segmented :deep(.el-segmented__item-label) {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
 .query-actions {
   justify-content: flex-end;
   margin-top: 16px;
@@ -821,6 +1056,11 @@ onMounted(loadBootstrap)
 .query-hints button:hover {
   border-color: var(--app-primary);
   color: var(--app-primary-active);
+}
+
+.query-hints button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .answer-content {
@@ -882,6 +1122,14 @@ onMounted(loadBootstrap)
 .answer-title-row {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--app-border-soft);
+}
+
+.answer-title-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
 }
 
 .semantic-answer h4 {
@@ -948,9 +1196,15 @@ onMounted(loadBootstrap)
 }
 
 .citation-card small,
-.muted-text {
+.muted-text,
+.source-link-label {
   color: var(--app-ink-muted);
   font-size: 12px;
+}
+
+.source-link-label {
+  color: var(--app-primary-active);
+  font-weight: 700;
 }
 
 .hit-list,
@@ -1060,47 +1314,59 @@ onMounted(loadBootstrap)
   gap: 16px;
 }
 
-.graph-canvas {
-  position: relative;
+.graph-board {
   min-height: 560px;
-  overflow: hidden;
-  border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius-sm);
-  background:
-    linear-gradient(90deg, rgba(15, 23, 42, 0.05) 1px, transparent 1px),
-    #f8fafc;
-  background-size: 25% 100%;
-}
-
-.graph-lane-labels {
-  position: absolute;
-  inset: 10px 14px auto 14px;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fafc;
+}
+
+.graph-lane {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e1e8f2;
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.graph-lane-header {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--app-border-soft);
   color: var(--app-ink-subtle);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
-.graph-lines {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+.graph-lane-header strong {
+  color: var(--app-ink-muted);
+  font-size: 12px;
 }
 
-.graph-lines line {
-  stroke: #9ab0c9;
-  stroke-width: 0.35;
+.graph-lane-body {
+  min-height: 0;
+  max-height: 508px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
 }
 
 .graph-node {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  width: 142px;
-  min-height: 54px;
+  width: 100%;
+  min-height: 48px;
   border: 1px solid #d4dfec;
   border-radius: var(--app-radius-sm);
   background: #ffffff;
@@ -1137,6 +1403,36 @@ onMounted(loadBootstrap)
 
 .graph-node:hover {
   border-color: var(--app-primary);
+}
+
+.lane-empty {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.node-source-link {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #b7d2ff;
+  border-radius: var(--app-radius-sm);
+  background: #eef5ff;
+  color: var(--app-primary-active);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.node-source-link:hover {
+  border-color: var(--app-primary);
+  text-decoration: underline;
 }
 
 .node-detail {
@@ -1251,12 +1547,9 @@ onMounted(loadBootstrap)
     grid-template-columns: 1fr;
   }
 
-  .graph-canvas {
+  .graph-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     min-height: 520px;
-  }
-
-  .graph-node {
-    width: 112px;
   }
 
   .type-legend {
@@ -1274,6 +1567,10 @@ onMounted(loadBootstrap)
   .citation-panel,
   .node-detail {
     padding: 12px;
+  }
+
+  .graph-board {
+    grid-template-columns: 1fr;
   }
 }
 </style>
