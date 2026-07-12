@@ -773,7 +773,7 @@ onMounted(loadBootstrap)
 
 .control-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
+  grid-template-columns: 1fr;
   gap: 12px;
 }
 
