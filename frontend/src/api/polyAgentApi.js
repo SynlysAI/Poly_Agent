@@ -103,7 +103,12 @@ export function getApiErrorMessage(error) {
         'upstream service error',
         'upstream timeout',
       ])
-      const message = error.detail && genericMessages.has(error.message) ? error.detail : (error.message || error.detail || '')
+      let message
+      if (Array.isArray(error.errors) && error.errors.length) {
+        message = error.errors.map(e => `[${(e.loc || []).join('.')}] ${e.msg}`).join('；')
+      } else {
+        message = error.detail && genericMessages.has(error.message) ? error.detail : (error.message || error.detail || '')
+      }
       return `${statusMsgMap[error.status]}：${message}`
     }
     return error.message || '服务异常'
