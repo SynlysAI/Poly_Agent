@@ -180,9 +180,9 @@ onMounted(() => {
     </div>
 
     <!-- 步骤导航 + 内容区 -->
-    <div style="display:flex;gap:16px">
+    <div class="alchemist-workspace">
       <!-- 左侧步骤导航 -->
-      <div class="panel" style="width:200px;flex-shrink:0">
+      <div class="panel step-panel">
         <div class="panel-header">
           <h3 class="panel-title">优化流程</h3>
         </div>
@@ -204,7 +204,7 @@ onMounted(() => {
       </div>
 
       <!-- 右侧内容区 -->
-      <div style="flex:1;min-width:0">
+      <div class="alchemist-main">
         <div v-if="!currentSessionId" class="panel" style="padding:60px;text-align:center">
           <p style="color:var(--app-ink-muted);font-size:15px">请先创建或选择一个 Session 以开始使用实验设计与优化工具</p>
         </div>
@@ -214,6 +214,26 @@ onMounted(() => {
           </keep-alive>
         </div>
       </div>
+
+      <aside class="panel alchemist-guide">
+        <div class="panel-header">
+          <h3 class="panel-title">使用说明</h3>
+        </div>
+        <div class="panel-body guide-body">
+          <div class="guide-step">
+            <strong>Session</strong>
+            <span>一个 Session 对应一次优化项目，变量空间、实验数据、模型和可视化结果都会保存在同一上下文。</span>
+          </div>
+          <div class="guide-step">
+            <strong>推荐流程</strong>
+            <span>先定义变量，再生成初始实验设计；回填实验数据后训练 GP 模型，最后用采集函数给出下一轮候选。</span>
+          </div>
+          <div class="guide-step">
+            <strong>数据要求</strong>
+            <span>实验数据需要包含已定义变量和目标输出值。模型训练前请确认输出列没有空值。</span>
+          </div>
+        </div>
+      </aside>
     </div>
 
     <!-- 新建 Session 弹窗 -->
@@ -238,6 +258,52 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.alchemist-workspace {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.step-panel,
+.alchemist-guide {
+  position: sticky;
+  top: 76px;
+}
+
+.step-panel {
+  width: 200px;
+}
+
+.alchemist-main {
+  min-width: 0;
+}
+
+.guide-body {
+  display: grid;
+  gap: 12px;
+}
+
+.guide-step {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.guide-step strong {
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.guide-step span {
+  color: var(--app-ink-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .session-toolbar {
   display: flex;
   align-items: center;
@@ -283,6 +349,16 @@ onMounted(() => {
 }
 
 @media (max-width: 720px) {
+  .alchemist-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .step-panel,
+  .alchemist-guide {
+    position: static;
+    width: auto;
+  }
+
   .session-toolbar {
     align-items: flex-start;
     flex-direction: column;

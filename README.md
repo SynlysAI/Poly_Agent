@@ -107,6 +107,10 @@
 | 认证 | HMAC-SHA256 令牌，与 AI4MS 门户共享账户体系 |
 | 部署 | PM2, Conda |
 
+## 技术架构图
+
+![Poly Agent 技术架构图](docs/poly-agent-technical-architecture.svg)
+
 ## 项目结构
 
 ```text

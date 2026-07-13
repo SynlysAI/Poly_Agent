@@ -5,10 +5,12 @@ from __future__ import annotations
 import shutil
 import socket
 import subprocess
+import re
 import importlib.metadata
 import importlib.util
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.services.integration_config_service import IntegrationConfigService
@@ -26,7 +28,11 @@ class IntegrationStatusService:
         }
         items = [
             self._worker_status(checked_at),
+            self._mongodb_status(checked_at),
+            self._data_asset_mongodb_status(checked_at),
             self._artifact_status(checked_at),
+            self._literature_rag_status(checked_at),
+            self._knowledge_graph_status(checked_at),
             self._port_status("atlas", "127.0.0.1", 65100, checked_at),
             self._alchemist_status(checked_at),
             self._speclabos_status(checked_at),
@@ -91,6 +97,102 @@ class IntegrationStatusService:
             "details": {"root": str(settings.outputs_root)},
         }
 
+    def _mongodb_status(self, checked_at: str) -> dict:
+        available = self._can_connect(settings.mongodb_host, settings.mongodb_port)
+        return {
+            "service": "mongodb",
+            "status": "up" if available else "down",
+            "checked_at": checked_at,
+            "details": {
+                "host": settings.mongodb_host,
+                "port": settings.mongodb_port,
+                "database": settings.mongodb_database,
+                "required": settings.require_mongodb,
+                "reason": None if available else "MongoDB port is not reachable",
+            },
+        }
+
+    def _data_asset_mongodb_status(self, checked_at: str) -> dict:
+        uri = settings.data_asset_mongodb_uri
+        if not uri:
+            return {
+                "service": "data-asset-mongodb",
+                "status": "not_configured",
+                "checked_at": checked_at,
+                "details": {
+                    "database": settings.data_asset_mongodb_database,
+                    "reason": "DATA_ASSET_MONGODB_URI is not configured",
+                },
+            }
+        host, port = self._parse_mongodb_endpoint(uri)
+        available = bool(host and self._can_connect(host, port))
+        return {
+            "service": "data-asset-mongodb",
+            "status": "up" if available else "down",
+            "checked_at": checked_at,
+            "details": {
+                "host": host,
+                "port": port,
+                "database": settings.data_asset_mongodb_database,
+                "configured": True,
+                "reason": None if available else "data asset MongoDB endpoint is not reachable",
+            },
+        }
+
+    def _literature_rag_status(self, checked_at: str) -> dict:
+        health = self._knowledge_health()
+        if not health:
+            return {
+                "service": "literature-rag",
+                "status": "not_configured",
+                "checked_at": checked_at,
+                "details": {"reason": "Literature RAG service is not configured or not reachable"},
+            }
+        raw_status = getattr(health, "status", "unavailable")
+        configured = bool(getattr(health, "configured", False))
+        if raw_status == "ready" and configured:
+            status = "up"
+        elif raw_status == "warning":
+            status = "degraded"
+        elif not configured:
+            status = "not_configured"
+        else:
+            status = "down"
+        return {
+            "service": "literature-rag",
+            "status": status,
+            "checked_at": checked_at,
+            "details": {
+                "configured": configured,
+                "systems": list(getattr(health, "systems", []) or []),
+                "message": getattr(health, "message", ""),
+            },
+        }
+
+    def _knowledge_graph_status(self, checked_at: str) -> dict:
+        health = self._knowledge_health()
+        systems = list(getattr(health, "systems", []) or []) if health else []
+        configured = bool(getattr(health, "configured", False)) if health else False
+        if not configured:
+            status = "not_configured"
+            reason = "Knowledge graph is unavailable until Literature RAG has a ready corpus"
+        elif systems:
+            status = "up"
+            reason = None
+        else:
+            status = "degraded"
+            reason = "Literature RAG is reachable but no graph-enabled corpus was reported"
+        return {
+            "service": "knowledge-graph",
+            "status": status,
+            "checked_at": checked_at,
+            "details": {
+                "provider": "literature-rag",
+                "systems": systems,
+                "reason": reason,
+            },
+        }
+
     def _run_script(self, script: Path, command: str) -> dict:
         try:
             completed = subprocess.run(
@@ -126,6 +228,21 @@ class IntegrationStatusService:
                 return True
         except OSError:
             return False
+
+    def _knowledge_health(self):
+        try:
+            from app.services.knowledge_service import KnowledgeService
+
+            return KnowledgeService().health()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_mongodb_endpoint(uri: str) -> tuple[str | None, int]:
+        parsed = urlparse(uri)
+        host = parsed.hostname
+        port = parsed.port or 27017
+        return host, port
 
     def _alchemist_status(self, checked_at: str) -> dict:
         return {
@@ -294,17 +411,25 @@ class IntegrationStatusService:
                     timeout=4,
                     check=False,
                 )
-                version = (completed.stdout or completed.stderr).strip()[:300] or "detected"
+                raw_stdout = completed.stdout or ""
+                raw_stderr = completed.stderr or ""
+                version = self._clean_version_text(service, raw_stdout or raw_stderr)
                 if completed.returncode != 0 and service != "orca":
                     reason = f"{service} probe returned {completed.returncode}"
             except subprocess.TimeoutExpired:
                 version = "detected"
+                raw_stdout = ""
+                raw_stderr = ""
                 reason = f"{service} probe timed out"
             except OSError as exc:
                 version = "unknown"
+                raw_stdout = ""
+                raw_stderr = ""
                 reason = str(exc)
         else:
             reason = f"{service} executable not found on PATH"
+            raw_stdout = ""
+            raw_stderr = ""
         if license_required and executable_path and not settings.orca_license_available:
             reason = "ORCA license is not marked available in backend configuration"
         return {
@@ -315,6 +440,29 @@ class IntegrationStatusService:
                 "path": executable_path,
                 "version": version,
                 "reason": reason,
+                "raw_stdout": raw_stdout[-1000:] if raw_stdout else None,
+                "raw_stderr": raw_stderr[-1000:] if raw_stderr else None,
                 "capabilities": capabilities if executable_path and not reason else [],
             },
         }
+
+    @staticmethod
+    def _clean_version_text(service: str, output: str) -> str:
+        text = (output or "").strip()
+        if not text:
+            return "detected"
+        service_pattern = re.compile(rf"\b{re.escape(service)}\b[^\n]*\b(?:version|[vV]ersion)\b[^\n]*", re.IGNORECASE)
+        match = service_pattern.search(text)
+        if match:
+            return " ".join(match.group(0).split())[:160]
+        generic = re.search(r"\b(?:version|Version)\s*[:=]?\s*[A-Za-z0-9][A-Za-z0-9._+\- ]{0,80}", text)
+        if generic:
+            return " ".join(generic.group(0).split())[:160]
+        for line in text.splitlines():
+            normalized = " ".join(line.strip().split())
+            if not normalized:
+                continue
+            alnum_count = sum(char.isalnum() for char in normalized)
+            if alnum_count >= 3 and alnum_count >= len(normalized) / 3:
+                return normalized[:160]
+        return "detected"

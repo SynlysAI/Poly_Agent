@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search, View, Finished } from '@element-plus/icons-vue'
+import { Cpu, Refresh, Search, View, Finished } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, listGlobalTasks } from '../api/polyAgentApi'
 import {
@@ -158,6 +158,7 @@ onMounted(() => {
         </div>
         <div class="header-actions">
           <el-button :icon="Refresh" :loading="loading" @click="loadTasks">刷新</el-button>
+          <el-button :icon="Cpu" @click="$router.push('/computations/runs')">计算任务中心</el-button>
           <el-button type="primary" @click="$router.push('/tasks/submit')">提交任务</el-button>
         </div>
       </div>

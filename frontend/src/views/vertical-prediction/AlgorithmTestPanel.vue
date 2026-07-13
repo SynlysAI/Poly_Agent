@@ -9,6 +9,7 @@ import {
   listAlgorithms,
   listAlgorithmVersions,
 } from '../../api/polyAgentApi'
+import AlgorithmResultView from './AlgorithmResultView.vue'
 
 const props = defineProps({ refreshKey: { type: Number, default: 0 } })
 const emit = defineEmits(['run-created'])
@@ -200,9 +201,14 @@ onMounted(loadAlgorithms)
             <el-descriptions-item label="耗时">{{ duration(lastRun) }}</el-descriptions-item>
             <el-descriptions-item label="Package SHA" :span="2">{{ lastRun.package_sha256 || '-' }}</el-descriptions-item>
           </el-descriptions>
-          <h4>Output JSON</h4><pre>{{ JSON.stringify(lastRun.output_summary, null, 2) }}</pre>
-          <h4>Artifacts</h4><pre>{{ JSON.stringify(lastRun.artifact_refs, null, 2) }}</pre>
-          <el-alert v-if="lastRun.error" :title="lastRun.error.message" type="error" show-icon :closable="false" />
+          <AlgorithmResultView
+            class="run-result-view"
+            :output-summary="lastRun.output_summary"
+            :input-snapshot="lastRun.input_snapshot"
+            :artifact-refs="lastRun.artifact_refs"
+            :status="lastRun.status"
+            :error="lastRun.error"
+          />
         </template>
         <div v-else class="empty-output">运行后将在此显示输出 JSON、artifact、版本与耗时。</div>
       </section>
@@ -220,8 +226,7 @@ onMounted(loadAlgorithms)
 .pane-heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
 .pane-heading h3, h4 { margin: 0; font-size: 15px; }
 .pane-heading span { color: var(--app-ink-muted); font-size: 12px; }
-h4 { margin: 16px 0 8px; }
-pre { max-height: 300px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #f8fafc; font: 12px/1.5 var(--app-mono-font); white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-result-view { margin-top: 14px; }
 .code-input :deep(textarea) { font-family: var(--app-mono-font); }
 .empty-output { min-height: 180px; display: grid; place-items: center; color: var(--app-ink-muted); text-align: center; }
 @media (max-width: 900px) { .test-layout { grid-template-columns: 1fr; } }

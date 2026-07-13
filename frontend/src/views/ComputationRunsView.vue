@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Refresh, Search, VideoPause, View } from '@element-plus/icons-vue'
+import { Download, Histogram, Refresh, Search, VideoPause, View } from '@element-plus/icons-vue'
 
 import {
   cancelComputation,
@@ -343,6 +343,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="header-actions">
           <el-button :icon="Refresh" :loading="loading" @click="loadTasks">刷新</el-button>
+          <el-button :icon="Histogram" @click="$router.push({ path: '/tasks/center', query: { module_id: 'computation' } })">全局任务中心</el-button>
           <el-button type="primary" @click="$router.push('/computations/submit')">提交计算任务</el-button>
         </div>
       </div>
@@ -422,7 +423,7 @@ onBeforeUnmount(() => {
       <div class="panel-body integration-grid">
         <div v-for="item in integrations" :key="item.service" class="integration-item">
           <span>{{ item.service }}</span>
-          <el-tag size="small" :type="item.status === 'up' || item.status === 'available' ? 'success' : 'info'">{{ item.status }}</el-tag>
+          <el-tag size="small" :type="['up', 'available', 'built_in'].includes(item.status) ? 'success' : 'info'">{{ item.status }}</el-tag>
         </div>
       </div>
     </section>

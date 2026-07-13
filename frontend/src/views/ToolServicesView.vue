@@ -30,6 +30,8 @@ const algoLoading = ref(false)
 const algoDetailVisible = ref(false)
 const algoDetail = ref(null)
 const algoFilters = reactive({ type: '', material_scope: '', keyword: '' })
+const configDetailVisible = ref(false)
+const selectedConfig = ref(null)
 
 const algoTypeOptions = [
   { label: '全部类型', value: '' },
@@ -59,6 +61,44 @@ function algoStatusLabel(status) {
   return map[status] || status
 }
 
+function algoIntegrationKind(item) {
+  if (item.capability_group === 'vertical_algorithm') return 'vertical'
+  return item.integration_kind || 'builtin'
+}
+
+function algoIntegrationLabel(kind) {
+  const map = { real: '真实能力', builtin: '内置能力', simulated: '模拟演示', pending: '待接入', vertical: '垂类算法' }
+  return map[kind] || kind
+}
+
+function algoIntegrationTag(kind) {
+  const map = { real: 'success', builtin: 'info', simulated: 'warning', pending: 'danger', vertical: 'success' }
+  return map[kind] || 'info'
+}
+
+function materialScopeLabel(scopes) {
+  const map = {
+    fluoropolymer: '氟基',
+    carbon_polymer: '碳基',
+    silicon_polymer: '硅基',
+    fluoro_carbon_copolymer: '氟碳共聚',
+    universal: '通用',
+  }
+  return (scopes || []).map((scope) => map[scope] || scope)
+}
+
+function triggerModeLabel(modes) {
+  const map = { human_workflow: '人工 Workflow', autoresearch: 'AutoResearch', system: '系统' }
+  return (modes || []).map((mode) => map[mode] || mode)
+}
+
+const algorithmGroupDefs = [
+  { key: 'real', label: '真实能力', hint: '已接入真实服务、SDK 或本地计算链路' },
+  { key: 'builtin', label: '内置能力', hint: '平台内置能力或待封装能力' },
+  { key: 'simulated', label: '模拟演示', hint: '仅用于演示、流程占位或 mock 输出' },
+  { key: 'vertical', label: '垂类算法', hint: '材料性质等垂类模型服务与上传算法' },
+]
+
 const filteredAlgos = computed(() => {
   const kw = algoFilters.keyword.trim().toLowerCase()
   return algorithms.value.filter((item) => {
@@ -67,6 +107,16 @@ const filteredAlgos = computed(() => {
     const haystack = `${item.name} ${item.algorithm_id} ${item.description || ''}`.toLowerCase()
     return matchesType && matchesMaterial && (!kw || haystack.includes(kw))
   })
+})
+
+const groupedAlgos = computed(() => {
+  const groups = Object.fromEntries(algorithmGroupDefs.map((group) => [group.key, []]))
+  filteredAlgos.value.forEach((item) => {
+    const key = algoIntegrationKind(item)
+    const target = groups[key] ? key : 'builtin'
+    groups[target].push(item)
+  })
+  return algorithmGroupDefs.map((group) => ({ ...group, items: groups[group.key] || [] }))
 })
 
 async function loadAlgos() {
@@ -111,8 +161,12 @@ const serviceTypeOptions = [
 const currentConfig = computed(() => configs.value.find((item) => item.service_key === editingServiceKey.value))
 
 const serviceCatalog = {
+  mongodb: { name: 'MongoDB', group: '核心存储', hint: 'Poly Agent 主数据库连接状态' },
+  'data-asset-mongodb': { name: '数据资产 MongoDB', group: '核心存储', hint: '只读材料数据资产库接入状态' },
   'computation-worker': { name: '计算 Worker', group: '运行组件', hint: '领取 queued run 并执行真实计算 workflow' },
   'artifact-store': { name: 'Artifact 存储', group: '核心存储', hint: '保存结构、日志、结果 JSON 和下载文件' },
+  'literature-rag': { name: 'Literature RAG', group: '知识服务', hint: '知识增强检索服务和 corpus 状态' },
+  'knowledge-graph': { name: 'Knowledge Graph', group: '知识服务', hint: '知识图谱子图检索能力状态' },
   rdkit: { name: 'RDKit', group: '计算工具链', hint: 'SMILES 解析和三维结构初猜' },
   openbabel: { name: 'OpenBabel', group: '计算工具链', hint: '结构格式转换和备用三维结构生成' },
   xtb: { name: 'xTB', group: '计算工具链', hint: '低成本粗优化和单点计算' },
@@ -125,7 +179,7 @@ const serviceCatalog = {
 }
 
 const serviceGroups = computed(() => {
-  const groups = ['核心存储', '计算工具链', '优化与实验', '运行组件']
+  const groups = ['核心存储', '知识服务', '计算工具链', '优化与实验', '运行组件']
   return groups.map((group) => ({
     name: group,
     items: services.value.filter((item) => (serviceCatalog[item.service]?.group || '运行组件') === group),
@@ -133,15 +187,15 @@ const serviceGroups = computed(() => {
 })
 
 const healthSummary = computed(() => {
-  const required = ['artifact-store', 'rdkit', 'openbabel', 'xtb', 'crest', 'orca']
+  const required = ['mongodb', 'artifact-store', 'literature-rag', 'rdkit', 'openbabel', 'xtb']
   const items = services.value.filter((item) => required.includes(item.service))
-  const ready = items.filter((item) => ['up', 'available'].includes(item.status)).length
+  const ready = items.filter((item) => ['up', 'available', 'built_in'].includes(item.status)).length
   return { ready, total: items.length }
 })
 
 function statusTag(status) {
-  if (['up', 'available'].includes(status)) return 'success'
-  if (status === 'degraded') return 'warning'
+  if (['up', 'available', 'built_in'].includes(status)) return 'success'
+  if (['degraded', 'not_configured', 'disabled', 'not_available'].includes(status)) return 'warning'
   if (['down', 'failed'].includes(status)) return 'danger'
   return 'info'
 }
@@ -176,6 +230,7 @@ function statusLabel(status) {
     not_available: '未安装',
     not_configured: '未配置',
     disabled: '已停用',
+    built_in: '内置',
     unknown: '未知',
   }
   return map[status] || status
@@ -188,6 +243,7 @@ function servicePrimaryDetail(row) {
   if (details.root) return details.root
   if (details.host && details.port) return `${details.host}:${details.port}`
   if (details.worker_id) return details.worker_id
+  if (details.database) return details.database
   return '-'
 }
 
@@ -196,12 +252,20 @@ function serviceReason(row) {
   return details.reason || details.last_error_summary || details.stderr || ''
 }
 
+function serviceVersion(row) {
+  return row.details?.version || row.details?.message || '-'
+}
+
 function formatConfigSummary(row) {
   const parts = []
   if (row.endpoint) parts.push(row.endpoint)
   if (row.config_summary && Object.keys(row.config_summary).length) parts.push(JSON.stringify(row.config_summary))
   if (row.secret_refs && Object.keys(row.secret_refs).length) parts.push(`secrets:${Object.keys(row.secret_refs).join(',')}`)
   return parts.join('\n') || '-'
+}
+
+function compactConfigSummary(row) {
+  return formatConfigSummary(row).replace(/\s+/g, ' ')
 }
 
 function parseJsonObject(value, label) {
@@ -258,6 +322,11 @@ function openEdit(row) {
   form.config_summary = JSON.stringify(row.config_summary || {}, null, 2)
   form.secret_refs = JSON.stringify(row.secret_refs || {}, null, 2)
   editVisible.value = true
+}
+
+function showConfigDetail(row) {
+  selectedConfig.value = row
+  configDetailVisible.value = true
 }
 
 async function saveConfig() {
@@ -361,7 +430,7 @@ onMounted(() => {
                       </div>
                       <div>
                         <dt>版本</dt>
-                        <dd>{{ row.details?.version || '-' }}</dd>
+                        <dd>{{ serviceVersion(row) }}</dd>
                       </div>
                       <div v-if="serviceReason(row)" class="service-reason">
                         <dt>原因</dt>
@@ -393,26 +462,57 @@ onMounted(() => {
               <el-button text @click="algoFilters.type = ''; algoFilters.material_scope = ''; algoFilters.keyword = ''">重置</el-button>
               <el-button :icon="Refresh" :loading="algoLoading" @click="loadAlgos">刷新</el-button>
             </div>
-            <el-table v-if="filteredAlgos.length" :data="filteredAlgos" v-loading="algoLoading" stripe style="margin-top:10px">
-              <el-table-column prop="name" label="算法名称" min-width="180" />
-              <el-table-column label="类型" width="100">
-                <template #default="{ row }"><el-tag size="small" :type="algoTypeTag(row.type)">{{ algoTypeLabel(row.type) }}</el-tag></template>
-              </el-table-column>
-              <el-table-column label="材料范围" min-width="160">
-                <template #default="{ row }">{{ (row.material_scope || []).join(', ') }}</template>
-              </el-table-column>
-              <el-table-column label="触发方式" min-width="140">
-                <template #default="{ row }">{{ (row.trigger_modes || []).join(', ') }}</template>
-              </el-table-column>
-              <el-table-column label="状态" width="100">
-                <template #default="{ row }"><el-tag size="small" :type="algoStatusTag(row.status)">{{ algoStatusLabel(row.status) }}</el-tag></template>
-              </el-table-column>
-              <el-table-column label="操作" width="100" fixed="right">
-                <template #default="{ row }">
-                  <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(row)">详情</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
+            <div v-if="filteredAlgos.length" v-loading="algoLoading" class="algo-board">
+              <section v-for="group in groupedAlgos" :key="group.key" class="algo-group" :class="`algo-group--${group.key}`">
+                <div class="algo-group-header">
+                  <div>
+                    <strong>{{ group.label }}</strong>
+                    <span>{{ group.hint }}</span>
+                  </div>
+                  <em>{{ group.items.length }}</em>
+                </div>
+                <div class="algo-group-body">
+                  <article v-for="algo in group.items" :key="algo.algorithm_id" class="algo-card">
+                    <div class="algo-card-top">
+                      <div class="algo-title-block">
+                        <strong :title="algo.name">{{ algo.name }}</strong>
+                        <small :title="algo.algorithm_id">{{ algo.algorithm_id }}</small>
+                      </div>
+                      <el-tag size="small" :type="algoIntegrationTag(algoIntegrationKind(algo))" effect="plain">
+                        {{ algoIntegrationLabel(algoIntegrationKind(algo)) }}
+                      </el-tag>
+                    </div>
+                    <p :title="algo.description">{{ algo.description || '暂无描述' }}</p>
+                    <div class="algo-tags">
+                      <el-tag size="small" :type="algoTypeTag(algo.type)">{{ algoTypeLabel(algo.type) }}</el-tag>
+                      <el-tag size="small" :type="algoStatusTag(algo.status)" effect="plain">{{ algoStatusLabel(algo.status) }}</el-tag>
+                      <el-tag size="small" effect="plain">{{ algo.call_method }}</el-tag>
+                    </div>
+                    <div class="algo-meta-row">
+                      <span>材料</span>
+                      <div>
+                        <el-tag v-for="item in materialScopeLabel(algo.material_scope).slice(0, 3)" :key="item" size="small" effect="plain">
+                          {{ item }}
+                        </el-tag>
+                        <el-tooltip v-if="materialScopeLabel(algo.material_scope).length > 3" placement="top" :content="materialScopeLabel(algo.material_scope).join(', ')">
+                          <el-tag size="small" effect="plain">+{{ materialScopeLabel(algo.material_scope).length - 3 }}</el-tag>
+                        </el-tooltip>
+                      </div>
+                    </div>
+                    <div class="algo-meta-row">
+                      <span>触发</span>
+                      <div>
+                        <el-tag v-for="item in triggerModeLabel(algo.trigger_modes)" :key="item" size="small" effect="plain">
+                          {{ item }}
+                        </el-tag>
+                      </div>
+                    </div>
+                    <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(algo)">详情</el-button>
+                  </article>
+                  <div v-if="!group.items.length" class="algo-group-empty">无匹配算法</div>
+                </div>
+              </section>
+            </div>
             <div v-else-if="!algoLoading" class="empty-inline" style="min-height:100px;justify-content:center">
               暂无算法数据
             </div>
@@ -434,21 +534,21 @@ onMounted(() => {
               </el-table-column>
               <el-table-column label="状态" width="130">
                 <template #default="{ row }">
-                  <el-tag size="small" :type="statusTag(row.last_status)">{{ row.last_status }}</el-tag>
+                  <el-tag size="small" :type="statusTag(row.last_status)">{{ statusLabel(row.last_status) }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="配置摘要" min-width="320">
+              <el-table-column label="配置摘要" min-width="220" show-overflow-tooltip>
                 <template #default="{ row }">
-                  <pre class="details-json">{{ formatConfigSummary(row) }}</pre>
+                  <span class="config-summary-line">{{ compactConfigSummary(row) }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="最后检查" min-width="180">
+              <el-table-column label="最后检查" width="180">
                 <template #default="{ row }">
                   <span>{{ formatDate(row.last_checked_at) }}</span>
                 </template>
               </el-table-column>
-              <el-table-column prop="last_error_summary" label="错误" min-width="220" show-overflow-tooltip />
-              <el-table-column label="操作" width="150" fixed="right">
+              <el-table-column prop="last_error_summary" label="错误" min-width="180" show-overflow-tooltip />
+              <el-table-column label="操作" width="190" fixed="right">
                 <template #default="{ row }">
                   <el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
                   <el-button
@@ -461,6 +561,7 @@ onMounted(() => {
                   >
                     检查
                   </el-button>
+                  <el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -499,6 +600,24 @@ onMounted(() => {
         <el-button type="primary" :loading="saving" @click="saveConfig">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-drawer v-model="configDetailVisible" :title="selectedConfig?.display_name || '配置详情'" size="520px">
+      <template v-if="selectedConfig">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="Service">{{ selectedConfig.service_key }}</el-descriptions-item>
+          <el-descriptions-item label="类型">{{ selectedConfig.service_type }}</el-descriptions-item>
+          <el-descriptions-item label="启用">{{ selectedConfig.enabled ? '是' : '否' }}</el-descriptions-item>
+          <el-descriptions-item label="Endpoint">{{ selectedConfig.endpoint || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="最后状态">{{ selectedConfig.last_status || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="最后检查">{{ formatDate(selectedConfig.last_checked_at) }}</el-descriptions-item>
+          <el-descriptions-item label="错误">{{ selectedConfig.last_error_summary || '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <h4 class="drawer-section-title">Config summary</h4>
+        <pre class="details-json drawer-json">{{ JSON.stringify(selectedConfig.config_summary || {}, null, 2) }}</pre>
+        <h4 class="drawer-section-title">Secret refs</h4>
+        <pre class="details-json drawer-json">{{ JSON.stringify(selectedConfig.secret_refs || {}, null, 2) }}</pre>
+      </template>
+    </el-drawer>
 
     <!-- 算法详情 drawer -->
     <el-drawer v-model="algoDetailVisible" :title="algoDetail?.name || '算法详情'" size="520px">
@@ -554,6 +673,202 @@ onMounted(() => {
 
 .config-alert {
   margin-bottom: 12px;
+}
+
+.config-summary-line {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--app-ink-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.algo-board {
+  min-height: 240px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.algo-group {
+  min-width: 0;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.algo-group--real {
+  border-color: #bbdfc8;
+}
+
+.algo-group--builtin {
+  border-color: #cbd8e8;
+}
+
+.algo-group--simulated {
+  border-color: #ead1a0;
+}
+
+.algo-group--vertical {
+  border-color: #bed7ff;
+}
+
+.algo-group-header {
+  min-height: 70px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--app-border-soft);
+  background: #f8fafc;
+}
+
+.algo-group--real .algo-group-header {
+  background: #f0f8f2;
+}
+
+.algo-group--simulated .algo-group-header {
+  background: #fff8e8;
+}
+
+.algo-group--vertical .algo-group-header {
+  background: #f0f6ff;
+}
+
+.algo-group-header strong {
+  display: block;
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.algo-group-header span {
+  display: block;
+  margin-top: 4px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.algo-group-header em {
+  min-width: 26px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--app-ink);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.algo-group-body {
+  min-height: 160px;
+  max-height: 620px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.algo-card {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.algo-card-top,
+.algo-tags,
+.algo-meta-row,
+.algo-meta-row div {
+  display: flex;
+  align-items: center;
+}
+
+.algo-card-top {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.algo-title-block {
+  min-width: 0;
+}
+
+.algo-title-block strong,
+.algo-title-block small {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.algo-title-block strong {
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.algo-title-block small,
+.algo-meta-row > span {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+}
+
+.algo-card p {
+  min-height: 38px;
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 8px 0;
+  color: var(--app-ink-body);
+  font-size: 12px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.algo-tags {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.algo-meta-row {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.algo-meta-row > span {
+  flex: 0 0 34px;
+  padding-top: 3px;
+}
+
+.algo-meta-row div {
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.algo-group-empty {
+  min-height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  color: var(--app-ink-muted);
+  font-size: 12px;
 }
 
 .service-groups {
@@ -648,6 +963,20 @@ summary {
   word-break: break-word;
 }
 
+.drawer-section-title {
+  margin: 16px 0 8px;
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.drawer-json {
+  max-height: 240px;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fafc;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 180px;
@@ -667,10 +996,18 @@ summary {
   .service-card-grid {
     grid-template-columns: 1fr;
   }
+
+  .algo-board {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (min-width: 721px) and (max-width: 1180px) {
   .service-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .algo-board {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

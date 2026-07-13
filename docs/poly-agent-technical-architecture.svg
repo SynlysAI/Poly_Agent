@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+  <title id="title">Poly Agent 技术架构图</title>
+  <desc id="desc">Poly Agent 从浏览器前端、FastAPI 后端、领域服务、计算 worker、独立 Literature RAG 服务到存储和外部系统的技术架构。</desc>
+  <style>
+    text { font-family: Arial, "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif; }
+    .title { font-size: 34px; font-weight: 700; fill: #111827; }
+    .subtitle { font-size: 16px; font-weight: 500; fill: #475569; }
+    .group { font-size: 18px; font-weight: 700; fill: #111827; }
+    .label { font-size: 17px; font-weight: 700; fill: #111827; }
+    .small { font-size: 13px; font-weight: 500; fill: #334155; }
+    .tiny { font-size: 12px; font-weight: 500; fill: #64748b; }
+  </style>
+
+  <rect x="0" y="0" width="1440" height="900" fill="#f8fafc"/>
+  <text class="title" x="56" y="60">Poly Agent 技术架构图</text>
+  <text class="subtitle" x="56" y="88">高分子材料智能研发平台：前端工作台、FastAPI 后端、领域服务、计算执行、文献 RAG 与外部系统集成</text>
+
+  <rect x="40" y="126" width="198" height="640" rx="16" fill="#ffffff" stroke="#dbe3ea" stroke-width="1.3"/>
+  <text class="group" x="64" y="164">访问层</text>
+  <rect x="64" y="204" width="150" height="86" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.4"/>
+  <text class="label" x="86" y="238">用户浏览器</text>
+  <text class="small" x="86" y="263">Browser / SPA</text>
+  <rect x="64" y="342" width="150" height="118" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.4"/>
+  <text class="label" x="92" y="376">Vue 3</text>
+  <text class="small" x="82" y="402">Element Plus</text>
+  <text class="small" x="91" y="426">Vite / Axios</text>
+  <rect x="64" y="526" width="150" height="122" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text class="label" x="92" y="560">AI4MS</text>
+  <text class="small" x="83" y="586">Portal SSO</text>
+  <text class="small" x="83" y="610">共享账户体系</text>
+
+  <rect x="270" y="126" width="316" height="640" rx="16" fill="#ffffff" stroke="#dbe3ea" stroke-width="1.3"/>
+  <text class="group" x="294" y="164">Poly Agent Backend</text>
+  <rect x="294" y="204" width="268" height="104" rx="10" fill="#ecfdf5" stroke="#14b8a6" stroke-width="1.4"/>
+  <text class="label" x="336" y="238">FastAPI /api/v1</text>
+  <text class="small" x="316" y="264">CORS, request id, unified errors</text>
+  <text class="small" x="316" y="286">生产模式托管 frontend/dist</text>
+  <rect x="294" y="346" width="120" height="64" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text class="small" x="319" y="374">Auth / Admin</text>
+  <text class="tiny" x="319" y="394">HMAC token</text>
+  <rect x="442" y="346" width="120" height="64" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text class="small" x="465" y="374">Assistant</text>
+  <text class="tiny" x="465" y="394">LLM actions</text>
+  <rect x="294" y="432" width="120" height="64" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text class="small" x="312" y="460">Alchemist API</text>
+  <text class="tiny" x="312" y="480">DoE / BO</text>
+  <rect x="442" y="432" width="120" height="64" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text class="small" x="457" y="460">Computations</text>
+  <text class="tiny" x="457" y="480">runs / artifacts</text>
+  <rect x="294" y="518" width="120" height="64" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text class="small" x="313" y="546">ResearchEngine</text>
+  <text class="tiny" x="313" y="566">P0 workflow</text>
+  <rect x="442" y="518" width="120" height="64" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text class="small" x="462" y="546">Knowledge</text>
+  <text class="tiny" x="462" y="566">RAG facade</text>
+  <rect x="294" y="604" width="120" height="64" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text class="small" x="316" y="632">Reports</text>
+  <text class="tiny" x="316" y="652">skill pipeline</text>
+  <rect x="442" y="604" width="120" height="64" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+  <text class="small" x="460" y="632">Data Catalog</text>
+  <text class="tiny" x="460" y="652">assets facade</text>
+
+  <rect x="618" y="126" width="346" height="640" rx="16" fill="#ffffff" stroke="#dbe3ea" stroke-width="1.3"/>
+  <text class="group" x="642" y="164">领域服务与执行</text>
+  <rect x="642" y="204" width="132" height="96" rx="10" fill="#ecfdf5" stroke="#14b8a6" stroke-width="1.4"/>
+  <text class="small" x="669" y="235">Alchemist</text>
+  <text class="tiny" x="665" y="258">变量 / DoE</text>
+  <text class="tiny" x="665" y="278">GP / 采集优化</text>
+  <rect x="808" y="204" width="132" height="96" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+  <text class="small" x="833" y="235">Research</text>
+  <text class="small" x="835" y="255">Engine</text>
+  <text class="tiny" x="826" y="278">AutoResearch</text>
+  <rect x="642" y="342" width="132" height="96" rx="10" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.4"/>
+  <text class="small" x="661" y="373">Computation</text>
+  <text class="small" x="677" y="393">Service</text>
+  <text class="tiny" x="663" y="416">run lifecycle</text>
+  <rect x="808" y="342" width="132" height="96" rx="10" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.4"/>
+  <text class="small" x="839" y="373">Worker</text>
+  <text class="tiny" x="829" y="396">claim / execute</text>
+  <text class="tiny" x="829" y="416">heartbeat / reclaim</text>
+  <rect x="642" y="480" width="132" height="96" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.4"/>
+  <text class="small" x="664" y="511">Knowledge</text>
+  <text class="small" x="677" y="531">Service</text>
+  <text class="tiny" x="662" y="554">query / stream</text>
+  <rect x="808" y="480" width="132" height="96" rx="10" fill="#fff1f2" stroke="#fb7185" stroke-width="1.4"/>
+  <text class="small" x="839" y="511">Adapters</text>
+  <text class="tiny" x="827" y="534">RDKit / xTB</text>
+  <text class="tiny" x="827" y="554">ORCA fixture</text>
+  <rect x="642" y="618" width="298" height="70" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text class="small" x="666" y="648">Stale-run Reaper + Integration Status</text>
+  <text class="tiny" x="666" y="670">后台回收过期 run，统一检查外部服务配置</text>
+
+  <rect x="996" y="126" width="386" height="330" rx="16" fill="#ffffff" stroke="#dbe3ea" stroke-width="1.3"/>
+  <text class="group" x="1020" y="164">独立服务与外部系统</text>
+  <rect x="1020" y="204" width="154" height="102" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.4"/>
+  <text class="small" x="1045" y="236">Literature RAG</text>
+  <text class="tiny" x="1043" y="260">FastAPI :8200</text>
+  <text class="tiny" x="1043" y="280">RAG / Graph API</text>
+  <rect x="1204" y="204" width="154" height="102" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text class="small" x="1236" y="236">LLM Provider</text>
+  <text class="tiny" x="1227" y="260">assistant / reports</text>
+  <text class="tiny" x="1227" y="280">openai-compatible</text>
+  <rect x="1020" y="344" width="154" height="82" rx="10" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.4"/>
+  <text class="small" x="1057" y="376">ORCA / HPC</text>
+  <text class="tiny" x="1044" y="400">SpecLabOS planned</text>
+  <rect x="1204" y="344" width="154" height="82" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text class="small" x="1239" y="376">Edison API</text>
+  <text class="tiny" x="1226" y="400">literature search</text>
+
+  <rect x="996" y="490" width="386" height="276" rx="16" fill="#ffffff" stroke="#dbe3ea" stroke-width="1.3"/>
+  <text class="group" x="1020" y="528">存储与运行时</text>
+  <rect x="1020" y="566" width="154" height="78" rx="10" fill="#ecfdf5" stroke="#14b8a6" stroke-width="1.4"/>
+  <text class="small" x="1058" y="598">MongoDB</text>
+  <text class="tiny" x="1045" y="622">poly_agent / ai4ms</text>
+  <rect x="1204" y="566" width="154" height="78" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text class="small" x="1232" y="598">Runtime Files</text>
+  <text class="tiny" x="1222" y="622">uploads / outputs / logs</text>
+  <rect x="1020" y="680" width="154" height="62" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.4"/>
+  <text class="small" x="1067" y="708">MinIO</text>
+  <text class="tiny" x="1048" y="728">PDF / parsed assets</text>
+  <rect x="1204" y="680" width="154" height="62" rx="10" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="1.4"/>
+  <text class="small" x="1264" y="708">Neo4j</text>
+  <text class="tiny" x="1237" y="728">graph / vector index</text>
+
+  <line x1="139" y1="290" x2="139" y2="342" stroke="#0f766e" stroke-width="2.2"/>
+  <polygon points="139,342 134,333 144,333" fill="#0f766e"/>
+  <line x1="214" y1="401" x2="294" y2="401" stroke="#0f766e" stroke-width="2.2"/>
+  <polygon points="294,401 285,396 285,406" fill="#0f766e"/>
+  <text class="tiny" x="220" y="388">/api proxy</text>
+  <line x1="562" y1="255" x2="642" y2="255" stroke="#475569" stroke-width="2"/>
+  <polygon points="642,255 633,250 633,260" fill="#475569"/>
+  <text class="tiny" x="579" y="242">routes</text>
+  <line x1="562" y1="464" x2="642" y2="390" stroke="#475569" stroke-width="2"/>
+  <polygon points="642,390 631,392 638,381" fill="#475569"/>
+  <line x1="562" y1="550" x2="642" y2="528" stroke="#475569" stroke-width="2"/>
+  <polygon points="642,528 632,525 635,535" fill="#475569"/>
+  <line x1="774" y1="390" x2="808" y2="390" stroke="#475569" stroke-width="2"/>
+  <polygon points="808,390 799,385 799,395" fill="#475569"/>
+  <line x1="940" y1="390" x2="1020" y2="385" stroke="#b45309" stroke-width="2"/>
+  <polygon points="1020,385 1011,380 1012,390" fill="#b45309"/>
+  <line x1="940" y1="528" x2="1020" y2="255" stroke="#475569" stroke-width="2" stroke-dasharray="7 6"/>
+  <polygon points="1020,255 1013,263 1010,253" fill="#475569"/>
+  <line x1="774" y1="528" x2="808" y2="528" stroke="#475569" stroke-width="2"/>
+  <polygon points="808,528 799,523 799,533" fill="#475569"/>
+  <line x1="874" y1="438" x2="874" y2="480" stroke="#475569" stroke-width="2"/>
+  <polygon points="874,480 869,471 879,471" fill="#475569"/>
+  <line x1="708" y1="300" x2="708" y2="342" stroke="#475569" stroke-width="2"/>
+  <polygon points="708,342 703,333 713,333" fill="#475569"/>
+  <line x1="874" y1="300" x2="874" y2="342" stroke="#475569" stroke-width="2"/>
+  <polygon points="874,342 869,333 879,333" fill="#475569"/>
+  <line x1="790" y1="688" x2="1097" y2="680" stroke="#475569" stroke-width="2" stroke-dasharray="7 6"/>
+  <polygon points="1097,680 1088,675 1088,685" fill="#475569"/>
+  <line x1="940" y1="652" x2="1020" y2="605" stroke="#475569" stroke-width="2"/>
+  <polygon points="1020,605 1009,606 1015,615" fill="#475569"/>
+  <line x1="1174" y1="255" x2="1204" y2="255" stroke="#475569" stroke-width="2"/>
+  <polygon points="1204,255 1195,250 1195,260" fill="#475569"/>
+  <line x1="1174" y1="255" x2="1097" y2="680" stroke="#475569" stroke-width="2" stroke-dasharray="7 6"/>
+  <polygon points="1097,680 1094,669 1104,671" fill="#475569"/>
+  <line x1="1174" y1="255" x2="1281" y2="680" stroke="#475569" stroke-width="2" stroke-dasharray="7 6"/>
+  <polygon points="1281,680 1274,672 1284,670" fill="#475569"/>
+  <line x1="214" y1="587" x2="294" y2="378" stroke="#475569" stroke-width="2" stroke-dasharray="7 6"/>
+  <polygon points="294,378 286,385 284,375" fill="#475569"/>
+
+  <rect x="56" y="810" width="1328" height="64" rx="8" fill="#eef2f7" stroke="#dbe3ea" stroke-width="1"/>
+  <text class="small" x="76" y="838">数据流：浏览器访问 Vue 工作台，经 FastAPI /api/v1 调用领域服务；计算 run 由 worker 执行并写回 MongoDB 与 runtime artifacts。</text>
+  <text class="small" x="76" y="858">Knowledge facade 通过独立 Literature RAG 服务访问文献、对象存储和知识图谱；助手与报告链路按配置调用 LLM。</text>
+</svg>

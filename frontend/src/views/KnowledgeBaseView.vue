@@ -10,6 +10,11 @@ import {
   Refresh,
   Search,
 } from '@element-plus/icons-vue'
+import VChart from 'vue-echarts'
+import { use } from 'echarts/core'
+import { GraphChart } from 'echarts/charts'
+import { LegendComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 
 import {
   getApiErrorMessage,
@@ -20,6 +25,13 @@ import {
   queryKnowledgeBase,
   streamKnowledgeQuery,
 } from '../api/polyAgentApi'
+
+use([
+  GraphChart,
+  LegendComponent,
+  TooltipComponent,
+  CanvasRenderer,
+])
 
 const route = useRoute()
 const router = useRouter()
@@ -33,6 +45,7 @@ const queryLoading = ref(false)
 const graphLoading = ref(false)
 const answer = ref(null)
 const graph = ref(null)
+const graphViewMode = ref('relationship')
 const selectedNodeId = ref('')
 const suggestedQuestions = ref([])
 const suggestionsLoading = ref(false)
@@ -68,14 +81,23 @@ const selectedNode = computed(() => graphNodes.value.find((item) => item.id === 
 const selectedNodeEdges = computed(() =>
   graphEdges.value.filter((item) => item.source === selectedNode.value?.id || item.target === selectedNode.value?.id),
 )
+const graphNodeDegreeMap = computed(() => {
+  const degreeMap = {}
+  graphEdges.value.forEach((edge) => {
+    degreeMap[edge.source] = (degreeMap[edge.source] || 0) + 1
+    degreeMap[edge.target] = (degreeMap[edge.target] || 0) + 1
+  })
+  return degreeMap
+})
 const answerBlocks = computed(() => parseMarkdownBlocks(answer.value?.answer || ''))
 const systemMetricItems = computed(() => [
   { label: '文档', value: selectedSystem.value?.indexed_document_count || selectedSystem.value?.document_count || graphStats.value.document_count || 0 },
   { label: '实体', value: selectedSystem.value?.entity_count || graphStats.value.entity_count || 0 },
   { label: '关系', value: selectedSystem.value?.relation_count || graphStats.value.relation_count || 0 },
-  { label: '索引状态', value: systemStatusLabel(selectedSystem.value?.status || health.value?.status) },
+  { label: '图谱来源', value: sourceStatusLabel(selectedSystem.value || health.value) },
 ])
 const currentStatus = computed(() => selectedSystem.value?.status || health.value?.status || 'unavailable')
+const currentStatusLabel = computed(() => sourceStatusLabel(selectedSystem.value || health.value) || systemStatusLabel(currentStatus.value))
 const currentStatusMessage = computed(() =>
   normalizeKnowledgeMessage(selectedSystem.value?.health_message || health.value?.message || queryUnavailableMessage.value),
 )
@@ -102,10 +124,97 @@ const graphTypeCounts = computed(() => {
   })
   return Object.entries(counts).map(([type, count]) => ({ type, count }))
 })
+const graphCategories = computed(() => graphTypeCounts.value.map((item) => ({
+  name: item.type,
+  itemStyle: { color: graphTypeColor(item.type) },
+})))
+const knowledgeGraphOption = computed(() => ({
+  color: graphCategories.value.map((item) => item.itemStyle.color),
+  legend: {
+    type: 'scroll',
+    orient: 'vertical',
+    right: 10,
+    top: 16,
+    bottom: 16,
+    textStyle: { color: '#64748b', fontSize: 11 },
+    data: graphCategories.value.map((item) => item.name),
+  },
+  tooltip: {
+    trigger: 'item',
+    confine: true,
+    formatter: graphTooltipFormatter,
+  },
+  series: [{
+    type: 'graph',
+    layout: 'force',
+    categories: graphCategories.value,
+    data: graphNodes.value.map((node) => {
+      const degree = graphNodeDegreeMap.value[node.id] || 0
+      const isSelected = node.id === selectedNode.value?.id
+      return {
+        id: node.id,
+        name: node.label || node.id,
+        value: Number(node.score || degree || 1),
+        category: node.type,
+        symbolSize: Math.max(28, Math.min(62, 30 + degree * 4)),
+        draggable: true,
+        raw: node,
+        label: {
+          show: isSelected || degree > 1,
+          position: 'right',
+          color: '#0f172a',
+          fontSize: 11,
+          width: 136,
+          overflow: 'truncate',
+        },
+        itemStyle: {
+          color: graphTypeColor(node.type),
+          borderColor: isSelected ? '#0f172a' : '#ffffff',
+          borderWidth: isSelected ? 3 : 1,
+        },
+      }
+    }),
+    links: graphEdges.value.map((edge, index) => ({
+      id: edge.id || `${edge.source}-${edge.target}-${edge.type}-${index}`,
+      source: edge.source,
+      target: edge.target,
+      name: edge.type,
+      raw: edge,
+      lineStyle: {
+        color: '#94a3b8',
+        opacity: 0.7,
+        width: edge.source === selectedNode.value?.id || edge.target === selectedNode.value?.id ? 2.2 : 1,
+        curveness: 0.08,
+      },
+      label: {
+        show: edge.source === selectedNode.value?.id || edge.target === selectedNode.value?.id,
+        formatter: edge.type,
+        color: '#475569',
+        fontSize: 10,
+      },
+    })),
+    roam: true,
+    edgeSymbol: ['none', 'arrow'],
+    edgeSymbolSize: 7,
+    focusNodeAdjacency: true,
+    force: {
+      repulsion: 220,
+      edgeLength: [80, 150],
+      gravity: 0.08,
+    },
+    emphasis: {
+      focus: 'adjacency',
+      lineStyle: { width: 2.5 },
+      label: { show: true },
+    },
+    animationDurationUpdate: 350,
+  }],
+}))
 const topCitations = computed(() => answer.value?.citations?.filter((item) => citationUrl(item)).slice(0, 8) || [])
 const answerGraphContext = computed(() => answer.value?.graph_context || null)
 const canOpenAnswerGraph = computed(() => (answerGraphContext.value?.nodes || []).length > 0)
 const graphEmptyMessage = computed(() => {
+  if (isProductionNeo4j(selectedSystem.value) && !hasNeo4jGraphData(selectedSystem.value)) return 'Neo4j 已连接，但 KrF 图谱尚未完成 worker 索引。'
   if (!canLoadGraph.value) return '该知识库体系未提供可用图谱。'
   if (!graph.value) return '尚未加载子图，输入关键词或使用默认关键词加载。'
   return '当前关键词未匹配到图谱节点。'
@@ -114,7 +223,7 @@ const graphLanes = computed(() => {
   const lanes = [
     { key: 'materials', label: 'Materials', types: ['Material', 'Polymer', 'Resin', 'Monomer', 'PhotoacidGenerator', 'Additive'], nodes: [] },
     { key: 'strategies', label: 'Strategies', types: ['Strategy', 'Method', 'ProcessCondition'], nodes: [] },
-    { key: 'properties', label: 'Properties', types: ['Property', 'LithographyMetric', 'Application'], nodes: [] },
+    { key: 'properties', label: 'Properties', types: ['Property', 'LithographyMetric', 'PerformanceMetric', 'Application'], nodes: [] },
     { key: 'papers', label: 'Papers & Chunks', types: ['Paper', 'Dataset', 'Chunk'], nodes: [] },
   ]
   graphNodes.value.forEach((node) => {
@@ -273,7 +382,9 @@ function statusTagType(status) {
   return 'danger'
 }
 
-function systemStatusLabel(status) {
+function systemStatusLabel(status, system = null) {
+  const sourceLabel = sourceStatusLabel(system)
+  if (sourceLabel) return sourceLabel
   const labels = {
     ready: '已连接',
     indexing: '索引中',
@@ -282,6 +393,25 @@ function systemStatusLabel(status) {
     unavailable: '不可用',
   }
   return labels[status] || '未知'
+}
+
+function sourceStatusLabel(source) {
+  if (!source) return ''
+  if (source.is_demo || source.backend === 'memory' || source.graph_backend === 'memory') {
+    return 'Demo / Memory 数据，非 Neo4j'
+  }
+  if (isProductionNeo4j(source)) {
+    return hasNeo4jGraphData(source) ? 'Neo4j / 真实 PDF 索引' : 'Neo4j 已连接，等待 worker 索引'
+  }
+  return ''
+}
+
+function isProductionNeo4j(source) {
+  return source?.backend === 'production' && source?.graph_backend === 'neo4j'
+}
+
+function hasNeo4jGraphData(source) {
+  return Number(source?.graph_node_count || 0) > 0 && Number(source?.graph_relationship_count || 0) > 0
 }
 
 function hasCapability(system, capability) {
@@ -333,6 +463,63 @@ function nodeTypeTag(type) {
     Application: 'warning',
   }
   return map[type] || 'info'
+}
+
+function graphNodeTitle(node) {
+  return `${node?.label || ''} · ${node?.type || ''}`
+}
+
+function graphTypeColor(type) {
+  const map = {
+    Material: '#2f855a',
+    Polymer: '#2563eb',
+    Resin: '#0891b2',
+    Monomer: '#d97706',
+    PhotoacidGenerator: '#9333ea',
+    Additive: '#7c3aed',
+    Property: '#dc2626',
+    LithographyMetric: '#b7791f',
+    PerformanceMetric: '#e11d48',
+    Method: '#1d4ed8',
+    Strategy: '#0f766e',
+    ProcessCondition: '#ca8a04',
+    Paper: '#64748b',
+    Dataset: '#16a34a',
+    Chunk: '#475569',
+    Application: '#ea580c',
+  }
+  return map[type] || '#64748b'
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+function graphTooltipFormatter(params) {
+  if (params.dataType === 'edge') {
+    const edge = params.data?.raw || params.data || {}
+    return [
+      `<strong>${escapeHtml(edge.type || params.name || '关系')}</strong>`,
+      `${escapeHtml(nodeLabelById(edge.source))} -&gt; ${escapeHtml(nodeLabelById(edge.target))}`,
+    ].join('<br/>')
+  }
+  const node = params.data?.raw || params.data || {}
+  return [
+    `<strong>${escapeHtml(node.label || params.name || node.id)}</strong>`,
+    `类型：${escapeHtml(node.type || 'unknown')}`,
+    `ID：${escapeHtml(node.id || '')}`,
+  ].join('<br/>')
+}
+
+function handleGraphChartClick(params) {
+  if (params.dataType !== 'node') return
+  const nodeId = params.data?.id || params.data?.raw?.id
+  if (nodeId) selectNode(nodeId)
 }
 
 async function loadBootstrap() {
@@ -512,14 +699,14 @@ onMounted(loadBootstrap)
               <div class="system-option">
                 <div>
                   <strong>{{ system.name }}</strong>
-                  <small>{{ system.provider || 'unknown' }}:{{ system.corpus_id || system.system_id }} · {{ system.indexed_document_count || system.document_count || 0 }} docs</small>
+                  <small>{{ system.provider || 'unknown' }}:{{ system.corpus_id || system.system_id }} · {{ system.indexed_document_count || system.document_count || 0 }} docs · {{ sourceStatusLabel(system) || system.graph_backend || 'unknown' }}</small>
                 </div>
-                <el-tag size="small" :type="statusTagType(system.status)" effect="plain">{{ systemStatusLabel(system.status) }}</el-tag>
+                <el-tag size="small" :type="statusTagType(system.status)" effect="plain">{{ systemStatusLabel(system.status, system) }}</el-tag>
               </div>
             </el-option>
           </el-select>
           <el-tag v-if="health || selectedSystem" :type="statusTagType(currentStatus)" effect="plain">
-            {{ systemStatusLabel(currentStatus) }}
+            {{ currentStatusLabel }}
           </el-tag>
           <span class="status-message">{{ currentStatusMessage }}</span>
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
@@ -532,7 +719,7 @@ onMounted(loadBootstrap)
             <el-icon><Collection /></el-icon>
             <div>
               <strong>{{ selectedSystem.name }}</strong>
-              <small>{{ selectedSystem.description || selectedSystem.data_source_id || selectedSystem.system_id }}</small>
+              <small>{{ selectedSystem.description || selectedSystem.data_source_id || selectedSystem.system_id }} · {{ sourceStatusLabel(selectedSystem) || '来源未配置' }}</small>
             </div>
           </div>
           <div v-else class="system-meta">
@@ -736,33 +923,60 @@ onMounted(loadBootstrap)
                 {{ item.type }} {{ item.count }}
               </el-tag>
             </div>
+            <el-segmented
+              v-model="graphViewMode"
+              class="graph-view-segmented"
+              :options="[
+                { label: '关系图', value: 'relationship' },
+                { label: '分栏视图', value: 'columns' },
+              ]"
+            />
           </section>
 
           <section class="graph-workspace" v-loading="graphLoading">
-            <div class="graph-board">
-              <div v-for="lane in graphLanes" :key="lane.key" class="graph-lane">
-                <div class="graph-lane-header">
-                  <span>{{ lane.label }}</span>
-                  <strong>{{ lane.nodes.length }}</strong>
-                </div>
-                <div class="graph-lane-body">
-                  <button
-                    v-for="node in lane.nodes"
-                    :key="node.id"
-                    type="button"
-                    class="graph-node"
-                    :class="{ active: node.id === selectedNode?.id }"
-                    @click="selectNode(node.id)"
-                  >
-                    <span>{{ node.label }}</span>
-                    <small>{{ node.type }}</small>
-                  </button>
-                  <span v-if="!lane.nodes.length" class="lane-empty">无节点</span>
+            <div class="graph-main-pane">
+              <div class="graph-chart-pane" :class="{ active: graphViewMode === 'relationship' }">
+                <VChart
+                  v-if="graphNodes.length"
+                  class="relationship-chart"
+                  :option="knowledgeGraphOption"
+                  autoresize
+                  @click="handleGraphChartClick"
+                />
+                <div v-else class="empty-state">
+                  <el-icon><Connection /></el-icon>
+                  <span>{{ graphEmptyMessage }}</span>
                 </div>
               </div>
-              <div v-if="!graphNodes.length" class="empty-state">
-                <el-icon><Connection /></el-icon>
-                <span>{{ graphEmptyMessage }}</span>
+
+              <div class="graph-board-pane" :class="{ active: graphViewMode === 'columns' }">
+                <div class="graph-board">
+                  <div v-for="lane in graphLanes" :key="lane.key" class="graph-lane" :class="`graph-lane--${lane.key}`">
+                    <div class="graph-lane-header">
+                      <span>{{ lane.label }}</span>
+                      <strong>{{ lane.nodes.length }}</strong>
+                    </div>
+                    <div class="graph-lane-body">
+                      <button
+                        v-for="node in lane.nodes"
+                        :key="node.id"
+                        type="button"
+                        class="graph-node"
+                        :class="[`graph-node--${lane.key}`, { active: node.id === selectedNode?.id }]"
+                        :title="graphNodeTitle(node)"
+                        @click="selectNode(node.id)"
+                      >
+                        <span>{{ node.label }}</span>
+                        <small>{{ node.type }}</small>
+                      </button>
+                      <span v-if="!lane.nodes.length" class="lane-empty">无节点</span>
+                    </div>
+                  </div>
+                  <div v-if="!graphNodes.length" class="empty-state">
+                    <el-icon><Connection /></el-icon>
+                    <span>{{ graphEmptyMessage }}</span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -781,7 +995,9 @@ onMounted(loadBootstrap)
                 打开原文/PDF
               </a>
               <el-descriptions v-if="selectedNode" :column="1" size="small" border>
-                <el-descriptions-item label="ID">{{ selectedNode.id }}</el-descriptions-item>
+                <el-descriptions-item label="ID">
+                  <span class="node-id-text" :title="selectedNode.id">{{ selectedNode.id }}</span>
+                </el-descriptions-item>
                 <el-descriptions-item label="Score">{{ selectedNode.score }}</el-descriptions-item>
               </el-descriptions>
               <pre v-if="selectedNode" class="property-json">{{ JSON.stringify(selectedNode.properties, null, 2) }}</pre>
@@ -789,8 +1005,10 @@ onMounted(loadBootstrap)
               <div class="edge-list">
                 <h4>关联关系</h4>
                 <div v-for="edge in selectedNodeEdges" :key="edge.id" class="edge-item">
+                  <span class="edge-node" :title="nodeLabelById(edge.source)">{{ nodeLabelById(edge.source) }}</span>
                   <el-tag size="small" effect="plain">{{ edge.type }}</el-tag>
-                  <span>{{ nodeLabelById(edge.source) }} -> {{ nodeLabelById(edge.target) }}</span>
+                  <span class="edge-arrow">-&gt;</span>
+                  <span class="edge-node" :title="nodeLabelById(edge.target)">{{ nodeLabelById(edge.target) }}</span>
                 </div>
                 <span v-if="!selectedNodeEdges.length" class="muted-text">暂无关联关系。</span>
               </div>
@@ -1308,10 +1526,41 @@ onMounted(loadBootstrap)
   gap: 6px;
 }
 
+.graph-view-segmented {
+  flex: 0 0 auto;
+  min-width: 168px;
+}
+
 .graph-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 16px;
+}
+
+.graph-main-pane {
+  min-width: 0;
+}
+
+.graph-chart-pane,
+.graph-board-pane {
+  display: none;
+}
+
+.graph-chart-pane.active,
+.graph-board-pane.active {
+  display: block;
+}
+
+.graph-chart-pane {
+  min-height: 560px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.relationship-chart {
+  width: 100%;
+  height: 560px;
 }
 
 .graph-board {
@@ -1334,6 +1583,22 @@ onMounted(loadBootstrap)
   background: #ffffff;
 }
 
+.graph-lane--materials {
+  border-color: #bddfca;
+}
+
+.graph-lane--strategies {
+  border-color: #bdd7ff;
+}
+
+.graph-lane--properties {
+  border-color: #ead1a0;
+}
+
+.graph-lane--papers {
+  border-color: #d8dee8;
+}
+
 .graph-lane-header {
   min-height: 38px;
   display: flex;
@@ -1347,6 +1612,26 @@ onMounted(loadBootstrap)
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.graph-lane--materials .graph-lane-header {
+  background: #f0f8f2;
+  color: #276749;
+}
+
+.graph-lane--strategies .graph-lane-header {
+  background: #f0f6ff;
+  color: #1d4f91;
+}
+
+.graph-lane--properties .graph-lane-header {
+  background: #fff8e8;
+  color: #8a5a00;
+}
+
+.graph-lane--papers .graph-lane-header {
+  background: #f6f8fb;
+  color: #64748b;
 }
 
 .graph-lane-header strong {
@@ -1365,6 +1650,7 @@ onMounted(loadBootstrap)
 }
 
 .graph-node {
+  position: relative;
   width: 100%;
   min-height: 48px;
   border: 1px solid #d4dfec;
@@ -1374,12 +1660,44 @@ onMounted(loadBootstrap)
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   gap: 2px;
-  padding: 8px;
-  text-align: center;
+  padding: 8px 8px 8px 12px;
+  text-align: left;
   box-shadow: 0 8px 16px rgba(15, 23, 42, 0.06);
+}
+
+.graph-node::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #94a3b8;
+}
+
+.graph-node--materials::before {
+  background: #2f855a;
+}
+
+.graph-node--strategies::before {
+  background: #2563eb;
+}
+
+.graph-node--properties::before {
+  background: #b7791f;
+}
+
+.graph-node--papers {
+  background: #f8fafc;
+  box-shadow: none;
+}
+
+.graph-node--papers::before {
+  background: #94a3b8;
 }
 
 .graph-node.active {
@@ -1389,9 +1707,11 @@ onMounted(loadBootstrap)
 
 .graph-node span {
   max-width: 100%;
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   font-size: 12px;
   font-weight: 700;
 }
@@ -1446,6 +1766,30 @@ onMounted(loadBootstrap)
 .node-detail-header {
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+}
+
+.node-detail-header h4 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.node-id-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-detail :deep(.el-descriptions__cell) {
+  min-width: 0;
+}
+
+.node-detail :deep(.el-descriptions__content) {
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .property-json {
@@ -1459,10 +1803,14 @@ onMounted(loadBootstrap)
   color: #dbeafe;
   font-family: var(--app-mono-font);
   font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .edge-item {
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr);
+  gap: 6px;
   min-height: 34px;
   padding: 6px 8px;
   border: 1px solid var(--app-border-soft);
@@ -1472,9 +1820,18 @@ onMounted(loadBootstrap)
   min-width: 0;
 }
 
-.edge-item span {
+.edge-node {
   min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
+}
+
+.edge-arrow {
+  color: var(--app-ink-muted);
 }
 
 .control-help {
@@ -1550,6 +1907,15 @@ onMounted(loadBootstrap)
   .graph-board {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     min-height: 520px;
+  }
+
+  .graph-view-segmented,
+  .graph-chart-pane {
+    display: none !important;
+  }
+
+  .graph-board-pane {
+    display: block !important;
   }
 
   .type-legend {

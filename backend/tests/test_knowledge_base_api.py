@@ -83,6 +83,8 @@ class KnowledgeBaseApiTest(ComputationTestCase):
                         "material_family": "photoresist", "description": "KrF corpus",
                         "document_count": 2, "entity_count": 4, "relation_count": 5,
                         "status": "ready", "capabilities": ["query", "streaming", "graph"],
+                        "backend": "production", "graph_backend": "neo4j", "source_mode": "ingested_pdf",
+                        "is_demo": False, "graph_node_count": 9, "graph_relationship_count": 8,
                     },
                     {
                         "corpus_id": "battery_polymer", "name": "Battery Polymer", "domain": "energy",
@@ -100,7 +102,37 @@ class KnowledgeBaseApiTest(ComputationTestCase):
         self.assertEqual(data["items"][0]["provider"], "literature-rag")
         self.assertEqual(data["items"][0]["data_source_id"], "literature-rag:krf_photoresist")
         self.assertEqual(data["items"][0]["status"], "ready")
+        self.assertEqual(data["items"][0]["backend"], "production")
+        self.assertEqual(data["items"][0]["graph_backend"], "neo4j")
+        self.assertEqual(data["items"][0]["source_mode"], "ingested_pdf")
+        self.assertFalse(data["items"][0]["is_demo"])
+        self.assertEqual(data["items"][0]["graph_node_count"], 9)
         self.assertEqual(data["items"][1]["status"], "empty")
+
+    def test_production_neo4j_empty_graph_is_not_ready(self):
+        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs): pass
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def get(self, path):
+                assert path == "/api/v1/corpora"
+                return FakeResponse({"data": {"items": [{
+                    "corpus_id": "krf_photoresist", "name": "KrF",
+                    "indexed_document_count": 30, "document_count": 30,
+                    "status": "ready", "backend": "production",
+                    "graph_backend": "neo4j", "source_mode": "ingested_pdf",
+                    "graph_node_count": 0, "graph_relationship_count": 0,
+                }]}})
+
+        with patch("app.services.knowledge_service.httpx.Client", FakeClient):
+            response = self.client.get(f"{self.base_url}/systems")
+        self.assertEqual(response.status_code, 200)
+        item = response.json()["data"]["items"][0]
+        self.assertEqual(item["status"], "warning")
+        self.assertEqual(item["graph_backend"], "neo4j")
+        self.assertEqual(item["indexed_document_count"], 30)
 
     def test_list_systems_auto_discovers_local_literature_rag_in_local_env(self):
         os.environ["APP_ENV"] = "dev"
@@ -307,12 +339,22 @@ class KnowledgeBaseApiTest(ComputationTestCase):
                 assert params["query"] == "polymer electrolyte"
                 return FakeResponse({"data": {
                     "corpus_id": "battery_polymer",
-                    "nodes": [{"id": "paper:1", "label": "Battery paper", "type": "Paper", "score": 1,
-                               "properties": {"document_id": "doc_1", "doi": "10.1000/battery"}}],
+                    "nodes": [
+                        {"id": "paper:1", "label": "Battery paper", "type": "Paper", "score": 1,
+                         "properties": {"document_id": "doc_1", "doi": "10.1000/battery"}},
+                        {"id": "metric:1", "label": "ionic conductivity", "type": "performance_metric", "score": 1,
+                         "properties": {"document_id": "doc_1"}},
+                        {"id": "material:1", "label": "polymer electrolyte", "type": "Entity", "score": 1,
+                         "properties": {"document_id": "doc_1", "entity_type": "Polymer"}},
+                    ],
                     "edges": [],
                     "stats": {"entity_count": 1, "relation_count": 0, "document_count": 1},
                     "configured": True, "message": "ok",
-                    "provenance": {"provider": "literature-rag", "query": params["query"]},
+                    "backend": "production", "graph_backend": "neo4j", "source_mode": "ingested_pdf",
+                    "is_demo": False,
+                    "provenance": {"provider": "literature-rag", "query": params["query"],
+                                   "storage_uri": "s3://secret", "object_key": "hidden",
+                                   "embedding": [0.1], "backend": "production"},
                 }})
 
         with patch("app.services.knowledge_service.httpx.Client", FakeClient):
@@ -321,7 +363,14 @@ class KnowledgeBaseApiTest(ComputationTestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
         self.assertEqual(data["nodes"][0]["type"], "Paper")
+        self.assertEqual(data["nodes"][1]["type"], "LithographyMetric")
+        self.assertEqual(data["nodes"][2]["type"], "Polymer")
         self.assertEqual(data["provenance"]["provider"], "literature-rag")
+        self.assertEqual(data["backend"], "production")
+        self.assertEqual(data["graph_backend"], "neo4j")
+        self.assertNotIn("storage_uri", response.text)
+        self.assertNotIn("object_key", response.text)
+        self.assertNotIn("embedding", response.text)
 
     def test_legacy_environment_variable_remains_supported(self):
         os.environ["KNOWLEDGE_RAG_BASE_URL"] = "http://legacy.test"

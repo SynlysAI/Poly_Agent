@@ -257,10 +257,16 @@ class Neo4jGraphStore:
     def subgraph(self, corpus_id: str, query: str, limit: int = 30) -> dict[str, Any]:
         with self.driver.session() as session:
             records = session.run(
-                "MATCH (p:Paper {corpus_id: $corpus_id})-[r:CONTAINS|MENTIONS]->(n) "
-                "WHERE toLower(p.title) CONTAINS toLower($query) OR toLower(coalesce(n.text, n.label, '')) CONTAINS toLower($query) "
-                "RETURN p, r, n LIMIT $limit",
-                corpus_id=corpus_id, query=query, limit=limit,
+                "MATCH (p:Paper {corpus_id: $corpus_id})-[matched_rel:CONTAINS|MENTIONS]->(matched_node) "
+                "WHERE toLower(p.title) CONTAINS toLower($search_query) "
+                "   OR toLower(coalesce(matched_node.text, matched_node.label, '')) CONTAINS toLower($search_query) "
+                "WITH collect(DISTINCT p) AS matched_papers "
+                "UNWIND matched_papers AS p "
+                "MATCH (p)-[r:MENTIONS|CONTAINS]->(n) "
+                "RETURN p, r, n "
+                "ORDER BY CASE type(r) WHEN 'MENTIONS' THEN 0 ELSE 1 END "
+                "LIMIT $limit",
+                corpus_id=corpus_id, search_query=query, limit=limit,
             )
             nodes: dict[str, dict[str, Any]] = {}
             edges = []
@@ -276,6 +282,36 @@ class Neo4jGraphStore:
                 edges.append({"id": f"edge:{index}", "source": paper_id, "target": target_id,
                               "type": record["r"].type, "weight": 1.0, "properties": dict(record["r"])})
             return {"nodes": list(nodes.values())[:limit], "edges": edges[:limit]}
+
+    def corpus_stats(self, corpus_id: str) -> dict[str, int]:
+        with self.driver.session() as session:
+            record = session.run(
+                "MATCH (p:Paper {corpus_id: $corpus_id}) "
+                "OPTIONAL MATCH (p)-[r:CONTAINS|MENTIONS]->(n) "
+                "RETURN count(DISTINCT p) AS paper_count, "
+                "count(DISTINCT CASE WHEN n:Chunk THEN n END) AS chunk_count, "
+                "count(DISTINCT CASE WHEN n:Entity THEN n END) AS entity_count, "
+                "count(DISTINCT n) AS target_node_count, "
+                "count(r) AS relationship_count",
+                corpus_id=corpus_id,
+            ).single()
+            if not record:
+                return {
+                    "paper_count": 0,
+                    "chunk_count": 0,
+                    "entity_count": 0,
+                    "node_count": 0,
+                    "relationship_count": 0,
+                }
+            paper_count = int(record["paper_count"] or 0)
+            target_node_count = int(record["target_node_count"] or 0)
+            return {
+                "paper_count": paper_count,
+                "chunk_count": int(record["chunk_count"] or 0),
+                "entity_count": int(record["entity_count"] or 0),
+                "node_count": paper_count + target_node_count,
+                "relationship_count": int(record["relationship_count"] or 0),
+            }
 
     @staticmethod
     def _paper_properties(document: dict[str, Any]) -> dict[str, Any]:

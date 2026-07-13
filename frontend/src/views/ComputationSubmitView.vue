@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Cpu, Promotion } from '@element-plus/icons-vue'
+import { Cpu, Histogram, Promotion } from '@element-plus/icons-vue'
 
 import { createComputation, getApiErrorMessage } from '../api/polyAgentApi'
 
@@ -190,16 +190,40 @@ async function handleSubmit() {
           <el-form-item>
             <el-button type="primary" :icon="Promotion" :loading="submitting" @click="handleSubmit">提交计算任务</el-button>
             <el-button :icon="Cpu" @click="$router.push('/computations/runs')">计算任务中心</el-button>
+            <el-button :icon="Histogram" @click="$router.push({ path: '/tasks/center', query: { module_id: 'computation' } })">全局任务中心</el-button>
           </el-form-item>
         </el-form>
       </div>
     </section>
+
+    <aside class="panel guide-panel">
+      <div class="panel-header">
+        <h3 class="panel-title">如何使用</h3>
+      </div>
+      <div class="panel-body guide-body">
+        <div class="guide-step">
+          <strong>1. 输入候选分子</strong>
+          <span>填写候选名称和 SMILES。提交前会按 workflow 校验必填参数。</span>
+        </div>
+        <div class="guide-step">
+          <strong>2. 选择计算链路</strong>
+          <span>Local 结构生成调用 RDKit/OpenBabel；xTB/CREST 粗优化调用本机工具；ORCA 需要后端 license 标记可用。</span>
+        </div>
+        <div class="guide-step">
+          <strong>3. 追踪结果</strong>
+          <span>计算任务中心查看 timeline、artifact、结果摘要；全局任务中心用于跨模块回访。</span>
+        </div>
+      </div>
+    </aside>
   </div>
 </template>
 
 <style scoped>
 .submit-layout {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  align-items: start;
 }
 
 .panel-subtitle {
@@ -210,6 +234,36 @@ async function handleSubmit() {
 
 .computation-form {
   max-width: 780px;
+}
+
+.guide-panel {
+  position: sticky;
+  top: 76px;
+}
+
+.guide-body {
+  display: grid;
+  gap: 12px;
+}
+
+.guide-step {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.guide-step strong {
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.guide-step span {
+  color: var(--app-ink-muted);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .form-section-title {
@@ -230,6 +284,14 @@ async function handleSubmit() {
 }
 
 @media (max-width: 640px) {
+  .submit-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-panel {
+    position: static;
+  }
+
   .compact-grid {
     grid-template-columns: 1fr;
   }

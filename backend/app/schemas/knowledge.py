@@ -22,10 +22,18 @@ class KnowledgeSystem(BaseModel):
     material_family: str
     description: str
     is_demo: bool = False
+    backend: str | None = None
+    graph_backend: str | None = None
+    source_mode: str | None = None
     tags: list[str] = Field(default_factory=list)
     document_count: int = 0
     entity_count: int = 0
     relation_count: int = 0
+    graph_node_count: int = 0
+    graph_relationship_count: int = 0
+    graph_paper_count: int = 0
+    graph_chunk_count: int = 0
+    graph_entity_count: int = 0
     data_source_id: str | None = None
     provider: str | None = None
     corpus_id: str | None = None
@@ -110,6 +118,8 @@ class KnowledgeGraphStats(BaseModel):
     entity_count: int
     relation_count: int
     document_count: int
+    node_type_counts: dict[str, int] = Field(default_factory=dict)
+    category_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class KnowledgeGraphData(BaseModel):
@@ -123,6 +133,10 @@ class KnowledgeGraphData(BaseModel):
     stats: KnowledgeGraphStats
     configured: bool = True
     message: str = "ok"
+    backend: str | None = None
+    graph_backend: str | None = None
+    source_mode: str | None = None
+    is_demo: bool = False
     provenance: dict = Field(default_factory=dict)
 
 
@@ -183,3 +197,9 @@ class KnowledgeHealthData(BaseModel):
     demo_available: bool
     message: str
     systems: list[str] = Field(default_factory=list)
+    backend: str | None = None
+    graph_backend: str | None = None
+    source_mode: str | None = None
+    is_demo: bool = False
+    graph_node_count: int = 0
+    graph_relationship_count: int = 0

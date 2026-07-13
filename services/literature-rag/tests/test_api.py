@@ -36,6 +36,10 @@ def test_health_and_corpus_contract() -> None:
     assert item["corpus_id"] == "krf_photoresist"
     assert item["provider"] == "literature-rag"
     assert item["data_source_id"] == "literature-rag:krf_photoresist"
+    assert item["backend"] == "memory"
+    assert item["graph_backend"] == "memory"
+    assert item["source_mode"] == "seed_manifest"
+    assert item["is_demo"] is True
     assert item["status"] == "empty"
     assert item["capabilities"] == ["query", "streaming", "graph", "suggestions"]
 
@@ -78,6 +82,8 @@ def test_memory_backend_can_seed_from_manifest(tmp_path) -> None:
     assert item["corpus_id"] == "krf_photoresist"
     assert item["status"] == "ready"
     assert item["indexed_document_count"] == 1
+    assert item["is_demo"] is True
+    assert item["graph_backend"] == "memory"
 
     query = client.post("/api/v1/query", headers={"Authorization": "Bearer query-secret"}, json={
         "corpus_id": "krf_photoresist",
@@ -94,7 +100,19 @@ def test_memory_backend_can_seed_from_manifest(tmp_path) -> None:
         headers={"Authorization": "Bearer query-secret"},
     )
     assert graph.status_code == 200
+    assert graph.json()["data"]["backend"] == "memory"
+    assert graph.json()["data"]["graph_backend"] == "memory"
+    assert graph.json()["data"]["source_mode"] == "seed_manifest"
+    assert graph.json()["data"]["is_demo"] is True
     assert graph.json()["data"]["nodes"][0]["properties"]["source_url"] == "https://publisher.example/krf-seed.pdf"
+    node_types = {node["type"] for node in graph.json()["data"]["nodes"]}
+    assert "PhotoacidGenerator" in node_types
+    assert "LithographyMetric" in node_types
+    assert "Method" in node_types
+    stats = graph.json()["data"]["stats"]
+    assert stats["node_type_counts"]["PhotoacidGenerator"] >= 1
+    assert stats["category_counts"]["Materials"] >= 1
+    assert stats["category_counts"]["Properties"] >= 1
 
 
 def test_admin_and_query_api_keys_are_separated() -> None:
@@ -165,6 +183,43 @@ def test_query_returns_traceable_hits_citations_and_stream_events() -> None:
     assert '"event": "evidence"' in streamed.text
     assert '"event": "answer_delta"' in streamed.text
     assert '"event": "completed"' in streamed.text
+
+
+def test_subgraph_prioritizes_entities_before_chunks_and_covers_domain_lanes() -> None:
+    client, service = build_client()
+    service.seed_indexed_document(
+        corpus_id="krf_photoresist",
+        doi="10.1000/domain-graph",
+        title="Methacrylate polymers and acid trap strategy for KrF lithography",
+        journal="Journal of Photopolymer Science and Technology",
+        year=2024,
+        chunks=[
+            (
+                "KrF chemically amplified photoresist uses methacrylate polymers, "
+                "phenolic resin and PAG photoacid generator for 248 nm exposure."
+            ),
+            (
+                "An acid trap reagent and post exposure bake strategy improves "
+                "dissolution contrast, sensitivity, exposure latitude, resolution and etch resistance."
+            ),
+        ],
+    )
+
+    response = client.get(
+        "/api/v1/corpora/krf_photoresist/graph/subgraph",
+        params={"query": "KrF", "limit": 100},
+        headers={"Authorization": "Bearer query-secret"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    node_types = {node["type"] for node in data["nodes"]}
+    assert {"Polymer", "Resin", "PhotoacidGenerator", "Method", "ProcessCondition", "LithographyMetric"} <= node_types
+    assert any(node["type"] not in {"Paper", "Chunk"} for node in data["nodes"][:8])
+    assert data["stats"]["node_type_counts"]["Polymer"] >= 1
+    assert data["stats"]["category_counts"]["Materials"] >= 3
+    assert data["stats"]["category_counts"]["Strategies"] >= 2
+    assert data["stats"]["category_counts"]["Properties"] >= 3
 
 
 def test_chinese_query_uses_domain_synonyms() -> None:

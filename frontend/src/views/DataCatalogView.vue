@@ -7,7 +7,7 @@ import {
 } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
-import { BarChart, LineChart, PieChart, SankeyChart, TreemapChart } from 'echarts/charts'
+import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import {
   GridComponent, LegendComponent, TitleComponent, TooltipComponent,
 } from 'echarts/components'
@@ -28,8 +28,6 @@ use([
   BarChart,
   LineChart,
   PieChart,
-  SankeyChart,
-  TreemapChart,
   GridComponent,
   LegendComponent,
   TitleComponent,
@@ -114,62 +112,106 @@ const keyMetrics = computed(() => [
   },
 ])
 
-const collectionTreemapOption = computed(() => ({
-  color: ['#3b82f6', '#16a34a', '#d97706', '#dc2626', '#0891b2'],
-  tooltip: { formatter: (info) => `${info.name}<br/>${formatNumber(info.value)} 条` },
+const collectionGroupColors = {
+  材料数据资产: '#3b82f6',
+  计算任务与产物: '#16a34a',
+  研发流程与算法: '#d97706',
+  优化闭环: '#0891b2',
+  报告产物: '#64748b',
+}
+
+const collectionVolumeRows = computed(() => mongoCollections.value
+  .map((item) => {
+    const rawCount = Number(item.count || 0)
+    return {
+      name: item.display_name,
+      collectionKey: collectionIdentity(item),
+      group: item.group || '其他',
+      status: item.status,
+      rawCount,
+      scaledValue: scaleCount(rawCount),
+      color: collectionGroupColors[item.group] || '#64748b',
+    }
+  })
+  .sort((a, b) => b.rawCount - a.rawCount || a.name.localeCompare(b.name)))
+
+const collectionVolumeOption = computed(() => ({
+  grid: { left: 136, right: 104, top: 18, bottom: 36 },
+  tooltip: {
+    trigger: 'item',
+    formatter: (item) => {
+      const row = item.data
+      return [
+        row.name,
+        `集合：${row.collectionKey}`,
+        `分组：${row.group}`,
+        `状态：${statusLabel(row.status)}`,
+        `真实记录量：${formatNumber(row.rawCount)} 条`,
+      ].join('<br/>')
+    },
+  },
+  xAxis: {
+    type: 'value',
+    min: 0,
+    splitNumber: 4,
+    axisLabel: {
+      color: '#64748b',
+      formatter: (value) => formatScaleTick(value),
+    },
+    splitLine: { lineStyle: { color: '#e2e8f0' } },
+  },
+  yAxis: {
+    type: 'category',
+    inverse: true,
+    data: collectionVolumeRows.value.map((row) => row.name),
+    axisLabel: { color: '#334155', width: 124, overflow: 'truncate' },
+    axisTick: { show: false },
+  },
   series: [{
-    type: 'treemap',
-    roam: false,
-    nodeClick: false,
-    breadcrumb: { show: false },
-    label: { color: '#0f172a', formatter: '{b}' },
-    upperLabel: { show: true, color: '#334155' },
-    itemStyle: { borderColor: '#ffffff', borderWidth: 2, gapWidth: 2 },
-    data: Object.entries(collectionGroups.value).map(([group, items]) => ({
-      name: group,
-      value: Math.max(1, items.reduce((sum, item) => sum + Number(item.count || 0), 0)),
-      children: items.map((item) => ({
-        name: item.display_name,
-        value: Math.max(1, Number(item.count || 0)),
-      })),
+    type: 'bar',
+    data: collectionVolumeRows.value.map((row) => ({
+      ...row,
+      value: row.scaledValue,
+      itemStyle: { color: row.color, borderRadius: [0, 4, 4, 0] },
     })),
+    barWidth: 16,
+    barMinWidth: 4,
+    label: {
+      show: true,
+      position: 'right',
+      color: '#0f172a',
+      fontSize: 12,
+      formatter: (item) => formatNumber(item.data.rawCount),
+    },
   }],
 }))
 
-const sourceSankeyOption = computed(() => {
-  const labels = Object.fromEntries((relationships.value.nodes || []).map(item => [item.node_id, item.label]))
-  const nodes = (relationships.value.nodes || []).map(item => ({ name: item.label, value: item.record_count }))
-  const links = (relationships.value.edges || [])
+const relationshipRows = computed(() => {
+  const nodeMap = Object.fromEntries((relationships.value.nodes || []).map((item) => [item.node_id, item]))
+  const maxLinkedCount = Math.max(
+    1,
+    ...(relationships.value.edges || []).map((item) => Number(item.linked_count || 0)),
+  )
+  return ((relationships.value.edges || [])
     .filter(item => item.linked_count > 0)
-    .map(item => ({
-      source: labels[item.source] || item.source,
-      target: labels[item.target] || item.target,
-      value: item.linked_count,
-      coverage: item.target_coverage,
-      sourceField: item.source_field,
-      targetField: item.target_field,
-    }))
-  return {
-    color: ['#3b82f6', '#16a34a', '#d97706', '#0891b2', '#64748b'],
-    tooltip: {
-      trigger: 'item',
-      triggerOn: 'mousemove',
-      formatter: (item) => item.dataType === 'edge'
-        ? `${item.data.source} → ${item.data.target}<br/>真实关联 ${formatNumber(item.data.value)} 条<br/>目标覆盖率 ${(item.data.coverage * 100).toFixed(1)}%<br/>${item.data.sourceField} ↔ ${item.data.targetField}`
-        : `${item.name}<br/>集合记录 ${formatNumber(item.data.value || 0)} 条`,
-    },
-    series: [{
-      type: 'sankey',
-      emphasis: { focus: 'adjacency' },
-      nodeAlign: 'justify',
-      nodeWidth: 16,
-      nodeGap: 14,
-      lineStyle: { color: 'gradient', curveness: 0.45, opacity: 0.35 },
-      label: { color: '#334155', fontSize: 12 },
-      data: nodes,
-      links,
-    }],
-  }
+    .map((item) => {
+      const sourceNode = nodeMap[item.source] || {}
+      const targetNode = nodeMap[item.target] || {}
+      const linkedCount = Number(item.linked_count || 0)
+      return {
+        key: `${item.source}-${item.target}`,
+        sourceLabel: sourceNode.label || item.source,
+        targetLabel: targetNode.label || item.target,
+        sourceRecordCount: Number(sourceNode.record_count || 0),
+        targetRecordCount: Number(targetNode.record_count || 0),
+        linkedCount,
+        coveragePercent: Math.round(Number(item.target_coverage || 0) * 1000) / 10,
+        barWidth: Math.max(8, Math.round((linkedCount / maxLinkedCount) * 100)),
+        sourceField: item.source_field,
+        targetField: item.target_field,
+      }
+    })
+    .sort((a, b) => b.linkedCount - a.linkedCount || a.sourceLabel.localeCompare(b.sourceLabel)))
 })
 
 const materialDatasetOption = computed(() => {
@@ -271,6 +313,15 @@ const recordTrendOption = computed(() => {
 function formatNumber(value) {
   if (value === null || value === undefined || value === '') return '-'
   return Number(value).toLocaleString()
+}
+
+function scaleCount(value) {
+  return Math.log10(Number(value || 0) + 1)
+}
+
+function formatScaleTick(value) {
+  const rawValue = Math.max(0, Math.round((10 ** Number(value || 0)) - 1))
+  return rawValue ? `~${formatNumber(rawValue)}` : '0'
 }
 
 function formatBytes(value) {
@@ -749,13 +800,38 @@ onMounted(async () => {
             <div class="section-heading">
               <h2>集合记录量（条）</h2>
             </div>
-            <v-chart class="relation-chart" :option="collectionTreemapOption" autoresize />
+            <v-chart class="collection-volume-chart" :option="collectionVolumeOption" autoresize />
+            <p class="relationship-note">柱长为对数尺度，数值为真实记录量。</p>
           </section>
           <section class="catalog-section">
             <div class="section-heading">
               <h2>已验证跨集合关联（条）</h2>
             </div>
-            <v-chart class="relation-chart" :option="sourceSankeyOption" autoresize />
+            <div v-if="relationshipRows.length" class="relationship-list">
+              <div v-for="row in relationshipRows" :key="row.key" class="relationship-row">
+                <div class="relationship-endpoint">
+                  <span>来源</span>
+                  <strong>{{ row.sourceLabel }}</strong>
+                  <small>{{ formatNumber(row.sourceRecordCount) }} 条记录</small>
+                </div>
+                <div class="relationship-metric">
+                  <div class="relationship-count">
+                    <strong>{{ formatNumber(row.linkedCount) }}</strong>
+                    <span>条已验证关联</span>
+                  </div>
+                  <div class="relationship-bar" aria-hidden="true">
+                    <span :style="{ width: `${row.barWidth}%` }"></span>
+                  </div>
+                  <code>{{ row.sourceField }} -> {{ row.targetField }}</code>
+                </div>
+                <div class="relationship-endpoint target">
+                  <span>目标</span>
+                  <strong>{{ row.targetLabel }}</strong>
+                  <small>覆盖 {{ row.coveragePercent }}% · {{ formatNumber(row.targetRecordCount) }} 条记录</small>
+                </div>
+              </div>
+            </div>
+            <el-empty v-else description="暂无可验证的跨集合关联" />
             <p class="relationship-note">{{ relationships.notes?.[0] || '仅展示数据库中可验证的外键关系。' }}</p>
           </section>
         </div>
@@ -1036,14 +1112,92 @@ onMounted(async () => {
   font-size: 18px;
 }
 
-.side-chart,
-.relation-chart {
+.collection-volume-chart {
   width: 100%;
-  height: 340px;
+  height: 420px;
 }
 
-.relation-main .relation-chart {
-  height: 420px;
+.relationship-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 340px;
+}
+
+.relationship-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(132px, 1.1fr) minmax(0, 0.95fr);
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.relationship-endpoint,
+.relationship-metric {
+  min-width: 0;
+}
+
+.relationship-endpoint span,
+.relationship-count span,
+.relationship-endpoint small {
+  display: block;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.relationship-endpoint strong {
+  display: block;
+  margin: 4px 0;
+  color: var(--app-ink);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.relationship-endpoint.target {
+  text-align: right;
+}
+
+.relationship-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.relationship-count {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.relationship-count strong {
+  color: var(--app-primary);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.relationship-bar {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.relationship-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--app-primary);
+}
+
+.relationship-metric code {
+  color: var(--app-ink-muted);
+  text-align: center;
 }
 
 .relationship-note {
@@ -1261,6 +1415,22 @@ code {
 
   .record-tools .el-input {
     max-width: none;
+  }
+
+  .relationship-row {
+    grid-template-columns: 1fr;
+  }
+
+  .relationship-endpoint.target {
+    text-align: left;
+  }
+
+  .relationship-count {
+    justify-content: flex-start;
+  }
+
+  .relationship-metric code {
+    text-align: left;
   }
 }
 </style>

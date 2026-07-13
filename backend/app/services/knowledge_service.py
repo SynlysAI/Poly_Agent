@@ -89,6 +89,9 @@ class KnowledgeService:
         items = [self._normalize_corpus(item) for item in corpora.get("items") or [] if item.get("corpus_id") or item.get("system_id")]
         systems = [item.system_id for item in items]
         configured = ready and bool(systems)
+        source_fields = self._source_fields(raw)
+        graph_node_count = int(raw.get("graph_node_count") or 0)
+        graph_relationship_count = int(raw.get("graph_relationship_count") or 0)
         if not ready:
             message = "Literature RAG 服务尚未就绪。"
         elif configured:
@@ -96,7 +99,10 @@ class KnowledgeService:
         else:
             message = "Literature RAG 服务可用，但未发现可用知识库体系。"
         return KnowledgeHealthData(status="ready" if configured else "warning", configured=configured,
-                                   demo_available=False, message=message, systems=systems)
+                                   demo_available=bool(source_fields["is_demo"]), message=message, systems=systems,
+                                   graph_node_count=graph_node_count,
+                                   graph_relationship_count=graph_relationship_count,
+                                   **source_fields)
 
     def query(self, payload: KnowledgeQueryRequest) -> KnowledgeQueryResponse:
         base_url = self._require_base_url()
@@ -209,7 +215,7 @@ class KnowledgeService:
     def _normalize_graph(self, system_id: str, raw: dict[str, Any]) -> KnowledgeGraphData:
         nodes = [KnowledgeGraphNode(
             id=str(item.get("id")), label=str(item.get("label") or item.get("id")),
-            type=str(item.get("type") or "Entity"), score=float(item.get("score") or 1.0),
+            type=self._normalize_node_type(item), score=float(item.get("score") or 1.0),
             properties=self._safe_metadata(item.get("properties") or {}),
         ) for item in raw.get("nodes") or []]
         node_ids = {node.id for node in nodes}
@@ -223,16 +229,61 @@ class KnowledgeService:
             system_id=system_id, nodes=nodes, edges=edges,
             stats=KnowledgeGraphStats(entity_count=int(stats.get("entity_count", len(nodes))),
                                       relation_count=int(stats.get("relation_count", len(edges))),
-                                      document_count=int(stats.get("document_count", 0))),
+                                      document_count=int(stats.get("document_count", 0)),
+                                      node_type_counts={str(k): int(v) for k, v in (stats.get("node_type_counts") or {}).items()},
+                                      category_counts={str(k): int(v) for k, v in (stats.get("category_counts") or {}).items()}),
             configured=bool(raw.get("configured", True)), message=str(raw.get("message") or "ok"),
+            **self._source_fields(raw),
             provenance=self._safe_metadata(raw.get("provenance") or {"provider": "literature-rag"}),
         )
+
+    @staticmethod
+    def _normalize_node_type(item: dict[str, Any]) -> str:
+        properties = item.get("properties") or {}
+        raw = str(item.get("type") or properties.get("entity_type") or "Entity").strip()
+        if raw.lower() == "entity" and properties.get("entity_type"):
+            raw = str(properties.get("entity_type")).strip()
+        aliases = {
+            "material": "Material",
+            "polymer": "Polymer",
+            "resin": "Resin",
+            "monomer": "Monomer",
+            "photoacidgenerator": "PhotoacidGenerator",
+            "photoacid_generator": "PhotoacidGenerator",
+            "pag": "PhotoacidGenerator",
+            "additive": "Additive",
+            "strategy": "Strategy",
+            "method": "Method",
+            "processcondition": "ProcessCondition",
+            "process_condition": "ProcessCondition",
+            "property": "Property",
+            "lithographymetric": "LithographyMetric",
+            "lithography_metric": "LithographyMetric",
+            "performancemetric": "LithographyMetric",
+            "performance_metric": "LithographyMetric",
+            "application": "Application",
+            "paper": "Paper",
+            "dataset": "Dataset",
+            "chunk": "Chunk",
+        }
+        key = raw.replace(" ", "").replace("-", "_").lower()
+        return aliases.get(key, raw or "Entity")
 
     @staticmethod
     def _normalize_corpus(item: dict[str, Any]) -> KnowledgeSystem:
         document_count = int(item.get("document_count") or item.get("indexed_document_count") or 0)
         indexed_document_count = int(item.get("indexed_document_count") or document_count)
         status = str(item.get("status") or ("ready" if indexed_document_count > 0 else "empty"))
+        graph_node_count = int(item.get("graph_node_count") or 0)
+        graph_relationship_count = int(item.get("graph_relationship_count") or 0)
+        source_fields = KnowledgeService._source_fields(item)
+        if (
+            source_fields["backend"] == "production"
+            and source_fields["graph_backend"] == "neo4j"
+            and indexed_document_count > 0
+            and (graph_node_count <= 0 or graph_relationship_count <= 0)
+        ):
+            status = "warning"
         allowed_statuses = {"ready", "indexing", "empty", "warning", "unavailable"}
         if status not in allowed_statuses:
             status = "warning"
@@ -242,9 +293,14 @@ class KnowledgeService:
             system_id=corpus_id, name=str(item.get("name") or corpus_id),
             domain=str(item.get("domain") or "literature"),
             material_family=str(item.get("material_family") or corpus_id),
-            description=str(item.get("description") or ""), is_demo=False,
+            description=str(item.get("description") or ""), **source_fields,
             tags=list(item.get("tags") or []), document_count=document_count,
             entity_count=int(item.get("entity_count") or 0), relation_count=int(item.get("relation_count") or 0),
+            graph_node_count=graph_node_count,
+            graph_relationship_count=graph_relationship_count,
+            graph_paper_count=int(item.get("graph_paper_count") or 0),
+            graph_chunk_count=int(item.get("graph_chunk_count") or 0),
+            graph_entity_count=int(item.get("graph_entity_count") or 0),
             data_source_id=str(item.get("data_source_id") or f"{provider}:{corpus_id}"),
             provider=provider,
             corpus_id=corpus_id,
@@ -274,6 +330,18 @@ class KnowledgeService:
             "doi": item.get("doi"), "url": item.get("url"), "journal": item.get("journal"),
             "year": item.get("year"), "authors": list(item.get("authors") or []),
             "chunk_id": item.get("chunk_id"),
+        }
+
+    @staticmethod
+    def _source_fields(item: dict[str, Any]) -> dict[str, Any]:
+        backend = str(item.get("backend") or "").strip() or None
+        graph_backend = str(item.get("graph_backend") or "").strip() or None
+        source_mode = str(item.get("source_mode") or "").strip() or None
+        return {
+            "backend": backend,
+            "graph_backend": graph_backend,
+            "source_mode": source_mode,
+            "is_demo": bool(item.get("is_demo", backend == "memory")),
         }
 
     @staticmethod

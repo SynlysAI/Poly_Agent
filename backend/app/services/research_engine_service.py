@@ -938,6 +938,18 @@ class ResearchEngineService:
     # AlgorithmRegistry
     # ------------------------------------------------------------------
 
+    REAL_ALGORITHM_IDS = {
+        "literature_rag_adapter",
+        "knowledge_graph_adapter",
+        "computation_submit_adapter",
+        "local_structure_adapter",
+        "local_xtb_adapter",
+        "orca_compute_engine_laser_adapter",
+        "mobo_alchemist_adapter",
+    }
+
+    VERTICAL_ALGORITHM_IDS = {"vertical_predictor_adapter"}
+
     def seed_default_algorithms(self) -> int:
         """写入默认算法能力清单（幂等）。
 
@@ -950,15 +962,15 @@ class ResearchEngineService:
 
         # 计算 workflow 适配器（3 个）
         for entry in build_default_algorithm_registry():
-            entries.append(entry.model_dump())
+            entries.append(self._with_algorithm_metadata(entry.model_dump()))
 
         # 真实外部/本地适配器
         for entry in build_adapter_algorithm_registry():
-            entries.append(entry.model_dump())
+            entries.append(self._with_algorithm_metadata(entry.model_dump()))
 
         # Mock/preset 演示算法
         for entry in build_mock_algorithm_registry():
-            entries.append(entry.model_dump())
+            entries.append(self._with_algorithm_metadata(entry.model_dump()))
 
         return AlgorithmRegistryRepository.seed_defaults(entries)
 
@@ -979,7 +991,7 @@ class ResearchEngineService:
             raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
         # 规范化旧 trigger_modes 值（如 "human" -> "human_workflow"）
         doc["trigger_modes"] = normalize_trigger_modes(doc.get("trigger_modes"))
-        return AlgorithmRegistryEntry(**doc)
+        return AlgorithmRegistryEntry(**self._with_algorithm_metadata(doc))
 
     def list_algorithms(
         self,
@@ -1018,14 +1030,48 @@ class ResearchEngineService:
         )
         entries = [
             AlgorithmRegistryEntry(
-                **{
+                **self._with_algorithm_metadata({
                     **doc,
                     "trigger_modes": normalize_trigger_modes(doc.get("trigger_modes")),
-                }
+                })
             )
             for doc in items
         ]
         return AlgorithmRegistryListData(items=entries, page=page, page_size=page_size, total=total)
+
+    @classmethod
+    def _with_algorithm_metadata(cls, doc: dict) -> dict:
+        normalized = dict(doc)
+        algorithm_id = str(normalized.get("algorithm_id") or "")
+        status = str(normalized.get("status") or "")
+        validation_metric = normalized.get("validation_metric") or {}
+        ui_hints = ((normalized.get("input_schema") or {}).get("ui_hints") or {})
+        demo_hint = ui_hints.get("_algorithm") or {}
+
+        if status in {"pending_encapsulation", "in_development", "frozen", "decommissioned"}:
+            integration_kind = "pending"
+        elif algorithm_id in cls.VERTICAL_ALGORITHM_IDS:
+            integration_kind = "pending"
+        elif algorithm_id in cls.REAL_ALGORITHM_IDS:
+            integration_kind = "real"
+        elif algorithm_id.endswith("_mock") or demo_hint.get("is_demo") or "mock" in {
+            str(value).lower() for value in validation_metric.values()
+        }:
+            integration_kind = "simulated"
+        else:
+            integration_kind = normalized.get("integration_kind") or "builtin"
+
+        family = normalized.get("algorithm_family")
+        if algorithm_id in cls.VERTICAL_ALGORITHM_IDS or family == "vertical_prediction":
+            capability_group = "vertical_algorithm"
+        elif family in {"knowledge", "computation", "structure", "wetlab_optimization"}:
+            capability_group = str(family)
+        else:
+            capability_group = normalized.get("capability_group") or "general"
+
+        normalized["integration_kind"] = integration_kind
+        normalized["capability_group"] = capability_group
+        return normalized
 
     # ------------------------------------------------------------------
     # Examples
