@@ -200,6 +200,33 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         graph = next(item for item in data.items if item.algorithm_id == "knowledge_graph_adapter")
         self.assertEqual(graph.type, "retriever")
         self.assertIn("KNOWLEDGE_RETRIEVAL", graph.task_scope)
+        self.assertEqual(graph.integration_kind, "real")
+        self.assertEqual(graph.capability_group, "knowledge")
+
+    def test_algorithm_registry_marks_real_and_simulated_capabilities(self):
+        data = self.service.list_algorithms(page=1, page_size=100)
+        by_id = {item.algorithm_id: item for item in data.items}
+
+        for algorithm_id in {
+            "literature_rag_adapter",
+            "knowledge_graph_adapter",
+            "computation_submit_adapter",
+            "local_structure_adapter",
+            "local_xtb_adapter",
+            "orca_compute_engine_laser_adapter",
+            "mobo_alchemist_adapter",
+        }:
+            self.assertEqual(by_id[algorithm_id].integration_kind, "real", algorithm_id)
+
+        for algorithm_id in {
+            "literature_mock",
+            "polymer_descriptor_mock",
+            "property_predictor_mock",
+            "mobo_mock",
+        }:
+            self.assertEqual(by_id[algorithm_id].integration_kind, "simulated", algorithm_id)
+
+        self.assertEqual(by_id["vertical_predictor_adapter"].capability_group, "vertical_algorithm")
 
     def test_literature_rag_adapter_preserves_existing_top_k_contract(self):
         response = KnowledgeQueryResponse(

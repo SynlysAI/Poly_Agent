@@ -6,6 +6,7 @@ from typing import Any, Iterator
 
 from .config import Settings
 from .domain import ALLOWED_SOURCE_KINDS, CandidateScoreInput, normalize_doi, score_candidate
+from .extraction import extract_domain_entities
 from .parsing import chunk_text
 from .query import is_document_inventory_query
 from .schemas import CandidateImportRequest, CorpusCreate, QueryRequest
@@ -39,15 +40,22 @@ class LiteratureRagService:
         self.repository.upsert_corpus(self._default_corpus())
 
     def health(self) -> dict[str, Any]:
-        return {"service": self.settings.service_name, "version": self.settings.service_version,
+        data = {"service": self.settings.service_name, "version": self.settings.service_version,
                 "status": "ready", "backend": self.settings.backend,
-                "default_corpus_id": self.settings.default_corpus_id}
+                "default_corpus_id": self.settings.default_corpus_id, **self._source_metadata()}
+        if self.settings.backend == "production":
+            graph_stats = self._neo4j_corpus_stats(self.settings.default_corpus_id)
+            data.update(self._graph_count_fields(graph_stats))
+            if graph_stats["node_count"] <= 0 or graph_stats["relationship_count"] <= 0:
+                data["status"] = "warning"
+                data["message"] = "Neo4j 已连接，但尚未写入已索引图谱数据。"
+        return data
 
     def create_corpus(self, payload: CorpusCreate) -> dict[str, Any]:
         return self.repository.upsert_corpus(payload.model_dump())
 
     def list_corpora(self) -> dict[str, Any]:
-        items = self.repository.list_corpora()
+        items = [self._decorate_corpus(item) for item in self.repository.list_corpora()]
         return {"items": items, "total": len(items)}
 
     def import_candidates(self, corpus_id: str, payload: CandidateImportRequest) -> dict[str, Any]:
@@ -153,11 +161,11 @@ class LiteratureRagService:
         data = self.graph_store.subgraph(corpus_id, query, limit)
         corpora = {item["corpus_id"]: item for item in self.repository.list_corpora()}
         corpus = corpora[corpus_id]
+        stats = self._graph_stats(data["nodes"], data["edges"], corpus["document_count"])
         return {"corpus_id": corpus_id, **data,
-                "stats": {"entity_count": len(data["nodes"]), "relation_count": len(data["edges"]),
-                          "document_count": corpus["document_count"]},
-                "configured": True, "message": "ok",
-                "provenance": {"provider": "literature-rag", "query": query}}
+                "stats": stats,
+                "configured": True, "message": "ok", **self._source_metadata(),
+                "provenance": {"provider": "literature-rag", "query": query, **self._source_metadata()}}
 
     def seed_indexed_document(self, *, corpus_id: str, doi: str, title: str, chunks: list[str],
                               journal: str | None = None, year: int | None = None,
@@ -169,14 +177,95 @@ class LiteratureRagService:
             "source_url": source_url or f"https://doi.org/{normalized_doi}", "filename": "seed.pdf"}, content)
         chunk_records = [{"chunk_id": f"chunk_{index:05d}", "position": index - 1, "text": text}
                          for index, text in enumerate(chunks, start=1)]
-        document = self.repository.update_document(document["document_id"], {"status": "indexed"})
+        entities = extract_domain_entities(chunk_records, document)
+        document = self.repository.update_document(document["document_id"], {
+            "status": "indexed",
+            "chunk_count": len(chunk_records),
+            "entity_count": len(entities),
+        })
         self.repository.save_chunks(document["document_id"], chunk_records)
-        self.graph_store.index_document(document, chunk_records, [])
+        self.graph_store.index_document(document, chunk_records, entities)
+        self.repository.refresh_corpus_stats(corpus_id)
         return document
+
+    @classmethod
+    def _graph_stats(cls, nodes: list[dict[str, Any]], edges: list[dict[str, Any]], document_count: int) -> dict[str, Any]:
+        node_type_counts: dict[str, int] = {}
+        category_counts = {"Materials": 0, "Strategies": 0, "Properties": 0, "Papers": 0}
+        for node in nodes:
+            node_type = str(node.get("type") or "Entity")
+            node_type_counts[node_type] = node_type_counts.get(node_type, 0) + 1
+            category = cls._node_category(node_type)
+            category_counts[category] = category_counts.get(category, 0) + 1
+        return {
+            "entity_count": len(nodes),
+            "relation_count": len(edges),
+            "document_count": document_count,
+            "node_type_counts": node_type_counts,
+            "category_counts": category_counts,
+        }
+
+    @staticmethod
+    def _node_category(node_type: str) -> str:
+        if node_type in {"Material", "Polymer", "Resin", "Monomer", "PhotoacidGenerator", "Additive"}:
+            return "Materials"
+        if node_type in {"Strategy", "Method", "ProcessCondition"}:
+            return "Strategies"
+        if node_type in {"Property", "LithographyMetric", "PerformanceMetric", "Application"}:
+            return "Properties"
+        return "Papers"
 
     def _require_corpus(self, corpus_id: str) -> None:
         if corpus_id not in {item["corpus_id"] for item in self.repository.list_corpora()}:
             raise ServiceError(404, "CORPUS_NOT_FOUND", f"Corpus '{corpus_id}' not found")
+
+    def _decorate_corpus(self, item: dict[str, Any]) -> dict[str, Any]:
+        decorated = {**item, **self._source_metadata()}
+        if self.settings.backend != "production":
+            return decorated
+        graph_stats = self._neo4j_corpus_stats(str(item["corpus_id"]))
+        decorated.update(self._graph_count_fields(graph_stats))
+        decorated["entity_count"] = graph_stats["node_count"]
+        decorated["relation_count"] = graph_stats["relationship_count"]
+        if int(decorated.get("indexed_document_count") or decorated.get("document_count") or 0) <= 0:
+            decorated["status"] = "empty"
+            decorated["health_message"] = "尚未完成 PDF ingestion worker 索引。"
+        elif graph_stats["node_count"] <= 0 or graph_stats["relationship_count"] <= 0:
+            decorated["status"] = "warning"
+            decorated["health_message"] = "Neo4j 已连接，但尚未写入 KrF 图谱节点或关系。"
+        else:
+            decorated["status"] = "ready"
+            decorated["health_message"] = "Neo4j 已连接，KrF 图谱已索引。"
+        return decorated
+
+    def _source_metadata(self) -> dict[str, Any]:
+        production = self.settings.backend == "production"
+        return {
+            "backend": self.settings.backend,
+            "graph_backend": "neo4j" if production else "memory",
+            "source_mode": "ingested_pdf" if production else "seed_manifest",
+            "is_demo": not production,
+        }
+
+    def _neo4j_corpus_stats(self, corpus_id: str) -> dict[str, int]:
+        if hasattr(self.graph_store, "corpus_stats"):
+            try:
+                return self.graph_store.corpus_stats(corpus_id)
+            except Exception:
+                return {"paper_count": 0, "chunk_count": 0, "entity_count": 0,
+                        "node_count": 0, "relationship_count": 0}
+        return {"paper_count": 0, "chunk_count": 0, "entity_count": 0,
+                "node_count": 0, "relationship_count": 0}
+
+    @staticmethod
+    def _graph_count_fields(stats: dict[str, int]) -> dict[str, int]:
+        return {
+            "graph_paper_count": int(stats.get("paper_count") or 0),
+            "graph_chunk_count": int(stats.get("chunk_count") or 0),
+            "graph_entity_count": int(stats.get("entity_count") or 0),
+            "graph_node_count": int(stats.get("node_count") or 0),
+            "graph_relationship_count": int(stats.get("relationship_count") or 0),
+        }
 
     def _default_corpus(self) -> dict[str, Any]:
         if self.settings.default_corpus_id == "krf_photoresist":

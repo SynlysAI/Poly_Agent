@@ -179,3 +179,52 @@ class IntegrationConfigServiceTest(ComputationTestCase):
         self.assertIn("alchemist-backend", by_service)
         self.assertEqual(by_service["alchemist-backend"]["status"], "built_in")
         self.assertIn("无需外部服务", by_service["alchemist-backend"]["details"]["message"])
+
+    def test_status_includes_database_and_knowledge_services(self) -> None:
+        original_asset_uri = settings.data_asset_mongodb_uri
+        settings.data_asset_mongodb_uri = "mongodb://127.0.0.1:27018"
+        try:
+            with patch.object(IntegrationStatusService, "_can_connect", return_value=False), patch(
+                "app.services.knowledge_service.KnowledgeService.health",
+            ) as health:
+                health.return_value.status = "unavailable"
+                health.return_value.configured = False
+                health.return_value.message = "Literature RAG 服务未配置或本地未发现。"
+                health.return_value.systems = []
+                items = IntegrationStatusService().get_status()["items"]
+        finally:
+            settings.data_asset_mongodb_uri = original_asset_uri
+
+        by_service = {item["service"]: item for item in items}
+
+        self.assertIn("mongodb", by_service)
+        self.assertIn("data-asset-mongodb", by_service)
+        self.assertIn("literature-rag", by_service)
+        self.assertIn("knowledge-graph", by_service)
+        self.assertEqual(by_service["mongodb"]["details"]["database"], settings.mongodb_database)
+        self.assertEqual(by_service["literature-rag"]["status"], "not_configured")
+        self.assertEqual(by_service["knowledge-graph"]["status"], "not_configured")
+
+    def test_executable_status_cleans_banner_versions(self) -> None:
+        banner = """
+        ------------------------------------------------------------
+        |     _  _  _      _    _  _      _  _      _  _  _        |
+        ------------------------------------------------------------
+        CREST version 3.0.2
+        """
+
+        with patch("app.services.integration_status_service.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = banner
+            run.return_value.stderr = ""
+            data = IntegrationStatusService()._executable_status(
+                "crest",
+                "/usr/bin/crest",
+                ["/usr/bin/crest", "--version"],
+                "2026-07-13T00:00:00",
+                ["conformer_search"],
+            )
+
+        self.assertEqual(data["status"], "available")
+        self.assertEqual(data["details"]["version"], "CREST version 3.0.2")
+        self.assertNotIn("|     _", data["details"]["version"])

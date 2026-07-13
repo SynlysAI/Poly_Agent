@@ -105,7 +105,7 @@ class IngestionWorker:
 
 
 def main() -> None:
-    from .main import create_default_service
+    from .factory import create_default_service
 
     settings = Settings.from_env()
     service = create_default_service(settings)

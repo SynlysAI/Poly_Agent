@@ -104,7 +104,7 @@ const serviceStatusLines = computed(() => {
   const alchemist = integrations.value.find((item) => item.service === 'alchemist-backend')
   return [
     worker?.status === 'up' ? '计算 worker 在线' : `计算 worker ${worker?.status || '未检查'}`,
-    alchemist?.status === 'up' ? 'Alchemist 后端在线' : `Alchemist 后端 ${alchemist?.status || '未检查'}`,
+    ['up', 'built_in', 'available'].includes(alchemist?.status) ? 'Alchemist 内置可用' : `Alchemist 后端 ${alchemist?.status || '未检查'}`,
   ]
 })
 

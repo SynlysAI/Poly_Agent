@@ -219,33 +219,46 @@ class MemoryGraphStore:
     def subgraph(self, corpus_id: str, query: str, limit: int = 30) -> dict[str, Any]:
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
+        seen_nodes: set[str] = set()
+
+        def add_node(node: dict[str, Any]) -> bool:
+            if len(nodes) >= limit or node["id"] in seen_nodes:
+                return False
+            nodes.append(node)
+            seen_nodes.add(node["id"])
+            return True
+
+        def add_edge(edge: dict[str, Any]) -> None:
+            if edge["source"] in seen_nodes and edge["target"] in seen_nodes:
+                edges.append(edge)
+
         for record in self.documents.values():
             document = record["document"]
             if document["corpus_id"] != corpus_id:
                 continue
             paper_id = f"paper:{document['document_id']}"
-            nodes.append({"id": paper_id, "label": document["title"], "type": "Paper", "score": 1.0,
-                          "properties": {"document_id": document["document_id"], "doi": document.get("doi"),
-                                         "source_url": document.get("source_url")}})
-            for chunk in record["chunks"]:
-                chunk_id = f"{document['document_id']}:{chunk['chunk_id']}"
-                nodes.append({"id": chunk_id, "label": chunk["text"][:80], "type": "Chunk", "score": 1.0,
-                              "properties": {"document_id": document["document_id"], "chunk_id": chunk["chunk_id"],
-                                             "doi": document.get("doi"), "source_url": document.get("source_url")}})
-                edges.append({"id": f"contains:{chunk_id}", "source": paper_id, "target": chunk_id,
-                              "type": "CONTAINS", "weight": 1.0, "properties": {"chunk_id": chunk["chunk_id"]}})
-                if len(nodes) >= limit:
-                    break
+            add_node({"id": paper_id, "label": document["title"], "type": "Paper", "score": 1.0,
+                      "properties": {"document_id": document["document_id"], "doi": document.get("doi"),
+                                     "source_url": document.get("source_url")}})
             for entity in record.get("entities", []):
                 if len(nodes) >= limit:
                     break
                 entity_id = f"{document['document_id']}:{entity['id']}"
-                nodes.append({"id": entity_id, "label": entity["label"], "type": entity["type"], "score": 1.0,
-                              "properties": {"document_id": document["document_id"], "doi": document.get("doi"),
-                                             "source_url": document.get("source_url"), "chunk_ids": entity.get("chunk_ids", [])}})
-                edges.append({"id": f"mentions:{entity_id}", "source": paper_id, "target": entity_id,
+                if add_node({"id": entity_id, "label": entity["label"], "type": entity["type"], "score": 1.0,
+                             "properties": {"document_id": document["document_id"], "doi": document.get("doi"),
+                                            "source_url": document.get("source_url"), "chunk_ids": entity.get("chunk_ids", [])}}):
+                    add_edge({"id": f"mentions:{entity_id}", "source": paper_id, "target": entity_id,
                               "type": "MENTIONS", "weight": 1.0,
                               "properties": {"chunk_ids": entity.get("chunk_ids", [])}})
+            for chunk in record["chunks"]:
+                if len(nodes) >= limit:
+                    break
+                chunk_id = f"{document['document_id']}:{chunk['chunk_id']}"
+                if add_node({"id": chunk_id, "label": chunk["text"][:80], "type": "Chunk", "score": 1.0,
+                             "properties": {"document_id": document["document_id"], "chunk_id": chunk["chunk_id"],
+                                            "doi": document.get("doi"), "source_url": document.get("source_url")}}):
+                    add_edge({"id": f"contains:{chunk_id}", "source": paper_id, "target": chunk_id,
+                              "type": "CONTAINS", "weight": 1.0, "properties": {"chunk_id": chunk["chunk_id"]}})
             if len(nodes) >= limit:
                 break
-        return {"nodes": nodes[:limit], "edges": edges[: max(limit - 1, 0)]}
+        return {"nodes": nodes[:limit], "edges": edges}

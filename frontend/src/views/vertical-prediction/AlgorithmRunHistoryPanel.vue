@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, View } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, listAlgorithmRuns } from '../../api/polyAgentApi'
+import AlgorithmResultView from './AlgorithmResultView.vue'
 
 const props = defineProps({ refreshKey: { type: Number, default: 0 } })
 
@@ -97,10 +98,14 @@ onMounted(loadRuns)
           <el-descriptions-item label="Image Digest">{{ detail.image_digest || '-' }}</el-descriptions-item>
           <el-descriptions-item label="状态 / 耗时">{{ detail.status }} / {{ duration(detail) }}</el-descriptions-item>
         </el-descriptions>
-        <h3>输入</h3><pre>{{ JSON.stringify(detail.input_snapshot, null, 2) }}</pre>
-        <h3>输出</h3><pre>{{ JSON.stringify(detail.output_summary, null, 2) }}</pre>
-        <h3>Artifacts</h3><pre>{{ JSON.stringify(detail.artifact_refs, null, 2) }}</pre>
-        <el-alert v-if="detail.error" :title="detail.error.message" type="error" show-icon :closable="false" />
+        <AlgorithmResultView
+          class="detail-result-view"
+          :output-summary="detail.output_summary"
+          :input-snapshot="detail.input_snapshot"
+          :artifact-refs="detail.artifact_refs"
+          :status="detail.status"
+          :error="detail.error"
+        />
       </template>
     </el-drawer>
   </div>
@@ -109,8 +114,7 @@ onMounted(loadRuns)
 <style scoped>
 .history-panel { display: grid; gap: 14px; }
 .history-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-code, pre { font-family: var(--app-mono-font); font-size: 12px; }
-h3 { margin: 18px 0 8px; font-size: 14px; }
-pre { max-height: 300px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #f8fafc; white-space: pre-wrap; overflow-wrap: anywhere; }
+code { font-family: var(--app-mono-font); font-size: 12px; }
+.detail-result-view { margin-top: 16px; }
 @media (max-width: 720px) { .history-toolbar { align-items: stretch; flex-direction: column; } .history-toolbar > * { width: 100% !important; } }
 </style>

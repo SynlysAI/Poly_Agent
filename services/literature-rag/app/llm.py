@@ -48,8 +48,16 @@ class OpenAIEntityExtractor:
             model=self.model,
             messages=[
                 {"role": "system", "content": (
-                    "Extract KrF photoresist entities. Return JSON object {entities:[{label,type,chunk_ids}]}. "
-                    f"Allowed types: {sorted(self.ALLOWED_TYPES)}. Use only supplied chunk IDs."
+                    "Extract a KrF/248 nm photoresist knowledge graph from the supplied chunks only. "
+                    "Return a JSON object: {\"entities\":[{\"label\":string,\"type\":string,\"chunk_ids\":[string]}]}. "
+                    f"Allowed types: {sorted(self.ALLOWED_TYPES)}. "
+                    "Classify materials/resist components as Resin/Polymer/Monomer/PhotoacidGenerator/Additive; "
+                    "process or formulation approaches as Method/Strategy/ProcessCondition; measured or target "
+                    "outcomes as LithographyMetric/Property. Use exact concise labels from the text where possible, "
+                    "such as PVP, PMMA, methacrylate terpolymer, phenolic resin, PAG, acid trap reagent, post exposure "
+                    "bake, 248 nm exposure, resolution, sensitivity, exposure latitude, dissolution contrast, "
+                    "etch resistance. Do not invent entities, values, DOIs, or chunk IDs. Use only supplied chunk IDs. "
+                    "Merge duplicates by normalized label and type."
                 )},
                 {"role": "user", "content": text},
             ],

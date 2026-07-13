@@ -27,6 +27,31 @@ const statusItems = computed(() => [
   { label: '运行器', value: '本机适配层', icon: Cpu },
 ])
 
+const guideItems = computed(() => {
+  const common = [
+    { title: '上传格式', text: '推荐上传标准 ZIP 包，至少包含 Python 源文件和依赖说明。系统会生成算法契约并校验输入输出。' },
+    { title: '管理版本', text: '上传成功后进入算法管理，确认版本状态、运行依赖和 schema，再激活可用版本。' },
+    { title: '测试调用', text: '使用测试调用验证输入 JSON、输出摘要和 artifact；运行记录用于回溯每次调用。' },
+  ]
+  if (activeTab.value === 'upload') return common
+  if (activeTab.value === 'management') {
+    return [
+      { title: '管理中心', text: '这里处理算法版本治理、激活状态和版本元信息，不直接运行预测。' },
+      ...common.slice(1),
+    ]
+  }
+  if (activeTab.value === 'test') {
+    return [
+      { title: '测试输入', text: '按算法版本的 input schema 填写 JSON。失败时先检查字段名、类型和必填项。' },
+      { title: '运行结果', text: '测试调用会生成运行记录，可在运行记录 tab 查看状态、输出和错误信息。' },
+    ]
+  }
+  return [
+    { title: '运行记录', text: '这里展示上传模型产生的预测调用记录，用于追溯输入、输出、版本和失败原因。' },
+    { title: '下一步', text: '需要重新验证时回到测试调用；需要切换版本时回到算法管理。' },
+  ]
+})
+
 function normalizeTab(tab) {
   const value = Array.isArray(tab) ? tab[0] : tab
   return tabNames.has(value) ? value : 'upload'
@@ -105,19 +130,31 @@ onMounted(() => {
       </div>
     </section>
 
-    <section class="workspace-panel">
-      <template v-if="activeTab === 'upload'">
-        <AlgorithmUploadPanel @changed="handleChanged" />
-        <div v-if="uploadCompleted" class="upload-next-action">
-          <el-button type="primary" @click="goToManagement">进入模型管理</el-button>
+    <div class="prediction-workspace">
+      <section class="workspace-panel">
+        <template v-if="activeTab === 'upload'">
+          <AlgorithmUploadPanel @changed="handleChanged" />
+          <div v-if="uploadCompleted" class="upload-next-action">
+            <el-button type="primary" @click="goToManagement">进入模型管理</el-button>
+          </div>
+        </template>
+        <el-tabs v-else v-model="activeTab" class="workspace-tabs">
+          <el-tab-pane label="算法管理" name="management"><AlgorithmManagementPanel :refresh-key="refreshKey" @changed="handleChanged" /></el-tab-pane>
+          <el-tab-pane label="测试调用" name="test"><AlgorithmTestPanel :refresh-key="refreshKey" @run-created="handleChanged" /></el-tab-pane>
+          <el-tab-pane label="运行记录" name="runs"><AlgorithmRunHistoryPanel :refresh-key="refreshKey" /></el-tab-pane>
+        </el-tabs>
+      </section>
+
+      <aside class="guide-panel">
+        <h3>使用说明</h3>
+        <div class="guide-list">
+          <div v-for="item in guideItems" :key="item.title" class="guide-item">
+            <strong>{{ item.title }}</strong>
+            <span>{{ item.text }}</span>
+          </div>
         </div>
-      </template>
-      <el-tabs v-else v-model="activeTab" class="workspace-tabs">
-        <el-tab-pane label="算法管理" name="management"><AlgorithmManagementPanel :refresh-key="refreshKey" @changed="handleChanged" /></el-tab-pane>
-        <el-tab-pane label="测试调用" name="test"><AlgorithmTestPanel :refresh-key="refreshKey" @run-created="handleChanged" /></el-tab-pane>
-        <el-tab-pane label="运行记录" name="runs"><AlgorithmRunHistoryPanel :refresh-key="refreshKey" /></el-tab-pane>
-      </el-tabs>
-    </section>
+      </aside>
+    </div>
   </div>
 </template>
 
@@ -133,9 +170,16 @@ h1 { margin: 0; color: var(--app-ink); font-size: 26px; line-height: 1.25; lette
 .status-item .el-icon { color: var(--app-primary); }
 .status-item span { color: var(--app-ink-muted); font-size: 12px; }
 .status-item strong { color: var(--app-ink); font-size: 14px; overflow-wrap: anywhere; }
-.workspace-panel { min-width: 0; padding: 0 18px 18px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
+.prediction-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+.workspace-panel { min-width: 0; overflow-x: auto; padding: 0 14px 18px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
 .workspace-tabs :deep(.el-tabs__header) { margin-bottom: 18px; }
 .upload-next-action { display: flex; justify-content: flex-end; padding-top: 14px; border-top: 1px solid var(--app-border-soft); }
-@media (max-width: 900px) { .status-band { grid-template-columns: repeat(2, minmax(0, 1fr)); } .status-item:nth-child(2) { border-right: 0; } .status-item:nth-child(-n+2) { border-bottom: 1px solid var(--app-border-soft); } }
+.guide-panel { position: sticky; top: 76px; padding: 16px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
+.guide-panel h3 { margin: 0 0 12px; color: var(--app-ink); font-size: 15px; }
+.guide-list { display: grid; gap: 12px; }
+.guide-item { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; }
+.guide-item strong { color: var(--app-ink); font-size: 14px; }
+.guide-item span { color: var(--app-ink-muted); font-size: 13px; line-height: 1.6; }
+@media (max-width: 900px) { .status-band { grid-template-columns: repeat(2, minmax(0, 1fr)); } .status-item:nth-child(2) { border-right: 0; } .status-item:nth-child(-n+2) { border-bottom: 1px solid var(--app-border-soft); } .prediction-workspace { grid-template-columns: 1fr; } .guide-panel { position: static; } }
 @media (max-width: 560px) { .page-heading { flex-direction: column; } .status-band { grid-template-columns: 1fr; } .status-item { border-right: 0; border-bottom: 1px solid var(--app-border-soft); } .status-item:last-child { border-bottom: 0; } .workspace-panel { padding-inline: 10px; } }
 </style>

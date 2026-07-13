@@ -308,9 +308,9 @@ function statusType(status) {
 
 <style scoped>
 .upload-workspace { display: grid; gap: 18px; }
-.upload-toolbar, .section-heading, .submit-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.upload-toolbar, .section-heading, .submit-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .metadata-form { padding-top: 4px; }
-.form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 14px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0 14px; }
 .schema-section, .contract-preview, .validation-results { border-top: 1px solid var(--app-border-soft); padding-top: 16px; }
 .section-heading { margin-bottom: 10px; }
 h3 { margin: 0; font-size: 15px; }
@@ -326,6 +326,6 @@ h3 { margin: 0; font-size: 15px; }
 .validation-results { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .validation-results div { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); }
 .validation-results span { color: var(--app-ink-muted); font-size: 12px; overflow-wrap: anywhere; }
-@media (max-width: 1100px) { .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .validation-results { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .validation-results { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) { .upload-toolbar, .section-heading, .submit-row { align-items: stretch; flex-direction: column; } .form-grid, .source-grid, .validation-results { grid-template-columns: 1fr; } }
 </style>

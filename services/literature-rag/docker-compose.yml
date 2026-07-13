@@ -32,7 +32,9 @@ services:
     environment:
       NEO4J_AUTH: neo4j/${LITERATURE_RAG_NEO4J_PASSWORD:-replace-with-neo4j-password}
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
-    ports: ["7474:7474"]
+    ports:
+      - "7474:7474"
+      - "7687:7687"
     volumes: ["rag-neo4j:/data"]
 
 volumes:

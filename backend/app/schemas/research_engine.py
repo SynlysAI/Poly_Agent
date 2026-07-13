@@ -73,6 +73,9 @@ AlgorithmStatus = Literal[
 ]
 """算法能力登记状态。"""
 
+AlgorithmIntegrationKind = Literal["real", "builtin", "simulated", "pending"]
+"""算法接入形态，用于区分真实能力、内置能力、模拟演示和待接入能力。"""
+
 MaterialScope = Literal[
     "fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"
 ]
@@ -532,6 +535,8 @@ class AlgorithmRegistryEntry(BaseModel):
     active_version_id: str | None = Field(default=None, max_length=120)
     source: str = Field(default="builtin", max_length=40)
     deployment_status: str | None = Field(default=None, max_length=40)
+    integration_kind: AlgorithmIntegrationKind = "builtin"
+    capability_group: str | None = Field(default=None, max_length=80)
 
     @field_validator("algorithm_id")
     @classmethod

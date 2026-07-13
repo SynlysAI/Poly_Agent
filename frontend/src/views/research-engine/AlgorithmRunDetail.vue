@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 
 import { getAlgorithmRun, getApiErrorMessage } from '../../api/polyAgentApi'
+import AlgorithmResultView from '../vertical-prediction/AlgorithmResultView.vue'
 
 const props = defineProps({
   runId: { type: String, required: true },
@@ -85,32 +86,14 @@ onMounted(loadRun)
         <el-descriptions-item v-if="run.finished_at" label="完成时间">{{ formatDate(run.finished_at) }}</el-descriptions-item>
       </el-descriptions>
 
-      <!-- 输入快照 -->
       <section class="detail-section">
-        <h4>输入快照</h4>
-        <pre class="json-block">{{ JSON.stringify(run.input_snapshot, null, 2) }}</pre>
-      </section>
-
-      <!-- 输出摘要 -->
-      <section class="detail-section">
-        <h4>输出摘要</h4>
-        <pre class="json-block">{{ JSON.stringify(run.output_summary, null, 2) || '{}' }}</pre>
-      </section>
-
-      <!-- Artifact 引用 -->
-      <section v-if="run.artifact_refs?.length" class="detail-section">
-        <h4>Artifact 引用 ({{ run.artifact_refs.length }})</h4>
-        <el-table :data="run.artifact_refs" border size="small">
-          <el-table-column prop="artifact_id" label="ID" min-width="200" />
-          <el-table-column prop="type" label="类型" width="120" />
-          <el-table-column prop="description" label="描述" min-width="200" />
-        </el-table>
-      </section>
-
-      <!-- 错误 -->
-      <section v-if="run.error" class="detail-section">
-        <h4>错误信息</h4>
-        <pre class="json-block error-block">{{ JSON.stringify(run.error, null, 2) }}</pre>
+        <AlgorithmResultView
+          :output-summary="run.output_summary"
+          :input-snapshot="run.input_snapshot"
+          :artifact-refs="run.artifact_refs"
+          :status="run.status"
+          :error="run.error"
+        />
       </section>
     </template>
 
@@ -144,32 +127,6 @@ onMounted(loadRun)
 
 .detail-section {
   margin-top: 16px;
-}
-
-.detail-section h4 {
-  margin: 0 0 8px;
-  font-size: 14px;
-  color: var(--app-ink);
-}
-
-.json-block {
-  margin: 0;
-  padding: 10px;
-  background: #f8fbff;
-  border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius-sm);
-  font-family: var(--app-mono-font);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 300px;
-  overflow: auto;
-}
-
-.error-block {
-  color: #b91c1c;
-  background: #fef2f2;
-  border-color: #fecaca;
 }
 
 .empty-hint {
