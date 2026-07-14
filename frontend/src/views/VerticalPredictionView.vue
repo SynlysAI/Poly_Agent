@@ -2,9 +2,17 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Box, Clock, Cpu, UploadFilled } from '@element-plus/icons-vue'
+import {
+  ArrowRight, Box, Clock, Cpu, DataAnalysis, Document, Key, Refresh, Search, UploadFilled, VideoPlay,
+} from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, listAlgorithmPackages, listAlgorithmRuns, listAlgorithms } from '../api/polyAgentApi'
+import {
+  getApiErrorMessage,
+  listAlgorithmPackages,
+  listAlgorithmRuns,
+  listAlgorithms,
+  listAlgorithmVersions,
+} from '../api/polyAgentApi'
 import AlgorithmManagementPanel from './vertical-prediction/AlgorithmManagementPanel.vue'
 import AlgorithmRunHistoryPanel from './vertical-prediction/AlgorithmRunHistoryPanel.vue'
 import AlgorithmTestPanel from './vertical-prediction/AlgorithmTestPanel.vue'
@@ -12,82 +20,132 @@ import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue
 
 const route = useRoute()
 const router = useRouter()
-const tabNames = new Set(['upload', 'management', 'test', 'runs'])
 
-const activeTab = ref(normalizeTab(route.query.tab))
+const detailTabMap = { management: 'api', test: 'experience', runs: 'api' }
+const routeModes = new Set(['center', 'upload', 'detail'])
+
+const activeMode = ref(normalizeMode(route.query.tab))
+const detailActiveTab = ref(normalizeDetailTab(route.query.tab))
 const loading = ref(false)
 const refreshKey = ref(0)
-const uploadCompleted = ref(false)
+const algorithms = ref([])
+const versionMap = ref({})
 const summary = ref({ packages: 0, activeAlgorithms: 0, recentRuns: 0, failedRuns: 0 })
+const searchText = ref('')
+const statusFilter = ref('')
+const typeFilter = ref('')
+const materialFilter = ref('')
+const selectedAlgorithmId = ref(normalizeQueryString(route.query.algorithm_id))
+
+const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === selectedAlgorithmId.value) || null)
+const selectedVersions = computed(() => versionMap.value[selectedAlgorithmId.value] || [])
+const activeVersion = computed(() =>
+  selectedVersions.value.find((item) => item.version_id === selectedAlgorithm.value?.active_version_id)
+  || selectedVersions.value.find((item) => item.status === 'active')
+  || selectedVersions.value[0]
+  || null,
+)
 
 const statusItems = computed(() => [
   { label: '上传包', value: summary.value.packages, icon: UploadFilled },
-  { label: 'Active 算法', value: summary.value.activeAlgorithms, icon: Box },
+  { label: 'Active 模型', value: summary.value.activeAlgorithms, icon: Box },
   { label: '最近运行', value: summary.value.recentRuns, icon: Clock },
-  { label: '运行器', value: '本机适配层', icon: Cpu },
+  { label: '运行器', value: '子进程沙箱', icon: Cpu },
 ])
 
-const guideItems = computed(() => {
-  const common = [
-    { title: '上传格式', text: '推荐上传标准 ZIP 包，至少包含 Python 源文件和依赖说明。系统会生成算法契约并校验输入输出。' },
-    { title: '管理版本', text: '上传成功后进入算法管理，确认版本状态、运行依赖和 schema，再激活可用版本。' },
-    { title: '测试调用', text: '使用测试调用验证输入 JSON、输出摘要和 artifact；运行记录用于回溯每次调用。' },
-  ]
-  if (activeTab.value === 'upload') return common
-  if (activeTab.value === 'management') {
-    return [
-      { title: '管理中心', text: '这里处理算法版本治理、激活状态和版本元信息，不直接运行预测。' },
-      ...common.slice(1),
-    ]
-  }
-  if (activeTab.value === 'test') {
-    return [
-      { title: '测试输入', text: '按算法版本的 input schema 填写 JSON。失败时先检查字段名、类型和必填项。' },
-      { title: '运行结果', text: '测试调用会生成运行记录，可在运行记录 tab 查看状态、输出和错误信息。' },
-    ]
-  }
+const filteredAlgorithms = computed(() => {
+  const keyword = searchText.value.trim().toLowerCase()
+  return algorithms.value.filter((item) => {
+    const textMatch = !keyword || [item.name, item.algorithm_id, item.description].some((value) => String(value || '').toLowerCase().includes(keyword))
+    const statusMatch = !statusFilter.value || item.status === statusFilter.value
+    const typeMatch = !typeFilter.value || item.type === typeFilter.value
+    const materialMatch = !materialFilter.value || (item.material_scope || []).includes(materialFilter.value)
+    return textMatch && statusMatch && typeMatch && materialMatch
+  })
+})
+
+const typeOptions = computed(() => Array.from(new Set(algorithms.value.map((item) => item.type).filter(Boolean))))
+const statusOptions = computed(() => Array.from(new Set(algorithms.value.map((item) => item.status).filter(Boolean))))
+const materialOptions = computed(() => Array.from(new Set(algorithms.value.flatMap((item) => item.material_scope || []).filter(Boolean))))
+
+const detailHighlights = computed(() => {
+  const algo = selectedAlgorithm.value
+  if (!algo) return []
+  const inputFields = Object.keys(algo.input_schema?.fields || {})
+  const outputFields = Object.keys(algo.output_schema?.fields || {})
   return [
-    { title: '运行记录', text: '这里展示上传模型产生的预测调用记录，用于追溯输入、输出、版本和失败原因。' },
-    { title: '下一步', text: '需要重新验证时回到测试调用；需要切换版本时回到算法管理。' },
+    { title: '可直接测试', text: inputFields.length ? `根据 ${inputFields.join('、')} 自动生成输入表单。` : '模型输入契约已接入平台测试台。' },
+    { title: '版本可治理', text: activeVersion.value ? `当前可用版本为 ${activeVersion.value.version}，支持日志、重部署、冻结和下线。` : '上传版本会进入校验、部署、激活流程。' },
+    { title: '输出可追溯', text: outputFields.length ? `预测结果包含 ${outputFields.join('、')} 等字段。` : '每次运行都会保留输入、输出、artifact 与版本摘要。' },
   ]
 })
 
-function normalizeTab(tab) {
-  const value = Array.isArray(tab) ? tab[0] : tab
-  return tabNames.has(value) ? value : 'upload'
+const bestPracticeItems = computed(() => [
+  '先在互动体验里用最小样例完成一次预测，确认字段名和类型与模型契约一致。',
+  '上线新版本后保留旧版本一段时间；确认结果稳定后再冻结或下线旧版本。',
+  '样例输入应覆盖常见材料结构，输出字段命名保持稳定，避免影响下游 Workflow 和 AutoResearch。',
+])
+
+function normalizeQueryString(value) {
+  return Array.isArray(value) ? value[0] || '' : value || ''
 }
 
-function syncActiveTabQuery() {
-  if (route.query.tab === activeTab.value) return
-  router.replace({ query: { ...route.query, tab: activeTab.value } })
+function normalizeMode(tab) {
+  const value = normalizeQueryString(tab)
+  if (value === 'upload') return 'upload'
+  if (value === 'detail' || detailTabMap[value]) return 'detail'
+  return routeModes.has(value) ? value : 'center'
+}
+
+function normalizeDetailTab(tab) {
+  const value = normalizeQueryString(tab)
+  return detailTabMap[value] || (['experience', 'highlights', 'practice', 'docs', 'api'].includes(value) ? value : 'experience')
+}
+
+function syncRoute() {
+  const query = { ...route.query }
+  if (activeMode.value === 'center') {
+    delete query.tab
+    delete query.algorithm_id
+  } else if (activeMode.value === 'upload') {
+    query.tab = 'upload'
+    delete query.algorithm_id
+  } else {
+    query.tab = 'detail'
+    if (selectedAlgorithmId.value) query.algorithm_id = selectedAlgorithmId.value
+  }
+  if (JSON.stringify(query) !== JSON.stringify(route.query)) router.replace({ query })
 }
 
 watch(
-  () => route.query.tab,
-  (tab) => {
-    const nextTab = normalizeTab(tab)
-    if (activeTab.value !== nextTab) activeTab.value = nextTab
+  () => route.query,
+  (query) => {
+    activeMode.value = normalizeMode(query.tab)
+    detailActiveTab.value = normalizeDetailTab(query.tab)
+    selectedAlgorithmId.value = normalizeQueryString(query.algorithm_id) || selectedAlgorithmId.value
   },
 )
 
-watch(activeTab, syncActiveTabQuery)
+watch([activeMode, selectedAlgorithmId], syncRoute)
 
-async function loadSummary() {
+async function loadData() {
   loading.value = true
   try {
-    const [packages, algorithms, runs] = await Promise.all([
+    const [packages, algorithmData, runs] = await Promise.all([
       listAlgorithmPackages({ page: 1, page_size: 100 }),
       listAlgorithms({ algorithm_family: 'vertical_prediction', page: 1, page_size: 100 }),
       listAlgorithmRuns({ page: 1, page_size: 100 }),
     ])
-    const uploadedAlgorithms = (algorithms.items || []).filter((item) => item.source === 'uploaded_package')
+    algorithms.value = (algorithmData.items || []).filter((item) => item.source === 'uploaded_package')
     const uploadedRuns = (runs.items || []).filter((item) => item.algorithm_version_id)
     summary.value = {
       packages: packages.total || packages.items?.length || 0,
-      activeAlgorithms: uploadedAlgorithms.filter((item) => item.status === 'active').length,
+      activeAlgorithms: algorithms.value.filter((item) => item.status === 'active').length,
       recentRuns: uploadedRuns.length,
       failedRuns: uploadedRuns.filter((item) => item.status === 'failed').length,
     }
+    if (!selectedAlgorithmId.value && algorithms.value[0]) selectedAlgorithmId.value = algorithms.value[0].algorithm_id
+    await loadVersionsForCards()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -95,34 +153,94 @@ async function loadSummary() {
   }
 }
 
-function handleChanged() {
-  refreshKey.value += 1
-  uploadCompleted.value = true
-  loadSummary()
+async function loadVersionsForCards() {
+  const entries = await Promise.all(
+    algorithms.value.map(async (algorithm) => {
+      try {
+        const data = await listAlgorithmVersions(algorithm.algorithm_id, { page: 1, page_size: 100 })
+        return [algorithm.algorithm_id, data.items || []]
+      } catch {
+        return [algorithm.algorithm_id, []]
+      }
+    }),
+  )
+  versionMap.value = Object.fromEntries(entries)
 }
 
-function goToManagement() {
-  activeTab.value = 'management'
+function handleChanged(packageInfo) {
+  refreshKey.value += 1
+  if (packageInfo?.algorithm_id) selectedAlgorithmId.value = packageInfo.algorithm_id
+  loadData()
+}
+
+function openUpload() {
+  activeMode.value = 'upload'
+}
+
+function openCenter() {
+  activeMode.value = 'center'
+}
+
+function openDetail(algorithmId, tab = 'experience') {
+  selectedAlgorithmId.value = algorithmId
+  detailActiveTab.value = tab
+  activeMode.value = 'detail'
+}
+
+function formatDate(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function statusType(status) {
+  const map = { active: 'success', frozen: 'info', decommissioned: 'danger', pending_encapsulation: 'warning', in_development: 'warning' }
+  return map[status] || 'info'
+}
+
+function statusLabel(status) {
+  const map = { active: '已激活', frozen: '已冻结', decommissioned: '已下线', pending_encapsulation: '待封装', in_development: '开发中' }
+  return map[status] || status || '-'
+}
+
+function typeLabel(type) {
+  const map = { retriever: '检索器', predictor: '预测器', simulator: '模拟器', optimizer: '优化器' }
+  return map[type] || type || '-'
+}
+
+function materialLabel(value) {
+  const map = { universal: '通用', fluoropolymer: '氟基', carbon_polymer: '碳基', silicon_polymer: '硅基', fluoro_carbon_copolymer: '氟碳共聚' }
+  return map[value] || value
+}
+
+function fieldRows(schema) {
+  return Object.entries(schema?.fields || {}).map(([name, type]) => ({
+    name,
+    type,
+    required: (schema.required || []).includes(name) ? '是' : '否',
+    unit: schema.ui_hints?.[name]?.unit || '-',
+  }))
 }
 
 onMounted(() => {
-  syncActiveTabQuery()
-  loadSummary()
+  loadData()
 })
 </script>
 
 <template>
   <div class="vertical-prediction-page">
-    <header class="page-heading">
+    <header class="model-page-hero">
       <div>
         <p class="eyebrow">任务提交 / 预测模型</p>
         <h1>垂类预测模型</h1>
-        <p>上传和治理 Python 算法版本，执行指定版本预测，并追溯每次运行的输入、输出与摘要。</p>
+        <p>像管理智能体一样管理材料预测模型：发布、体验、版本治理和运行追溯集中在一个入口。</p>
       </div>
-      <el-tag type="success" effect="dark">P0-MVP 在线</el-tag>
+      <div class="hero-actions">
+        <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
+      </div>
     </header>
 
-    <section v-if="activeTab !== 'upload'" class="status-band" v-loading="loading" aria-label="垂类预测模型状态摘要">
+    <section class="status-band" v-loading="loading" aria-label="垂类预测模型状态摘要">
       <div v-for="item in statusItems" :key="item.label" class="status-item">
         <el-icon><component :is="item.icon" /></el-icon>
         <span>{{ item.label }}</span>
@@ -130,56 +248,251 @@ onMounted(() => {
       </div>
     </section>
 
-    <div class="prediction-workspace">
-      <section class="workspace-panel">
-        <template v-if="activeTab === 'upload'">
-          <AlgorithmUploadPanel @changed="handleChanged" />
-          <div v-if="uploadCompleted" class="upload-next-action">
-            <el-button type="primary" @click="goToManagement">进入模型管理</el-button>
-          </div>
-        </template>
-        <el-tabs v-else v-model="activeTab" class="workspace-tabs">
-          <el-tab-pane label="算法管理" name="management"><AlgorithmManagementPanel :refresh-key="refreshKey" @changed="handleChanged" /></el-tab-pane>
-          <el-tab-pane label="测试调用" name="test"><AlgorithmTestPanel :refresh-key="refreshKey" @run-created="handleChanged" /></el-tab-pane>
-          <el-tab-pane label="运行记录" name="runs"><AlgorithmRunHistoryPanel :refresh-key="refreshKey" /></el-tab-pane>
-        </el-tabs>
-      </section>
+    <template v-if="activeMode === 'upload'">
+      <div class="subnav-row">
+        <el-button text @click="openCenter">返回模型中心</el-button>
+      </div>
+      <AlgorithmUploadPanel @changed="handleChanged" @view-detail="openDetail" />
+    </template>
 
-      <aside class="guide-panel">
-        <h3>使用说明</h3>
-        <div class="guide-list">
-          <div v-for="item in guideItems" :key="item.title" class="guide-item">
-            <strong>{{ item.title }}</strong>
-            <span>{{ item.text }}</span>
+    <template v-else-if="activeMode === 'detail' && selectedAlgorithm">
+      <div class="subnav-row">
+        <el-button text @click="openCenter">返回模型中心</el-button>
+        <el-button text type="primary" @click="openUpload">上传新版本</el-button>
+      </div>
+      <section class="detail-banner">
+        <div class="model-avatar"><el-icon><DataAnalysis /></el-icon></div>
+        <div class="detail-main">
+          <div class="detail-title-row">
+            <h2>{{ selectedAlgorithm.name }}</h2>
+            <el-tag :type="statusType(selectedAlgorithm.status)">{{ statusLabel(selectedAlgorithm.status) }}</el-tag>
+          </div>
+          <p>{{ selectedAlgorithm.description || '该模型已接入 Poly Agent 垂类预测工作台，可用于人工 Workflow 与 AutoResearch。' }}</p>
+          <div class="detail-meta">
+            <span>{{ selectedAlgorithm.algorithm_id }}</span>
+            <span>{{ typeLabel(selectedAlgorithm.type) }}</span>
+            <span>版本 {{ activeVersion?.version || selectedAlgorithm.version || '-' }}</span>
+            <span>更新 {{ formatDate(activeVersion?.updated_at) }}</span>
           </div>
         </div>
-      </aside>
-    </div>
+        <div class="detail-actions">
+          <el-button :icon="VideoPlay" type="primary" @click="detailActiveTab = 'experience'">立即体验</el-button>
+          <el-button :icon="Key" @click="detailActiveTab = 'api'">版本治理</el-button>
+        </div>
+      </section>
+
+      <section class="detail-panel">
+        <el-tabs v-model="detailActiveTab" class="detail-tabs">
+          <el-tab-pane label="互动体验" name="experience">
+            <AlgorithmTestPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-toolbar="false" @run-created="handleChanged" />
+          </el-tab-pane>
+          <el-tab-pane label="亮点介绍" name="highlights">
+            <div class="info-grid">
+              <article v-for="item in detailHighlights" :key="item.title" class="info-card">
+                <h3>{{ item.title }}</h3>
+                <p>{{ item.text }}</p>
+              </article>
+            </div>
+          </el-tab-pane>
+          <el-tab-pane label="最佳实践" name="practice">
+            <div class="practice-list">
+              <div v-for="(item, index) in bestPracticeItems" :key="item" class="practice-item">
+                <strong>{{ index + 1 }}</strong>
+                <span>{{ item }}</span>
+              </div>
+            </div>
+          </el-tab-pane>
+          <el-tab-pane label="API 使用手册" name="docs">
+            <div class="docs-layout">
+              <section>
+                <h3>输入 Schema</h3>
+                <el-table :data="fieldRows(selectedAlgorithm.input_schema)" border size="small">
+                  <el-table-column prop="name" label="字段" min-width="140" />
+                  <el-table-column prop="type" label="类型" width="120" />
+                  <el-table-column prop="required" label="必填" width="90" />
+                  <el-table-column prop="unit" label="单位" width="100" />
+                </el-table>
+              </section>
+              <section>
+                <h3>输出 Schema</h3>
+                <el-table :data="fieldRows(selectedAlgorithm.output_schema)" border size="small">
+                  <el-table-column prop="name" label="字段" min-width="140" />
+                  <el-table-column prop="type" label="类型" width="120" />
+                  <el-table-column prop="required" label="必填" width="90" />
+                  <el-table-column prop="unit" label="单位" width="100" />
+                </el-table>
+              </section>
+              <section class="api-note">
+                <el-icon><Document /></el-icon>
+                <span>调用入口复用平台 AlgorithmRun API；外部集成时按 input schema 提交 input_snapshot，并记录 algorithm_id 与 algorithm_version_id。</span>
+              </section>
+            </div>
+          </el-tab-pane>
+          <el-tab-pane label="API Key / 版本治理" name="api">
+            <div class="governance-layout">
+              <AlgorithmManagementPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-selector="false" @changed="handleChanged" />
+              <section class="history-panel">
+                <h3>运行记录</h3>
+                <AlgorithmRunHistoryPanel :refresh-key="refreshKey" />
+              </section>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </section>
+    </template>
+
+    <template v-else>
+      <div class="model-center-layout">
+        <aside class="filter-panel">
+          <div class="filter-title">筛选</div>
+          <el-input v-model="searchText" :prefix-icon="Search" placeholder="搜索模型名称、ID" clearable />
+          <div class="filter-group">
+            <span>状态</span>
+            <el-radio-group v-model="statusFilter">
+              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button v-for="status in statusOptions" :key="status" :value="status">{{ statusLabel(status) }}</el-radio-button>
+            </el-radio-group>
+          </div>
+          <div class="filter-group">
+            <span>类型</span>
+            <el-radio-group v-model="typeFilter">
+              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button v-for="type in typeOptions" :key="type" :value="type">{{ typeLabel(type) }}</el-radio-button>
+            </el-radio-group>
+          </div>
+          <div class="filter-group">
+            <span>材料范围</span>
+            <el-radio-group v-model="materialFilter">
+              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button v-for="item in materialOptions" :key="item" :value="item">{{ materialLabel(item) }}</el-radio-button>
+            </el-radio-group>
+          </div>
+        </aside>
+
+        <main class="model-list-panel">
+          <div class="list-head">
+            <div>
+              <h2>模型中心</h2>
+              <p>共 {{ filteredAlgorithms.length }} 个可管理模型</p>
+            </div>
+            <el-button type="primary" :icon="UploadFilled" @click="openUpload">上传新模型</el-button>
+          </div>
+
+          <div v-if="filteredAlgorithms.length" class="model-card-grid" v-loading="loading">
+            <button v-for="item in filteredAlgorithms" :key="item.algorithm_id" type="button" class="model-card" @click="openDetail(item.algorithm_id)">
+              <div class="model-card-top">
+                <div class="model-avatar small"><el-icon><DataAnalysis /></el-icon></div>
+                <div class="model-card-title">
+                  <strong>{{ item.name }}</strong>
+                  <span>{{ item.algorithm_id }}</span>
+                </div>
+                <el-tag :type="statusType(item.status)" size="small">{{ statusLabel(item.status) }}</el-tag>
+              </div>
+              <p>{{ item.description || '已上传的垂类预测模型，可在详情页进行测试调用、版本治理和运行追溯。' }}</p>
+              <div class="model-tags">
+                <el-tag size="small" effect="plain">{{ typeLabel(item.type) }}</el-tag>
+                <el-tag v-for="scope in item.material_scope" :key="scope" size="small" effect="plain">{{ materialLabel(scope) }}</el-tag>
+              </div>
+              <div class="model-card-foot">
+                <span>Active {{ item.active_version_id || '无' }}</span>
+                <el-icon><ArrowRight /></el-icon>
+              </div>
+            </button>
+          </div>
+
+          <div v-else class="empty-models">
+            <el-icon><UploadFilled /></el-icon>
+            <strong>还没有符合条件的垂类预测模型</strong>
+            <span>上传 Python 脚本或标准 ZIP 后，模型会出现在这里。</span>
+            <el-button type="primary" @click="openUpload">上传第一个模型</el-button>
+          </div>
+        </main>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .vertical-prediction-page { display: grid; gap: 16px; }
-.page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.model-page-hero, .detail-banner, .detail-panel, .filter-panel, .model-list-panel {
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: #fff;
+  box-shadow: var(--app-card-shadow);
+}
+.model-page-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px; }
 .eyebrow { margin: 0 0 4px; color: var(--app-primary-active); font-size: 12px; font-weight: 700; }
-h1 { margin: 0; color: var(--app-ink); font-size: 26px; line-height: 1.25; letter-spacing: 0; }
-.page-heading p:last-child { max-width: 760px; margin: 7px 0 0; color: var(--app-ink-muted); font-size: 14px; }
+h1, h2, h3 { margin: 0; color: var(--app-ink); letter-spacing: 0; }
+h1 { font-size: 26px; line-height: 1.25; }
+h2 { font-size: 20px; line-height: 1.3; }
+h3 { font-size: 15px; }
+.model-page-hero p:last-child, .list-head p, .detail-main p { margin: 7px 0 0; color: var(--app-ink-muted); font-size: 14px; line-height: 1.6; }
+.hero-actions, .detail-actions, .subnav-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .status-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
 .status-item { min-width: 0; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; padding: 12px 14px; border-right: 1px solid var(--app-border-soft); }
 .status-item:last-child { border-right: 0; }
 .status-item .el-icon { color: var(--app-primary); }
 .status-item span { color: var(--app-ink-muted); font-size: 12px; }
 .status-item strong { color: var(--app-ink); font-size: 14px; overflow-wrap: anywhere; }
-.prediction-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
-.workspace-panel { min-width: 0; overflow-x: auto; padding: 0 14px 18px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
-.workspace-tabs :deep(.el-tabs__header) { margin-bottom: 18px; }
-.upload-next-action { display: flex; justify-content: flex-end; padding-top: 14px; border-top: 1px solid var(--app-border-soft); }
-.guide-panel { position: sticky; top: 76px; padding: 16px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
-.guide-panel h3 { margin: 0 0 12px; color: var(--app-ink); font-size: 15px; }
-.guide-list { display: grid; gap: 12px; }
-.guide-item { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; }
-.guide-item strong { color: var(--app-ink); font-size: 14px; }
-.guide-item span { color: var(--app-ink-muted); font-size: 13px; line-height: 1.6; }
-@media (max-width: 900px) { .status-band { grid-template-columns: repeat(2, minmax(0, 1fr)); } .status-item:nth-child(2) { border-right: 0; } .status-item:nth-child(-n+2) { border-bottom: 1px solid var(--app-border-soft); } .prediction-workspace { grid-template-columns: 1fr; } .guide-panel { position: static; } }
-@media (max-width: 560px) { .page-heading { flex-direction: column; } .status-band { grid-template-columns: 1fr; } .status-item { border-right: 0; border-bottom: 1px solid var(--app-border-soft); } .status-item:last-child { border-bottom: 0; } .workspace-panel { padding-inline: 10px; } }
+.model-center-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+.filter-panel { position: sticky; top: 76px; display: grid; gap: 16px; padding: 16px; }
+.filter-title { color: var(--app-ink); font-size: 16px; font-weight: 700; }
+.filter-group { display: grid; gap: 8px; }
+.filter-group > span { color: var(--app-ink-muted); font-size: 13px; font-weight: 600; }
+.filter-group :deep(.el-radio-group) { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter-group :deep(.el-radio-button__inner) { border-radius: var(--app-radius-sm) !important; border-left: 1px solid var(--app-border) !important; font-size: 12px; }
+.model-list-panel { min-width: 0; padding: 16px; }
+.list-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.model-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.model-card { min-width: 0; display: grid; gap: 12px; padding: 16px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: #fff; color: inherit; text-align: left; cursor: pointer; transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease; }
+.model-card:hover { border-color: #bfdbfe; box-shadow: 0 10px 22px rgba(37, 99, 235, 0.09); transform: translateY(-1px); }
+.model-card:focus-visible { outline: 3px solid var(--app-primary-light); outline-offset: 2px; }
+.model-card-top { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.model-avatar { display: grid; place-items: center; width: 82px; height: 82px; border-radius: var(--app-radius-md); background: linear-gradient(180deg, #f8fbff, #e7f0ff); color: var(--app-primary-active); border: 1px solid #dbeafe; }
+.model-avatar.small { width: 48px; height: 48px; }
+.model-avatar .el-icon { font-size: 30px; }
+.model-card-title { min-width: 0; display: grid; gap: 3px; }
+.model-card-title strong { overflow: hidden; color: var(--app-ink); font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.model-card-title span, .model-card-foot span, .detail-meta span { color: var(--app-ink-muted); font-size: 12px; overflow-wrap: anywhere; }
+.model-card p { display: -webkit-box; min-height: 44px; margin: 0; overflow: hidden; color: var(--app-ink-body); font-size: 13px; line-height: 1.65; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.model-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.model-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--app-border-soft); }
+.empty-models { min-height: 320px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--app-ink-muted); text-align: center; }
+.empty-models .el-icon { color: var(--app-primary); font-size: 42px; }
+.empty-models strong { color: var(--app-ink); font-size: 16px; }
+.detail-banner { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; align-items: center; padding: 18px; background: linear-gradient(90deg, #ffffff 0%, #f4f8ff 100%); }
+.detail-main { min-width: 0; }
+.detail-title-row, .detail-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.detail-meta { margin-top: 12px; }
+.detail-meta span { padding-right: 10px; border-right: 1px solid var(--app-border-soft); }
+.detail-meta span:last-child { border-right: 0; }
+.detail-panel { min-width: 0; padding: 0 16px 18px; }
+.detail-tabs :deep(.el-tabs__header) { margin-bottom: 18px; }
+.info-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.info-card { padding: 16px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-md); background: #f8fbff; }
+.info-card p { margin: 8px 0 0; color: var(--app-ink-muted); font-size: 13px; line-height: 1.65; }
+.practice-list { display: grid; gap: 12px; max-width: 880px; }
+.practice-item { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; align-items: start; padding: 14px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-md); }
+.practice-item strong { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--app-primary-light); color: var(--app-primary-active); }
+.practice-item span { color: var(--app-ink-body); font-size: 14px; line-height: 1.7; }
+.docs-layout, .governance-layout { display: grid; gap: 16px; }
+.docs-layout section h3, .history-panel h3 { margin-bottom: 10px; }
+.api-note { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; color: var(--app-ink-muted); font-size: 13px; }
+.history-panel { padding-top: 16px; border-top: 1px solid var(--app-border-soft); }
+@media (max-width: 1180px) { .model-card-grid, .info-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .model-page-hero, .list-head, .detail-banner { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
+  .status-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .status-item:nth-child(2) { border-right: 0; }
+  .status-item:nth-child(-n+2) { border-bottom: 1px solid var(--app-border-soft); }
+  .model-center-layout { grid-template-columns: 1fr; }
+  .filter-panel { position: static; }
+}
+@media (max-width: 560px) {
+  .status-band { grid-template-columns: 1fr; }
+  .status-item { border-right: 0; border-bottom: 1px solid var(--app-border-soft); }
+  .status-item:last-child { border-bottom: 0; }
+  .model-card-top { grid-template-columns: 42px minmax(0, 1fr); }
+  .model-card-top .el-tag { grid-column: 1 / -1; justify-self: start; }
+}
 </style>

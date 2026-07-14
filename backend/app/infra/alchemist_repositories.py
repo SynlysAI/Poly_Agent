@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from pymongo import ReturnDocument
 
+from app.core.time import utc_now
 from app.infra.mongo import (
     get_alchemist_sessions_collection,
 )
@@ -28,7 +28,7 @@ class AlchemistSessionRepository:
         Args:
             session_doc: Session 完整文档。
         """
-        session_doc["updated_at"] = datetime.utcnow()
+        session_doc["updated_at"] = utc_now()
         get_alchemist_sessions_collection().update_one(
             {"session_id": session_doc["session_id"]},
             {"$set": session_doc},
@@ -106,7 +106,7 @@ class AlchemistSessionRepository:
         Returns:
             是否命中并更新。
         """
-        fields["updated_at"] = datetime.utcnow()
+        fields["updated_at"] = utc_now()
         result = get_alchemist_sessions_collection().update_one(
             {"session_id": session_id}, {"$set": fields}
         )

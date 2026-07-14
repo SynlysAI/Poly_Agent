@@ -62,6 +62,15 @@ function duration(run) {
   return `${Math.max(0, new Date(run.finished_at) - new Date(run.started_at))} ms`
 }
 
+function shortDigest(value) {
+  if (!value) return '-'
+  return value.length > 34 ? `${value.slice(0, 30)}...` : value
+}
+
+function runtimeBackend(run) {
+  return run.runtime_snapshot?.backend || run.runtime_snapshot?.deployment?.backend || '-'
+}
+
 onMounted(loadRuns)
 </script>
 
@@ -95,8 +104,13 @@ onMounted(loadRuns)
           <el-descriptions-item label="Run ID">{{ detail.run_id }}</el-descriptions-item>
           <el-descriptions-item label="算法 / 版本">{{ detail.algorithm_id }} / {{ detail.algorithm_version_id }}</el-descriptions-item>
           <el-descriptions-item label="Package SHA">{{ detail.package_sha256 || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="Image Digest">{{ detail.image_digest || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="Runtime">{{ runtimeBackend(detail) }}</el-descriptions-item>
+          <el-descriptions-item label="Runtime Digest">{{ shortDigest(detail.runtime_digest || detail.image_digest) }}</el-descriptions-item>
+          <el-descriptions-item label="Environment Digest">{{ shortDigest(detail.environment_digest) }}</el-descriptions-item>
           <el-descriptions-item label="状态 / 耗时">{{ detail.status }} / {{ duration(detail) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.runtime_snapshot?.logs?.stderr" label="Runtime stderr">
+            <pre class="runtime-log">{{ detail.runtime_snapshot.logs.stderr }}</pre>
+          </el-descriptions-item>
         </el-descriptions>
         <AlgorithmResultView
           class="detail-result-view"
@@ -115,6 +129,7 @@ onMounted(loadRuns)
 .history-panel { display: grid; gap: 14px; }
 .history-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 code { font-family: var(--app-mono-font); font-size: 12px; }
+.runtime-log { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--app-mono-font); font-size: 12px; }
 .detail-result-view { margin-top: 16px; }
 @media (max-width: 720px) { .history-toolbar { align-items: stretch; flex-direction: column; } .history-toolbar > * { width: 100% !important; } }
 </style>

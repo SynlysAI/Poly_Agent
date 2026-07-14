@@ -85,6 +85,28 @@ def _request_id(request: Request) -> str | None:
     return getattr(request.state, "request_id", None) or request.headers.get("x-request-id")
 
 
+def _ensure_package_access(package_id: str, current_user: dict[str, str] | None) -> AlgorithmPackage:
+    """校验当前用户是否可访问上传算法包。"""
+    package = package_service.get_package(package_id)
+    if _has_full_access(current_user) or package.created_by == _access_user_id(current_user):
+        return package
+    raise HTTPException(status_code=403, detail="无权限访问该算法包")
+
+
+def _ensure_version_access(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None,
+) -> AlgorithmVersion:
+    """校验当前用户是否可访问上传算法版本。"""
+    version = package_service.get_version(version_id)
+    if version.algorithm_id != algorithm_id:
+        raise HTTPException(status_code=409, detail="算法 ID 与版本不匹配")
+    if _has_full_access(current_user) or version.created_by == _access_user_id(current_user):
+        return version
+    raise HTTPException(status_code=403, detail="无权限访问该算法版本")
+
+
 @router.get("/readiness", response_model=ApiResponse[ResearchEngineReadinessData])
 def get_research_engine_readiness() -> ApiResponse[ResearchEngineReadinessData]:
     """获取 AutoResearch 启动前集成可用性摘要。"""
@@ -212,14 +234,21 @@ def list_algorithm_packages(
 
 
 @router.get("/algorithm-packages/{package_id}", response_model=ApiResponse[AlgorithmPackage])
-def get_algorithm_package(package_id: str) -> ApiResponse[AlgorithmPackage]:
+def get_algorithm_package(
+    package_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmPackage]:
     """查看算法包状态。"""
-    return ApiResponse(code=0, message="ok", data=package_service.get_package(package_id))
+    return ApiResponse(code=0, message="ok", data=_ensure_package_access(package_id, current_user))
 
 
 @router.get("/algorithm-packages/{package_id}/download")
-def download_algorithm_package(package_id: str) -> Response:
+def download_algorithm_package(
+    package_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> Response:
     """下载已上传或由平台生成的标准算法 ZIP。"""
+    _ensure_package_access(package_id, current_user)
     filename, content = package_service.download_package(package_id)
     return Response(
         content=content,
@@ -229,14 +258,22 @@ def download_algorithm_package(package_id: str) -> Response:
 
 
 @router.post("/algorithm-packages/{package_id}:validate", response_model=ApiResponse[AlgorithmPackage])
-def validate_algorithm_package(package_id: str) -> ApiResponse[AlgorithmPackage]:
+def validate_algorithm_package(
+    package_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmPackage]:
     """校验算法包并生成 AlgorithmVersion。"""
+    _ensure_package_access(package_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.validate_package(package_id))
 
 
 @router.post("/algorithm-packages/{package_id}:build", response_model=ApiResponse[AlgorithmPackage])
-def build_algorithm_package(package_id: str) -> ApiResponse[AlgorithmPackage]:
+def build_algorithm_package(
+    package_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmPackage]:
     """构建算法包。P0 记录本机 adapter build 状态。"""
+    _ensure_package_access(package_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.build_package(package_id))
 
 
@@ -246,11 +283,13 @@ def list_algorithm_versions(
     status: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmVersionListData]:
     """查询指定算法的版本。"""
     data = package_service.list_versions(
         algorithm_id=algorithm_id,
         status=status,
+        created_by=None if _has_full_access(current_user) else _access_user_id(current_user),
         page=page,
         page_size=page_size,
     )
@@ -258,26 +297,79 @@ def list_algorithm_versions(
 
 
 @router.post("/algorithms/{algorithm_id}/versions/{version_id}:deploy", response_model=ApiResponse[AlgorithmVersion])
-def deploy_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
-    """部署算法版本到 P0 本机 adapter。"""
+def deploy_algorithm_version(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
+    """部署算法版本到 P0 本地 runtime。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.deploy_version(algorithm_id, version_id))
 
 
+@router.post("/algorithms/{algorithm_id}/versions/{version_id}:redeploy", response_model=ApiResponse[AlgorithmVersion])
+def redeploy_algorithm_version(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
+    """重新部署算法版本到 P0 本地 runtime。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
+    return ApiResponse(code=0, message="ok", data=package_service.redeploy_version(algorithm_id, version_id))
+
+
+@router.get("/algorithms/{algorithm_id}/versions/{version_id}/health", response_model=ApiResponse[dict])
+def get_algorithm_version_health(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[dict]:
+    """查看算法版本 runtime health。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
+    return ApiResponse(code=0, message="ok", data=package_service.version_health(algorithm_id, version_id))
+
+
+@router.get("/algorithms/{algorithm_id}/versions/{version_id}/logs", response_model=ApiResponse[dict])
+def get_algorithm_version_logs(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[dict]:
+    """查看算法版本生命周期和 runtime 日志。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
+    return ApiResponse(code=0, message="ok", data=package_service.version_logs(algorithm_id, version_id))
+
+
 @router.post("/algorithms/{algorithm_id}/versions/{version_id}:activate", response_model=ApiResponse[AlgorithmVersion])
-def activate_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+def activate_algorithm_version(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
     """激活算法版本。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.activate_version(algorithm_id, version_id))
 
 
 @router.post("/algorithms/{algorithm_id}/versions/{version_id}:rollback", response_model=ApiResponse[AlgorithmVersion])
-def rollback_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+def rollback_algorithm_version(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
     """回滚到指定历史版本。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.rollback_version(algorithm_id, version_id))
 
 
 @router.post("/algorithms/{algorithm_id}/versions/{version_id}:freeze", response_model=ApiResponse[AlgorithmVersion])
-def freeze_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+def freeze_algorithm_version(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
     """冻结指定算法版本。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.freeze_version(algorithm_id, version_id))
 
 
@@ -285,8 +377,13 @@ def freeze_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[
     "/algorithms/{algorithm_id}/versions/{version_id}:decommission",
     response_model=ApiResponse[AlgorithmVersion],
 )
-def decommission_algorithm_version(algorithm_id: str, version_id: str) -> ApiResponse[AlgorithmVersion]:
+def decommission_algorithm_version(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
     """下线指定算法版本。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.decommission_version(algorithm_id, version_id))
 
 
@@ -504,19 +601,29 @@ def list_algorithms(
     支持按类型、材料体系、触发方式、状态过滤和分页。
     响应字段足够前端渲染算法卡和 schema drawer。
     """
-    return ApiResponse(
-        code=0,
-        message="ok",
-        data=service.list_algorithms(
-            algorithm_type=type,
-            algorithm_family=algorithm_family,
-            material_scope=material_scope,
-            trigger_mode=trigger_mode,
-            status=status,
-            page=page,
-            page_size=page_size,
-        ),
+    data = service.list_algorithms(
+        algorithm_type=type,
+        algorithm_family=algorithm_family,
+        material_scope=material_scope,
+        trigger_mode=trigger_mode,
+        status=status,
+        page=page,
+        page_size=page_size,
     )
+    if not _has_full_access(current_user):
+        user_id = _access_user_id(current_user)
+        items = [
+            item
+            for item in data.items
+            if item.source != "uploaded_package" or item.owner == user_id
+        ]
+        data = AlgorithmRegistryListData(
+            items=items,
+            page=data.page,
+            page_size=data.page_size,
+            total=len(items),
+        )
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.get("/algorithms/{algorithm_id}", response_model=ApiResponse[AlgorithmRegistryEntry])
@@ -529,6 +636,12 @@ def get_algorithm(
     包含算法名称、类型、材料范围、输入输出 schema 等完整信息。
     """
     data = service.get_algorithm(algorithm_id)
+    if (
+        not _has_full_access(current_user)
+        and data.source == "uploaded_package"
+        and data.owner != _access_user_id(current_user)
+    ):
+        raise HTTPException(status_code=403, detail="无权限访问该算法")
     return ApiResponse(code=0, message="ok", data=data)
 
 

@@ -1037,6 +1037,85 @@ watch(
           </div>
         </div>
       </main>
+
+      <aside class="workflow-context" aria-label="研发任务上下文">
+        <section class="context-card">
+          <div class="context-card-header">
+            <h4>当前上下文</h4>
+            <el-tag v-if="currentStep" size="small" effect="plain">步骤 {{ currentStep }}</el-tag>
+          </div>
+          <div class="context-list">
+            <div class="context-row">
+              <span>ProblemSpec</span>
+              <strong>{{ problemSpec?.name || problemSpec?.problem_spec_id || '未选择' }}</strong>
+            </div>
+            <div class="context-row">
+              <span>执行路径</span>
+              <strong>{{ executionMode ? (executionMode === 'manual_workbench' ? '人工工作台' : 'AutoResearch') : '未选择' }}</strong>
+            </div>
+            <div class="context-row">
+              <span>当前运行</span>
+              <strong>{{ researchRun?.run_id || workflowRun?.run_id || algorithmRun?.run_id || '暂无' }}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="context-card context-card-accent">
+          <div class="context-card-header">
+            <h4>下一步操作</h4>
+          </div>
+          <div class="context-actions">
+            <el-button
+              v-if="pendingResearchApprovalStage"
+              type="warning"
+              size="small"
+              @click="openGateReviewFromStatus"
+            >
+              审批 Gate
+            </el-button>
+            <el-button
+              v-if="reportSubject"
+              type="primary"
+              size="small"
+              :disabled="reportSubmitting"
+              @click="hasActiveReportJobs ? loadReportJobs() : openReportDrawer()"
+            >
+              {{ reportPrimaryButtonText }}
+            </el-button>
+            <el-button size="small" @click="openExamples">示例流程</el-button>
+          </div>
+          <p class="context-hint">
+            右侧只保留审批、报告和追溯入口，主工作区专注当前步骤。
+          </p>
+        </section>
+
+        <section class="context-card">
+          <div class="context-card-header">
+            <h4>追溯状态</h4>
+            <el-tag
+              v-if="researchRun?.status || algorithmRun?.status"
+              size="small"
+              :type="statusTag(researchRun?.status || algorithmRun?.status)"
+            >
+              {{ researchRun?.status || algorithmRun?.status }}
+            </el-tag>
+          </div>
+          <div class="context-list">
+            <div class="context-row">
+              <span>报告任务</span>
+              <strong>{{ reportJobs.length }}</strong>
+            </div>
+            <div class="context-row">
+              <span>活跃报告</span>
+              <strong>{{ hasActiveReportJobs ? '有' : '无' }}</strong>
+            </div>
+            <div class="context-row">
+              <span>追溯链</span>
+              <strong>{{ researchTraceability ? '已加载' : '待加载' }}</strong>
+            </div>
+          </div>
+        </section>
+      </aside>
     </div>
 
     <el-dialog v-model="examplesVisible" title="示例流程" width="640px">
@@ -1175,9 +1254,10 @@ watch(
   gap: 6px;
 }
 
-/* ── 主体两栏布局 ── */
+/* ── 主体三栏布局 ── */
 .workflow-body {
-  display: flex;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 300px;
   flex: 1;
   min-height: 0;
   border: 1px solid var(--app-border-soft);
@@ -1190,7 +1270,6 @@ watch(
 /* ── 左侧工作流树 ── */
 .workflow-tree {
   width: 280px;
-  flex-shrink: 0;
   border-right: 1px solid var(--app-border-soft);
   background: #fafbfc;
   display: flex;
@@ -1347,14 +1426,86 @@ watch(
 
 /* ── 右侧工作区 ── */
 .workflow-main {
-  flex: 1;
   min-width: 0;
   overflow-y: auto;
   padding: 20px 24px;
 }
 
 .step-panel {
-  max-width: 960px;
+  max-width: none;
+}
+
+.workflow-context {
+  min-width: 0;
+  border-left: 1px solid var(--app-border-soft);
+  background: #fbfdff;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.context-card {
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #ffffff;
+  padding: 12px;
+}
+
+.context-card-accent {
+  background: #f8fbff;
+  border-color: #bfdbfe;
+}
+
+.context-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.context-card-header h4 {
+  margin: 0;
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.context-list,
+.context-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.context-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.context-row span,
+.context-hint {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.context-row strong {
+  overflow: hidden;
+  color: var(--app-ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-actions .el-button {
+  width: 100%;
+}
+
+.context-hint {
+  margin: 10px 0 0;
+  line-height: 1.5;
 }
 
 .step-panel-header {
@@ -1621,17 +1772,38 @@ watch(
 }
 
 /* ── 响应式 ── */
+@media (max-width: 1180px) {
+  .workflow-body {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .workflow-tree {
+    width: 240px;
+  }
+
+  .workflow-context {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--app-border-soft);
+    border-left: none;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 960px) {
   .workflow-body {
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .workflow-tree {
     width: 100%;
-    flex-shrink: 1;
     max-height: 200px;
     border-right: none;
     border-bottom: 1px solid var(--app-border-soft);
+  }
+
+  .workflow-context {
+    grid-template-columns: 1fr;
   }
 
   .two-col {

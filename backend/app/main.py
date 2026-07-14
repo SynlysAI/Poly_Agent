@@ -166,8 +166,8 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=settings.cors_allowed_origins,
+        allow_credentials=settings.cors_allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["Content-Disposition", "X-Request-Id"],
@@ -293,12 +293,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         f"unhandled exception: {request.method} {request.url.path}",
         extra={"request_id": request_id},
     )
+    detail = str(exc) if settings.is_local_env else "internal server error"
     return JSONResponse(
         status_code=500,
         content={
             "code": 50001,
             "message": "internal error",
-            "data": {"detail": str(exc), "path": str(request.url.path)},
+            "data": {"detail": detail, "path": str(request.url.path)},
             "request_id": request_id,
         },
         headers={"X-Request-Id": request_id},

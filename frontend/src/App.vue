@@ -36,6 +36,7 @@ const currentUserRoleLabel = computed(() => {
 
 const currentUserAvatarText = computed(() => currentUserDisplayName.value.slice(0, 1) || 'U')
 const isAuthPublicRoute = computed(() => AUTH_PUBLIC_PATHS.has(route.path))
+const canAccessAdmin = computed(() => !authState.authEnabled || authState.role === 'admin')
 
 const HEADER_SECTION_ROUTE_MAP = {
   '任务提交': '/tasks/submit',
@@ -46,6 +47,7 @@ const HEADER_SECTION_ROUTE_MAP = {
   '湿实验优化': '/tasks/submit',
   '研发引擎': '/research-engine',
   '工具服务': '/tools',
+  '系统管理': '/admin',
 }
 
 const currentBreadcrumbItems = computed(() => {
@@ -70,6 +72,7 @@ const activeMenu = computed(() => {
   if (current.startsWith('/optimization')) return '/tasks/submit'
   // 问答对话归入工作台
   if (current.startsWith('/dialogue')) return '/dashboard'
+  if (current.startsWith('/admin')) return '/admin'
   return current
 })
 
@@ -236,6 +239,10 @@ onBeforeUnmount(() => {
           <el-menu-item index="/database/data-catalog">
             <el-icon><DataAnalysis /></el-icon>
             <span>数据管理</span>
+          </el-menu-item>
+          <el-menu-item v-if="canAccessAdmin" index="/admin">
+            <el-icon><SetUp /></el-icon>
+            <span>系统管理</span>
           </el-menu-item>
         </el-menu>
       </div>

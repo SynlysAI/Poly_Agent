@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import socket
-from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.core.time import utc_date_id
+from app.core.time import utc_now
 from app.infra.computation_repositories import AuditEventRepository
 from app.infra.computation_repositories import ServiceIntegrationRepository
-from app.infra.computation_repositories import utc_now
 from app.schemas.integrations import IntegrationServiceKey
 from app.schemas.integrations import IntegrationStatus
 from app.schemas.integrations import SENSITIVE_KEY_MARKERS
@@ -146,7 +146,7 @@ class IntegrationConfigService:
         """构造未持久化配置的只读默认摘要。"""
         normalized = self._normalize_service_key(service_key)
         defaults = SERVICE_DEFAULTS[normalized]
-        now = datetime.utcnow()
+        now = utc_now()
         return ServiceIntegrationConfig(
             service_key=normalized,  # type: ignore[arg-type]
             display_name=defaults["display_name"],
@@ -243,4 +243,4 @@ class IntegrationConfigService:
 
     def _new_id(self, prefix: str) -> str:
         """生成业务 ID。"""
-        return f"{prefix}_{datetime.utcnow().strftime('%Y%m%d')}_{uuid4().hex[:10]}"
+        return f"{prefix}_{utc_date_id()}_{uuid4().hex[:10]}"

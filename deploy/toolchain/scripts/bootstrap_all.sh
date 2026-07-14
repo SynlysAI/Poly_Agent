@@ -18,7 +18,7 @@
 # 环境变量（可覆盖默认值）：
 #   POLY_AGENT_CONDA_ENV   主 conda 环境名（默认 poly_agent）
 #   MONGODB_PORT           MongoDB 端口（默认 27017）
-#   BACKEND_PORT           后端服务端口（默认 5100）
+#   BACKEND_PORT           后端服务端口（默认 5201）
 #   CONDA_EXE              conda 可执行文件路径
 # ============================================================================
 
@@ -35,7 +35,7 @@ ALCHEMIST_GIT_URL=""
 SKIP_ALCHEMIST=false
 SKIP_VERIFY=false
 MONGODB_PORT="${MONGODB_PORT:-27017}"
-BACKEND_PORT="${BACKEND_PORT:-5100}"
+BACKEND_PORT="${BACKEND_PORT:-5201}"
 
 # ---- 参数解析 ----
 while [[ $# -gt 0 ]]; do

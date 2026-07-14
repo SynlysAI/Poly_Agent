@@ -9,6 +9,7 @@ const props = defineProps({
 const emit = defineEmits(['update:visible'])
 
 const STORAGE_KEY = 'alchemist_llm_config'
+const SESSION_SECRET_KEY = 'alchemist_llm_api_key'
 
 const formData = ref({
   apiUrl: '',
@@ -23,6 +24,7 @@ function loadConfig() {
       const config = JSON.parse(saved)
       formData.value = { ...formData.value, ...config }
     }
+    formData.value.apiKey = sessionStorage.getItem(SESSION_SECRET_KEY) || ''
   } catch {
     /* 忽略解析错误 */
   }
@@ -30,9 +32,15 @@ function loadConfig() {
 
 function handleSave() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(formData.value))
+    const { apiKey, ...persistableConfig } = formData.value
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistableConfig))
+    if (apiKey) {
+      sessionStorage.setItem(SESSION_SECRET_KEY, apiKey)
+    } else {
+      sessionStorage.removeItem(SESSION_SECRET_KEY)
+    }
     emit('update:visible', false)
-    ElMessage.success('LLM 配置已保存')
+    ElMessage.success('LLM 配置已保存，API Key 仅保留在当前浏览器会话')
   } catch (e) {
     ElMessage.error('保存配置失败')
   }
@@ -56,6 +64,7 @@ watch(() => props.visible, (val) => {
       </el-form-item>
       <el-form-item label="API Key">
         <el-input v-model="formData.apiKey" type="password" show-password placeholder="请输入 API Key" />
+        <div style="font-size:11px;color:var(--app-ink-muted);margin-top:4px">API Key 不写入 localStorage，关闭浏览器会话后需重新输入。</div>
       </el-form-item>
       <el-form-item label="模型名称">
         <el-input v-model="formData.model" placeholder="例如: gpt-4o, gpt-4, llama3" />

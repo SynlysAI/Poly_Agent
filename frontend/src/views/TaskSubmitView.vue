@@ -9,7 +9,6 @@ import {
 
 import { getApiErrorMessage, getIntegrationStatus, listCampaigns, listComputations } from '../api/polyAgentApi'
 import {
-  TASK_MODULES,
   isResearchEngineContainerCampaign,
   mapCampaignToGlobalTask,
   mapComputationRunToGlobalTask,
@@ -87,17 +86,12 @@ const taskCategories = [
         name: '模型管理中心',
         description: '统一管理算法版本、指定版本发起预测调用，并追溯输入、输出、artifact 与运行状态。',
         actionText: '进入管理中心',
-        route: '/vertical-prediction?tab=management',
+        route: '/vertical-prediction',
         tags: ['算法管理', '任务调用', '运行记录', '版本治理'],
       },
     ],
   },
 ]
-
-// ------ Dock Data (right sidebar, unchanged) ------
-const onlineModules = computed(() => TASK_MODULES.filter(
-  (module) => module.id !== 'research-engine' && (module.status === 'online' || module.status === 'preview'),
-))
 
 const serviceStatusLines = computed(() => {
   const worker = integrations.value.find((item) => item.service === 'computation-worker')
@@ -107,14 +101,6 @@ const serviceStatusLines = computed(() => {
     ['up', 'built_in', 'available'].includes(alchemist?.status) ? 'Alchemist 内置可用' : `Alchemist 后端 ${alchemist?.status || '未检查'}`,
   ]
 })
-
-function openModule(module) {
-  if (module.routes?.submit) {
-    router.push(module.routes.submit)
-    return
-  }
-  ElMessage.info(`${module.name} 正在接入中`)
-}
 
 function navigateTo(route) {
   if (!route) {
@@ -169,6 +155,14 @@ onMounted(() => {
         </div>
       </div>
       <div class="panel-body">
+        <div class="launcher-status-band">
+          <div v-for="line in serviceStatusLines" :key="line" class="launcher-status-item">
+            <el-icon><CircleCheck /></el-icon>
+            <span>{{ line }}</span>
+          </div>
+          <el-button text :loading="loading" @click="loadDockData">刷新状态</el-button>
+        </div>
+
         <!-- Category Tabs -->
         <el-tabs v-model="activeTab" class="category-tabs">
           <el-tab-pane
@@ -231,38 +225,7 @@ onMounted(() => {
       </div>
     </section>
 
-    <!-- Right Sidebar Dock (unchanged) -->
     <aside class="launcher-dock">
-      <section class="panel">
-        <div class="panel-header dock-header">
-          <h3 class="panel-title">在线任务</h3>
-          <el-button text :loading="loading" @click="loadDockData">刷新</el-button>
-        </div>
-        <div class="panel-body dock-list">
-          <button v-for="module in onlineModules" :key="module.id" type="button" class="dock-module" @click="openModule(module)">
-            <span class="dock-module-icon"><el-icon><component :is="module.icon" /></el-icon></span>
-            <span>
-              <strong>{{ module.name }}</strong>
-              <small>{{ module.statusText }}</small>
-            </span>
-          </button>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <h3 class="panel-title">服务状态</h3>
-        </div>
-        <div class="panel-body">
-          <div class="status-line">
-            <div v-for="line in serviceStatusLines" :key="line" class="status-line-item">
-              <el-icon><CircleCheck /></el-icon>
-              <span>{{ line }}</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <section class="panel">
         <div class="panel-header">
           <h3 class="panel-title">最近任务</h3>
@@ -313,6 +276,31 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.launcher-status-band {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.launcher-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--app-ink-body);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.launcher-status-item .el-icon {
+  color: #16a34a;
 }
 
 /* ---- Entry Card Grid ---- */

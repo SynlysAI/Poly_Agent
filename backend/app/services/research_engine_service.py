@@ -26,6 +26,7 @@ from app.infra.research_engine_repositories import (
     WorkflowRunRepository,
 )
 from app.services.research_engine_algorithm_package_service import AlgorithmPackageService
+from app.services.algorithm_runtimes import AlgorithmRuntimeError
 from app.schemas.research_engine import (
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
@@ -1343,7 +1344,14 @@ class ResearchEngineService:
             "algorithm_version_id": algorithm_version.version_id if algorithm_version else None,
             "package_sha256": algorithm_version.package_sha256 if algorithm_version else None,
             "image_digest": algorithm_version.image_digest if algorithm_version else None,
-            "runtime_snapshot": algorithm_version.runtime if algorithm_version else {},
+            "package_digest": algorithm_version.package_digest if algorithm_version else None,
+            "environment_digest": algorithm_version.environment_digest if algorithm_version else None,
+            "runtime_digest": algorithm_version.runtime_digest if algorithm_version else None,
+            "runtime_snapshot": {
+                **(algorithm_version.runtime if algorithm_version else {}),
+                "backend": (algorithm_version.deployment or {}).get("backend") if algorithm_version else None,
+                "deployment": algorithm_version.deployment if algorithm_version else {},
+            } if algorithm_version else {},
             "linked_computation_run_id": None,
             "linked_suggestion_id": None,
             "linked_observation_id": None,
@@ -1402,7 +1410,13 @@ class ResearchEngineService:
                     payload.input_snapshot,
                     algorithm_version.input_schema.model_dump(),
                 )
-                output_summary = package_service.run_version(algorithm_version, payload.input_snapshot)
+                runtime_result = package_service.run_version_with_metadata(algorithm_version, payload.input_snapshot)
+                output_summary = runtime_result.output
+                run_doc["runtime_snapshot"] = {
+                    **run_doc.get("runtime_snapshot", {}),
+                    **runtime_result.runtime,
+                    "logs": runtime_result.logs.model_dump(),
+                }
                 artifact_specs = [
                     {
                         "type": "json_artifact",
@@ -1438,6 +1452,7 @@ class ResearchEngineService:
                 "status": "completed",
                 "output_summary": output_summary,
                 "artifact_refs": artifact_specs,
+                "runtime_snapshot": run_doc.get("runtime_snapshot", {}),
                 "finished_at": now2,
                 "updated_at": now2,
             }
@@ -1462,14 +1477,23 @@ class ResearchEngineService:
         except Exception as exc:
             # 更新为 failed
             now2 = utc_now()
-            error_info = {
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "retryable": not isinstance(exc, (ValueError, HTTPException)),
-            }
+            if isinstance(exc, AlgorithmRuntimeError):
+                error_info = exc.to_error_dict()
+                run_doc["runtime_snapshot"] = {
+                    **run_doc.get("runtime_snapshot", {}),
+                    **exc.runtime,
+                    "logs": exc.logs.model_dump(),
+                }
+            else:
+                error_info = {
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "retryable": not isinstance(exc, (ValueError, HTTPException)),
+                }
             failed_fields: dict[str, Any] = {
                 "status": "failed",
                 "error": error_info,
+                "runtime_snapshot": run_doc.get("runtime_snapshot", {}),
                 "finished_at": now2,
                 "updated_at": now2,
             }
@@ -2277,6 +2301,9 @@ class ResearchEngineService:
             algorithm_version_id=doc.get("algorithm_version_id"),
             package_sha256=doc.get("package_sha256"),
             image_digest=doc.get("image_digest"),
+            package_digest=doc.get("package_digest"),
+            environment_digest=doc.get("environment_digest"),
+            runtime_digest=doc.get("runtime_digest"),
             runtime_snapshot=doc.get("runtime_snapshot", {}),
             linked_computation_run_id=doc.get("linked_computation_run_id"),
             linked_suggestion_id=doc.get("linked_suggestion_id"),

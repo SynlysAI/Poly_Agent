@@ -2,18 +2,23 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  Cpu, Document, Monitor, Refresh, SetUp,
+  Cpu, DataAnalysis, Document, Monitor, Refresh, SetUp,
 } from '@element-plus/icons-vue'
 
 import {
   getApiErrorMessage,
   getIntegrationStatus,
+  listAlgorithmPackages,
   listAuditEvents,
   listCampaigns,
   listComputations,
 } from '../api/polyAgentApi'
+import AlgorithmManagementPanel from './vertical-prediction/AlgorithmManagementPanel.vue'
+import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue'
 
-const activeSection = ref('audit-events')
+const activeSection = ref('vertical-models')
+const verticalModelTab = ref('governance')
+const verticalRefreshKey = ref(0)
 const loading = ref(false)
 const sectionCache = ref({})
 
@@ -25,6 +30,7 @@ function sectionCount(key) {
 }
 
 const sections = [
+  { key: 'vertical-models', name: '垂类模型', icon: DataAnalysis },
   { key: 'audit-events', name: '审计事件', icon: Document },
   { key: 'computations', name: '计算任务', icon: Cpu },
   { key: 'campaigns', name: '优化任务', icon: SetUp },
@@ -107,6 +113,11 @@ async function loadSectionData() {
         sectionCache.value = { ...sectionCache.value, [key]: { items: res.items || [], total: res.total || 0 } }
         break
       }
+      case 'vertical-models': {
+        const res = await listAlgorithmPackages({ page: 1, page_size: 1 })
+        sectionCache.value = { ...sectionCache.value, [key]: { items: [], total: res.total || 0 } }
+        break
+      }
       case 'computations': {
         const res = await listComputations({ page: 1, page_size: 50 })
         sectionCache.value = { ...sectionCache.value, [key]: { items: res.items || [], total: res.total || 0 } }
@@ -131,6 +142,11 @@ async function loadSectionData() {
 }
 
 // ── Actions ──
+
+function handleVerticalModelChanged() {
+  verticalRefreshKey.value += 1
+  loadSectionData()
+}
 
 watch(activeSection, () => {
   loadSectionData()
@@ -185,8 +201,25 @@ onMounted(() => {
         </div>
       </div>
       <div class="panel-body" style="flex:1;overflow:auto">
+        <div v-if="activeSection === 'vertical-models'" class="vertical-admin">
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            title="管理员可在这里统一上传垂类模型、激活版本、回滚、冻结或下线；普通任务入口只保留模型体验和调用。"
+          />
+          <el-tabs v-model="verticalModelTab">
+            <el-tab-pane label="版本治理" name="governance">
+              <AlgorithmManagementPanel :refresh-key="verticalRefreshKey" @changed="handleVerticalModelChanged" />
+            </el-tab-pane>
+            <el-tab-pane label="上传模型" name="upload">
+              <AlgorithmUploadPanel @changed="handleVerticalModelChanged" />
+            </el-tab-pane>
+          </el-tabs>
+        </div>
+
         <!-- Audit event table -->
-        <el-table v-if="activeSection === 'audit-events'" :data="activeData.items" v-loading="loading" stripe>
+        <el-table v-else-if="activeSection === 'audit-events'" :data="activeData.items" v-loading="loading" stripe>
           <el-table-column prop="event_type" label="事件类型" min-width="130" />
           <el-table-column prop="actor_user_id" label="操作人" min-width="170" />
           <el-table-column prop="entity_type" label="实体类型" min-width="120" />
@@ -258,3 +291,10 @@ onMounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.vertical-admin {
+  display: grid;
+  gap: 14px;
+}
+</style>

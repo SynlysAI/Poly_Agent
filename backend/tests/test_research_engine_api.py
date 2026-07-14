@@ -21,6 +21,7 @@ except ImportError:
 from app.services.research_engine_service import ResearchEngineService
 from app.core.auth import get_current_user
 from app.main import app
+from app.schemas.knowledge import KnowledgeHealthData
 
 
 def problem_spec_payload(**overrides) -> dict:
@@ -147,7 +148,15 @@ class ProblemSpecApiTest(ComputationTestCase):
 
     def test_readiness_reports_optional_demo_fallbacks_before_start(self) -> None:
         """AutoResearch 启动前可见 RAG/Alchemist 等集成可用性。"""
-        with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False):
+        rag_unavailable = KnowledgeHealthData(
+            status="unavailable",
+            configured=False,
+            demo_available=False,
+            message="Literature RAG 服务未配置或本地未发现。",
+            systems=[],
+        )
+        with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
+             patch("app.services.knowledge_service.KnowledgeService.health", return_value=rag_unavailable):
             resp = self.client.get(f"{self.base_url}/readiness")
 
         self.assertEqual(resp.status_code, 200)
@@ -207,18 +216,40 @@ class AlgorithmPackageApiTest(ComputationTestCase):
         self.assertEqual(build_resp.status_code, 200, build_resp.text)
         self.assertEqual(build_resp.json()["data"]["status"], "built")
         self.assertTrue(build_resp.json()["data"]["image_digest"].startswith("sha256:"))
+        self.assertTrue(build_resp.json()["data"]["runtime_digest"].startswith("sha256:"))
+        self.assertTrue(build_resp.json()["data"]["environment_digest"].startswith("sha256:"))
 
         deploy_resp = self.client.post(
             f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}:deploy"
         )
         self.assertEqual(deploy_resp.status_code, 200, deploy_resp.text)
         self.assertEqual(deploy_resp.json()["data"]["status"], "deployed_staging")
+        self.assertEqual(deploy_resp.json()["data"]["deployment"]["backend"], "local_sandbox_runtime")
+        self.assertEqual(deploy_resp.json()["data"]["deployment"]["endpoint_type"], "subprocess")
+
+        health_resp = self.client.get(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}/health"
+        )
+        self.assertEqual(health_resp.status_code, 200, health_resp.text)
+        self.assertEqual(health_resp.json()["data"]["health"]["health"], "ready")
+
+        logs_resp = self.client.get(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}/logs"
+        )
+        self.assertEqual(logs_resp.status_code, 200, logs_resp.text)
+        self.assertIn("runtime_logs", logs_resp.json()["data"])
 
         activate_resp = self.client.post(
             f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}:activate"
         )
         self.assertEqual(activate_resp.status_code, 200, activate_resp.text)
         self.assertEqual(activate_resp.json()["data"]["status"], "active")
+
+        redeploy_resp = self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}:redeploy"
+        )
+        self.assertEqual(redeploy_resp.status_code, 200, redeploy_resp.text)
+        self.assertEqual(redeploy_resp.json()["data"]["status"], "active")
 
         algorithm_resp = self.client.get(f"{self.base_url}/algorithms/vertical_tg_predictor_demo")
         self.assertEqual(algorithm_resp.status_code, 200)
@@ -239,6 +270,9 @@ class AlgorithmPackageApiTest(ComputationTestCase):
         self.assertEqual(run_data["algorithm_version_id"], version_id)
         self.assertIn("prediction", run_data["output_summary"])
         self.assertIn("feature_summary", run_data["output_summary"])
+        self.assertEqual(run_data["runtime_snapshot"]["backend"], "local_sandbox_runtime")
+        self.assertTrue(run_data["runtime_digest"].startswith("sha256:"))
+        self.assertIn("worker_pid", run_data["runtime_snapshot"])
 
     def test_upload_rejects_zip_path_traversal_on_validate(self) -> None:
         """ZIP 路径穿越在校验阶段被拒绝。"""
@@ -259,6 +293,51 @@ class AlgorithmPackageApiTest(ComputationTestCase):
 
         detail_resp = self.client.get(f"{self.base_url}/algorithm-packages/{package_id}")
         self.assertEqual(detail_resp.json()["data"]["status"], "validation_failed")
+
+    def test_upload_rejects_zip_symlink_on_validate(self) -> None:
+        """ZIP 符号链接在校验阶段被拒绝。"""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            link = zipfile.ZipInfo("src/link.py")
+            link.external_attr = (0o120777 << 16)
+            zf.writestr(link, "target.py")
+            zf.writestr("polyagent.algorithm.yaml", "contract_version: '0.1'\n")
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("symlink.zip", buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package_id = upload_resp.json()["data"]["package_id"]
+
+        validate_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:validate")
+        self.assertEqual(validate_resp.status_code, 422)
+        self.assertIn("符号链接", validate_resp.text)
+
+    def test_build_rejects_unauthorized_requirements_source(self) -> None:
+        """requirements.txt 外部 URL/可编辑来源在构建阶段被拒绝。"""
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(template_resp.content)) as source_zip:
+            with zipfile.ZipFile(buffer, "w") as target_zip:
+                for member in source_zip.infolist():
+                    content = source_zip.read(member.filename)
+                    if member.filename == "requirements.txt":
+                        content = b"demo @ https://example.invalid/demo.tar.gz\n"
+                    target_zip.writestr(member, content)
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("bad-requirements.zip", buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package_id = upload_resp.json()["data"]["package_id"]
+        validate_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:validate")
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+
+        build_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:build")
+        self.assertEqual(build_resp.status_code, 422)
+        self.assertIn("未授权依赖来源", build_resp.text)
 
     def test_version_activation_freeze_and_decommission_govern_new_runs(self) -> None:
         """版本切换保持单一 active，冻结和下线版本不能再被显式调用。"""

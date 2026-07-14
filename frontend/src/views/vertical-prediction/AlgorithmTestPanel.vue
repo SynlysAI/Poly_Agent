@@ -11,7 +11,11 @@ import {
 } from '../../api/polyAgentApi'
 import AlgorithmResultView from './AlgorithmResultView.vue'
 
-const props = defineProps({ refreshKey: { type: Number, default: 0 } })
+const props = defineProps({
+  refreshKey: { type: Number, default: 0 },
+  algorithmId: { type: String, default: '' },
+  showToolbar: { type: Boolean, default: true },
+})
 const emit = defineEmits(['run-created'])
 
 const loading = ref(false)
@@ -28,6 +32,7 @@ const selectedVersion = computed(() => versions.value.find((item) => item.versio
 const schemaFields = computed(() => Object.keys(selectedVersion.value?.input_schema?.fields || {}))
 
 watch(() => props.refreshKey, loadAlgorithms)
+watch(() => props.algorithmId, loadAlgorithms)
 watch(algorithmId, loadVersions)
 watch(versionId, resetInputs)
 
@@ -36,8 +41,11 @@ async function loadAlgorithms() {
   try {
     const data = await listAlgorithms({ algorithm_family: 'vertical_prediction', page: 1, page_size: 100 })
     algorithms.value = (data.items || []).filter((item) => item.source === 'uploaded_package')
-    if (!algorithms.value.some((item) => item.algorithm_id === algorithmId.value)) {
+    const preferredId = props.algorithmId || algorithmId.value
+    if (!algorithms.value.some((item) => item.algorithm_id === preferredId)) {
       algorithmId.value = algorithms.value[0]?.algorithm_id || ''
+    } else if (algorithmId.value !== preferredId) {
+      algorithmId.value = preferredId
     } else {
       await loadVersions()
     }
@@ -166,7 +174,7 @@ onMounted(loadAlgorithms)
 
 <template>
   <div class="test-panel" v-loading="loading">
-    <div class="test-toolbar">
+    <div v-if="showToolbar" class="test-toolbar">
       <el-select v-model="algorithmId" filterable placeholder="选择算法" style="width: 320px">
         <el-option v-for="item in algorithms" :key="item.algorithm_id" :label="item.name" :value="item.algorithm_id" />
       </el-select>
