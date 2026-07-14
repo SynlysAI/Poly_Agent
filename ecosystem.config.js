@@ -16,7 +16,7 @@ const HOME = process.env.HOME || process.env.USERPROFILE || "";
 const PYTHON_BIN =
   process.env.POLY_AGENT_PYTHON_BIN ||
   path.join(HOME, "miniconda3", "envs", CONDA_ENV, "bin", "python");
-const BACKEND_PORT = process.env.POLY_AGENT_BACKEND_PORT || "5100";
+const BACKEND_PORT = process.env.POLY_AGENT_BACKEND_PORT || "5201";
 
 module.exports = {
   apps: [

@@ -615,6 +615,9 @@ class AlgorithmPackage(BaseModel):
     build_logs: list[str] = Field(default_factory=list)
     deployment_logs: list[str] = Field(default_factory=list)
     image_digest: str | None = None
+    package_digest: str | None = None
+    environment_digest: str | None = None
+    runtime_digest: str | None = None
     created_by: str
     created_at: datetime
     updated_at: datetime
@@ -632,6 +635,9 @@ class AlgorithmVersion(BaseModel):
     version: str
     package_sha256: str
     image_digest: str | None = None
+    package_digest: str | None = None
+    environment_digest: str | None = None
+    runtime_digest: str | None = None
     status: AlgorithmPackageStatus = "validated"
     runtime: dict = Field(default_factory=dict)
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
@@ -640,6 +646,7 @@ class AlgorithmVersion(BaseModel):
     loader: str | None = None
     package_path: str
     deployment: dict = Field(default_factory=dict)
+    runtime_logs: list[dict] = Field(default_factory=list)
     contract: dict = Field(default_factory=dict)
     created_by: str
     created_at: datetime
@@ -753,6 +760,9 @@ class AlgorithmRun(BaseModel):
     algorithm_version_id: str | None = None
     package_sha256: str | None = None
     image_digest: str | None = None
+    package_digest: str | None = None
+    environment_digest: str | None = None
+    runtime_digest: str | None = None
     runtime_snapshot: dict = Field(default_factory=dict)
     linked_computation_run_id: str | None = None
     linked_suggestion_id: str | None = None

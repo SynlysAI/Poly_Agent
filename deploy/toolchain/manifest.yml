@@ -85,8 +85,8 @@ tools:
     source: pip
     version: null
     install_method: pip_requirements
-    port: 5100
-    verify_cmd: "curl -sf http://127.0.0.1:5100/api/v1/health"
+    port: 5201
+    verify_cmd: "curl -sf http://127.0.0.1:5201/api/v1/health"
     description: "Poly_Agent FastAPI 后端服务"
 
   - name: poly-agent-frontend

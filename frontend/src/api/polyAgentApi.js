@@ -515,6 +515,18 @@ export function deployAlgorithmVersion(algorithmId, versionId) {
   return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:deploy`).then(unwrapResponse)
 }
 
+export function redeployAlgorithmVersion(algorithmId, versionId) {
+  return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:redeploy`).then(unwrapResponse)
+}
+
+export function getAlgorithmVersionHealth(algorithmId, versionId) {
+  return apiClient.get(`/research-engine/algorithms/${algorithmId}/versions/${versionId}/health`).then(unwrapResponse)
+}
+
+export function getAlgorithmVersionLogs(algorithmId, versionId) {
+  return apiClient.get(`/research-engine/algorithms/${algorithmId}/versions/${versionId}/logs`).then(unwrapResponse)
+}
+
 export function activateAlgorithmVersion(algorithmId, versionId) {
   return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:activate`).then(unwrapResponse)
 }

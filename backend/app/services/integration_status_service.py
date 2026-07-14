@@ -8,11 +8,11 @@ import subprocess
 import re
 import importlib.metadata
 import importlib.util
-from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 from app.core.config import settings
+from app.core.time import utc_now
 from app.services.integration_config_service import IntegrationConfigService
 
 
@@ -21,7 +21,7 @@ class IntegrationStatusService:
 
     def get_status(self) -> dict:
         """返回集成状态列表。"""
-        checked_at = datetime.utcnow().isoformat()
+        checked_at = utc_now().isoformat()
         config_map = {
             item.service_key: item
             for item in IntegrationConfigService().list_configs().items

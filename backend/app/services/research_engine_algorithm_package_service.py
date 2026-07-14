@@ -7,12 +7,9 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 import io
 import json
-import os
 import shutil
-import sys
 import textwrap
 import zipfile
 from pathlib import Path
@@ -38,6 +35,12 @@ from app.schemas.research_engine import (
     AlgorithmVersion,
     AlgorithmVersionListData,
 )
+from app.services.algorithm_runtimes import (
+    AlgorithmRuntimeBackend,
+    LocalInProcessRuntimeBackend,
+    LocalSandboxRuntimeBackend,
+    RuntimeExecutionResult,
+)
 
 
 MAX_PACKAGE_BYTES = 20 * 1024 * 1024
@@ -59,6 +62,9 @@ ALLOWED_SUFFIXES = {
 }
 FORBIDDEN_FILENAMES = {"Dockerfile", "dockerfile", ".env"}
 FORBIDDEN_PARTS = {"__pycache__", ".git", ".venv", "venv", "node_modules"}
+MAX_UNCOMPRESSED_PACKAGE_BYTES = MAX_PACKAGE_BYTES * 3
+MAX_COMPRESSION_RATIO = 100
+MIN_COMPRESSED_BOMB_BYTES = 1024 * 1024
 
 
 class AlgorithmPackageService:
@@ -169,6 +175,9 @@ class AlgorithmPackageService:
             "build_logs": [],
             "deployment_logs": [],
             "image_digest": None,
+            "package_digest": f"sha256:{package_sha256}",
+            "environment_digest": None,
+            "runtime_digest": None,
             "created_by": actor_user_id,
             "created_at": now,
             "updated_at": now,
@@ -231,13 +240,20 @@ class AlgorithmPackageService:
             contract = self._load_contract(extract_dir)
             self._validate_contract(contract)
             sample_input = self._load_sample_input(extract_dir, contract)
-            output = self.execute_version_path(
+            runtime_backend = self._runtime_backend()
+            result = runtime_backend.predict(
                 package_path=extract_dir,
                 entrypoint=contract["entrypoint"],
                 loader=contract.get("loader"),
                 inputs=sample_input,
                 timeout_seconds=int((contract.get("runtime") or {}).get("timeout_seconds", 30)),
+                context={
+                    "algorithm_id": contract["algorithm_id"],
+                    "version": contract["version"],
+                    "phase": "validation_dry_run",
+                },
             )
+            output = result.output
             self._validate_output(output, contract.get("output_schema") or {})
             version_id = self._version_id(contract["algorithm_id"], contract["version"], package.package_sha256)
             now = utc_now()
@@ -249,6 +265,9 @@ class AlgorithmPackageService:
                 "version": contract["version"],
                 "package_sha256": package.package_sha256,
                 "image_digest": None,
+                "package_digest": f"sha256:{package.package_sha256}",
+                "environment_digest": None,
+                "runtime_digest": None,
                 "status": "validated",
                 "runtime": contract.get("runtime") or {},
                 "input_schema": contract.get("input_schema") or {},
@@ -257,13 +276,18 @@ class AlgorithmPackageService:
                 "loader": contract.get("loader"),
                 "package_path": str(extract_dir),
                 "deployment": {},
+                "runtime_logs": [self._runtime_log_summary("validation_dry_run", result)],
                 "contract": contract,
                 "created_by": package.created_by,
                 "created_at": now,
                 "updated_at": now,
             }
             AlgorithmVersionRepository.save("version_id", version_doc)
-            logs.extend(["契约校验通过", "样例输入 dry-run 通过", f"已创建算法版本 {version_id}"])
+            logs.extend([
+                "契约校验通过",
+                f"样例输入 dry-run 通过（{runtime_backend.backend_name}）",
+                f"已创建算法版本 {version_id}",
+            ])
             update = {
                 "algorithm_id": contract["algorithm_id"],
                 "version": contract["version"],
@@ -291,41 +315,74 @@ class AlgorithmPackageService:
         return self.get_package(package_id)
 
     def build_package(self, package_id: str) -> AlgorithmPackage:
-        """P0 构建：记录可追踪 image digest，占位真实 Docker 构建。"""
+        """P0 构建：记录可追踪 package/environment/runtime digest。"""
         package = self.get_package(package_id)
         if not package.version_id:
             raise HTTPException(status_code=409, detail="算法包尚未校验通过，不能构建")
         version = self.get_version(package.version_id)
         now = utc_now()
-        image_digest = f"sha256:{hashlib.sha256((version.version_id + package.package_sha256).encode()).hexdigest()}"
+        runtime_backend = self._runtime_backend()
+        requirements = self._read_requirements(Path(version.package_path))
+        self._validate_requirements_policy(requirements)
+        digests = runtime_backend.build(
+            version_id=version.version_id,
+            package_sha256=package.package_sha256,
+            package_path=Path(version.package_path),
+            runtime=version.runtime,
+            requirements=requirements,
+        )
+        runtime_digest = digests["runtime_digest"]
         build_logs = [
-            "P0 本机适配层构建开始",
+            f"P0 {runtime_backend.backend_name} 构建开始",
             "已校验 Python 3.11 契约和样例 dry-run",
-            f"记录镜像摘要占位符 {image_digest}",
+            f"package_digest={digests['package_digest']}",
+            f"environment_digest={digests['environment_digest']}",
+            f"runtime_digest={runtime_digest}",
         ]
         AlgorithmPackageRepository.update_fields(
             package_id,
-            {"status": "built", "image_digest": image_digest, "build_logs": build_logs, "updated_at": now},
+            {
+                "status": "built",
+                "image_digest": runtime_digest,
+                "package_digest": digests["package_digest"],
+                "environment_digest": digests["environment_digest"],
+                "runtime_digest": runtime_digest,
+                "build_logs": build_logs,
+                "updated_at": now,
+            },
         )
         AlgorithmVersionRepository.update_fields(
             version.version_id,
-            {"status": "built", "image_digest": image_digest, "updated_at": now},
+            {
+                "status": "built",
+                "image_digest": runtime_digest,
+                "package_digest": digests["package_digest"],
+                "environment_digest": digests["environment_digest"],
+                "runtime_digest": runtime_digest,
+                "updated_at": now,
+            },
         )
         return self.get_package(package_id)
 
     def deploy_version(self, algorithm_id: str, version_id: str) -> AlgorithmVersion:
-        """P0 部署：登记本机受控 adapter 元数据。"""
+        """P0 部署：登记本地 runtime 元数据。"""
         version = self.get_version(version_id)
         if version.algorithm_id != algorithm_id:
             raise HTTPException(status_code=409, detail="算法 ID 与版本不匹配")
         if version.status not in {"built", "deployed_staging", "active"}:
             raise HTTPException(status_code=409, detail="算法版本必须先完成构建")
-        deployment = {
-            "kind": "local_python_adapter",
-            "health": "ready",
-            "endpoint": "internal://algorithm-package-runner",
-            "deployed_at": utc_now().isoformat(),
+        runtime_backend = self._runtime_backend()
+        digests = {
+            "package_digest": version.package_digest or f"sha256:{version.package_sha256}",
+            "environment_digest": version.environment_digest,
+            "runtime_digest": version.runtime_digest or version.image_digest,
         }
+        deployment = runtime_backend.deploy(
+            version_id=version.version_id,
+            package_path=Path(version.package_path),
+            runtime=version.runtime,
+            digests=digests,
+        )
         AlgorithmVersionRepository.update_fields(
             version_id,
             {"status": "deployed_staging", "deployment": deployment, "updated_at": utc_now()},
@@ -334,11 +391,55 @@ class AlgorithmPackageService:
             version.package_id,
             {
                 "status": "deployed_staging",
-                "deployment_logs": ["P0 本机 adapter 已就绪，等待激活"],
+                "deployment_logs": [f"{runtime_backend.backend_name} 已就绪，等待激活"],
                 "updated_at": utc_now(),
             },
         )
         return self.get_version(version_id)
+
+    def redeploy_version(self, algorithm_id: str, version_id: str) -> AlgorithmVersion:
+        """重新登记 runtime metadata。active 版本 redeploy 后保持 active。"""
+        version = self.get_version(version_id)
+        previous_status = version.status
+        if previous_status not in {"built", "deployed_staging", "active"}:
+            raise HTTPException(status_code=409, detail="算法版本必须先完成构建")
+        deployed = self.deploy_version(algorithm_id, version_id)
+        if previous_status == "active":
+            now = utc_now()
+            AlgorithmVersionRepository.update_fields(version_id, {"status": "active", "updated_at": now})
+            AlgorithmPackageRepository.update_fields(deployed.package_id, {"status": "active", "updated_at": now})
+            return self.get_version(version_id)
+        return deployed
+
+    def version_health(self, algorithm_id: str, version_id: str) -> dict[str, Any]:
+        """返回版本 runtime health。"""
+        version = self.get_version(version_id)
+        if version.algorithm_id != algorithm_id:
+            raise HTTPException(status_code=409, detail="算法 ID 与版本不匹配")
+        runtime_backend = self._runtime_backend(version.deployment.get("backend") if version.deployment else None)
+        return {
+            "algorithm_id": algorithm_id,
+            "version_id": version_id,
+            "status": version.status,
+            "deployment": version.deployment,
+            "health": runtime_backend.health(deployment=version.deployment),
+        }
+
+    def version_logs(self, algorithm_id: str, version_id: str) -> dict[str, Any]:
+        """返回版本生命周期和 runtime 日志摘要。"""
+        version = self.get_version(version_id)
+        if version.algorithm_id != algorithm_id:
+            raise HTTPException(status_code=409, detail="算法 ID 与版本不匹配")
+        package = self.get_package(version.package_id)
+        return {
+            "algorithm_id": algorithm_id,
+            "version_id": version_id,
+            "validation_logs": package.validation_logs,
+            "build_logs": package.build_logs,
+            "deployment_logs": package.deployment_logs,
+            "runtime_logs": version.runtime_logs,
+            "deployment": version.deployment,
+        }
 
     def activate_version(self, algorithm_id: str, version_id: str) -> AlgorithmVersion:
         """激活算法版本，并写入 AlgorithmRegistry。"""
@@ -370,7 +471,7 @@ class AlgorithmPackageService:
             "task_scope": contract.get("task_scope") or ["COMPUTE_PREDICT"],
             "input_schema": contract.get("input_schema") or {},
             "output_schema": contract.get("output_schema") or {},
-            "call_method": "LOCAL_PYTHON_ADAPTER",
+            "call_method": str((version.deployment or {}).get("backend") or "LOCAL_PYTHON_ADAPTER").upper(),
             "trigger_modes": contract.get("trigger_modes") or ["human_workflow"],
             "runtime_dependency": "uploaded_python_package",
             "version": contract.get("version", version.version),
@@ -477,12 +578,22 @@ class AlgorithmPackageService:
 
     def run_version(self, version: AlgorithmVersion, inputs: dict) -> dict:
         """运行上传算法版本。"""
-        return self.execute_version_path(
+        return self.run_version_with_metadata(version, inputs).output
+
+    def run_version_with_metadata(self, version: AlgorithmVersion, inputs: dict) -> RuntimeExecutionResult:
+        """运行上传算法版本，并返回 runtime metadata/logs。"""
+        runtime_backend = self._runtime_backend(version.deployment.get("backend") if version.deployment else None)
+        return runtime_backend.predict(
             package_path=Path(version.package_path),
             entrypoint=version.entrypoint,
             loader=version.loader,
             inputs=inputs,
             timeout_seconds=int((version.runtime or {}).get("timeout_seconds", 30)),
+            context={
+                "algorithm_id": version.algorithm_id,
+                "version_id": version.version_id,
+                "version": version.version,
+            },
         )
 
     @staticmethod
@@ -494,39 +605,40 @@ class AlgorithmPackageService:
         inputs: dict,
         timeout_seconds: int,
     ) -> dict:
-        """在当前进程中按受控入口调用上传算法。
+        """Compatibility wrapper for dev/test in-process execution."""
+        return LocalInProcessRuntimeBackend().predict(
+            package_path=package_path,
+            entrypoint=entrypoint,
+            loader=loader,
+            inputs=inputs,
+            timeout_seconds=timeout_seconds,
+        ).output
 
-        P0 用于本地开发和测试。后续 Docker/KServe 接入时替换该边界。
-        """
-        module_name, func_name = AlgorithmPackageService._split_callable(entrypoint)
-        loader_ref = AlgorithmPackageService._split_callable(loader) if loader else None
-        sys_path = str(package_path)
-        old_cwd = os.getcwd()
-        sys.path.insert(0, sys_path)
-        try:
-            os.chdir(package_path)
-            model = None
-            context = {"package_path": str(package_path), "runtime": "local_python_adapter"}
-            if loader_ref:
-                loader_module = importlib.import_module(loader_ref[0])
-                loader_func = getattr(loader_module, loader_ref[1])
-                model = loader_func(context)
-            module = importlib.import_module(module_name)
-            predict_func = getattr(module, func_name)
-            try:
-                output = predict_func(inputs, context, model)
-            except TypeError:
-                output = predict_func(inputs, context)
-            if not isinstance(output, dict):
-                raise ValueError("predict() 必须返回 dict")
-            return output
-        finally:
-            os.chdir(old_cwd)
-            if sys.path and sys.path[0] == sys_path:
-                sys.path.pop(0)
-            for name in list(sys.modules):
-                if name == module_name or name.startswith(module_name.rsplit(".", 1)[0] + "."):
-                    sys.modules.pop(name, None)
+    @staticmethod
+    def _runtime_backend(name: str | None = None) -> AlgorithmRuntimeBackend:
+        backend_name = (name or settings.algorithm_runtime_backend or "local_sandbox_runtime").strip()
+        if backend_name in {"local_sandbox", "local_sandbox_runtime"}:
+            return LocalSandboxRuntimeBackend()
+        if backend_name in {"local_inprocess", "local_python_adapter"}:
+            return LocalInProcessRuntimeBackend()
+        raise HTTPException(status_code=500, detail=f"未知算法运行时 backend: {backend_name}")
+
+    @staticmethod
+    def _read_requirements(package_path: Path) -> str:
+        requirements_path = package_path / "requirements.txt"
+        if not requirements_path.exists():
+            return ""
+        return requirements_path.read_text(encoding="utf-8", errors="replace")
+
+    @staticmethod
+    def _runtime_log_summary(phase: str, result: RuntimeExecutionResult) -> dict[str, Any]:
+        return {
+            "phase": phase,
+            "runtime": result.runtime,
+            "stdout": result.logs.stdout,
+            "stderr": result.logs.stderr,
+            "truncated": result.logs.truncated,
+        }
 
     @staticmethod
     def demo_handler_source() -> str:
@@ -595,9 +707,21 @@ class AlgorithmPackageService:
             members = zf.infolist()
             if not members:
                 raise ValueError("ZIP 包为空")
+            total_uncompressed = 0
             for member in members:
                 path = self._normalize_archive_path(member.filename)
+                if self._is_zip_symlink(member):
+                    raise ValueError(f"禁止上传符号链接: {path}")
                 self._validate_archive_member(path, member.file_size)
+                total_uncompressed += member.file_size
+                if total_uncompressed > MAX_UNCOMPRESSED_PACKAGE_BYTES:
+                    raise ValueError("ZIP 解压后体积超过限制")
+                if (
+                    member.compress_size
+                    and member.file_size > MIN_COMPRESSED_BOMB_BYTES
+                    and member.file_size / max(member.compress_size, 1) > MAX_COMPRESSION_RATIO
+                ):
+                    raise ValueError(f"疑似压缩炸弹文件: {path}")
                 target = target_dir / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not member.is_dir():
@@ -735,3 +859,26 @@ class AlgorithmPackageService:
         suffix = Path(path).suffix
         if suffix and suffix not in ALLOWED_SUFFIXES:
             raise ValueError(f"不支持的文件类型: {path}")
+
+    @staticmethod
+    def _is_zip_symlink(member: zipfile.ZipInfo) -> bool:
+        return ((member.external_attr >> 16) & 0o170000) == 0o120000
+
+    @staticmethod
+    def _validate_requirements_policy(requirements: str) -> None:
+        for raw_line in requirements.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            lower = line.lower()
+            if (
+                lower.startswith("-e ")
+                or lower.startswith("--editable")
+                or lower.startswith("git+")
+                or lower.startswith("http://")
+                or lower.startswith("https://")
+                or lower.startswith("file:")
+                or "@ http://" in lower
+                or "@ https://" in lower
+            ):
+                raise HTTPException(status_code=422, detail=f"requirements.txt 包含未授权依赖来源: {line}")

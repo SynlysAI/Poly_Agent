@@ -14,6 +14,7 @@ from app.computation_adapters.base import AdapterRunResult
 from app.computation_adapters.base import ArtifactSpec
 from app.computation_adapters.registry import supported_workflow_engine_pairs
 from app.core.config import settings
+from app.core.time import utc_date_id
 from app.infra.computation_repositories import (
     AuditEventRepository,
     ComputationArtifactRepository,
@@ -766,4 +767,4 @@ class ComputationService:
 
     def _new_id(self, prefix: str) -> str:
         """生成业务 ID。"""
-        return f"{prefix}_{datetime.utcnow().strftime('%Y%m%d')}_{uuid4().hex[:10]}"
+        return f"{prefix}_{utc_date_id()}_{uuid4().hex[:10]}"

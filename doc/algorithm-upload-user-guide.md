@@ -60,7 +60,7 @@ python scripts/pack_algorithm.py \
 
 ## 版本治理
 
-- `部署`：将已构建版本登记到本机 adapter staging。
+- `部署`：将已构建版本登记到本地 sandbox runtime staging。
 - `激活`：设置 AlgorithmRegistry 的 active version；原 active 版本退回待激活状态。
 - `回滚`：重新激活一个历史 staging 版本。
 - `冻结`：保留版本与历史记录，但禁止新任务选择。
@@ -70,7 +70,7 @@ python scripts/pack_algorithm.py \
 
 ## 当前执行边界
 
-P0.1-P0.3 已完成。当前构建和部署仍使用 `local_python_adapter`，`image_digest` 为可追踪摘要占位符，并非真实 Docker 镜像摘要。Docker/BuildKit、独立 `/health`/`/predict` 容器服务、资源隔离和日志治理属于后续 P0.4-P0.5。
+P0.1-P0.3 已完成，P0-prod 默认使用 `local_sandbox_runtime`：上传算法在独立 Python 子进程中执行，支持 timeout、stdout/stderr 捕获和环境变量白名单。`local_inprocess` 仅保留给 dev/test 兼容路径。界面中的 `runtime_digest`、`environment_digest` 和 `package_digest` 是平台运行时追溯摘要，不是真实 Docker 镜像摘要；依赖安装、系统级资源隔离、硬性网络隔离和日志运维 API 仍属于后续增强。
 
 ## 标准 ZIP 结构
 

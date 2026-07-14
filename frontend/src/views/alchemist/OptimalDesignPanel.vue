@@ -236,7 +236,11 @@ const llmConfidence = ref(null)
 function getLlmConfig() {
   try {
     const saved = localStorage.getItem('alchemist_llm_config')
-    if (saved) return JSON.parse(saved)
+    const config = saved ? JSON.parse(saved) : {}
+    return {
+      ...config,
+      apiKey: sessionStorage.getItem('alchemist_llm_api_key') || '',
+    }
   } catch { /* ignore */ }
   return null
 }

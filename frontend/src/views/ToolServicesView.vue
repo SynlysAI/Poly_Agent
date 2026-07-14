@@ -268,6 +268,10 @@ function compactConfigSummary(row) {
   return formatConfigSummary(row).replace(/\s+/g, ' ')
 }
 
+function maskedSecretRefs(refs = {}) {
+  return Object.fromEntries(Object.keys(refs || {}).map((key) => [key, 'configured reference']))
+}
+
 function parseJsonObject(value, label) {
   const text = String(value || '').trim()
   if (!text) return {}
@@ -615,7 +619,7 @@ onMounted(() => {
         <h4 class="drawer-section-title">Config summary</h4>
         <pre class="details-json drawer-json">{{ JSON.stringify(selectedConfig.config_summary || {}, null, 2) }}</pre>
         <h4 class="drawer-section-title">Secret refs</h4>
-        <pre class="details-json drawer-json">{{ JSON.stringify(selectedConfig.secret_refs || {}, null, 2) }}</pre>
+        <pre class="details-json drawer-json">{{ JSON.stringify(maskedSecretRefs(selectedConfig.secret_refs), null, 2) }}</pre>
       </template>
     </el-drawer>
 

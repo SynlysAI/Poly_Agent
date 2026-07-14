@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-const backendPort = Number(process.env.POLY_AGENT_BACKEND_PORT || '5101')
-const frontendPort = Number(process.env.POLY_AGENT_FRONTEND_PORT || '5100')
+const backendPort = Number(process.env.POLY_AGENT_BACKEND_PORT || '5201')
+const frontendPort = Number(process.env.POLY_AGENT_FRONTEND_PORT || '5200')
 const devApiProxyTarget =
   process.env.VITE_DEV_API_PROXY_TARGET || `http://127.0.0.1:${backendPort}`
 

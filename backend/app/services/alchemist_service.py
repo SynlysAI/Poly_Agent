@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from app.alchemist_core.session import OptimizationSession
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.time import utc_now
 from app.infra.alchemist_repositories import AlchemistSessionRepository
 
 logger = get_logger("poly_agent.alchemist_service")
@@ -72,7 +73,7 @@ class AlchemistService:
         if tags:
             session.metadata.tags = tags
 
-        now = datetime.utcnow()
+        now = utc_now()
         doc = {
             "session_id": session_id,
             "name": name,
@@ -306,8 +307,8 @@ class AlchemistService:
             "metadata": {
                 "session_id": session_id,
                 "name": doc.get("name", ""),
-                "created_at": doc.get("created_at", datetime.utcnow()).isoformat() if isinstance(doc.get("created_at"), datetime) else str(doc.get("created_at", "")),
-                "last_modified": doc.get("updated_at", datetime.utcnow()).isoformat() if isinstance(doc.get("updated_at"), datetime) else str(doc.get("updated_at", "")),
+                "created_at": doc.get("created_at", utc_now()).isoformat() if isinstance(doc.get("created_at"), datetime) else str(doc.get("created_at", "")),
+                "last_modified": doc.get("updated_at", utc_now()).isoformat() if isinstance(doc.get("updated_at"), datetime) else str(doc.get("updated_at", "")),
                 "description": doc.get("description", ""),
                 "tags": doc.get("tags", []),
             },

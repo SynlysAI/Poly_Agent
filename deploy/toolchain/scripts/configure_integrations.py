@@ -9,7 +9,7 @@ enabled/endpoint/config_summary 等元数据。
   python configure_integrations.py \
     --root /path/to/Poly_Agent \
     --mode full \
-    --backend-url http://127.0.0.1:5100 \
+    --backend-url http://127.0.0.1:5201 \
     --username admin --password admin123456
 
   # 仅输出配置摘要而不调用 API（dry-run）
@@ -252,7 +252,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="写入 Poly_Agent 服务集成配置摘要")
     parser.add_argument("--root", required=True, help="Poly_Agent 项目根目录")
     parser.add_argument("--mode", default="core", choices=["core", "full"])
-    parser.add_argument("--backend-url", default="http://127.0.0.1:5100")
+    parser.add_argument("--backend-url", default="http://127.0.0.1:5201")
     parser.add_argument("--username", default=None)
     parser.add_argument("--password", default=None)
     parser.add_argument("--alchemist-available", default="")

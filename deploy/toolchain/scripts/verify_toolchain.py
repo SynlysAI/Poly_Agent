@@ -16,7 +16,7 @@
   - .runtime/toolchain-verify/report.md    （人类可读）
 
 用法：
-  python verify_toolchain.py --root /path/to/Poly_Agent [--mode core|full] [--backend-port 5100]
+  python verify_toolchain.py --root /path/to/Poly_Agent [--mode core|full] [--backend-port 5201]
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ def check_python_module(module_name: str) -> dict:
 class ToolchainVerifier:
     """工具链验收器。"""
 
-    def __init__(self, root: str, mode: str = "core", backend_port: int = 5100) -> None:
+    def __init__(self, root: str, mode: str = "core", backend_port: int = 5201) -> None:
         self.root = Path(root)
         self.mode = mode
         self.backend_port = backend_port
@@ -661,7 +661,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Poly_Agent 计算工具链验收脚本")
     parser.add_argument("--root", required=True, help="Poly_Agent 项目根目录")
     parser.add_argument("--mode", default="core", choices=["core", "full"])
-    parser.add_argument("--backend-port", type=int, default=5100)
+    parser.add_argument("--backend-port", type=int, default=5201)
     parser.add_argument("--report-dir", default=None)
     args = parser.parse_args()
 

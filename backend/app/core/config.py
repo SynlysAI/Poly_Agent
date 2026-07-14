@@ -15,6 +15,14 @@ LOCAL_APP_ENVS = {"dev", "development", "local", "test", "testing", "ci"}
 DEFAULT_AUTH_USERNAME = "admin"
 DEFAULT_AUTH_PASSWORD = "admin123456"
 MIN_AUTH_SECRET_LENGTH = 32
+DEFAULT_LOCAL_CORS_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:5200",
+    "http://localhost:5200",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://127.0.0.1:5174",
+    "http://localhost:5174",
+]
 
 
 class Settings:
@@ -59,6 +67,15 @@ class Settings:
         self.max_upload_size_mb: int = 100
         self.api_prefix: str = "/api/v1"
         self.app_env: str = os.getenv("APP_ENV", "dev")
+        self.cors_allowed_origins: list[str] = self._parse_csv(
+            os.getenv("CORS_ALLOWED_ORIGINS", ",".join(DEFAULT_LOCAL_CORS_ALLOWED_ORIGINS))
+        )
+        self.cors_allow_credentials: bool = os.getenv("CORS_ALLOW_CREDENTIALS", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self.auth_enabled: bool = os.getenv("AUTH_ENABLED", "false").strip().lower() in {
             "1",
             "true",
@@ -201,6 +218,18 @@ class Settings:
         }
         self.data_catalog_cache_ttl_seconds: int = int(os.getenv("DATA_CATALOG_CACHE_TTL_SECONDS", "900"))
 
+        # Uploaded algorithm runtime. Production defaults to the subprocess sandbox.
+        self.algorithm_runtime_backend: str = os.getenv(
+            "ALGORITHM_RUNTIME_BACKEND",
+            "local_sandbox_runtime",
+        ).strip() or "local_sandbox_runtime"
+        self.algorithm_runtime_max_output_bytes: int = int(
+            os.getenv("ALGORITHM_RUNTIME_MAX_OUTPUT_BYTES", "65536")
+        )
+        self.algorithm_runtime_max_concurrency: int = int(
+            os.getenv("ALGORITHM_RUNTIME_MAX_CONCURRENCY", "2")
+        )
+
         self.upload_root.mkdir(parents=True, exist_ok=True)
         self.outputs_root.mkdir(parents=True, exist_ok=True)
         self.logs_root.mkdir(parents=True, exist_ok=True)
@@ -220,9 +249,19 @@ class Settings:
             return target_path
         return (self.project_root / target_path).resolve()
 
+    @staticmethod
+    def _parse_csv(raw_value: str) -> list[str]:
+        """Parse a comma-separated environment value into non-empty entries."""
+        return [item.strip() for item in str(raw_value or "").split(",") if item.strip()]
+
+    @property
+    def is_local_env(self) -> bool:
+        """Return whether the configured app environment is local/test-like."""
+        return self.app_env.strip().lower() in LOCAL_APP_ENVS
+
     def validate_deployment_security(self) -> None:
         """Enforce authentication settings outside local/test environments."""
-        if self.app_env.strip().lower() in LOCAL_APP_ENVS:
+        if self.is_local_env:
             return
 
         errors: list[str] = []
@@ -236,6 +275,10 @@ class Settings:
             errors.append(f"AUTH_SECRET must be at least {MIN_AUTH_SECRET_LENGTH} characters")
         if self.auth_secret in {"", "change-me", "changeme", "secret", "default"}:
             errors.append("AUTH_SECRET must be a non-default random value")
+        if not self.cors_allowed_origins:
+            errors.append("CORS_ALLOWED_ORIGINS must include at least one production origin")
+        if self.cors_allow_credentials and "*" in self.cors_allowed_origins:
+            errors.append("CORS_ALLOWED_ORIGINS cannot include '*' when credentials are allowed")
         if errors:
             raise RuntimeError(
                 "Unsafe deployment configuration for APP_ENV="

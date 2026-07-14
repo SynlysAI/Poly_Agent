@@ -10,6 +10,7 @@ from pymongo.errors import PyMongoError
 from pymongo import ReturnDocument
 
 from app.core.config import settings
+from app.core.time import utc_now as core_utc_now
 from app.infra.demo_store import clone_document, demo_store
 from app.infra.mongo import (
     get_audit_events_collection,
@@ -591,4 +592,4 @@ class AuditEventRepository(BaseRepository):
 
 def utc_now() -> datetime:
     """返回当前 UTC-naive 时间，与现有模型保持 datetime 对象。"""
-    return datetime.utcnow()
+    return core_utc_now()

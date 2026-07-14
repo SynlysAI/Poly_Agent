@@ -16,6 +16,8 @@ const loading = ref(false)
 const taskRows = ref([])
 const total = ref(0)
 const summary = ref({ total: 0, running: 0, completed: 0, pending: 0 })
+const selectedTask = ref(null)
+const taskDrawerVisible = ref(false)
 
 const filters = reactive({
   module_id: route.query.module_id ? String(route.query.module_id) : '',
@@ -118,12 +120,17 @@ function handleSizeChange(pageSize) {
   loadTasks()
 }
 
-function openTask(row) {
+function navigateTask(row) {
   if (row.route) {
     router.push(row.route)
     return
   }
   ElMessage.info('该任务类型暂未接入详情页')
+}
+
+function openTask(row) {
+  selectedTask.value = row
+  taskDrawerVisible.value = true
 }
 
 function actionLabel(row) {
@@ -132,6 +139,10 @@ function actionLabel(row) {
 
 function actionIcon(row) {
   return row.module_id === 'research-engine' && row.status === 'blocked_approval' ? Finished : View
+}
+
+function primaryActionText(row) {
+  return row?.module_id === 'research-engine' && row?.status === 'blocked_approval' ? '进入审批' : '进入详情'
 }
 
 function openModule(moduleId) {
@@ -260,6 +271,33 @@ onMounted(() => {
         </button>
       </div>
     </section>
+
+    <el-drawer
+      v-model="taskDrawerVisible"
+      :title="selectedTask?.title || '任务详情'"
+      size="460px"
+      class="task-detail-drawer"
+    >
+      <template v-if="selectedTask">
+        <div class="task-detail-summary">
+          <el-tag :type="getStatusTag(selectedTask.status)" effect="plain">{{ selectedTask.status_text }}</el-tag>
+          <span>{{ selectedTask.module_name }}</span>
+        </div>
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="任务编号">{{ selectedTask.task_id }}</el-descriptions-item>
+          <el-descriptions-item label="任务类型">{{ selectedTask.task_type }}</el-descriptions-item>
+          <el-descriptions-item label="摘要">{{ selectedTask.summary || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ formatDate(selectedTask.created_at) }}</el-descriptions-item>
+          <el-descriptions-item label="更新时间">{{ formatDate(selectedTask.updated_at) }}</el-descriptions-item>
+        </el-descriptions>
+        <div class="task-detail-actions">
+          <el-button @click="taskDrawerVisible = false">关闭</el-button>
+          <el-button type="primary" :icon="actionIcon(selectedTask)" @click="navigateTask(selectedTask)">
+            {{ primaryActionText(selectedTask) }}
+          </el-button>
+        </div>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
@@ -345,6 +383,25 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 14px;
+}
+
+.task-detail-summary,
+.task-detail-actions {
+  display: flex;
+  align-items: center;
+}
+
+.task-detail-summary {
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--app-ink-muted);
+  font-size: 13px;
+}
+
+.task-detail-actions {
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .unavailable-grid {
