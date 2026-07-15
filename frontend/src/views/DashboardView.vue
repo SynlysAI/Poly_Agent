@@ -48,38 +48,56 @@ const chatModeOptions = [
   { label: '模型管理', value: 'model' },
 ]
 
-const homeGreetings = [
-  {
+const homeGreetings = {
+  default: {
     title: '今天想推进哪条高分子研发路线？',
     subtitle: '描述材料体系、目标性质或实验约束，Poly Agent 会帮你定位模型、计算和优化入口。',
     placeholder: '例如：帮我为含氟聚合物设计 Tg 预测和后续验证流程...',
     suggestions: ['如何为 Tg 预测模型准备输入？', '哪些垂类模型可直接调用？', '帮我规划一个 AI4S 材料发现任务'],
   },
-  {
+  morning: {
     title: '上午好，先看模型还是实验闭环？',
     subtitle: '从性质预测、计算验证到贝叶斯优化，把 AI4S 研发动作拆成可追踪任务。',
     placeholder: '输入你的聚合物结构、物性目标或实验设计问题...',
     suggestions: ['上传的预测模型现在怎么运行？', '如何把预测结果接到 AutoResearch？', '查看最近失败的计算任务'],
   },
-  {
+  noon: {
+    title: '中午好，要先梳理材料数据还是任务队列？',
+    subtitle: '把上午积累的结构、配方和计算结果整理成下一步可执行动作。',
+    placeholder: '例如：根据现有候选材料，安排下午的预测和验证任务...',
+    suggestions: ['帮我整理下一步实验建议', '查看最近失败的计算任务', '哪些算法是真实适配器？'],
+  },
+  afternoon: {
+    title: '下午好，继续推进材料研发任务吗？',
+    subtitle: '围绕性质预测、计算验证和优化建议，快速进入问答、任务提交或研发编排。',
+    placeholder: '例如：为一批候选聚合物安排预测、xTB 计算和优化建议...',
+    suggestions: ['如何开始一个 ResearchEngine 示例？', '计算智能和垂类预测怎么衔接？', '如何查看待审批任务？'],
+  },
+  evening: {
+    title: '晚上好，要复盘今天的材料数据吗？',
+    subtitle: '可以从知识库、垂类模型和计算结果出发，形成明天的实验或算法调用建议。',
+    placeholder: '输入数据来源、目标性质或需要比较的材料系列...',
+    suggestions: ['查询知识库里的高分子体系', '帮我整理下一步实验建议', '查看今天的任务进展'],
+  },
+  night: {
     title: '需要把材料问题拆成可执行任务吗？',
     subtitle: '围绕高分子结构、配方、工艺和目标性能，快速进入问答、任务提交或研发编排。',
     placeholder: '例如：为一批候选聚合物安排预测、xTB 计算和优化建议...',
     suggestions: ['如何开始一个 ResearchEngine 示例？', '计算智能和垂类预测怎么衔接？', '如何查看待审批任务？'],
   },
-  {
-    title: '今天的材料数据要回答什么问题？',
-    subtitle: '可以从知识库、垂类模型和计算结果出发，形成下一步实验或算法调用建议。',
-    placeholder: '输入数据来源、目标性质或需要比较的材料系列...',
-    suggestions: ['查询知识库里的高分子体系', '哪些算法是真实适配器？', '帮我整理下一步实验建议'],
-  },
-]
-
-function selectHomeGreeting() {
-  return homeGreetings[Math.floor(Math.random() * homeGreetings.length)]
 }
 
-const homeGreeting = ref(selectHomeGreeting())
+function getTimeGreeting(date = new Date()) {
+  const hour = date.getHours()
+  if (hour >= 5 && hour < 12) return homeGreetings.morning
+  if (hour >= 12 && hour < 14) return homeGreetings.noon
+  if (hour >= 14 && hour < 18) return homeGreetings.afternoon
+  if (hour >= 18 && hour < 24) return homeGreetings.evening
+  if (hour >= 0 && hour < 5) return homeGreetings.night
+  return homeGreetings.default
+}
+
+const homeGreeting = ref(getTimeGreeting())
 
 const currentSuggestions = computed(() => homeGreeting.value.suggestions)
 

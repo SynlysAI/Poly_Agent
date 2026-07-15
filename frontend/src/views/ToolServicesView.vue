@@ -193,11 +193,34 @@ const healthSummary = computed(() => {
   return { ready, total: items.length }
 })
 
+const serviceHealthStats = computed(() => {
+  const readyStatuses = new Set(['up', 'available', 'built_in'])
+  const issueStatuses = new Set(['degraded', 'down', 'failed'])
+  const setupStatuses = new Set(['not_configured', 'disabled', 'not_available'])
+  const ready = services.value.filter((item) => readyStatuses.has(item.status)).length
+  const issues = services.value.filter((item) => issueStatuses.has(item.status)).length
+  const setupRequired = services.value.filter((item) => setupStatuses.has(item.status)).length
+  const coreReady = healthSummary.value.total > 0 && healthSummary.value.ready === healthSummary.value.total
+  return [
+    { label: '核心服务', value: `${healthSummary.value.ready}/${healthSummary.value.total}`, hint: '关键链路', tone: coreReady ? 'success' : 'warning' },
+    { label: '可用服务', value: String(ready), hint: '在线 / 内置', tone: 'success' },
+    { label: '异常服务', value: String(issues), hint: '需排查', tone: issues ? 'danger' : 'neutral' },
+    { label: '待配置', value: String(setupRequired), hint: '未安装 / 未配置', tone: setupRequired ? 'warning' : 'neutral' },
+  ]
+})
+
 function statusTag(status) {
   if (['up', 'available', 'built_in'].includes(status)) return 'success'
   if (['degraded', 'not_configured', 'disabled', 'not_available'].includes(status)) return 'warning'
   if (['down', 'failed'].includes(status)) return 'danger'
   return 'info'
+}
+
+function statusTone(status) {
+  if (['up', 'available', 'built_in'].includes(status)) return 'success'
+  if (['degraded', 'not_configured', 'disabled', 'not_available'].includes(status)) return 'warning'
+  if (['down', 'failed'].includes(status)) return 'danger'
+  return 'neutral'
 }
 
 function formatDate(value) {
@@ -404,7 +427,7 @@ onMounted(() => {
           <h3 class="panel-title">工具服务</h3>
           <p class="panel-subtitle">真实计算工具链、Mongo/artifact、SpecLabOS 和优化服务状态。</p>
         </div>
-        <el-tag size="large" :type="healthSummary.ready === healthSummary.total ? 'success' : 'warning'">
+        <el-tag size="large" :type="healthSummary.total > 0 && healthSummary.ready === healthSummary.total ? 'success' : 'warning'">
           核心服务 {{ healthSummary.ready }}/{{ healthSummary.total }}
         </el-tag>
         <el-button :icon="Refresh" :loading="loadingStatus || loadingConfigs" @click="loadAll">刷新</el-button>
@@ -415,39 +438,54 @@ onMounted(() => {
       <div class="panel-body">
         <el-tabs v-model="activeTab">
           <el-tab-pane label="状态" name="status">
-            <div v-loading="loadingStatus" class="service-groups">
-              <section v-for="group in serviceGroups" :key="group.name" class="service-group">
-                <h4>{{ group.name }}</h4>
-                <div class="service-card-grid">
-                  <article v-for="row in group.items" :key="row.service" class="service-card">
-                    <div class="service-card-header">
-                      <div>
-                        <strong>{{ serviceName(row.service) }}</strong>
-                        <span>{{ serviceHint(row.service) }}</span>
+            <div v-loading="loadingStatus" class="service-status-panel">
+              <div class="service-health-strip" aria-label="服务健康概览">
+                <article v-for="stat in serviceHealthStats" :key="stat.label" class="service-health-stat" :class="`service-health-stat--${stat.tone}`">
+                  <span>{{ stat.label }}</span>
+                  <strong>{{ stat.value }}</strong>
+                  <small>{{ stat.hint }}</small>
+                </article>
+              </div>
+              <div class="service-groups">
+                <section v-for="group in serviceGroups" :key="group.name" class="service-group">
+                  <div class="service-group-title">
+                    <h4>{{ group.name }}</h4>
+                    <span>{{ group.items.length }} 项</span>
+                  </div>
+                  <div class="service-card-grid">
+                    <article v-for="row in group.items" :key="row.service" class="service-card" :class="`service-card--${statusTone(row.status)}`">
+                      <div class="service-card-header">
+                        <div>
+                          <strong>{{ serviceName(row.service) }}</strong>
+                          <span>{{ serviceHint(row.service) }}</span>
+                        </div>
+                        <div class="service-status-line">
+                          <i class="service-status-dot" aria-hidden="true" />
+                          <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+                        </div>
                       </div>
-                      <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
-                    </div>
-                    <dl class="service-facts">
-                      <div>
-                        <dt>位置</dt>
-                        <dd>{{ servicePrimaryDetail(row) }}</dd>
-                      </div>
-                      <div>
-                        <dt>版本</dt>
-                        <dd>{{ serviceVersion(row) }}</dd>
-                      </div>
-                      <div v-if="serviceReason(row)" class="service-reason">
-                        <dt>原因</dt>
-                        <dd>{{ serviceReason(row) }}</dd>
-                      </div>
-                    </dl>
-                    <details>
-                      <summary>查看原始检查结果</summary>
-                      <pre class="details-json">{{ formatDetails(row.details) }}</pre>
-                    </details>
-                  </article>
-                </div>
-              </section>
+                      <dl class="service-facts">
+                        <div>
+                          <dt>位置</dt>
+                          <dd class="service-fact-value" :title="servicePrimaryDetail(row)">{{ servicePrimaryDetail(row) }}</dd>
+                        </div>
+                        <div>
+                          <dt>版本</dt>
+                          <dd class="service-fact-value service-fact-value--version" :title="serviceVersion(row)">{{ serviceVersion(row) }}</dd>
+                        </div>
+                        <div v-if="serviceReason(row)" class="service-reason">
+                          <dt>原因</dt>
+                          <dd class="service-fact-value service-fact-value--reason" :title="serviceReason(row)">{{ serviceReason(row) }}</dd>
+                        </div>
+                      </dl>
+                      <details>
+                        <summary>查看原始检查结果</summary>
+                        <pre class="details-json">{{ formatDetails(row.details) }}</pre>
+                      </details>
+                    </article>
+                  </div>
+                </section>
+              </div>
             </div>
           </el-tab-pane>
 
@@ -523,7 +561,7 @@ onMounted(() => {
           </el-tab-pane>
           <el-tab-pane label="配置" name="configs">
             <el-alert v-if="configError" :title="configError" type="warning" :closable="false" class="config-alert" />
-            <el-table v-else :data="configs" v-loading="loadingConfigs" stripe>
+            <el-table v-else :data="configs" v-loading="loadingConfigs" stripe class="config-table">
               <el-table-column prop="service_key" label="Service" min-width="150" />
               <el-table-column prop="display_name" label="名称" min-width="180" />
               <el-table-column prop="service_type" label="类型" width="130" />
@@ -552,20 +590,22 @@ onMounted(() => {
                 </template>
               </el-table-column>
               <el-table-column prop="last_error_summary" label="错误" min-width="180" show-overflow-tooltip />
-              <el-table-column label="操作" width="190" fixed="right">
+              <el-table-column label="操作" width="230" fixed="right">
                 <template #default="{ row }">
-                  <el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-                  <el-button
-                    text
-                    type="primary"
-                    size="small"
-                    :icon="Check"
-                    :loading="actionLoading === `${row.service_key}:check`"
-                    @click="handleCheck(row)"
-                  >
-                    检查
-                  </el-button>
-                  <el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button>
+                  <div class="config-actions">
+                    <el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+                    <el-button
+                      text
+                      type="primary"
+                      size="small"
+                      :icon="Check"
+                      :loading="actionLoading === `${row.service_key}:check`"
+                      @click="handleCheck(row)"
+                    >
+                      检查
+                    </el-button>
+                    <el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button>
+                  </div>
                 </template>
               </el-table-column>
             </el-table>
@@ -875,17 +915,85 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.service-groups {
+.service-status-panel {
   min-height: 180px;
+}
+
+.service-health-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.service-health-stat {
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.service-health-stat::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: #94a3b8;
+}
+
+.service-health-stat--success::before {
+  background: #22c55e;
+}
+
+.service-health-stat--warning::before {
+  background: #f59e0b;
+}
+
+.service-health-stat--danger::before {
+  background: #ef4444;
+}
+
+.service-health-stat span,
+.service-health-stat small {
+  display: block;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.service-health-stat strong {
+  display: block;
+  margin: 4px 0 2px;
+  color: var(--app-ink);
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.service-groups {
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
 
-.service-group h4 {
-  margin: 0 0 10px;
+.service-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.service-group-title h4 {
+  margin: 0;
   color: var(--app-ink);
   font-size: 14px;
+}
+
+.service-group-title span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
 }
 
 .service-card-grid {
@@ -895,11 +1003,40 @@ onMounted(() => {
 }
 
 .service-card {
+  position: relative;
+  overflow: hidden;
   min-height: 190px;
-  padding: 14px;
+  padding: 16px 14px 14px;
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-md);
-  background: #ffffff;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.service-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: #94a3b8;
+}
+
+.service-card--success::before {
+  background: #22c55e;
+}
+
+.service-card--warning::before {
+  background: #f59e0b;
+}
+
+.service-card--danger::before {
+  background: #ef4444;
+}
+
+.service-card:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 12px 26px rgba(22, 59, 110, 0.08);
+  transform: translateY(-1px);
 }
 
 .service-card-header {
@@ -909,10 +1046,17 @@ onMounted(() => {
   gap: 12px;
 }
 
+.service-card-header > div:first-child {
+  min-width: 0;
+}
+
 .service-card-header strong {
   display: block;
+  overflow: hidden;
   color: var(--app-ink);
   font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .service-card-header span {
@@ -921,6 +1065,36 @@ onMounted(() => {
   color: var(--app-ink-muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.service-status-line {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.service-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.14);
+}
+
+.service-card--success .service-status-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
+}
+
+.service-card--warning .service-status-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.14);
+}
+
+.service-card--danger .service-status-dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.14);
 }
 
 .service-facts {
@@ -945,8 +1119,45 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 
+.service-fact-value {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.service-fact-value--version,
+.service-fact-value--reason {
+  -webkit-line-clamp: 3;
+}
+
 .service-reason dd {
   color: #b45309;
+}
+
+.config-table {
+  border-radius: var(--app-radius-sm);
+}
+
+.config-table :deep(.el-table-fixed-column--right) {
+  background: #ffffff;
+  box-shadow: -8px 0 18px rgba(22, 59, 110, 0.06);
+}
+
+.config-table :deep(.el-table__body tr.el-table__row--striped td.el-table-fixed-column--right) {
+  background: #f7f9fd;
+}
+
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.config-actions :deep(.el-button) {
+  margin-left: 0;
 }
 
 summary {
@@ -993,6 +1204,10 @@ summary {
     flex-direction: column;
   }
 
+  .service-health-strip {
+    grid-template-columns: 1fr;
+  }
+
   .form-grid {
     grid-template-columns: 1fr;
   }
@@ -1007,6 +1222,10 @@ summary {
 }
 
 @media (min-width: 721px) and (max-width: 1180px) {
+  .service-health-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .service-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
