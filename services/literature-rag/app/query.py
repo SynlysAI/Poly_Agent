@@ -24,12 +24,24 @@ DOMAIN_SYNONYMS = {
     "分辨率": ["resolution"],
     "曝光": ["exposure"],
     "显影": ["development", "developer"],
+    "焊接": ["welding", "weld", "joint", "arc", "laser", "friction", "stir"],
+    "焊缝": ["weld", "joint", "nugget", "microstructure"],
+    "稀土": ["rare", "earth", "rare-earth", "lanthanide"],
+    "镧系": ["lanthanide", "rare", "earth"],
+    "磁体": ["magnet", "magnetic"],
+    "表面处理": ["surface", "treatment", "coating", "plasma", "corrosion"],
+    "涂层": ["coating", "surface", "film"],
+    "腐蚀": ["corrosion", "corrosion-resistant"],
+    "等离子": ["plasma", "treatment"],
 }
 
 DOMAIN_ANCHORS = {
     "krf", "248", "photoresist", "resist", "lithography", "sensitivity", "resolution", "pag",
     "photoacid", "resin", "developer", "development", "exposure", "bake", "chemically", "amplified",
     "dissolution", "etch", "acid", "generator",
+    "welding", "weld", "joint", "nugget", "arc", "laser", "friction", "stir", "microstructure",
+    "rare", "earth", "rare-earth", "lanthanide", "magnet", "magnetic", "alloy", "catalyst",
+    "surface", "treatment", "coating", "film", "plasma", "corrosion", "oxidation", "interface",
 }
 
 INVENTORY_PATTERNS = (

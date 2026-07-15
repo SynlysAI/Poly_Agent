@@ -14,6 +14,7 @@ import {
   listAlgorithmVersions,
 } from '../api/polyAgentApi'
 import AlgorithmManagementPanel from './vertical-prediction/AlgorithmManagementPanel.vue'
+import AlgorithmHandoffPanel from './vertical-prediction/AlgorithmHandoffPanel.vue'
 import AlgorithmRunHistoryPanel from './vertical-prediction/AlgorithmRunHistoryPanel.vue'
 import AlgorithmTestPanel from './vertical-prediction/AlgorithmTestPanel.vue'
 import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue'
@@ -22,7 +23,7 @@ const route = useRoute()
 const router = useRouter()
 
 const detailTabMap = { management: 'api', test: 'experience', runs: 'api' }
-const routeModes = new Set(['center', 'upload', 'detail'])
+const routeModes = new Set(['center', 'upload', 'handoff', 'detail'])
 
 const activeMode = ref(normalizeMode(route.query.tab))
 const detailActiveTab = ref(normalizeDetailTab(route.query.tab))
@@ -36,6 +37,7 @@ const statusFilter = ref('')
 const typeFilter = ref('')
 const materialFilter = ref('')
 const selectedAlgorithmId = ref(normalizeQueryString(route.query.algorithm_id))
+const selectedHandoffId = ref(normalizeQueryString(route.query.handoff_id))
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === selectedAlgorithmId.value) || null)
 const selectedVersions = computed(() => versionMap.value[selectedAlgorithmId.value] || [])
@@ -107,12 +109,19 @@ function syncRoute() {
   if (activeMode.value === 'center') {
     delete query.tab
     delete query.algorithm_id
+    delete query.handoff_id
   } else if (activeMode.value === 'upload') {
     query.tab = 'upload'
     delete query.algorithm_id
+    delete query.handoff_id
+  } else if (activeMode.value === 'handoff') {
+    query.tab = 'handoff'
+    delete query.algorithm_id
+    if (selectedHandoffId.value) query.handoff_id = selectedHandoffId.value
   } else {
     query.tab = 'detail'
     if (selectedAlgorithmId.value) query.algorithm_id = selectedAlgorithmId.value
+    delete query.handoff_id
   }
   if (JSON.stringify(query) !== JSON.stringify(route.query)) router.replace({ query })
 }
@@ -123,10 +132,11 @@ watch(
     activeMode.value = normalizeMode(query.tab)
     detailActiveTab.value = normalizeDetailTab(query.tab)
     selectedAlgorithmId.value = normalizeQueryString(query.algorithm_id) || selectedAlgorithmId.value
+    selectedHandoffId.value = normalizeQueryString(query.handoff_id) || selectedHandoffId.value
   },
 )
 
-watch([activeMode, selectedAlgorithmId], syncRoute)
+watch([activeMode, selectedAlgorithmId, selectedHandoffId], syncRoute)
 
 async function loadData() {
   loading.value = true
@@ -175,6 +185,10 @@ function handleChanged(packageInfo) {
 
 function openUpload() {
   activeMode.value = 'upload'
+}
+
+function openHandoff() {
+  activeMode.value = 'handoff'
 }
 
 function openCenter() {
@@ -235,7 +249,8 @@ onMounted(() => {
         <h1>垂类预测模型</h1>
         <p>像管理智能体一样管理材料预测模型：发布、体验、版本治理和运行追溯集中在一个入口。</p>
       </div>
-      <div class="hero-actions">
+    <div class="hero-actions">
+        <el-button :icon="Document" @click="openHandoff">算法接入助手</el-button>
         <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
       </div>
     </header>
@@ -251,8 +266,17 @@ onMounted(() => {
     <template v-if="activeMode === 'upload'">
       <div class="subnav-row">
         <el-button text @click="openCenter">返回模型中心</el-button>
+        <el-button text type="primary" @click="openHandoff">算法接入助手</el-button>
       </div>
       <AlgorithmUploadPanel @changed="handleChanged" @view-detail="openDetail" />
+    </template>
+
+    <template v-else-if="activeMode === 'handoff'">
+      <div class="subnav-row">
+        <el-button text @click="openCenter">返回模型中心</el-button>
+        <el-button text type="primary" @click="openUpload">标准上传部署</el-button>
+      </div>
+      <AlgorithmHandoffPanel :initial-handoff-id="selectedHandoffId" @changed="handleChanged" />
     </template>
 
     <template v-else-if="activeMode === 'detail' && selectedAlgorithm">
@@ -375,7 +399,10 @@ onMounted(() => {
               <h2>模型中心</h2>
               <p>共 {{ filteredAlgorithms.length }} 个可管理模型</p>
             </div>
-            <el-button type="primary" :icon="UploadFilled" @click="openUpload">上传新模型</el-button>
+            <div class="list-actions">
+              <el-button :icon="Document" @click="openHandoff">创建接入任务</el-button>
+              <el-button type="primary" :icon="UploadFilled" @click="openUpload">上传新模型</el-button>
+            </div>
           </div>
 
           <div v-if="filteredAlgorithms.length" class="model-card-grid" v-loading="loading">
@@ -404,7 +431,10 @@ onMounted(() => {
             <el-icon><UploadFilled /></el-icon>
             <strong>还没有符合条件的垂类预测模型</strong>
             <span>上传 Python 脚本或标准 ZIP 后，模型会出现在这里。</span>
-            <el-button type="primary" @click="openUpload">上传第一个模型</el-button>
+            <div class="empty-actions">
+              <el-button @click="openHandoff">创建接入任务</el-button>
+              <el-button type="primary" @click="openUpload">上传第一个模型</el-button>
+            </div>
           </div>
         </main>
       </div>
@@ -427,7 +457,7 @@ h1 { font-size: 26px; line-height: 1.25; }
 h2 { font-size: 20px; line-height: 1.3; }
 h3 { font-size: 15px; }
 .model-page-hero p:last-child, .list-head p, .detail-main p { margin: 7px 0 0; color: var(--app-ink-muted); font-size: 14px; line-height: 1.6; }
-.hero-actions, .detail-actions, .subnav-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hero-actions, .detail-actions, .subnav-row, .list-actions, .empty-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .status-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
 .status-item { min-width: 0; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; padding: 12px 14px; border-right: 1px solid var(--app-border-soft); }
 .status-item:last-child { border-right: 0; }

@@ -101,6 +101,14 @@ const materialFamilyOptions = [
   { label: '含氟-碳共聚体系', value: 'fluoro_carbon_copolymer' },
   { label: '通用', value: 'universal' },
 ]
+const materialFamilyValues = new Set(materialFamilyOptions.map((item) => item.value))
+const materialFamilyAliases = {
+  welding: 'universal',
+  welding_materials: 'universal',
+  weld: 'universal',
+  焊接: 'universal',
+  通用: 'universal',
+}
 
 const problemTypeOptions = [
   { label: '配方/工艺优化', value: 'formulation_process_optimization' },
@@ -210,7 +218,7 @@ const SPEC_TEMPLATES = [
 
 function applyTemplate(template) {
   const t = template.data
-  form.value.material_family = t.material_family
+  form.value.material_family = normalizeMaterialFamily(t.material_family)
   form.value.problem_type = t.problem_type
   form.value.allowed_execution_modes = [...t.allowed_execution_modes]
   form.value.decision_status = 'pending_execution_decision'
@@ -313,7 +321,7 @@ async function loadSpecDetail(specId, source = 'select') {
     detail.value = await getProblemSpec(specId)
     form.value = {
       name: detail.value.name,
-      material_family: detail.value.material_family,
+      material_family: normalizeMaterialFamily(detail.value.material_family),
       problem_type: detail.value.problem_type,
       allowed_execution_modes: [...(detail.value.allowed_execution_modes || ['manual_workbench', 'autoresearch'])],
       decision_status: detail.value.decision_status || 'pending_execution_decision',
@@ -350,6 +358,7 @@ async function handleSave() {
   try {
     const payload = {
       ...form.value,
+      material_family: normalizeMaterialFamily(form.value.material_family),
       objectives: form.value.objectives.filter(o => o.name.trim()),
     }
     if (isNew.value) {
@@ -428,12 +437,19 @@ function statusTag(status) {
 }
 
 function materialFamilyLabel(value) {
-  const found = materialFamilyOptions.find(o => o.value === value)
-  return found?.label || value
+  const normalized = normalizeMaterialFamily(value)
+  const found = materialFamilyOptions.find(o => o.value === normalized)
+  return found?.label || normalized || value
 }
 
 function decisionStatusLabel(value) {
   return decisionStatusLabelMap[value] || value || '-'
+}
+
+function normalizeMaterialFamily(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  const mapped = materialFamilyAliases[normalized] || normalized
+  return materialFamilyValues.has(mapped) ? mapped : 'universal'
 }
 
 loadSpecs()

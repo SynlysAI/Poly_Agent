@@ -1,0 +1,1356 @@
+"""Assistant orchestration service for project-grounded and web-grounded chat."""
+
+from __future__ import annotations
+
+import html as html_module
+import ipaddress
+import json
+import re
+import socket
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Iterable
+from urllib.parse import quote_plus, urljoin, urlparse
+
+import httpx
+
+from app.core import llm_client
+from app.core.config import settings
+from app.core.logging import get_logger
+from app.schemas.assistant import AssistantAction
+from app.schemas.assistant import AssistantAnswerMode
+from app.schemas.assistant import AssistantAnswerScope
+from app.schemas.assistant import AssistantChatRequest
+from app.schemas.assistant import AssistantChatResponse
+from app.schemas.assistant import AssistantReference
+from app.schemas.assistant import AssistantRetrievalStatus
+from app.services.integration_status_service import IntegrationStatusService
+from app.services.research_engine_defaults import DEFAULT_STAGE_SEQUENCE
+from app.services.research_engine_defaults import P0_GATE_STAGES
+from app.services.research_engine_service import ResearchEngineService
+
+
+logger = get_logger("poly_agent.assistant")
+
+SYSTEM_PROMPT = (
+    "你是 PolyAgent 的产品内助手。优先使用给定 FACTS 和 WEB_EVIDENCE 回答，"
+    "所有正常回答都要经过项目配置的 LLM 润色。"
+    "项目内问题只依据项目事实；项目外问题必须结合网页证据；混合问题同时结合两者。"
+    "如果事实和网页证据冲突，以项目事实为准，并明确说明冲突。"
+    "不要编造算法、按钮、配置状态或外部资料。"
+    "回答要简洁、可操作，必要时用要点列出依据。"
+)
+
+PROJECT_KEYWORDS = {
+    "polyagent",
+    "poly agent",
+    "researchengine",
+    "research engine",
+    "autoresearch",
+    "task center",
+    "任务中心",
+    "审批",
+    "待审批",
+    "blocked_approval",
+    "研究引擎",
+    "研发引擎",
+    "计算",
+    "computation",
+    "xtb",
+    "crest",
+    "orca",
+    "alchemist",
+    "优化",
+    "算法",
+    "适配器",
+    "知识库",
+    "文献",
+}
+MODEL_KEYWORDS = {
+    "llm",
+    "model",
+    "模型",
+    "provider",
+    "api key",
+    "base url",
+    "base_url",
+    "prompt",
+    "responses",
+}
+WEB_KEYWORDS = {
+    "最新",
+    "最近",
+    "趋势",
+    "实践",
+    "对比",
+    "benchmark",
+    "agentic",
+    "rag",
+    "web search",
+    "tool calling",
+    "openai",
+    "anthropic",
+    "langchain",
+    "mcp",
+    "论文",
+    "资料",
+}
+
+
+@dataclass(frozen=True)
+class AssistantIntent:
+    scope: AssistantAnswerScope
+    use_web: bool
+    deep: bool
+
+
+@dataclass(frozen=True)
+class WebEvidence:
+    title: str
+    url: str
+    snippet: str
+    content: str = ""
+    source: str = "bing_rss"
+    published_at: str | None = None
+
+
+@dataclass(frozen=True)
+class SearchQueryPlan:
+    query: str
+    original_query: str
+    query_terms: list[str]
+    dropped_terms: list[str]
+
+
+@dataclass(frozen=True)
+class SearchOutcome:
+    status: AssistantRetrievalStatus
+    provider: str
+    query: str
+    results: list[WebEvidence]
+    original_query: str | None = None
+    query_terms: list[str] | None = None
+    dropped_terms: list[str] | None = None
+    raw_result_count: int = 0
+    filtered_result_count: int = 0
+
+
+class AssistantIntentRouter:
+    """Route user questions to the right answer scope."""
+
+    def route(self, text: str, *, mode: str) -> AssistantIntent:
+        normalized = self._normalize(text)
+        has_project = self._contains_any(normalized, PROJECT_KEYWORDS)
+        has_model = self._contains_any(normalized, MODEL_KEYWORDS)
+        has_web = self._contains_any(normalized, WEB_KEYWORDS) or self._looks_current(normalized)
+        deep = mode == "deep"
+
+        if has_model and not has_web and not has_project:
+            return AssistantIntent(scope="model", use_web=False, deep=deep)
+        if has_project and (has_web or self._looks_like_bridge_question(normalized)):
+            return AssistantIntent(scope="hybrid", use_web=True, deep=deep)
+        if has_project:
+            if has_model and not has_web:
+                return AssistantIntent(scope="model", use_web=False, deep=deep)
+            return AssistantIntent(scope="project", use_web=False, deep=deep)
+        if has_model:
+            return AssistantIntent(scope="model", use_web=False, deep=deep)
+        return AssistantIntent(scope="web", use_web=True, deep=deep)
+
+    def _normalize(self, text: str) -> str:
+        return str(text or "").strip().lower()
+
+    def _contains_any(self, text: str, keywords: Iterable[str]) -> bool:
+        return any(keyword in text for keyword in keywords)
+
+    def _looks_current(self, text: str) -> bool:
+        return any(token in text for token in ("最新", "最近", "当前", "today", "latest", "recent", "2025", "2026"))
+
+    def _looks_like_bridge_question(self, text: str) -> bool:
+        return any(token in text for token in ("结合", "对比", "外部", "互联网", "web search", "agentic", "rag", "最新", "最近"))
+
+
+class ProjectGroundingService:
+    """Collect project facts from live services."""
+
+    def build_facts(self, *, intent: AssistantIntent) -> dict:
+        algorithms = self._safe_list_algorithms()
+        integrations = self._safe_integration_status()
+        model_facts = {
+            "chat": {
+                "configured": bool(settings.llm_model),
+                "model": settings.llm_model or "未配置",
+                "base_url_configured": bool(settings.llm_base_url),
+                "provider": "LLM_*",
+            },
+            "report": {
+                "provider": settings.report_llm_provider,
+                "model": settings.report_llm_model or settings.llm_model or "未配置",
+            },
+        }
+
+        production_adapters: list[dict] = []
+        computation_adapters: list[dict] = []
+        bridge_adapters: list[dict] = []
+        demo_algorithms: list[dict] = []
+        other_algorithms: list[dict] = []
+
+        for item in algorithms:
+            algorithm_id = item.get("algorithm_id", "")
+            summary = self._algorithm_summary(item)
+            if algorithm_id in {"literature_rag_adapter", "vertical_predictor_adapter", "mobo_alchemist_adapter"}:
+                production_adapters.append(summary)
+            elif algorithm_id in {"local_structure_adapter", "local_xtb_adapter", "orca_compute_engine_laser_adapter"}:
+                computation_adapters.append(summary)
+            elif algorithm_id == "computation_submit_adapter":
+                bridge_adapters.append(summary)
+            elif self._is_demo_algorithm(item):
+                demo_algorithms.append(summary)
+            else:
+                other_algorithms.append(summary)
+
+        return {
+            "project": {
+                "name": "Poly Agent",
+                "assistant": "PolyAgent 产品内助手",
+                "research_module": "ResearchEngine",
+            },
+            "assistant": {
+                "intent_scope": intent.scope,
+                "deep_mode": intent.deep,
+            },
+            "algorithm_registry": {
+                "total": len(algorithms),
+                "production_adapters": production_adapters,
+                "computation_workflow_adapters": computation_adapters,
+                "bridge_adapters": bridge_adapters,
+                "demo_algorithms": demo_algorithms,
+                "other_algorithms": other_algorithms,
+            },
+            "integration_status": integrations,
+            "autoresearch": {
+                "stage_sequence": list(DEFAULT_STAGE_SEQUENCE),
+                "gate_stages": sorted(P0_GATE_STAGES),
+                "approval_status": "blocked_approval",
+                "approval_route": "/tasks/center?module_id=research-engine&status=blocked_approval",
+                "guide": "ResearchRun 阶段时间线中出现 blocked_approval 时点击审批按钮，填写原因后批准或拒绝。",
+            },
+            "manuals": {
+                "autoresearch": "doc/autoresearch-user-guide.md",
+                "computation_workflows": "doc/computation-workflows-user-guide.md",
+                "knowledge_base": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+            },
+            "model_management": model_facts,
+        }
+
+    def build_project_references(self, text: str) -> list[AssistantReference]:
+        lowered = text.lower()
+        refs: list[AssistantReference] = []
+        if any(token in lowered for token in ("research", "autoresearch", "研发", "适配器", "算法")):
+            refs.append(AssistantReference(label="ResearchEngine 算法清单", target="/research-engine", type="route"))
+        if "autoresearch" in lowered or "审批" in text:
+            refs.append(AssistantReference(label="AutoResearch 运行说明", target="doc/autoresearch-user-guide.md"))
+        if "workflow" in lowered or "计算" in text:
+            refs.append(AssistantReference(label="计算 Workflow 使用说明", target="doc/computation-workflows-user-guide.md"))
+        if "知识库" in text or "rag" in lowered:
+            refs.append(AssistantReference(label="知识库 RAG/KG 设计", target="doc/knowledge-base-rag-kg-upgrade-plan.md"))
+        return refs
+
+    def build_actions(self, text: str) -> list[AssistantAction]:
+        lowered = text.lower()
+        actions: list[AssistantAction] = []
+        if "审批" in text or "待审批" in text or "autoresearch" in lowered:
+            actions.append(
+                AssistantAction(
+                    label="查看待审批任务",
+                    target="/tasks/center?module_id=research-engine&status=blocked_approval",
+                    description="筛选 ResearchEngine 中等待 Gate 审批的 AutoResearch 运行。",
+                )
+            )
+        if any(token in lowered for token in ("research", "autoresearch", "研发", "审批", "workflow")):
+            actions.append(
+                AssistantAction(
+                    label="进入 ResearchEngine",
+                    target="/research-engine",
+                    description="定义 ProblemSpec、运行 Workflow 或处理 AutoResearch 审批。",
+                )
+            )
+        if any(token in lowered for token in ("计算", "xtb", "orca", "dft", "computation")):
+            actions.append(
+                AssistantAction(
+                    label="打开计算任务提交",
+                    target="/computations/submit",
+                    description="提交 LOCAL_STRUCTURE、LOCAL_XTB 或 ORCA 计算。",
+                )
+            )
+        if any(token in lowered for token in ("alchemist", "贝叶斯", "优化", "mobo", "bo")):
+            actions.append(
+                AssistantAction(
+                    label="查看 Alchemist",
+                    target="/optimization/alchemist",
+                    description="进入实验设计和贝叶斯优化工具。",
+                )
+            )
+        if any(token in lowered for token in ("适配器", "算法", "registry", "algorithm")):
+            actions.append(
+                AssistantAction(
+                    label="查看算法清单",
+                    target="/research-engine",
+                    description="在 ResearchEngine 的算法能力清单中查看真实注册条目和 Schema。",
+                )
+            )
+        if not actions and any(token in lowered for token in ("polyagent", "poly agent", "researchengine", "autoresearch", "任务中心")):
+            actions.append(
+                AssistantAction(
+                    label="查看任务中心",
+                    target="/tasks/center",
+                    description="查看所有计算、优化和 ResearchEngine 任务状态。",
+                )
+            )
+        return actions
+
+    def build_suggested_questions(self, text: str, intent: AssistantIntent) -> list[str]:
+        lowered = text.lower()
+        if intent.scope == "model":
+            return ["现在问答使用什么模型？", "问答和报告的模型配置有什么区别？", "如何切换 LLM provider？"]
+        if "审批" in text or "autoresearch" in lowered:
+            return ["如何批准 blocked_approval 阶段？", "AutoResearch 每个 Gate 会做什么？"]
+        if "计算" in text or "xtb" in lowered or "orca" in lowered:
+            return ["LOCAL_XTB 需要哪些输入？", "如何从 ResearchEngine 提交计算任务？"]
+        if intent.scope == "web" or intent.scope == "hybrid":
+            return ["给我整理成对比表。", "补充最新实践和局限。", "给出可直接落地的建议。"]
+        return ["如何开始一个 ResearchEngine 示例？", "哪些算法是真实适配器？", "如何查看待审批任务？"]
+
+    def _safe_list_algorithms(self) -> list[dict]:
+        try:
+            result = ResearchEngineService().list_algorithms(page=1, page_size=100)
+            return [item.model_dump(mode="python") for item in result.items]
+        except Exception as exc:
+            logger.warning("assistant algorithm grounding unavailable: %s", exc)
+            return []
+
+    def _safe_integration_status(self) -> dict:
+        try:
+            items = IntegrationStatusService().get_status().get("items", [])
+        except Exception as exc:
+            logger.warning("assistant integration grounding unavailable: %s", exc)
+            items = []
+        wanted = {
+            "rdkit",
+            "openbabel",
+            "xtb",
+            "crest",
+            "orca",
+            "alchemist-backend",
+            "computation-worker",
+        }
+        return {
+            item.get("service"): {
+                "status": item.get("status"),
+                "details": item.get("details", {}),
+            }
+            for item in items
+            if item.get("service") in wanted
+        }
+
+    def _algorithm_summary(self, item: dict) -> dict:
+        return {
+            "algorithm_id": item.get("algorithm_id", ""),
+            "name": item.get("name", ""),
+            "type": item.get("type", ""),
+            "algorithm_family": item.get("algorithm_family", ""),
+            "call_method": item.get("call_method", ""),
+            "runtime_dependency": item.get("runtime_dependency", ""),
+            "status": item.get("status", ""),
+            "description": item.get("description", ""),
+        }
+
+    def _is_demo_algorithm(self, item: dict) -> bool:
+        ui_hints = (item.get("input_schema") or {}).get("ui_hints") or {}
+        algorithm_hint = ui_hints.get("_algorithm") or {}
+        validation_metric = item.get("validation_metric") or {}
+        return bool(
+            algorithm_hint.get("hidden_by_default")
+            or algorithm_hint.get("is_demo")
+            or any(str(value).lower() == "mock" for value in validation_metric.values())
+            or str(item.get("algorithm_id", "")).endswith("_mock")
+        )
+
+    def format_project_facts_for_prompt(self, facts: dict) -> str:
+        registry = facts.get("algorithm_registry", {})
+        sections = []
+        for label, key in [
+            ("真实/生产适配器", "production_adapters"),
+            ("计算 workflow 适配器", "computation_workflow_adapters"),
+            ("桥接适配器", "bridge_adapters"),
+            ("演示 mock 算法", "demo_algorithms"),
+        ]:
+            values = registry.get(key, [])
+            ids = ", ".join(item.get("algorithm_id", "") for item in values) or "无"
+            sections.append(f"{label}: {ids}")
+        sections.append(f"集成状态: {facts.get('integration_status', {})}")
+        sections.append(f"AutoResearch: {facts.get('autoresearch', {})}")
+        sections.append(f"模型管理: {facts.get('model_management', {})}")
+        return "\n".join(sections)
+
+
+class AssistantSearchQueryBuilder:
+    """Build focused web search queries from natural-language questions."""
+
+    CHINESE_DROP_TERMS = (
+        "请问",
+        "帮我",
+        "我要",
+        "我想",
+        "怎么做",
+        "结合",
+        "如何",
+        "怎么",
+        "什么",
+        "哪些",
+        "一下",
+        "一个",
+        "一款",
+        "一种",
+        "这个",
+        "那个",
+        "问题",
+        "搜索",
+        "查询",
+        "资料",
+        "推荐",
+        "方法",
+        "最近",
+        "最新",
+        "当前",
+        "实践有哪些",
+        "有哪些",
+        "做",
+        "设计",
+        "生成",
+        "在线",
+        "平台",
+        "的",
+        "了",
+        "吗",
+        "呢",
+        "我",
+    )
+    ENGLISH_STOPWORDS = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "best",
+        "can",
+        "current",
+        "design",
+        "do",
+        "does",
+        "find",
+        "for",
+        "from",
+        "help",
+        "how",
+        "latest",
+        "me",
+        "method",
+        "methods",
+        "new",
+        "news",
+        "of",
+        "please",
+        "practice",
+        "practices",
+        "recent",
+        "search",
+        "the",
+        "to",
+        "what",
+        "which",
+        "with",
+    }
+    CHINESE_DOMAIN_SYNONYMS = {
+        "高耐热聚酰亚胺": ["polyimide", "high heat resistant", "high temperature", "synthesis", "preparation"],
+        "新材料": ["new materials", "materials design", "materials discovery", "inverse design", "molecular design"],
+        "材料设计": ["materials design", "new materials", "materials discovery", "inverse design", "molecular design"],
+        "聚酰亚胺": ["polyimide"],
+        "高分子": ["polymer", "macromolecule"],
+        "分子设计": ["molecular design", "materials discovery"],
+        "材料发现": ["materials discovery"],
+        "高耐热": ["high heat resistant", "high temperature"],
+        "耐热": ["heat resistant", "thermal stability"],
+        "制备": ["合成", "synthesis", "preparation"],
+        "合成": ["synthesis", "preparation"],
+        "配方": ["formulation"],
+        "工艺": ["process", "preparation"],
+        "材料": ["material"],
+    }
+    PRESERVED_ENGLISH_PHRASES = (
+        "Poly Agent",
+        "AI agent",
+        "Agentic RAG",
+        "web search",
+    )
+
+    def build(self, text: str) -> SearchQueryPlan:
+        original = str(text or "").strip()
+        if not original:
+            return SearchQueryPlan(query="", original_query="", query_terms=[], dropped_terms=[])
+
+        dropped_terms = self._dropped_terms(original)
+        cleaned = original
+        for term in sorted(dropped_terms, key=len, reverse=True):
+            cleaned = cleaned.replace(term, " ")
+        cleaned = re.sub(r"[?？!！,，。；;：:()（）\[\]{}<>《》\"“”'‘’、]", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+        terms: list[str] = []
+        for term, synonyms in self.CHINESE_DOMAIN_SYNONYMS.items():
+            if term in original:
+                if term not in self.CHINESE_DROP_TERMS:
+                    self._append_unique(terms, term)
+                for synonym in synonyms:
+                    self._append_unique(terms, synonym)
+
+        covered_english_words: set[str] = set()
+        lowered_original = original.lower()
+        for phrase in self.PRESERVED_ENGLISH_PHRASES:
+            if phrase.lower() in lowered_original:
+                self._append_unique(terms, phrase)
+                covered_english_words.update(self._english_words(phrase))
+
+        for phrase in self._english_phrases(cleaned):
+            if self._english_words(phrase).issubset(covered_english_words):
+                continue
+            self._append_unique(terms, phrase)
+        for phrase in self._english_phrases(original):
+            if self._english_words(phrase).issubset(covered_english_words):
+                continue
+            self._append_unique(terms, phrase)
+
+        for item in re.findall(r"[\u4e00-\u9fff]{2,}", cleaned):
+            if item not in self.CHINESE_DROP_TERMS:
+                self._append_unique(terms, item)
+
+        query = " ".join(terms).strip() or cleaned or original
+        query_terms = self._query_terms_from_values(terms) if terms else self._query_terms(query)
+        return SearchQueryPlan(
+            query=query,
+            original_query=original,
+            query_terms=query_terms,
+            dropped_terms=dropped_terms,
+        )
+
+    def _dropped_terms(self, text: str) -> list[str]:
+        return [term for term in self.CHINESE_DROP_TERMS if term in text]
+
+    def _english_phrases(self, text: str) -> list[str]:
+        phrases: list[str] = []
+        for match in re.finditer(r"[A-Za-z][A-Za-z0-9+.-]*(?:\s+[A-Za-z][A-Za-z0-9+.-]*)*", text):
+            words = [word for word in match.group(0).split() if word.lower() not in self.ENGLISH_STOPWORDS]
+            if not words:
+                continue
+            if len(words) == 1:
+                phrases.append(words[0])
+            else:
+                phrases.append(" ".join(words))
+                phrases.extend(words)
+        return phrases
+
+    def _query_terms(self, text: str) -> list[str]:
+        terms: list[str] = []
+        for item in re.findall(r"[A-Za-z0-9][A-Za-z0-9+.-]{1,}", text.lower()):
+            if item not in self.ENGLISH_STOPWORDS:
+                self._append_unique(terms, item)
+        for item in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+            if item not in self.CHINESE_DROP_TERMS:
+                self._append_unique(terms, item)
+        return terms
+
+    def _query_terms_from_values(self, values: list[str]) -> list[str]:
+        terms: list[str] = []
+        for value in values:
+            normalized = re.sub(r"\s+", " ", str(value or "").strip())
+            if not normalized:
+                continue
+            if " " in normalized:
+                self._append_unique(terms, normalized.lower())
+            for item in re.findall(r"[A-Za-z0-9][A-Za-z0-9+.-]{1,}", normalized.lower()):
+                if item not in self.ENGLISH_STOPWORDS:
+                    self._append_unique(terms, item)
+            for item in re.findall(r"[\u4e00-\u9fff]{2,}", normalized):
+                if item not in self.CHINESE_DROP_TERMS:
+                    self._append_unique(terms, item)
+        return terms
+
+    def _english_words(self, text: str) -> set[str]:
+        return {
+            item
+            for item in re.findall(r"[A-Za-z0-9][A-Za-z0-9+.-]{1,}", text.lower())
+            if item not in self.ENGLISH_STOPWORDS
+        }
+
+    def _append_unique(self, values: list[str], value: str) -> None:
+        normalized = re.sub(r"\s+", " ", str(value or "").strip())
+        if normalized and normalized not in values:
+            values.append(normalized)
+
+
+class AssistantWebSearchService:
+    """Search the web using configured HTTP provider or RSS fallback."""
+
+    GENERIC_RELEVANCE_TERMS = {
+        "设计",
+        "生成",
+        "在线",
+        "平台",
+        "图片",
+        "海报",
+        "素材",
+        "推荐",
+        "搜索",
+        "查询",
+        "资料",
+        "方法",
+        "问题",
+        "实践",
+        "最新",
+        "最近",
+        "当前",
+        "new",
+        "news",
+        "design",
+        "method",
+        "methods",
+        "材料",
+        "分子",
+        "molecule",
+        "material",
+        "materials",
+        "current",
+        "latest",
+        "practice",
+        "practices",
+        "recent",
+        "search",
+    }
+
+    def search(self, query: str, *, deep: bool) -> SearchOutcome:
+        query_plan = AssistantSearchQueryBuilder().build(query)
+        focused_query = query_plan.query or query
+        if not settings.assistant_web_search_enabled:
+            return SearchOutcome(
+                status="skipped_disabled",
+                provider="disabled",
+                query=focused_query,
+                results=[],
+                original_query=query_plan.original_query,
+                query_terms=query_plan.query_terms,
+                dropped_terms=query_plan.dropped_terms,
+            )
+
+        max_results = settings.assistant_web_search_max_results + (4 if deep else 0)
+        max_pages = settings.assistant_web_fetch_max_pages + (2 if deep else 0)
+        provider = settings.assistant_web_search_provider
+
+        try:
+            if provider == "searxng" and settings.assistant_web_search_endpoint:
+                raw_results = self._search_via_searxng(focused_query, max_results=max_results)
+                provider_name = "searxng"
+            else:
+                raw_results = self._search_via_bing_rss(focused_query, max_results=max_results)
+                provider_name = "bing_rss"
+        except Exception as exc:
+            logger.warning("assistant web search failed for provider=%s: %s", provider, exc)
+            if provider != "bing_rss":
+                try:
+                    raw_results = self._search_via_bing_rss(focused_query, max_results=max_results)
+                    provider_name = "bing_rss"
+                except Exception as fallback_exc:
+                    logger.warning("assistant web search fallback failed: %s", fallback_exc)
+                    return SearchOutcome(
+                        status="failed",
+                        provider=provider,
+                        query=focused_query,
+                        results=[],
+                        original_query=query_plan.original_query,
+                        query_terms=query_plan.query_terms,
+                        dropped_terms=query_plan.dropped_terms,
+                    )
+            else:
+                return SearchOutcome(
+                    status="failed",
+                    provider=provider,
+                    query=focused_query,
+                    results=[],
+                    original_query=query_plan.original_query,
+                    query_terms=query_plan.query_terms,
+                    dropped_terms=query_plan.dropped_terms,
+                )
+
+        if not raw_results:
+            fallback = self._fallback_search(
+                query_plan,
+                provider=provider,
+                max_results=max_results,
+            )
+            if fallback:
+                focused_query, raw_results, provider_name = fallback
+            else:
+                return SearchOutcome(
+                    status="no_results",
+                    provider=provider_name,
+                    query=focused_query,
+                    results=[],
+                    original_query=query_plan.original_query,
+                    query_terms=query_plan.query_terms,
+                    dropped_terms=query_plan.dropped_terms,
+                    raw_result_count=0,
+                    filtered_result_count=0,
+                )
+
+        candidates = self._filter_results(raw_results, query_plan.query_terms, include_content=False)
+        if not candidates:
+            fallback = self._fallback_search(
+                query_plan,
+                provider=provider,
+                max_results=max_results,
+            )
+            if fallback:
+                fallback_query, fallback_raw_results, fallback_provider_name = fallback
+                fallback_candidates = self._filter_results(
+                    fallback_raw_results,
+                    query_plan.query_terms,
+                    include_content=False,
+                )
+                if fallback_candidates:
+                    focused_query = fallback_query
+                    raw_results = fallback_raw_results
+                    candidates = fallback_candidates
+                    provider_name = fallback_provider_name
+
+        if not candidates:
+            curated_results = self._curated_fallback_results(query_plan)
+            if curated_results:
+                focused_query = query_plan.query or focused_query
+                raw_results = curated_results
+                candidates = curated_results
+                provider_name = "curated_material_design"
+
+        if not candidates:
+            return SearchOutcome(
+                status="no_results",
+                provider=provider_name,
+                query=focused_query,
+                results=[],
+                original_query=query_plan.original_query,
+                query_terms=query_plan.query_terms,
+                dropped_terms=query_plan.dropped_terms,
+                raw_result_count=len(raw_results),
+                filtered_result_count=0,
+            )
+        results: list[WebEvidence] = []
+        for index, item in enumerate(candidates[:max_results]):
+            content = ""
+            if index < max_pages:
+                content = self._fetch_page_text(item.url)
+            results.append(
+                WebEvidence(
+                    title=item.title,
+                    url=item.url,
+                    snippet=item.snippet,
+                    content=content,
+                    source=provider_name,
+                    published_at=item.published_at,
+                )
+            )
+        results = self._filter_results(results, query_plan.query_terms, include_content=True)
+        if not results:
+            return SearchOutcome(
+                status="no_results",
+                provider=provider_name,
+                query=focused_query,
+                results=[],
+                original_query=query_plan.original_query,
+                query_terms=query_plan.query_terms,
+                dropped_terms=query_plan.dropped_terms,
+                raw_result_count=len(raw_results),
+                filtered_result_count=0,
+            )
+        return SearchOutcome(
+            status="searched",
+            provider=provider_name,
+            query=focused_query,
+            results=results,
+            original_query=query_plan.original_query,
+            query_terms=query_plan.query_terms,
+            dropped_terms=query_plan.dropped_terms,
+            raw_result_count=len(raw_results),
+            filtered_result_count=len(results),
+        )
+
+    def _fallback_search(
+        self,
+        query_plan: SearchQueryPlan,
+        *,
+        provider: str,
+        max_results: int,
+    ) -> tuple[str, list[WebEvidence], str] | None:
+        for fallback_query in self._fallback_queries(query_plan):
+            try:
+                if provider == "searxng" and settings.assistant_web_search_endpoint:
+                    raw_results = self._search_via_searxng(fallback_query, max_results=max_results)
+                    provider_name = "searxng"
+                else:
+                    raw_results = self._search_via_bing_rss(fallback_query, max_results=max_results)
+                    provider_name = "bing_rss"
+            except Exception as exc:
+                logger.debug("assistant fallback web search failed for query=%s: %s", fallback_query, exc)
+                continue
+            if raw_results:
+                return fallback_query, raw_results, provider_name
+        return None
+
+    def _fallback_queries(self, query_plan: SearchQueryPlan) -> list[str]:
+        if not self._is_material_design_query(query_plan):
+            return []
+        return [
+            "materials design new materials inverse design materials discovery",
+            '"materials design" "new materials" "inverse design"',
+            "computational materials design materials discovery review",
+        ]
+
+    def _curated_fallback_results(self, query_plan: SearchQueryPlan) -> list[WebEvidence]:
+        if not self._is_material_design_query(query_plan):
+            return []
+        return [
+            WebEvidence(
+                title="Materials Project",
+                url="https://next-gen.materialsproject.org/",
+                snippet="Open materials database for exploring computed structures and properties in materials discovery workflows.",
+                source="curated_material_design",
+            ),
+            WebEvidence(
+                title="Matminer",
+                url="https://hackingmaterials.lbl.gov/matminer/",
+                snippet="Python library for data mining and machine learning on materials data, including featurization for materials design.",
+                source="curated_material_design",
+            ),
+            WebEvidence(
+                title="Materials Project API documentation",
+                url="https://docs.materialsproject.org/",
+                snippet="Documentation for programmatic access to Materials Project data for computational materials screening.",
+                source="curated_material_design",
+            ),
+        ]
+
+    def _is_material_design_query(self, query_plan: SearchQueryPlan) -> bool:
+        text = f"{query_plan.original_query} {query_plan.query}".lower()
+        terms = set(query_plan.query_terms or [])
+        return (
+            "新材料" in text
+            or "材料设计" in text
+            or "new materials" in terms
+            or "materials design" in terms
+            or "materials discovery" in terms
+        )
+
+    def _search_via_searxng(self, query: str, *, max_results: int) -> list[WebEvidence]:
+        endpoint = settings.assistant_web_search_endpoint.rstrip("/")
+        url = f"{endpoint}/search" if not endpoint.endswith("/search") else endpoint
+        params = {
+            "q": query,
+            "format": "json",
+            "language": "zh-CN",
+            "categories": "general",
+        }
+        headers = {}
+        if settings.assistant_web_search_api_key:
+            headers["Authorization"] = f"Bearer {settings.assistant_web_search_api_key}"
+        with httpx.Client(timeout=settings.assistant_web_search_timeout_seconds, headers=headers) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+        payload = response.json()
+        raw_items = payload.get("results") or payload.get("items") or []
+        results: list[WebEvidence] = []
+        for item in raw_items[:max_results]:
+            title = str(item.get("title") or item.get("name") or query).strip()
+            link = str(item.get("url") or item.get("link") or "").strip()
+            snippet = str(item.get("content") or item.get("snippet") or item.get("description") or "").strip()
+            if title and link:
+                results.append(WebEvidence(title=title, url=link, snippet=snippet, source="searxng"))
+        return results
+
+    def _search_via_bing_rss(self, query: str, *, max_results: int) -> list[WebEvidence]:
+        url = f"https://www.bing.com/search?format=rss&q={quote_plus(query)}"
+        with httpx.Client(timeout=settings.assistant_web_search_timeout_seconds, headers=self._search_headers()) as client:
+            response = client.get(url)
+            response.raise_for_status()
+        root = ET.fromstring(response.text)
+        results: list[WebEvidence] = []
+        for item in root.findall("./channel/item")[:max_results]:
+            title = self._xml_text(item, "title")
+            link = self._xml_text(item, "link")
+            snippet = self._xml_text(item, "description")
+            pub_date = self._xml_text(item, "pubDate") or None
+            if title and link:
+                results.append(
+                    WebEvidence(
+                        title=title,
+                        url=link,
+                        snippet=self._clean_snippet(snippet),
+                        source="bing_rss",
+                        published_at=pub_date,
+                    )
+                )
+        return results
+
+    def _fetch_page_text(self, url: str) -> str:
+        if not self._is_safe_http_url(url):
+            return ""
+        headers = self._search_headers()
+        try:
+            with httpx.Client(timeout=settings.assistant_web_search_timeout_seconds, headers=headers, follow_redirects=False) as client:
+                current_url = url
+                for _ in range(3):
+                    response = client.get(current_url)
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        next_url = response.headers.get("location")
+                        if not next_url:
+                            break
+                        current_url = urljoin(str(response.url), next_url)
+                        if not self._is_safe_http_url(current_url):
+                            return ""
+                        continue
+                    if response.status_code >= 400:
+                        return ""
+                    raw = response.content[: settings.assistant_web_fetch_max_bytes]
+                    return self._strip_html(raw.decode(response.encoding or "utf-8", errors="ignore"))
+        except httpx.HTTPError as exc:
+            logger.debug("assistant web page fetch skipped for %s: %s", url, exc)
+        return ""
+
+    def _search_headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
+
+    def _is_safe_http_url(self, url: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        host = parsed.hostname
+        if not host:
+            return False
+        normalized = host.lower()
+        if normalized in {"localhost", "127.0.0.1", "::1"} or normalized.endswith(".localhost"):
+            return False
+        if settings.assistant_web_allowed_domains and not self._host_matches_any(normalized, settings.assistant_web_allowed_domains):
+            return False
+        if self._host_matches_any(normalized, settings.assistant_web_blocked_domains):
+            return False
+        return self._host_is_public(normalized)
+
+    def _host_matches_any(self, host: str, patterns: Iterable[str]) -> bool:
+        for pattern in patterns:
+            normalized = pattern.lower().strip()
+            if not normalized:
+                continue
+            if host == normalized or host.endswith(f".{normalized}"):
+                return True
+        return False
+
+    @lru_cache(maxsize=256)
+    def _host_is_public(self, host: str) -> bool:
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            return False
+        for info in infos:
+            ip_text = info[4][0]
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                return False
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
+                return False
+        return True
+
+    def _strip_html(self, raw_html: str) -> str:
+        cleaned = re.sub(r"(?is)<(script|style|noscript|iframe)[^>]*>.*?</\1>", " ", raw_html)
+        cleaned = re.sub(r"(?is)<[^>]+>", " ", cleaned)
+        cleaned = html_module.unescape(cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned[:4000]
+
+    def _xml_text(self, item: ET.Element, tag: str) -> str:
+        value = item.findtext(tag) or ""
+        return html_module.unescape(value).strip()
+
+    def _clean_snippet(self, text: str) -> str:
+        return re.sub(r"\s+", " ", html_module.unescape(text or "")).strip()
+
+    def _filter_results(
+        self,
+        results: list[WebEvidence],
+        query_terms: list[str] | None,
+        *,
+        include_content: bool,
+    ) -> list[WebEvidence]:
+        specific_terms = self._specific_query_terms(query_terms or [])
+        if not specific_terms:
+            return results
+        scored = [
+            (self._result_relevance_score(item, specific_terms, include_content=include_content), index, item)
+            for index, item in enumerate(results)
+        ]
+        filtered = [(score, index, item) for score, index, item in scored if score > 0]
+        filtered.sort(key=lambda value: (-value[0], value[1]))
+        return [item for _, _, item in filtered]
+
+    def _result_relevance_score(self, item: WebEvidence, query_terms: list[str], *, include_content: bool) -> int:
+        title_snippet = f"{item.title} {item.snippet}"
+        text = title_snippet
+        if include_content:
+            text = f"{text} {item.content}"
+        normalized_title_snippet = title_snippet.lower()
+        normalized = text.lower()
+        score = 0
+        for term in query_terms:
+            candidate = term.strip().lower()
+            if len(candidate) < 2 or candidate in self.GENERIC_RELEVANCE_TERMS:
+                continue
+            weight = 4 if " " in candidate else 2
+            if len(candidate) >= 5:
+                weight += 1
+            if candidate in normalized_title_snippet:
+                score += weight + 2
+                continue
+            if candidate in normalized:
+                score += max(1, weight - 1)
+                continue
+            if re.search(rf"\b{re.escape(candidate)}\b", normalized):
+                score += 1
+        return score
+
+    def _specific_query_terms(self, query_terms: list[str]) -> list[str]:
+        specific: list[str] = []
+        for term in query_terms:
+            candidate = re.sub(r"\s+", " ", str(term or "").strip().lower())
+            if not candidate or candidate in self.GENERIC_RELEVANCE_TERMS:
+                continue
+            specific.append(candidate)
+        return specific
+
+
+class AssistantAnswerSynthesizer:
+    """Call the project-configured LLM to produce the final answer."""
+
+    def synthesize(
+        self,
+        *,
+        request: AssistantChatRequest,
+        intent: AssistantIntent,
+        facts: dict,
+        evidence: SearchOutcome | None,
+    ) -> str:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": self._build_context_block(intent=intent, facts=facts, evidence=evidence),
+            },
+        ]
+        messages.extend({"role": item.role, "content": item.content} for item in request.messages)
+        return llm_client.chat(messages, temperature=0.2)
+
+    def _build_context_block(self, *, intent: AssistantIntent, facts: dict, evidence: SearchOutcome | None) -> str:
+        sections = [
+            f"ANSWER_SCOPE: {intent.scope}",
+            f"DEEP_MODE: {intent.deep}",
+            "FACTS:",
+            self._format_facts(facts),
+        ]
+        if evidence and evidence.results:
+            sections.append("WEB_EVIDENCE:")
+            for index, item in enumerate(evidence.results, start=1):
+                sections.append(
+                    f"[{index}] {item.title}\nURL: {item.url}\nSNIPPET: {item.snippet}\nCONTENT: {item.content[:1200]}"
+                )
+        else:
+            sections.append(f"WEB_EVIDENCE: {evidence.status if evidence else 'not_needed'}")
+        sections.append("RESPONSE RULES: 先给结论，再给依据，最后给可执行建议；网页证据请用 [1] [2] 这样的编号引用。")
+        return "\n".join(sections)
+
+    def _format_facts(self, facts: dict) -> str:
+        return json.dumps(facts, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+class AssistantService:
+    """High-level orchestration for assistant chat."""
+
+    def __init__(self) -> None:
+        self.intent_router = AssistantIntentRouter()
+        self.project_service = ProjectGroundingService()
+        self.search_query_builder = AssistantSearchQueryBuilder()
+        self.web_service = AssistantWebSearchService()
+        self.answer_synthesizer = AssistantAnswerSynthesizer()
+
+    def chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
+        user_text = self._latest_user_text(request.messages)
+        mode = self._normalize_mode(request.context.get("mode"))
+        intent = self.intent_router.route(user_text, mode=mode)
+        facts = self.project_service.build_facts(intent=intent)
+        project_refs = self.project_service.build_project_references(user_text)
+        actions = self.project_service.build_actions(user_text)
+        suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
+
+        web_outcome: SearchOutcome | None = None
+        search_query_plan: SearchQueryPlan | None = None
+        if intent.use_web:
+            search_query_plan = self.search_query_builder.build(user_text)
+            web_outcome = self.web_service.search(search_query_plan.query, deep=intent.deep)
+
+        web_refs = self._web_references(web_outcome)
+        references = project_refs + web_refs
+        retrieval_status = web_outcome.status if web_outcome else "not_needed"
+        answer_mode = self._answer_mode(intent)
+        response_facts = self._build_response_facts(
+            facts=facts,
+            web_outcome=web_outcome,
+            request=request,
+            search_query_plan=search_query_plan,
+        )
+
+        try:
+            content = self.answer_synthesizer.synthesize(
+                request=request,
+                intent=intent,
+                facts=response_facts,
+                evidence=web_outcome,
+            )
+            confidence = "medium"
+        except Exception as exc:
+            logger.warning("assistant LLM fallback: %s", exc)
+            content = self._fallback_content(user_text, facts=facts, intent=intent)
+            confidence = "medium"
+            answer_mode = "fallback"
+            if web_outcome and web_outcome.status == "searched":
+                retrieval_status = "searched"
+
+        return AssistantChatResponse(
+            content=content,
+            actions=actions,
+            references=references,
+            suggested_questions=suggested_questions,
+            grounding_facts=response_facts,
+            confidence=confidence,
+            answer_mode=answer_mode,
+            answer_scope=intent.scope,
+            retrieval_status=retrieval_status,
+        )
+
+    def _build_response_facts(
+        self,
+        *,
+        facts: dict,
+        web_outcome: SearchOutcome | None,
+        request: AssistantChatRequest,
+        search_query_plan: SearchQueryPlan | None = None,
+    ) -> dict:
+        response_facts = dict(facts)
+        response_facts["request_context"] = dict(request.context)
+        if web_outcome:
+            raw_count = web_outcome.raw_result_count or len(web_outcome.results)
+            filtered_count = web_outcome.filtered_result_count or len(web_outcome.results)
+            response_facts["web_search"] = {
+                "status": web_outcome.status,
+                "provider": web_outcome.provider,
+                "query": web_outcome.query,
+                "original_query": (
+                    search_query_plan.original_query
+                    if search_query_plan
+                    else web_outcome.original_query or web_outcome.query
+                ),
+                "query_terms": (
+                    search_query_plan.query_terms
+                    if search_query_plan
+                    else web_outcome.query_terms or []
+                ),
+                "dropped_terms": (
+                    search_query_plan.dropped_terms
+                    if search_query_plan
+                    else web_outcome.dropped_terms or []
+                ),
+                "raw_result_count": raw_count,
+                "filtered_result_count": filtered_count,
+                "result_count": len(web_outcome.results),
+                "results": [
+                    {
+                        "title": item.title,
+                        "url": item.url,
+                        "snippet": item.snippet,
+                        "published_at": item.published_at,
+                        "source": item.source,
+                    }
+                    for item in web_outcome.results
+                ],
+            }
+        else:
+            response_facts["web_search"] = {
+                "status": "not_needed",
+                "provider": None,
+                "query": None,
+                "original_query": None,
+                "query_terms": [],
+                "dropped_terms": [],
+                "raw_result_count": 0,
+                "filtered_result_count": 0,
+                "result_count": 0,
+                "results": [],
+            }
+        return response_facts
+
+    def _web_references(self, outcome: SearchOutcome | None) -> list[AssistantReference]:
+        if not outcome or not outcome.results:
+            return []
+        return [AssistantReference(label=item.title, target=item.url, type="web") for item in outcome.results[:3]]
+
+    def _answer_mode(self, intent: AssistantIntent) -> AssistantAnswerMode:
+        if intent.scope == "web":
+            return "web_grounded"
+        if intent.scope == "hybrid":
+            return "hybrid_grounded"
+        return "llm_project_grounded"
+
+    def _normalize_mode(self, mode: str | None) -> str:
+        normalized = str(mode or "qa").strip().lower()
+        if normalized not in {"qa", "deep", "model"}:
+            return "qa"
+        return normalized
+
+    def _latest_user_text(self, messages) -> str:
+        for msg in reversed(messages):
+            if msg.role == "user":
+                return msg.content.strip()
+        return ""
+
+    def _fallback_content(self, text: str, *, facts: dict, intent: AssistantIntent) -> str:
+        lowered = text.lower()
+        if intent.scope == "model":
+            model_facts = facts.get("model_management", {})
+            chat_model = (model_facts.get("chat") or {}).get("model", "未配置")
+            report_provider = (model_facts.get("report") or {}).get("provider", "unknown")
+            return (
+                f"当前问答链路优先使用 `LLM_*` 配置，已配置模型：`{chat_model}`。"
+                f"报告链路则使用 `REPORT_LLM_*`，当前报告 provider 为 `{report_provider}`。"
+                "如果你要切换问答模型，请修改 `LLM_MODEL` / `LLM_BASE_URL` / `LLM_API_KEY`。"
+            )
+        if "审批" in text or "autoresearch" in lowered or "blocked_approval" in lowered:
+            return self._approval_answer(facts)
+        if "如何开始" in text and ("researchengine" in lowered or "research engine" in lowered or "研发" in text):
+            return self._research_engine_start_answer()
+        if "计算" in text and any(token in lowered for token in ("workflow", "research", "xtb", "orca", "提交")):
+            return self._computation_answer(facts)
+        if "真实适配器" in text or ("adapter" in lowered and ("research" in lowered or "algorithm" in lowered)):
+            return self._adapter_answer(facts)
+        if intent.scope == "web":
+            return "我暂时没有拿到外部网页证据，但可以先基于通用经验给出保守建议：请补充更具体的主题、技术栈或对比对象。"
+        return "我可以帮你进入 ResearchEngine、提交计算任务、查看 Alchemist，或定位待审批任务。"
+
+    def _adapter_answer(self, facts: dict) -> str:
+        registry = facts.get("algorithm_registry", {})
+        production = registry.get("production_adapters", [])
+        computation = registry.get("computation_workflow_adapters", [])
+        bridge = registry.get("bridge_adapters", [])
+        demo = registry.get("demo_algorithms", [])
+        status = facts.get("integration_status", {})
+
+        lines = [
+            "当前 ResearchEngine 的算法事实应按 Registry 分类理解：",
+            "",
+            "真实/生产适配器：",
+            *self._format_algorithm_lines(production),
+            "",
+            "计算 workflow 适配器：",
+            *self._format_algorithm_lines(computation),
+            "",
+            "桥接适配器：",
+            *self._format_algorithm_lines(bridge),
+            "",
+            "演示 mock 算法：",
+            *self._format_algorithm_lines(demo),
+            "",
+            "可用性边界：",
+            f"- 文献 RAG 取决于本地索引；垂类预测取决于 VERTICAL_PREDICTOR_URL；Alchemist 取决于 alchemist-backend 状态（当前：{self._service_status(status, 'alchemist-backend')}）。",
+            f"- LOCAL_STRUCTURE 取决于 RDKit/OpenBabel（当前：RDKit {self._service_status(status, 'rdkit')}，OpenBabel {self._service_status(status, 'openbabel')}）。",
+            f"- LOCAL_XTB 取决于 xTB/CREST（当前：xTB {self._service_status(status, 'xtb')}，CREST {self._service_status(status, 'crest')}）。",
+            f"- ORCA DFT 取决于 ORCA 可执行文件和 license（当前：ORCA {self._service_status(status, 'orca')}）。",
+            "",
+            "因此不要把未出现在 AlgorithmRegistry 中的通用优化器名称当成当前 ResearchEngine 已注册的真实适配器。",
+        ]
+        return "\n".join(lines)
+
+    def _approval_answer(self, facts: dict) -> str:
+        autoresearch = facts.get("autoresearch", {})
+        gate_stages = autoresearch.get("gate_stages", [])
+        route = autoresearch.get("approval_route", "/tasks/center?module_id=research-engine&status=blocked_approval")
+        return (
+            "AutoResearch 进入 `blocked_approval` 时才需要人工审批。\n\n"
+            f"待审批入口：`{route}`。\n\n"
+            f"当前 P0 Gate 阶段：{', '.join(gate_stages)}。\n\n"
+            "操作路径：任务中心筛选 ResearchEngine + blocked_approval，或进入 ResearchEngine 的 ResearchRun 面板；"
+            "在阶段时间线中点击“审批”，填写原因后选择批准或拒绝。批准后流程继续推进，拒绝后该 ResearchRun 会失败。"
+        )
+
+    def _research_engine_start_answer(self) -> str:
+        return (
+            "开始 ResearchEngine 示例的实际路径是：\n\n"
+            "1. 进入 `/research-engine`。\n"
+            "2. 创建或实例化一个 ProblemSpec，确认材料体系、目标和约束。\n"
+            "3. 创建 ExecutionDecision：选择 `manual_workbench` 或 `autoresearch`。\n"
+            "4. 人工模式下选择算法清单形成 Workflow；自动模式下创建 ResearchRun 草稿。\n"
+            "5. 启动 ResearchRun 后，遇到 `blocked_approval` 的 Gate 阶段再处理审批。\n\n"
+            "如果只是独立提交分子计算，可以直接走 `/computations/submit`；如果要把计算结果纳入研发追溯链，应从 ResearchEngine Workflow 或 ResearchRun 进入。"
+        )
+
+    def _computation_answer(self, facts: dict) -> str:
+        status = facts.get("integration_status", {})
+        return (
+            "计算任务有两种入口：\n\n"
+            "- 独立探索：进入 `/computations/submit`，直接提交 `LOCAL_STRUCTURE`、`LOCAL_XTB` 或 `ORCA_COMPUTE_ENGINE_LASER`。\n"
+            "- 系统性研发：进入 `/research-engine`，在人工 Workflow 中使用计算适配器或 `computation_submit_adapter`，这样结果会关联 ProblemSpec、AlgorithmRun 和追溯链。\n\n"
+            "当前依赖状态："
+            f"RDKit {self._service_status(status, 'rdkit')}，OpenBabel {self._service_status(status, 'openbabel')}，"
+            f"xTB {self._service_status(status, 'xtb')}，CREST {self._service_status(status, 'crest')}，ORCA {self._service_status(status, 'orca')}。"
+        )
+
+    def _format_algorithm_lines(self, items: list[dict]) -> list[str]:
+        if not items:
+            return ["- 当前 Registry 未返回该类条目。"]
+        return [
+            f"- `{item.get('algorithm_id')}`：{item.get('name') or '-'}；"
+            f"调用方式 {item.get('call_method') or '-'}；状态 {item.get('status') or '-'}；"
+            f"依赖：{item.get('runtime_dependency') or '未声明'}。"
+            for item in items
+        ]
+
+    def _service_status(self, status: dict, service: str) -> str:
+        return str((status.get(service) or {}).get("status") or "unknown")
+
+
+_assistant_service = AssistantService()
+
+
+def chat_assistant(request: AssistantChatRequest) -> AssistantChatResponse:
+    return _assistant_service.chat(request)

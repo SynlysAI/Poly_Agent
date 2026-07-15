@@ -23,6 +23,7 @@ from app.infra.computation_repositories import (
 from app.infra.mongo import (
     get_algorithm_packages_collection,
     get_algorithm_registry_entries_collection,
+    get_algorithm_handoffs_collection,
     get_algorithm_runs_collection,
     get_algorithm_versions_collection,
     get_execution_decisions_collection,
@@ -432,6 +433,55 @@ class AlgorithmVersionRepository(BaseRepository):
             filters["algorithm_id"] = algorithm_id
         if status:
             filters["status"] = status
+        if created_by:
+            filters["created_by"] = created_by
+        return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+
+class AlgorithmHandoffRepository(BaseRepository):
+    """算法对接任务仓储。"""
+
+    collection_name = "algorithm_handoffs"
+
+    @classmethod
+    def _collection(cls):
+        return get_algorithm_handoffs_collection()
+
+    @classmethod
+    def update_fields(cls, handoff_id: str, fields: dict[str, Any]) -> bool:
+        """更新算法对接任务字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one({"handoff_id": handoff_id}, {"$set": fields})
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("handoff_id") == handoff_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def list_handoffs(
+        cls,
+        *,
+        status: str | None = None,
+        example_id: str | None = None,
+        created_by: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询算法对接任务。"""
+        filters: dict[str, Any] = {}
+        if status:
+            filters["status"] = status
+        if example_id:
+            filters["example_id"] = example_id
         if created_by:
             filters["created_by"] = created_by
         return cls.list_all(filters, sort_field="created_at", reverse=True, page=page, page_size=page_size)

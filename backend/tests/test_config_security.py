@@ -87,6 +87,18 @@ class DeploymentSecurityConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "CORS_ALLOWED_ORIGINS cannot include"):
             settings.validate_deployment_security()
 
+    def test_assistant_web_search_defaults_are_safe_and_enabled(self) -> None:
+        settings = self._settings_with_env(
+            {
+                "APP_ENV": "dev",
+            }
+        )
+
+        self.assertTrue(settings.assistant_web_search_enabled)
+        self.assertEqual(settings.assistant_web_search_provider, "searxng")
+        self.assertEqual(settings.assistant_web_search_max_results, 6)
+        self.assertEqual(settings.assistant_web_fetch_max_pages, 3)
+
     def test_production_unhandled_errors_do_not_expose_exception_detail(self) -> None:
         original_app_env = settings.app_env
         settings.app_env = "production"

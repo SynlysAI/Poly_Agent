@@ -425,6 +425,108 @@ class AlgorithmPackageApiTest(ComputationTestCase):
         )
         self.assertEqual(decommissioned_run.status_code, 409, decommissioned_run.text)
 
+    def test_algorithm_handoff_generates_prefilled_package_and_self_tests(self) -> None:
+        """算法接入任务可生成预填包，并在不正式部署的情况下完成自测。"""
+        examples_resp = self.client.get(f"{self.base_url}/algorithm-package-examples")
+        self.assertEqual(examples_resp.status_code, 200, examples_resp.text)
+        example_ids = [item["example_id"] for item in examples_resp.json()["data"]["items"]]
+        self.assertIn("batch_formulation_predictor", example_ids)
+
+        create_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs",
+            json={
+                "algorithm_id": "electrolyte_formulation_predictor",
+                "name": "含氟电解液配方性能预测",
+                "version": "0.1.0",
+                "example_id": "batch_formulation_predictor",
+                "material_scope": ["fluoropolymer"],
+                "input_schema": {"fields": {"formulations": "list"}, "required": ["formulations"]},
+                "output_schema": {"fields": {"results": "list"}, "required": ["results"]},
+                "sample_input": {
+                    "formulations": [
+                        {
+                            "formula_id": "TEST-001",
+                            "task_type": "electrolyte",
+                            "lithium_salt": "LiTFSI",
+                            "lithium_salt_mol_L": 1.0,
+                            "electrolyte_component_1": "FEC",
+                            "electrolyte_component_1_mol_ratio": 1,
+                            "electrolyte_component_2": "DME",
+                            "electrolyte_component_2_mol_ratio": 1,
+                        }
+                    ]
+                },
+                "requirements_hint": ["rdkit", "scikit-learn", "joblib"],
+            },
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.text)
+        handoff = create_resp.json()["data"]
+        handoff_id = handoff["handoff_id"]
+        self.assertEqual(handoff["status"], "draft")
+        self.assertIn(handoff_id, handoff["handoff_url"])
+
+        package_resp = self.client.get(f"{self.base_url}/algorithm-handoffs/{handoff_id}/package")
+        self.assertEqual(package_resp.status_code, 200, package_resp.text)
+        with zipfile.ZipFile(io.BytesIO(package_resp.content)) as handoff_zip:
+            names = set(handoff_zip.namelist())
+            self.assertIn("polyagent.algorithm.yaml", names)
+            self.assertIn("src/handler.py", names)
+            self.assertIn("src/predictor_service.py", names)
+            sample_input = handoff_zip.read("tests/sample_input.json").decode("utf-8")
+            self.assertIn("TEST-001", sample_input)
+            contract = handoff_zip.read("polyagent.algorithm.yaml").decode("utf-8")
+            self.assertIn("electrolyte_formulation_predictor", contract)
+
+        detail_resp = self.client.get(f"{self.base_url}/algorithm-handoffs/{handoff_id}")
+        self.assertEqual(detail_resp.json()["data"]["status"], "package_downloaded")
+
+        validate_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs/{handoff_id}:validate",
+            files={"file": ("handoff.zip", package_resp.content, "application/zip")},
+        )
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        validation = validate_resp.json()["data"]
+        self.assertTrue(validation["ok"])
+        self.assertEqual(validation["status"], "self_test_passed")
+        self.assertIn("results", validation["output_preview"])
+
+        packages_resp = self.client.get(f"{self.base_url}/algorithm-packages")
+        self.assertEqual(packages_resp.json()["data"]["total"], 0)
+
+    def test_algorithm_handoff_validation_reports_missing_sample_input_fix(self) -> None:
+        """对接包缺关键文件时返回面向对接人的修复建议。"""
+        create_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs",
+            json={
+                "algorithm_id": "bad_handoff_predictor",
+                "name": "Bad Handoff Predictor",
+                "example_id": "generic_python_predictor",
+                "input_schema": {"fields": {"smiles": "string"}, "required": ["smiles"]},
+                "output_schema": {"fields": {"prediction": "object"}, "required": ["prediction"]},
+                "sample_input": {"smiles": "C=C(F)F"},
+            },
+        )
+        handoff_id = create_resp.json()["data"]["handoff_id"]
+        package_resp = self.client.get(f"{self.base_url}/algorithm-handoffs/{handoff_id}/package")
+
+        broken_buffer = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(package_resp.content)) as source_zip:
+            with zipfile.ZipFile(broken_buffer, "w") as target_zip:
+                for member in source_zip.infolist():
+                    if member.filename == "tests/sample_input.json":
+                        continue
+                    target_zip.writestr(member, source_zip.read(member.filename))
+
+        validate_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs/{handoff_id}:validate",
+            files={"file": ("broken.zip", broken_buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        validation = validate_resp.json()["data"]
+        self.assertFalse(validation["ok"])
+        self.assertEqual(validation["status"], "self_test_failed")
+        self.assertTrue(any("tests/sample_input.json" in item for item in validation["fixes"]))
+
 
 class ResearchEngineAccessControlApiTest(ComputationTestCase):
     """覆盖 ResearchEngine ID 直连访问的所有权校验。"""
