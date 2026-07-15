@@ -179,6 +179,24 @@ class Settings:
             "yes",
             "on",
         }
+        self.assistant_web_search_enabled: bool = os.getenv("ASSISTANT_WEB_SEARCH_ENABLED", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.assistant_web_search_provider: str = os.getenv(
+            "ASSISTANT_WEB_SEARCH_PROVIDER",
+            "searxng",
+        ).strip().lower() or "searxng"
+        self.assistant_web_search_endpoint: str = os.getenv("ASSISTANT_WEB_SEARCH_ENDPOINT", "").strip()
+        self.assistant_web_search_api_key: str = os.getenv("ASSISTANT_WEB_SEARCH_API_KEY", "").strip()
+        self.assistant_web_search_timeout_seconds: int = int(os.getenv("ASSISTANT_WEB_SEARCH_TIMEOUT_SECONDS", "8"))
+        self.assistant_web_search_max_results: int = int(os.getenv("ASSISTANT_WEB_SEARCH_MAX_RESULTS", "6"))
+        self.assistant_web_fetch_max_pages: int = int(os.getenv("ASSISTANT_WEB_FETCH_MAX_PAGES", "3"))
+        self.assistant_web_fetch_max_bytes: int = int(os.getenv("ASSISTANT_WEB_FETCH_MAX_BYTES", "400000"))
+        self.assistant_web_blocked_domains: list[str] = self._parse_csv(os.getenv("ASSISTANT_WEB_BLOCKED_DOMAINS", ""))
+        self.assistant_web_allowed_domains: list[str] = self._parse_csv(os.getenv("ASSISTANT_WEB_ALLOWED_DOMAINS", ""))
         self.report_ollama_base_url: str = os.getenv("REPORT_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
         self.report_ollama_model: str = os.getenv("REPORT_OLLAMA_MODEL", "")
         self.report_codex_bin: str = os.getenv("REPORT_CODEX_BIN", "codex").strip() or "codex"

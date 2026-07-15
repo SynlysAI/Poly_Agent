@@ -13,10 +13,15 @@ from fastapi.responses import Response
 from app.core.auth import get_current_user
 from app.schemas.common import ApiResponse
 from app.schemas.research_engine import (
+    AlgorithmHandoff,
+    AlgorithmHandoffCreate,
+    AlgorithmHandoffListData,
+    AlgorithmHandoffValidationResult,
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
     AlgorithmPackage,
     AlgorithmPackageCreate,
+    AlgorithmPackageExampleListData,
     AlgorithmPackageListData,
     AlgorithmRun,
     AlgorithmRunCreate,
@@ -48,6 +53,7 @@ from app.schemas.research_engine import (
     WorkflowRun,
     WorkflowRunListData,
 )
+from app.services.algorithm_handoff_service import AlgorithmHandoffService
 from app.services.research_engine_algorithm_package_service import AlgorithmPackageService
 from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
 from app.services.research_engine_readiness_service import ResearchEngineReadinessService
@@ -58,6 +64,7 @@ service = ResearchEngineService()
 orchestrator = ResearchEngineOrchestrator()
 readiness_service = ResearchEngineReadinessService()
 package_service = AlgorithmPackageService()
+handoff_service = AlgorithmHandoffService()
 
 
 def _actor_user_id(current_user: dict[str, str] | None) -> str:
@@ -137,6 +144,93 @@ def download_algorithm_package_template() -> Response:
         media_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=polyagent-algorithm-template.zip"},
     )
+
+
+@router.get("/algorithm-package-examples", response_model=ApiResponse[AlgorithmPackageExampleListData])
+def list_algorithm_package_examples() -> ApiResponse[AlgorithmPackageExampleListData]:
+    """查询面向算法对接人的接入包模板。"""
+    return ApiResponse(code=0, message="ok", data=handoff_service.list_examples())
+
+
+@router.get("/algorithm-package-examples/{example_id}/download")
+def download_algorithm_package_example(example_id: str) -> Response:
+    """下载指定类型的算法接入 example ZIP。"""
+    filename, content = handoff_service.download_example_package(example_id)
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/algorithm-handoffs", response_model=ApiResponse[AlgorithmHandoff])
+def create_algorithm_handoff(
+    payload: AlgorithmHandoffCreate,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmHandoff]:
+    """创建算法对接任务，并生成对接人交付链接。"""
+    data = handoff_service.create_handoff(payload, actor_user_id=_actor_user_id(current_user))
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/algorithm-handoffs", response_model=ApiResponse[AlgorithmHandoffListData])
+def list_algorithm_handoffs(
+    status: str | None = Query(default=None),
+    example_id: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmHandoffListData]:
+    """分页查询算法对接任务。"""
+    data = handoff_service.list_handoffs(
+        status=status,
+        example_id=example_id,
+        created_by=None if _has_full_access(current_user) else _access_user_id(current_user),
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/algorithm-handoffs/{handoff_id}", response_model=ApiResponse[AlgorithmHandoff])
+def get_algorithm_handoff(handoff_id: str) -> ApiResponse[AlgorithmHandoff]:
+    """获取算法对接任务详情。"""
+    return ApiResponse(code=0, message="ok", data=handoff_service.get_handoff(handoff_id))
+
+
+@router.get("/algorithm-handoffs/{handoff_id}/package")
+def download_algorithm_handoff_package(handoff_id: str) -> Response:
+    """下载已按对接任务预填的算法接入包。"""
+    filename, content = handoff_service.download_handoff_package(handoff_id)
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/algorithm-handoffs/{handoff_id}:validate",
+    response_model=ApiResponse[AlgorithmHandoffValidationResult],
+)
+async def validate_algorithm_handoff_package(
+    handoff_id: str,
+    file: UploadFile = File(...),
+) -> ApiResponse[AlgorithmHandoffValidationResult]:
+    """对算法对接包做上传前自测，不创建正式算法版本。"""
+    content = await file.read()
+    data = handoff_service.validate_handoff_package(
+        handoff_id,
+        filename=file.filename or "handoff.zip",
+        content=content,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/algorithm-handoffs/{handoff_id}:submit", response_model=ApiResponse[AlgorithmHandoff])
+def mark_algorithm_handoff_submitted(handoff_id: str) -> ApiResponse[AlgorithmHandoff]:
+    """标记算法对接任务已提交正式部署。"""
+    return ApiResponse(code=0, message="ok", data=handoff_service.mark_submitted(handoff_id))
 
 
 @router.post("/algorithm-packages:pack", response_model=ApiResponse[AlgorithmPackage])

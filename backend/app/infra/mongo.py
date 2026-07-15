@@ -143,6 +143,11 @@ def get_algorithm_runs_collection() -> Collection:
     return get_database()["algorithm_runs"]
 
 
+def get_algorithm_handoffs_collection() -> Collection:
+    """获取 algorithm_handoffs 集合。"""
+    return get_database()["algorithm_handoffs"]
+
+
 def get_research_runs_collection() -> Collection:
     """获取 research_runs 集合。"""
     return get_database()["research_runs"]

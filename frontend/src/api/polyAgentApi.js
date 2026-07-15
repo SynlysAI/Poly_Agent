@@ -473,6 +473,50 @@ export function downloadAlgorithmPackageTemplate() {
     }))
 }
 
+export function listAlgorithmPackageExamples() {
+  return apiClient.get('/research-engine/algorithm-package-examples').then(unwrapResponse)
+}
+
+export function downloadAlgorithmPackageExample(exampleId, fallbackName = 'algorithm-example.zip') {
+  return apiClient
+    .get(`/research-engine/algorithm-package-examples/${exampleId}/download`, { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], fallbackName),
+      contentType: response.headers['content-type'] || 'application/zip',
+    }))
+}
+
+export function createAlgorithmHandoff(payload) {
+  return apiClient.post('/research-engine/algorithm-handoffs', payload).then(unwrapResponse)
+}
+
+export function listAlgorithmHandoffs(params = {}) {
+  return apiClient.get('/research-engine/algorithm-handoffs', { params }).then(unwrapResponse)
+}
+
+export function getAlgorithmHandoff(handoffId) {
+  return apiClient.get(`/research-engine/algorithm-handoffs/${handoffId}`).then(unwrapResponse)
+}
+
+export function downloadAlgorithmHandoffPackage(handoffId, fallbackName = 'algorithm-handoff.zip') {
+  return apiClient
+    .get(`/research-engine/algorithm-handoffs/${handoffId}/package`, { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], fallbackName),
+      contentType: response.headers['content-type'] || 'application/zip',
+    }))
+}
+
+export function validateAlgorithmHandoffPackage(handoffId, formData) {
+  return apiClient.post(`/research-engine/algorithm-handoffs/${handoffId}:validate`, formData).then(unwrapResponse)
+}
+
+export function markAlgorithmHandoffSubmitted(handoffId) {
+  return apiClient.post(`/research-engine/algorithm-handoffs/${handoffId}:submit`).then(unwrapResponse)
+}
+
 export function packAlgorithmPackage(formData) {
   return apiClient.post('/research-engine/algorithm-packages:pack', formData).then(unwrapResponse)
 }

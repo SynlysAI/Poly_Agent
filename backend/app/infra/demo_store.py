@@ -32,6 +32,7 @@ COLLECTION_NAMES = [
     "algorithm_packages",
     "algorithm_versions",
     "algorithm_runs",
+    "algorithm_handoffs",
     "research_runs",
     "report_jobs",
     "report_artifacts",

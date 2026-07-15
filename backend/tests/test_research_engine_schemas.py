@@ -105,6 +105,14 @@ class ProblemSpecSchemaTest(ComputationTestCase):
         self.assertEqual(ps.allowed_execution_modes, ["manual_workbench", "autoresearch"])
         self.assertEqual(ps.decision_status, "pending_execution_decision")
 
+    def test_create_normalizes_cross_module_material_family_aliases(self) -> None:
+        """跨模块材料语料别名归一为通用材料体系。"""
+        ps = ProblemSpecCreate(**problem_spec_payload(material_family="welding"))
+        self.assertEqual(ps.material_family, "universal")
+
+        ps = ProblemSpecCreate(**problem_spec_payload(material_family="welding_materials"))
+        self.assertEqual(ps.material_family, "universal")
+
     def test_create_rejects_empty_name(self) -> None:
         """空名称被拒绝。"""
         with self.assertRaises(ValueError):

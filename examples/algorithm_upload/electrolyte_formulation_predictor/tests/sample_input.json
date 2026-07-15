@@ -1,0 +1,14 @@
+{
+  "formulations": [
+    {
+      "formula_id": "TEST-001",
+      "task_type": "electrolyte",
+      "lithium_salt": "LiTFSI",
+      "lithium_salt_mol_L": 1.0,
+      "electrolyte_component_1": "FEC",
+      "electrolyte_component_1_mol_ratio": 1,
+      "electrolyte_component_2": "DME",
+      "electrolyte_component_2_mol_ratio": 1
+    }
+  ]
+}

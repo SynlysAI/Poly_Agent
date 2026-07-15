@@ -103,6 +103,24 @@ AlgorithmPackageStatus = Literal[
 ]
 """用户上传算法包/版本生命周期状态。"""
 
+AlgorithmHandoffStatus = Literal[
+    "draft",
+    "package_downloaded",
+    "self_test_failed",
+    "self_test_passed",
+    "submitted",
+]
+"""算法对接任务状态。"""
+
+AlgorithmPackageExampleId = Literal[
+    "batch_formulation_predictor",
+    "smiles_property_predictor",
+    "file_based_predictor",
+    "http_service_adapter",
+    "generic_python_predictor",
+]
+"""算法接入包模板 ID。"""
+
 ProblemType = Literal[
     "formulation_process_optimization",
     "structure_property_prediction",
@@ -293,6 +311,22 @@ class ProblemSpecCreate(BaseModel):
         if not normalized:
             raise ValueError("ProblemSpec 名称不能为空")
         return normalized
+
+    @field_validator("material_family", mode="before")
+    @classmethod
+    def normalize_material_family(cls, value: object) -> object:
+        """兼容跨模块材料语料别名，避免旧入口把非枚举值直接打到 API。"""
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().lower()
+        aliases = {
+            "welding": "universal",
+            "welding_materials": "universal",
+            "weld": "universal",
+            "焊接": "universal",
+            "通用": "universal",
+        }
+        return aliases.get(normalized, normalized)
 
     @field_validator("allowed_execution_modes")
     @classmethod
@@ -669,6 +703,111 @@ class AlgorithmVersionListData(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+class AlgorithmPackageExample(BaseModel):
+    """算法接入模板摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    example_id: AlgorithmPackageExampleId
+    name: str
+    description: str
+    algorithm_family: AlgorithmFamily = "vertical_prediction"
+    input_pattern: str
+    output_pattern: str
+    zip_filename: str
+
+
+class AlgorithmPackageExampleListData(BaseModel):
+    """算法接入模板列表。"""
+
+    items: list[AlgorithmPackageExample]
+
+
+class AlgorithmHandoffCreate(BaseModel):
+    """创建算法对接任务请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm_id: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=120)
+    version: str = Field(default="0.1.0", min_length=1, max_length=40)
+    example_id: AlgorithmPackageExampleId = "generic_python_predictor"
+    owner_name: str | None = Field(default=None, max_length=80)
+    owner_contact: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+    material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"], min_length=1)
+    input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    sample_input: dict = Field(default_factory=dict)
+    requirements_hint: list[str] = Field(default_factory=list)
+
+    @field_validator("algorithm_id")
+    @classmethod
+    def normalize_handoff_algorithm_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("算法 ID 不能为空")
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def normalize_handoff_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("算法名称不能为空")
+        return normalized
+
+
+class AlgorithmHandoff(BaseModel):
+    """算法对接任务。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    handoff_id: str
+    algorithm_id: str
+    name: str
+    version: str
+    example_id: AlgorithmPackageExampleId
+    owner_name: str | None = None
+    owner_contact: str | None = None
+    description: str | None = None
+    material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"])
+    input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    sample_input: dict = Field(default_factory=dict)
+    requirements_hint: list[str] = Field(default_factory=list)
+    status: AlgorithmHandoffStatus = "draft"
+    handoff_url: str
+    last_validation: dict | None = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlgorithmHandoffListData(BaseModel):
+    """算法对接任务分页响应。"""
+
+    items: list[AlgorithmHandoff]
+    page: int
+    page_size: int
+    total: int
+
+
+class AlgorithmHandoffValidationResult(BaseModel):
+    """算法对接包自测结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    handoff_id: str
+    ok: bool
+    status: AlgorithmHandoffStatus
+    package_filename: str
+    checks: list[dict] = Field(default_factory=list)
+    logs: list[str] = Field(default_factory=list)
+    fixes: list[str] = Field(default_factory=list)
+    output_preview: dict = Field(default_factory=dict)
 
 
 class ResearchEngineExampleSummary(BaseModel):

@@ -36,6 +36,21 @@ const currentSuggestions = computed(() => {
     : ['哪些算法是真实适配器？', '如何上传垂类预测模型？', '如何查看待审批任务？']
 })
 
+const answerModeLabelMap = {
+  llm_project_grounded: '项目事实+LLM',
+  web_grounded: '网页证据+LLM',
+  hybrid_grounded: '混合证据+LLM',
+  fallback: '兜底回答',
+}
+
+const retrievalStatusLabelMap = {
+  not_needed: '无需检索',
+  skipped_disabled: '检索已关闭',
+  searched: '已联网检索',
+  no_results: '无检索结果',
+  failed: '检索失败',
+}
+
 function normalizeQueryString(value) {
   return Array.isArray(value) ? value[0] || '' : value || ''
 }
@@ -79,6 +94,9 @@ async function sendPrompt(prompt) {
       actions: data.actions || [],
       references: data.references || [],
       suggested_questions: data.suggested_questions || [],
+      answer_mode: data.answer_mode || '',
+      answer_scope: data.answer_scope || '',
+      retrieval_status: data.retrieval_status || '',
     })
   } catch (error) {
     const message = getApiErrorMessage(error)
@@ -102,6 +120,10 @@ function openAssistantAction(action) {
 
 function openAssistantReference(ref) {
   if (!ref?.target) return
+  if (ref.type === 'web' || /^https?:\/\//i.test(ref.target)) {
+    window.open(ref.target, '_blank', 'noopener,noreferrer')
+    return
+  }
   if (ref.type === 'route' || ref.target.startsWith('/')) {
     router.push(ref.target)
     return
@@ -121,7 +143,9 @@ function markdownBlocks(text) {
   const blocks = []
   let paragraph = []
   let list = []
+  let listOrdered = false
   let code = []
+  let table = []
   let inCode = false
   const flushParagraph = () => {
     if (paragraph.length) {
@@ -131,9 +155,21 @@ function markdownBlocks(text) {
   }
   const flushList = () => {
     if (list.length) {
-      blocks.push({ type: 'list', items: list })
+      blocks.push({ type: 'list', items: list, ordered: listOrdered })
       list = []
+      listOrdered = false
     }
+  }
+  const flushTable = () => {
+    if (table.length) {
+      blocks.push({ type: 'table', rows: table })
+      table = []
+    }
+  }
+  const flushTextBlocks = () => {
+    flushParagraph()
+    flushList()
+    flushTable()
   }
   for (const line of lines) {
     if (line.trim().startsWith('```')) {
@@ -142,8 +178,7 @@ function markdownBlocks(text) {
         code = []
         inCode = false
       } else {
-        flushParagraph()
-        flushList()
+        flushTextBlocks()
         inCode = true
       }
       continue
@@ -153,10 +188,17 @@ function markdownBlocks(text) {
       continue
     }
     if (!line.trim()) {
-      flushParagraph()
-      flushList()
+      flushTextBlocks()
       continue
     }
+    const tableRow = parseMarkdownTableRow(line)
+    if (tableRow) {
+      flushParagraph()
+      flushList()
+      if (!isMarkdownTableDivider(tableRow)) table.push(tableRow)
+      continue
+    }
+    flushTable()
     const heading = line.match(/^(#{1,3})\s+(.+)$/)
     if (heading) {
       flushParagraph()
@@ -167,15 +209,41 @@ function markdownBlocks(text) {
     const listItem = line.match(/^\s*[-*•]\s+(.+)$/)
     if (listItem) {
       flushParagraph()
+      if (list.length && listOrdered) flushList()
+      listOrdered = false
       list.push(listItem[1])
+      continue
+    }
+    const orderedListItem = line.match(/^\s*\d+[.)]\s+(.+)$/)
+    if (orderedListItem) {
+      flushParagraph()
+      if (list.length && !listOrdered) flushList()
+      listOrdered = true
+      list.push(orderedListItem[1])
       continue
     }
     paragraph.push(line.trim())
   }
   flushParagraph()
   flushList()
+  flushTable()
   if (code.length) blocks.push({ type: 'code', text: code.join('\n') })
   return blocks
+}
+
+function parseMarkdownTableRow(line) {
+  const trimmed = String(line || '').trim()
+  if (!trimmed.includes('|')) return null
+  const cells = trimmed
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim())
+  return cells.length >= 2 ? cells : null
+}
+
+function isMarkdownTableDivider(cells) {
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell))
 }
 
 function inlineSegments(text) {
@@ -214,6 +282,14 @@ onMounted(() => {
         >
           <div class="chat-bubble">
             <div class="chat-bubble-text">
+              <div v-if="msg.answer_mode || msg.retrieval_status" class="chat-meta">
+                <el-tag v-if="msg.answer_mode" size="small" effect="plain" type="info">
+                  {{ answerModeLabelMap[msg.answer_mode] || msg.answer_mode }}
+                </el-tag>
+                <el-tag v-if="msg.retrieval_status" size="small" effect="plain" type="success">
+                  {{ retrievalStatusLabelMap[msg.retrieval_status] || msg.retrieval_status }}
+                </el-tag>
+              </div>
               <template v-for="(block, blockIdx) in markdownBlocks(msg.content)" :key="blockIdx">
                 <h2 v-if="block.type === 'heading'" class="markdown-heading">
                   <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
@@ -221,14 +297,38 @@ onMounted(() => {
                     <span v-else>{{ seg.text }}</span>
                   </template>
                 </h2>
-                <ul v-else-if="block.type === 'list'" class="markdown-list">
+                <component :is="block.ordered ? 'ol' : 'ul'" v-else-if="block.type === 'list'" class="markdown-list">
                   <li v-for="(item, itemIdx) in block.items" :key="itemIdx">
                     <template v-for="(seg, segIdx) in inlineSegments(item)" :key="segIdx">
                       <strong v-if="seg.strong">{{ seg.text }}</strong>
                       <span v-else>{{ seg.text }}</span>
                     </template>
                   </li>
-                </ul>
+                </component>
+                <div v-else-if="block.type === 'table'" class="markdown-table-wrap">
+                  <table class="markdown-table">
+                    <tbody>
+                      <tr v-for="(row, rowIdx) in block.rows" :key="rowIdx">
+                        <template v-if="rowIdx === 0">
+                          <th v-for="(cell, cellIdx) in row" :key="cellIdx" scope="col">
+                            <template v-for="(seg, segIdx) in inlineSegments(cell)" :key="segIdx">
+                              <strong v-if="seg.strong">{{ seg.text }}</strong>
+                              <span v-else>{{ seg.text }}</span>
+                            </template>
+                          </th>
+                        </template>
+                        <template v-else>
+                          <td v-for="(cell, cellIdx) in row" :key="cellIdx">
+                            <template v-for="(seg, segIdx) in inlineSegments(cell)" :key="segIdx">
+                              <strong v-if="seg.strong">{{ seg.text }}</strong>
+                              <span v-else>{{ seg.text }}</span>
+                            </template>
+                          </td>
+                        </template>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
                 <pre v-else-if="block.type === 'code'" class="markdown-code"><code>{{ block.text }}</code></pre>
                 <p v-else class="markdown-paragraph">
                   <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
@@ -393,6 +493,13 @@ h1 {
   color: var(--app-ink-muted);
 }
 
+.chat-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
 .markdown-heading,
 .markdown-paragraph {
   margin: 0 0 8px;
@@ -424,6 +531,40 @@ h1 {
   background: #0e1b2d;
   color: #b9d4ff;
   font-size: 12px;
+}
+
+.markdown-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 8px 0 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+}
+
+.markdown-table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.markdown-table th,
+.markdown-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--app-border-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-table th {
+  color: var(--app-ink);
+  background: #f8fbff;
+  font-weight: 700;
+}
+
+.markdown-table tr:last-child td {
+  border-bottom: 0;
 }
 
 .chat-actions,
