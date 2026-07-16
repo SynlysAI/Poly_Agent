@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
@@ -17,6 +18,7 @@ from app.schemas.research_engine import (
     AlgorithmHandoffCreate,
     AlgorithmHandoffListData,
     AlgorithmHandoffValidationResult,
+    AlgorithmRequirementDocumentParseResult,
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
     AlgorithmPackage,
@@ -53,6 +55,7 @@ from app.schemas.research_engine import (
     WorkflowRun,
     WorkflowRunListData,
 )
+from app.services.algorithm_requirement_doc_service import AlgorithmRequirementDocService
 from app.services.algorithm_handoff_service import AlgorithmHandoffService
 from app.services.research_engine_algorithm_package_service import AlgorithmPackageService
 from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
@@ -65,6 +68,7 @@ orchestrator = ResearchEngineOrchestrator()
 readiness_service = ResearchEngineReadinessService()
 package_service = AlgorithmPackageService()
 handoff_service = AlgorithmHandoffService()
+requirement_doc_service = AlgorithmRequirementDocService()
 
 
 def _actor_user_id(current_user: dict[str, str] | None) -> str:
@@ -144,6 +148,38 @@ def download_algorithm_package_template() -> Response:
         media_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=polyagent-algorithm-template.zip"},
     )
+
+
+@router.get("/algorithm-requirement-docs/template")
+def download_algorithm_requirement_document_template() -> Response:
+    """下载需求文档模板。"""
+    filename, content = requirement_doc_service.download_template()
+    media_type = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if filename.endswith(".docx")
+        else "text/markdown; charset=utf-8"
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.post(
+    "/algorithm-requirement-docs:parse",
+    response_model=ApiResponse[AlgorithmRequirementDocumentParseResult],
+)
+async def parse_algorithm_requirement_document(
+    file: UploadFile = File(...),
+) -> ApiResponse[AlgorithmRequirementDocumentParseResult]:
+    """解析需求文档并生成接入草案。"""
+    content = await file.read()
+    data = requirement_doc_service.parse_document(
+        filename=file.filename or "algorithm-requirement.md",
+        content=content,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.get("/algorithm-package-examples", response_model=ApiResponse[AlgorithmPackageExampleListData])

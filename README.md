@@ -99,6 +99,7 @@
 
 - **认证体系**：与 AI4MS 门户共享账户体系，HMAC-SHA256 令牌 + 邀请码注册，支持门户 SSO 免登录
 - **产品内助手**：`/assistant/chat` 基于项目实时事实回答入口、算法清单、计算任务和 AutoResearch 审批问题，并返回结构化跳转动作
+- **LLM 模型管理**：`/llm/models` 提供 Codex 风格模型选择数据，支持科研问答、深度思考和报告生成的默认模型路由
 - **任务中心**：全局任务视图，跨模块追踪计算任务、优化任务和算法运行状态
 - **工具服务**：集成状态监控，支持外部服务（ComputeEngine、SpecLabOS 等）配置和健康检查
 - **数据库管理**：管理员面板，管理用户、邀请码和数据
@@ -358,18 +359,21 @@ Poly Agent 后端在本地 `APP_ENV=dev` 时会自动探测 `127.0.0.1:8200`；�
 ### 4. 生产部署
 
 ```bash
+# 准备环境文件
+cp deploy/toolchain/env/backend.env.template backend/.env
+cp deploy/toolchain/env/literature-rag.env.template services/literature-rag/.env
+
 # 构建前端
-cd frontend && npm run build
+npm --prefix frontend run build
 
-# 启动后端（自动托管前端静态文件，默认端口 5201）
-cd ../backend
-conda run -n poly_agent python -m uvicorn app.main:app --host 0.0.0.0 --port 5201
-
-# 或使用 PM2
+# 启动主后端和独立知识库实例
 pm2 start ecosystem.config.js
+pm2 start services/literature-rag/ecosystem.config.js
+pm2 save
 ```
 
-生产模式下直接访问 `http://<host>:5201` 即可，后端自动提供前端 SPA 页面。
+生产模式下直接访问 `http://<host>:5201` 即可，后端自动提供前端 SPA 页面。  
+知识库服务独立运行，Poly Agent 只连接本次部署的专用 `literature-rag` 实例，不改动共享焊接/稀土/表面处理数据。
 
 ## 认证体系
 

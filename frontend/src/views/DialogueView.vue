@@ -2,16 +2,21 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ChatLineRound, Loading, Promotion } from '@element-plus/icons-vue'
+import { ChatLineRound, Loading, Promotion, Setting } from '@element-plus/icons-vue'
 
-import { chatWithAssistant, getApiErrorMessage } from '../api/polyAgentApi'
+import { getApiErrorMessage, getLlmModels, streamAssistantChat } from '../api/polyAgentApi'
+import LlmModelSelect from '../components/LlmModelSelect.vue'
+import { buildSelectableLlmModels } from '../utils/llmModels'
 
 const route = useRoute()
 const router = useRouter()
 const bodyRef = ref(null)
 const inputText = ref('')
 const sending = ref(false)
+const modelLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
+const llmCatalog = ref({ providers: [], routing: {} })
+const selectedModelKey = ref('')
 
 const messages = ref([
   {
@@ -26,8 +31,16 @@ const messages = ref([
 const chatModeOptions = [
   { label: '科研问答', value: 'qa' },
   { label: '深度思考', value: 'deep' },
-  { label: '模型管理', value: 'model' },
 ]
+
+const selectableModels = computed(() =>
+  buildSelectableLlmModels(llmCatalog.value, {
+    dedupeByModelId: true,
+    preferredPurpose: routePurpose(),
+  }),
+)
+
+const selectedModel = computed(() => selectableModels.value.find((item) => item.key === selectedModelKey.value) || null)
 
 const currentSuggestions = computed(() => {
   const latestAssistant = [...messages.value].reverse().find((item) => item.role === 'assistant')
@@ -61,11 +74,45 @@ function normalizeMode(value) {
 }
 
 function cleanInitialQuery() {
-  if (!route.query.prompt && !route.query.mode) return
+  if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId) return
   const query = { ...route.query }
   delete query.prompt
   delete query.mode
+  delete query.providerId
+  delete query.modelId
   router.replace({ path: route.path, query })
+}
+
+function routePurpose() {
+  return chatMode.value === 'deep' ? 'deep' : 'qa'
+}
+
+function selectDefaultModelForMode(preferred = {}) {
+  const preferredKey = preferred.providerId && preferred.modelId ? `${preferred.providerId}::${preferred.modelId}` : ''
+  if (preferredKey && selectableModels.value.some((item) => item.key === preferredKey)) {
+    selectedModelKey.value = preferredKey
+    return
+  }
+  const purpose = routePurpose()
+  const route = llmCatalog.value.routing?.[purpose]
+  const key = route?.provider_id && route?.model_id ? `${route.provider_id}::${route.model_id}` : ''
+  if (key && selectableModels.value.some((item) => item.key === key)) {
+    selectedModelKey.value = key
+    return
+  }
+  selectedModelKey.value = selectableModels.value[0]?.key || ''
+}
+
+async function loadLlmModels(preferred = {}) {
+  modelLoading.value = true
+  try {
+    llmCatalog.value = await getLlmModels()
+    selectDefaultModelForMode(preferred)
+  } catch (error) {
+    ElMessage.warning(`模型列表加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    modelLoading.value = false
+  }
 }
 
 async function sendMessage() {
@@ -76,36 +123,113 @@ async function sendPrompt(prompt) {
   const text = String(prompt || '').trim()
   if (!text || sending.value) return
   messages.value.push({ role: 'user', content: text })
+  const requestMessages = messages.value.map((message) => ({ role: message.role, content: message.content }))
+  const assistantMessage = {
+    role: 'assistant',
+    content: '',
+    reasoning_summary: [],
+    actions: [],
+    references: [],
+    suggested_questions: [],
+    answer_mode: '',
+    answer_scope: '',
+    retrieval_status: '',
+    stream_status: '准备回答...',
+    stream_stage: 'queued',
+    streaming: true,
+  }
+  messages.value.push(assistantMessage)
+  const assistantIndex = messages.value.length - 1
   inputText.value = ''
   sending.value = true
   scrollToBottom()
+  let streamErrorMessage = ''
   try {
-    const data = await chatWithAssistant({
-      messages: messages.value.map((message) => ({ role: message.role, content: message.content })),
-      context: {
-        current_route: router.currentRoute.value.fullPath,
-        page: 'dialogue',
-        mode: chatMode.value,
+    await streamAssistantChat(
+      {
+        messages: requestMessages,
+        context: {
+          current_route: router.currentRoute.value.fullPath,
+          page: 'dialogue',
+          mode: chatMode.value,
+          model: selectedModel.value
+            ? { providerId: selectedModel.value.providerId, modelId: selectedModel.value.modelId }
+            : null,
+        },
       },
-    })
-    messages.value.push({
-      role: 'assistant',
-      content: data.content || '抱歉，未能获得有效回复。',
-      actions: data.actions || [],
-      references: data.references || [],
-      suggested_questions: data.suggested_questions || [],
-      answer_mode: data.answer_mode || '',
-      answer_scope: data.answer_scope || '',
-      retrieval_status: data.retrieval_status || '',
-    })
+      (event) => {
+        const errorMessage = applyAssistantStreamEvent(assistantIndex, event)
+        if (errorMessage) streamErrorMessage = errorMessage
+        scrollToBottom()
+      },
+    )
+    if (streamErrorMessage) ElMessage.error(`对话失败：${streamErrorMessage}`)
   } catch (error) {
     const message = getApiErrorMessage(error)
-    messages.value.push({ role: 'assistant', content: `对话出错：${message}` })
+    Object.assign(messages.value[assistantIndex], {
+      content: `对话出错：${message}`,
+      stream_status: '',
+      streaming: false,
+    })
     ElMessage.error(`对话失败：${message}`)
   } finally {
+    if (messages.value[assistantIndex]) {
+      messages.value[assistantIndex].streaming = false
+      messages.value[assistantIndex].stream_status = ''
+    }
     sending.value = false
     scrollToBottom()
   }
+}
+
+function applyAssistantStreamEvent(index, event) {
+  const target = messages.value[index]
+  if (!target || !event) return ''
+  if (event.type === 'status') {
+    target.stream_status = event.message || ''
+    target.stream_stage = event.stage || ''
+    return ''
+  }
+  if (event.type === 'evidence') {
+    target.retrieval_status = event.status || target.retrieval_status
+    target.stream_status = event.message || target.stream_status
+    if (Array.isArray(event.references) && event.references.length) target.references = event.references
+    return ''
+  }
+  if (event.type === 'reasoning_summary_delta') {
+    const item = String(event.item || '').trim()
+    if (item && !target.reasoning_summary.includes(item)) target.reasoning_summary.push(item)
+    return ''
+  }
+  if (event.type === 'answer_delta') {
+    target.content += event.delta || ''
+    return ''
+  }
+  if (event.type === 'final') {
+    const data = event.data || {}
+    Object.assign(target, {
+      content: data.content || target.content || '抱歉，未能获得有效回复。',
+      reasoning_summary: data.reasoning_summary || target.reasoning_summary || [],
+      actions: data.actions || [],
+      references: data.references || target.references || [],
+      suggested_questions: data.suggested_questions || [],
+      answer_mode: data.answer_mode || '',
+      answer_scope: data.answer_scope || '',
+      retrieval_status: data.retrieval_status || target.retrieval_status || '',
+      stream_status: '',
+      stream_stage: '',
+      streaming: false,
+    })
+    return ''
+  }
+  if (event.type === 'error') {
+    const message = event.message || '流式对话失败'
+    target.content = target.content || `对话出错：${message}`
+    target.stream_status = ''
+    target.streaming = false
+    return message
+  }
+  return ''
 }
 
 function scrollToBottom() {
@@ -116,6 +240,10 @@ function scrollToBottom() {
 
 function openAssistantAction(action) {
   if (action?.target) router.push(action.target)
+}
+
+function openModelManagement() {
+  router.push({ path: '/tools', query: { tab: 'llm-models' } })
 }
 
 function openAssistantReference(ref) {
@@ -256,9 +384,13 @@ function inlineSegments(text) {
 
 onMounted(() => {
   const initialPrompt = normalizeQueryString(route.query.prompt).trim()
+  const initialProviderId = normalizeQueryString(route.query.providerId).trim()
+  const initialModelId = normalizeQueryString(route.query.modelId).trim()
   chatMode.value = normalizeMode(route.query.mode)
   cleanInitialQuery()
-  if (initialPrompt) sendPrompt(initialPrompt)
+  loadLlmModels({ providerId: initialProviderId, modelId: initialModelId }).finally(() => {
+    if (initialPrompt) sendPrompt(initialPrompt)
+  })
 })
 </script>
 
@@ -269,7 +401,15 @@ onMounted(() => {
         <p class="dialogue-kicker">Poly Agent 问答</p>
         <h1>科研任务交互问答</h1>
       </div>
-      <el-segmented v-model="chatMode" :options="chatModeOptions" />
+      <div class="dialogue-controls">
+        <LlmModelSelect
+          v-model="selectedModelKey"
+          :models="selectableModels"
+          :loading="modelLoading"
+        />
+        <el-segmented v-model="chatMode" :options="chatModeOptions" @change="() => selectDefaultModelForMode()" />
+        <el-button text type="primary" :icon="Setting" @click="openModelManagement">模型管理</el-button>
+      </div>
     </header>
 
     <main ref="bodyRef" class="dialogue-body" aria-live="polite">
@@ -282,14 +422,25 @@ onMounted(() => {
         >
           <div class="chat-bubble">
             <div class="chat-bubble-text">
-              <div v-if="msg.answer_mode || msg.retrieval_status" class="chat-meta">
+              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status" class="chat-meta">
                 <el-tag v-if="msg.answer_mode" size="small" effect="plain" type="info">
                   {{ answerModeLabelMap[msg.answer_mode] || msg.answer_mode }}
                 </el-tag>
                 <el-tag v-if="msg.retrieval_status" size="small" effect="plain" type="success">
                   {{ retrievalStatusLabelMap[msg.retrieval_status] || msg.retrieval_status }}
                 </el-tag>
+                <el-tag v-if="msg.stream_status" size="small" effect="plain" type="warning">
+                  {{ msg.stream_status }}
+                </el-tag>
               </div>
+              <details v-if="msg.reasoning_summary?.length" class="reasoning-summary">
+                <summary>推理摘要</summary>
+                <ol>
+                  <li v-for="(item, itemIdx) in msg.reasoning_summary" :key="`${idx}-reasoning-${itemIdx}`">
+                    {{ item }}
+                  </li>
+                </ol>
+              </details>
               <template v-for="(block, blockIdx) in markdownBlocks(msg.content)" :key="blockIdx">
                 <h2 v-if="block.type === 'heading'" class="markdown-heading">
                   <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
@@ -364,12 +515,6 @@ onMounted(() => {
             </div>
           </div>
         </div>
-        <div v-if="sending" class="chat-message chat-message-assistant">
-          <div class="chat-bubble chat-bubble-loading">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>思考中...</span>
-          </div>
-        </div>
       </div>
     </main>
 
@@ -421,6 +566,14 @@ onMounted(() => {
   justify-content: space-between;
   gap: 16px;
   min-height: 48px;
+}
+
+.dialogue-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .dialogue-kicker {
@@ -486,18 +639,34 @@ h1 {
   border-color: var(--app-primary);
 }
 
-.chat-bubble-loading {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--app-ink-muted);
-}
-
 .chat-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
+}
+
+.reasoning-summary {
+  margin: 0 0 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.reasoning-summary summary {
+  padding: 8px 10px;
+  color: var(--app-ink);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.reasoning-summary ol {
+  margin: 0;
+  padding: 0 12px 10px 28px;
+  color: var(--app-ink-body);
+  font-size: 13px;
+  line-height: 1.7;
 }
 
 .markdown-heading,

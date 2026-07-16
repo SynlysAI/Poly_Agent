@@ -1,7 +1,7 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Check, Delete, Download, Plus, UploadFilled } from '@element-plus/icons-vue'
+import { Box, Check, Delete, Download, Plus, UploadFilled } from '@element-plus/icons-vue'
 
 import {
   activateAlgorithmVersion,
@@ -25,6 +25,23 @@ const requirementsFiles = ref([])
 const zipFiles = ref([])
 const currentPackage = ref(null)
 const expandedAdvanced = ref([])
+
+const uploadModeOptions = [
+  {
+    value: 'script',
+    title: 'Python 脚本自动打包',
+    description: '上传源码、依赖和样例输入，平台生成标准 ZIP 并完成校验部署。',
+    icon: UploadFilled,
+    tags: ['推荐', '自动生成契约', '适合首次接入'],
+  },
+  {
+    value: 'zip',
+    title: '标准 ZIP 直接上传',
+    description: '适合已经按平台规范准备好的模型包，需包含 polyagent.algorithm.yaml。',
+    icon: Box,
+    tags: ['已有接入包', '保留目录结构'],
+  },
+]
 
 const form = reactive({
   algorithm_id: 'vertical_tg_predictor',
@@ -90,6 +107,11 @@ const processSteps = computed(() => {
     { title: '构建部署', done: ['deployed_staging', 'active'].includes(status), text: currentPackage.value?.deployment_logs?.[0] || currentPackage.value?.build_logs?.at(-1) || '构建运行环境并部署版本' },
     { title: '激活可用', done: status === 'active', text: status === 'active' ? '版本已进入模型中心' : '等待激活' },
   ]
+})
+
+const uploadStepTitle = computed(() => {
+  const titles = ['选择上传方式', uploadMode.value === 'zip' ? '上传标准 ZIP' : '填写信息并上传文件', '校验部署', '完成']
+  return titles[currentStep.value] || titles[0]
 })
 
 function schemaFromRows(rows) {
@@ -177,6 +199,26 @@ function validateBeforeSubmit() {
   return ''
 }
 
+function goNext() {
+  if (currentStep.value === 0) {
+    currentStep.value = 1
+    return
+  }
+  if (currentStep.value === 1) {
+    const warning = validateBeforeSubmit()
+    if (warning) {
+      ElMessage.warning(warning)
+      return
+    }
+    currentStep.value = 2
+  }
+}
+
+function goPrevious() {
+  if (loading.value || currentStep.value === 0) return
+  currentStep.value -= 1
+}
+
 async function finalizePackage(pkg) {
   let current = pkg
   if (current.status !== 'validated') current = await validateAlgorithmPackage(current.package_id)
@@ -222,6 +264,7 @@ async function submit() {
     }
     currentPackage.value = pkg
     await finalizePackage(pkg)
+    currentStep.value = 3
     emit('changed', currentPackage.value)
     ElMessage.success('模型版本已完成校验、部署并激活')
   } catch (error) {
@@ -250,37 +293,54 @@ function viewModelDetail() {
     <div class="wizard-shell">
       <div class="wizard-head">
         <div>
-          <p class="wizard-eyebrow">模型上传向导</p>
-          <h2>用最少信息发布一个垂类预测模型</h2>
-          <p>普通用户只需要模型信息、Python 文件和样例输入；契约和入口函数可在高级配置中调整。</p>
+          <p class="wizard-eyebrow">高级导入</p>
+          <h2>{{ uploadStepTitle }}</h2>
+          <p>Python 脚本会由平台打包为标准 ZIP；已有完整包时可直接上传标准 ZIP。</p>
         </div>
         <el-button :icon="Download" @click="downloadTemplate">下载标准模板</el-button>
       </div>
       <el-steps :active="currentStep" finish-status="success" simple>
         <el-step title="选择方式" />
-        <el-step title="填写信息" />
+        <el-step title="上传内容" />
         <el-step title="校验部署" />
+        <el-step title="完成" />
       </el-steps>
     </div>
 
-    <section class="wizard-section">
+    <section v-if="currentStep === 0" class="wizard-section step-card">
       <div class="section-heading">
         <div>
-          <h3>1. 选择上传方式</h3>
-          <p>推荐直接上传 Python 脚本，平台会打包为标准 ZIP；高级用户也可以上传完整 ZIP。</p>
+          <h3>选择上传方式</h3>
+          <p>根据手头材料选择接入路径。首次接入建议使用 Python 脚本自动打包。</p>
         </div>
       </div>
-      <el-segmented
-        v-model="uploadMode"
-        :options="[{ label: 'Python 脚本', value: 'script' }, { label: '标准 ZIP', value: 'zip' }]"
-        @change="currentStep = 1"
-      />
+      <div class="upload-mode-grid" role="radiogroup" aria-label="选择上传方式">
+        <button
+          v-for="option in uploadModeOptions"
+          :key="option.value"
+          type="button"
+          class="upload-mode-card"
+          :class="{ active: uploadMode === option.value }"
+          role="radio"
+          :aria-checked="uploadMode === option.value"
+          @click="uploadMode = option.value"
+        >
+          <span class="mode-icon"><el-icon><component :is="option.icon" /></el-icon></span>
+          <span class="mode-copy">
+            <strong>{{ option.title }}</strong>
+            <small>{{ option.description }}</small>
+          </span>
+          <span class="mode-tags">
+            <el-tag v-for="tag in option.tags" :key="tag" size="small" effect="plain">{{ tag }}</el-tag>
+          </span>
+        </button>
+      </div>
     </section>
 
-    <section class="wizard-section">
+    <section v-else-if="currentStep === 1" class="wizard-section step-card">
       <div class="section-heading">
         <div>
-          <h3>2. 填写必要信息</h3>
+          <h3>{{ uploadMode === 'zip' ? '上传标准 ZIP' : '填写必要信息' }}</h3>
           <p>{{ uploadMode === 'zip' ? 'ZIP 内需要包含 polyagent.algorithm.yaml。' : '这几项会生成模型卡片、版本记录和测试表单。' }}</p>
         </div>
       </div>
@@ -371,13 +431,33 @@ function viewModelDetail() {
       </section>
     </section>
 
-    <section class="wizard-section">
+    <section v-else-if="currentStep === 2" class="wizard-section step-card">
       <div class="submit-row">
         <div>
-          <h3>3. 校验、部署并激活</h3>
-          <p>提交后平台会自动打包、校验、构建、部署并激活版本。</p>
+          <h3>校验、部署并激活</h3>
+          <p>确认无误后提交，平台会自动打包、校验、构建、部署并激活版本。</p>
         </div>
-        <el-button type="primary" :loading="loading" @click="submit">校验部署</el-button>
+      </div>
+      <div class="deploy-summary">
+        <span>上传方式：{{ uploadMode === 'zip' ? '标准 ZIP' : 'Python 脚本' }}</span>
+        <span v-if="uploadMode === 'script'">模型：{{ form.name }} / {{ form.version }}</span>
+        <span v-if="uploadMode === 'zip'">文件：{{ zipFiles[0]?.name || '已选择 ZIP' }}</span>
+      </div>
+      <div v-if="loading || currentPackage" class="validation-results">
+        <div v-for="step in processSteps" :key="step.title" :class="{ done: step.done }">
+          <el-icon><Check /></el-icon>
+          <strong>{{ step.title }}</strong>
+          <span>{{ step.text }}</span>
+        </div>
+      </div>
+    </section>
+
+    <section v-else class="wizard-section step-card">
+      <div class="submit-row">
+        <div>
+          <h3>完成</h3>
+          <p>模型版本已完成校验、部署并激活，可进入详情页测试或继续上传新版本。</p>
+        </div>
       </div>
       <div class="validation-results">
         <div v-for="step in processSteps" :key="step.title" :class="{ done: step.done }">
@@ -398,6 +478,13 @@ function viewModelDetail() {
         </div>
       </div>
     </section>
+
+    <div class="wizard-footer">
+      <el-button :disabled="currentStep === 0 || loading || currentStep === 3" @click="goPrevious">上一步</el-button>
+      <el-button v-if="currentStep < 2" type="primary" @click="goNext">下一步</el-button>
+      <el-button v-else-if="currentStep === 2" type="primary" :loading="loading" @click="submit">校验部署</el-button>
+      <el-button v-else type="primary" @click="viewModelDetail">查看模型详情</el-button>
+    </div>
   </div>
 </template>
 
@@ -405,6 +492,7 @@ function viewModelDetail() {
 .upload-workspace { display: grid; gap: 16px; }
 .wizard-shell, .wizard-section { border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: #fff; padding: 16px; }
 .wizard-head, .section-heading, .submit-row, .success-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.step-card { min-height: 260px; }
 .wizard-eyebrow { margin: 0 0 4px; color: var(--app-primary-active); font-size: 12px; font-weight: 700; }
 h2, h3 { margin: 0; color: var(--app-ink); letter-spacing: 0; }
 h2 { font-size: 22px; line-height: 1.25; }
@@ -422,9 +510,20 @@ h3 { font-size: 15px; }
 .advanced-title { color: var(--app-ink); font-weight: 700; }
 .schema-section, .contract-preview { border-top: 1px solid var(--app-border-soft); padding-top: 16px; margin-top: 14px; }
 .section-heading { margin-bottom: 10px; }
+.upload-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; max-width: 920px; }
+.upload-mode-card { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px 12px; align-items: start; padding: 14px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-md); background: #fff; color: inherit; text-align: left; cursor: pointer; transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease; }
+.upload-mode-card:hover, .upload-mode-card:focus-visible { border-color: #3b82f6; box-shadow: 0 2px 12px rgba(59, 130, 246, 0.1); outline: none; }
+.upload-mode-card.active { border-color: #3b82f6; background: #f8fbff; box-shadow: inset 0 0 0 1px #3b82f6; }
+.mode-icon { display: inline-grid; place-items: center; width: 42px; height: 42px; border-radius: var(--app-radius-sm); background: var(--app-primary-light); color: var(--app-primary-active); }
+.mode-copy { min-width: 0; display: grid; gap: 6px; }
+.mode-copy strong { color: var(--app-ink); font-size: 15px; line-height: 1.35; }
+.mode-copy small { color: var(--app-ink-muted); font-size: 12px; line-height: 1.5; }
+.mode-tags { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; }
 .range-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .contract-preview pre { margin: 0; max-height: 260px; overflow: auto; padding: 14px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #f8fafc; white-space: pre-wrap; }
 .zip-upload { max-width: 760px; margin-top: 8px; }
+.deploy-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.deploy-summary span { padding: 7px 10px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; color: var(--app-ink-body); font-size: 12px; overflow-wrap: anywhere; }
 .validation-results { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
 .validation-results div { min-width: 0; display: grid; grid-template-columns: 20px 1fr; gap: 4px 8px; padding: 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; }
 .validation-results .el-icon { grid-row: span 2; color: var(--app-ink-subtle); margin-top: 2px; }
@@ -434,9 +533,10 @@ h3 { font-size: 15px; }
 .validation-results span { color: var(--app-ink-muted); font-size: 12px; overflow-wrap: anywhere; }
 .package-status, .success-buttons { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .package-status { min-width: 0; color: var(--app-ink-body); }
+.wizard-footer { position: sticky; bottom: 14px; z-index: 2; display: flex; justify-content: flex-end; gap: 10px; padding: 12px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: rgba(255, 255, 255, 0.96); box-shadow: var(--app-card-shadow); }
 @media (max-width: 1100px) { .validation-results { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
-  .wizard-head, .section-heading, .submit-row, .success-actions { align-items: stretch; flex-direction: column; }
-  .simple-form-grid, .form-grid, .source-grid, .validation-results { grid-template-columns: 1fr; }
+  .wizard-head, .section-heading, .submit-row, .success-actions, .wizard-footer { align-items: stretch; flex-direction: column; }
+  .simple-form-grid, .form-grid, .source-grid, .validation-results, .upload-mode-grid { grid-template-columns: 1fr; }
 }
 </style>

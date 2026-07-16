@@ -37,6 +37,7 @@ class AssistantReference(BaseModel):
 
 class AssistantChatResponse(BaseModel):
     content: str
+    reasoning_summary: list[str] = Field(default_factory=list)
     actions: list[AssistantAction] = Field(default_factory=list)
     references: list[AssistantReference] = Field(default_factory=list)
     suggested_questions: list[str] = Field(default_factory=list)

@@ -180,6 +180,125 @@ class AlgorithmPackageApiTest(ComputationTestCase):
         super().setUp()
         self.base_url = "/api/v1/research-engine"
 
+    def test_requirement_document_template_download_and_parse(self) -> None:
+        template_resp = self.client.get(f"{self.base_url}/algorithm-requirement-docs/template")
+        self.assertEqual(template_resp.status_code, 200, template_resp.text)
+        self.assertEqual(
+            template_resp.headers["content-type"],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        self.assertIn("PolyAgent_%E6%A8%A1%E5%9E%8B%E6%95%B0%E6%8D%AE%E9%9B%86%E6%88%90%E9%9C%80%E6%B1%82%E6%94%B6%E9%9B%86_%E5%A1%AB%E5%86%99%E6%A8%A1%E6%9D%BF.docx", template_resp.headers["content-disposition"])
+        self.assertTrue(template_resp.content.startswith(b"PK"))
+
+        document = """---
+template_version: "0.1"
+algorithm_id: vertical_tg_predictor
+name: Polymer Tg Predictor
+version: 0.1.0
+description: 预测聚合物玻璃化转变温度。
+material_scope:
+  - universal
+requirements_hint:
+  - scikit-learn
+  - joblib
+input_schema:
+  fields:
+    smiles: string
+  required:
+    - smiles
+output_schema:
+  fields:
+    prediction: object
+  required:
+    - prediction
+sample_input:
+  smiles: C=C(F)F
+---
+
+# Poly Agent 需求文档
+
+## 目标
+预测聚合物玻璃化转变温度。
+"""
+        parse_resp = self.client.post(
+            f"{self.base_url}/algorithm-requirement-docs:parse",
+            files={"file": ("requirement.md", document.encode("utf-8"), "text/markdown")},
+        )
+        self.assertEqual(parse_resp.status_code, 200, parse_resp.text)
+        data = parse_resp.json()["data"]
+        self.assertEqual(data["source_filename"], "requirement.md")
+        self.assertEqual(data["draft"]["algorithm_id"], "vertical_tg_predictor")
+        self.assertEqual(data["draft"]["name"], "Polymer Tg Predictor")
+        self.assertEqual(data["draft"]["example_id"], "smiles_property_predictor")
+        self.assertEqual(data["draft"]["input_schema"]["fields"]["smiles"], "string")
+        self.assertEqual(data["draft"]["sample_input"]["smiles"], "C=C(F)F")
+        self.assertIn("owner_name", data["missing_fields"])
+        self.assertIn("owner_contact", data["missing_fields"])
+
+    def test_requirement_document_docx_parse(self) -> None:
+        document = self._build_requirement_docx(
+            paragraphs=[
+                "PolyAgent 模型与数据集成需求收集表",
+                "输入 JSON 示例：",
+                '{\n  "smiles": "C=C(F)F",\n  "temperature": 298\n}',
+                "输出 JSON 示例：",
+                '{\n  "prediction": 123.4,\n  "unit": "K"\n}',
+            ],
+            tables=[
+                [
+                    ["字段", "填写内容"],
+                    ["算法名称 / 代号", "Polymer Tg Predictor / vertical_tg_predictor"],
+                    ["负责人", "张三 / zhangsan@example.com"],
+                    ["算法功能介绍", "预测聚合物玻璃化转变温度。"],
+                    ["适用体系", "通用"],
+                    ["依赖（附 requirements.txt）", "scikit-learn, joblib"],
+                ],
+            ],
+        )
+        parse_resp = self.client.post(
+            f"{self.base_url}/algorithm-requirement-docs:parse",
+            files={
+                "file": (
+                    "requirement.docx",
+                    document,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+        self.assertEqual(parse_resp.status_code, 200, parse_resp.text)
+        data = parse_resp.json()["data"]
+        self.assertEqual(data["source_filename"], "requirement.docx")
+        self.assertEqual(data["draft"]["algorithm_id"], "vertical_tg_predictor")
+        self.assertEqual(data["draft"]["name"], "Polymer Tg Predictor")
+        self.assertEqual(data["draft"]["owner_contact"], "zhangsan@example.com")
+        self.assertEqual(data["draft"]["input_schema"]["fields"]["smiles"], "string")
+        self.assertEqual(data["draft"]["input_schema"]["fields"]["temperature"], "integer")
+        self.assertEqual(data["draft"]["output_schema"]["fields"]["prediction"], "number")
+        self.assertEqual(data["draft"]["sample_input"]["temperature"], 298)
+
+    @staticmethod
+    def _build_requirement_docx(*, paragraphs: list[str], tables: list[list[list[str]]]) -> bytes:
+        def text_nodes(value: str) -> str:
+            return "".join(f"<w:t>{line}</w:t>{'<w:br/>' if index < len(value.splitlines()) - 1 else ''}" for index, line in enumerate(value.splitlines()))
+
+        paragraph_xml = "".join(f"<w:p><w:r>{text_nodes(item)}</w:r></w:p>" for item in paragraphs)
+        table_xml = ""
+        for table in tables:
+            rows_xml = ""
+            for row in table:
+                cells_xml = "".join(f"<w:tc><w:p><w:r>{text_nodes(cell)}</w:r></w:p></w:tc>" for cell in row)
+                rows_xml += f"<w:tr>{cells_xml}</w:tr>"
+            table_xml += f"<w:tbl>{rows_xml}</w:tbl>"
+        document_xml = (
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f"<w:body>{paragraph_xml}{table_xml}</w:body></w:document>"
+        )
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("word/document.xml", document_xml)
+        return buffer.getvalue()
+
     def test_template_upload_validate_build_deploy_activate_and_run(self) -> None:
         """模板 ZIP 可完整进入 active，并被 AlgorithmRun 调用。"""
         template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")

@@ -38,6 +38,20 @@ docker compose --profile demo up --build
 Compose reads `.env.example` by default for validation. After creating `.env`, run with
 `LITERATURE_RAG_ENV_FILE=.env docker compose --profile demo up --build`.
 
+## Dedicated production instance
+
+For Poly_Agent production, run this service as an isolated instance with its own MongoDB / MinIO / Neo4j and a
+separate PM2 process group:
+
+```bash
+cp deploy/toolchain/env/literature-rag.env.template services/literature-rag/.env
+cd services/literature-rag
+pm2 start ecosystem.config.js
+```
+
+Point `LITERATURE_RAG_BASE_URL` from Poly_Agent to this dedicated instance. Keep the shared welding / rare-earth /
+surface-treatment corpus deployment untouched.
+
 Generate an auditable corpus manifest:
 
 ```bash

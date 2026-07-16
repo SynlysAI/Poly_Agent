@@ -23,7 +23,7 @@ const route = useRoute()
 const router = useRouter()
 
 const detailTabMap = { management: 'api', test: 'experience', runs: 'api' }
-const routeModes = new Set(['center', 'upload', 'handoff', 'detail'])
+const routeModes = new Set(['center', 'doc', 'upload', 'detail'])
 
 const activeMode = ref(normalizeMode(route.query.tab))
 const detailActiveTab = ref(normalizeDetailTab(route.query.tab))
@@ -38,6 +38,7 @@ const typeFilter = ref('')
 const materialFilter = ref('')
 const selectedAlgorithmId = ref(normalizeQueryString(route.query.algorithm_id))
 const selectedHandoffId = ref(normalizeQueryString(route.query.handoff_id))
+const docEntryMode = ref(normalizeQueryString(route.query.doc_mode) === 'download' ? 'download' : 'upload')
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === selectedAlgorithmId.value) || null)
 const selectedVersions = computed(() => versionMap.value[selectedAlgorithmId.value] || [])
@@ -95,8 +96,9 @@ function normalizeQueryString(value) {
 function normalizeMode(tab) {
   const value = normalizeQueryString(tab)
   if (value === 'upload') return 'upload'
+  if (value === 'doc' || value === 'handoff') return 'doc'
   if (value === 'detail' || detailTabMap[value]) return 'detail'
-  return routeModes.has(value) ? value : 'center'
+  return routeModes.has(value) ? value : 'doc'
 }
 
 function normalizeDetailTab(tab) {
@@ -107,21 +109,26 @@ function normalizeDetailTab(tab) {
 function syncRoute() {
   const query = { ...route.query }
   if (activeMode.value === 'center') {
-    delete query.tab
+    query.tab = 'center'
     delete query.algorithm_id
     delete query.handoff_id
+    delete query.doc_mode
+  } else if (activeMode.value === 'doc') {
+    query.tab = 'doc'
+    delete query.algorithm_id
+    if (selectedHandoffId.value) query.handoff_id = selectedHandoffId.value
+    else delete query.handoff_id
+    query.doc_mode = docEntryMode.value
   } else if (activeMode.value === 'upload') {
     query.tab = 'upload'
     delete query.algorithm_id
     delete query.handoff_id
-  } else if (activeMode.value === 'handoff') {
-    query.tab = 'handoff'
-    delete query.algorithm_id
-    if (selectedHandoffId.value) query.handoff_id = selectedHandoffId.value
+    delete query.doc_mode
   } else {
     query.tab = 'detail'
     if (selectedAlgorithmId.value) query.algorithm_id = selectedAlgorithmId.value
     delete query.handoff_id
+    delete query.doc_mode
   }
   if (JSON.stringify(query) !== JSON.stringify(route.query)) router.replace({ query })
 }
@@ -132,11 +139,12 @@ watch(
     activeMode.value = normalizeMode(query.tab)
     detailActiveTab.value = normalizeDetailTab(query.tab)
     selectedAlgorithmId.value = normalizeQueryString(query.algorithm_id) || selectedAlgorithmId.value
-    selectedHandoffId.value = normalizeQueryString(query.handoff_id) || selectedHandoffId.value
+    selectedHandoffId.value = normalizeQueryString(query.handoff_id)
+    docEntryMode.value = normalizeQueryString(query.doc_mode) === 'download' ? 'download' : 'upload'
   },
 )
 
-watch([activeMode, selectedAlgorithmId, selectedHandoffId], syncRoute)
+watch([activeMode, selectedAlgorithmId, selectedHandoffId, docEntryMode], syncRoute)
 
 async function loadData() {
   loading.value = true
@@ -187,8 +195,10 @@ function openUpload() {
   activeMode.value = 'upload'
 }
 
-function openHandoff() {
-  activeMode.value = 'handoff'
+function openDoc(mode = 'upload') {
+  docEntryMode.value = mode
+  selectedHandoffId.value = ''
+  activeMode.value = 'doc'
 }
 
 function openCenter() {
@@ -243,40 +253,56 @@ onMounted(() => {
 
 <template>
   <div class="vertical-prediction-page">
-    <header class="model-page-hero">
+    <template v-if="activeMode === 'center'">
+      <header class="model-page-hero">
       <div>
         <p class="eyebrow">任务提交 / 预测模型</p>
         <h1>垂类预测模型</h1>
-        <p>像管理智能体一样管理材料预测模型：发布、体验、版本治理和运行追溯集中在一个入口。</p>
+        <p>先走需求文档，再进入草案、校验和部署；高级脚本和 ZIP 作为兼容入口。</p>
       </div>
-    <div class="hero-actions">
-        <el-button :icon="Document" @click="openHandoff">算法接入助手</el-button>
+      <div class="hero-actions">
         <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
       </div>
-    </header>
+      </header>
 
-    <section class="status-band" v-loading="loading" aria-label="垂类预测模型状态摘要">
-      <div v-for="item in statusItems" :key="item.label" class="status-item">
-        <el-icon><component :is="item.icon" /></el-icon>
-        <span>{{ item.label }}</span>
-        <strong>{{ item.value }}</strong>
+      <section class="entry-band" v-loading="loading" aria-label="算法接入入口">
+        <button class="entry-card" type="button" @click="openDoc('upload')">
+          <span>有需求文档</span>
+          <strong>上传文档，系统生成草案</strong>
+        </button>
+        <button class="entry-card" type="button" @click="openDoc('download')">
+          <span>没有需求文档</span>
+          <strong>先下载模板，再填写上传</strong>
+        </button>
+        <button class="entry-card subtle" type="button" @click="openUpload">
+          <span>更多方式</span>
+          <strong>Python 脚本 / 标准 ZIP</strong>
+        </button>
+      </section>
+
+      <section class="status-band" v-loading="loading" aria-label="垂类预测模型状态摘要">
+        <div v-for="item in statusItems" :key="item.label" class="status-item">
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ item.label }}</span>
+          <strong>{{ item.value }}</strong>
+        </div>
+      </section>
+    </template>
+
+    <template v-if="activeMode === 'doc'">
+      <div class="subnav-row">
+        <el-button text @click="openCenter">返回模型中心</el-button>
+        <el-button text type="primary" @click="openUpload">高级导入</el-button>
       </div>
-    </section>
+      <AlgorithmHandoffPanel :entry-mode="docEntryMode" :initial-handoff-id="selectedHandoffId" @changed="handleChanged" />
+    </template>
 
     <template v-if="activeMode === 'upload'">
       <div class="subnav-row">
         <el-button text @click="openCenter">返回模型中心</el-button>
-        <el-button text type="primary" @click="openHandoff">算法接入助手</el-button>
+        <el-button text type="primary" @click="openDoc('upload')">需求文档</el-button>
       </div>
       <AlgorithmUploadPanel @changed="handleChanged" @view-detail="openDetail" />
-    </template>
-
-    <template v-else-if="activeMode === 'handoff'">
-      <div class="subnav-row">
-        <el-button text @click="openCenter">返回模型中心</el-button>
-        <el-button text type="primary" @click="openUpload">标准上传部署</el-button>
-      </div>
-      <AlgorithmHandoffPanel :initial-handoff-id="selectedHandoffId" @changed="handleChanged" />
     </template>
 
     <template v-else-if="activeMode === 'detail' && selectedAlgorithm">
@@ -365,7 +391,7 @@ onMounted(() => {
       </section>
     </template>
 
-    <template v-else>
+    <template v-else-if="activeMode === 'center'">
       <div class="model-center-layout">
         <aside class="filter-panel">
           <div class="filter-title">筛选</div>
@@ -400,8 +426,8 @@ onMounted(() => {
               <p>共 {{ filteredAlgorithms.length }} 个可管理模型</p>
             </div>
             <div class="list-actions">
-              <el-button :icon="Document" @click="openHandoff">创建接入任务</el-button>
-              <el-button type="primary" :icon="UploadFilled" @click="openUpload">上传新模型</el-button>
+              <el-button :icon="Document" @click="openDoc('upload')">需求文档</el-button>
+              <el-button type="primary" :icon="UploadFilled" @click="openUpload">高级导入</el-button>
             </div>
           </div>
 
@@ -430,10 +456,10 @@ onMounted(() => {
           <div v-else class="empty-models">
             <el-icon><UploadFilled /></el-icon>
             <strong>还没有符合条件的垂类预测模型</strong>
-            <span>上传 Python 脚本或标准 ZIP 后，模型会出现在这里。</span>
+            <span>先走需求文档或高级导入，模型会出现在这里。</span>
             <div class="empty-actions">
-              <el-button @click="openHandoff">创建接入任务</el-button>
-              <el-button type="primary" @click="openUpload">上传第一个模型</el-button>
+              <el-button @click="openDoc('download')">需求文档</el-button>
+              <el-button type="primary" @click="openUpload">高级导入</el-button>
             </div>
           </div>
         </main>
@@ -458,6 +484,13 @@ h2 { font-size: 20px; line-height: 1.3; }
 h3 { font-size: 15px; }
 .model-page-hero p:last-child, .list-head p, .detail-main p { margin: 7px 0 0; color: var(--app-ink-muted); font-size: 14px; line-height: 1.6; }
 .hero-actions, .detail-actions, .subnav-row, .list-actions, .empty-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.entry-band { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.entry-card { min-width: 0; display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: #fff; color: inherit; text-align: left; cursor: pointer; transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease; }
+.entry-card:hover { border-color: #bfdbfe; box-shadow: 0 10px 22px rgba(37, 99, 235, 0.09); transform: translateY(-1px); }
+.entry-card:focus-visible { outline: 3px solid var(--app-primary-light); outline-offset: 2px; }
+.entry-card span { color: var(--app-ink-muted); font-size: 12px; }
+.entry-card strong { color: var(--app-ink); font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+.entry-card.subtle { background: #f8fbff; }
 .status-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
 .status-item { min-width: 0; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; padding: 12px 14px; border-right: 1px solid var(--app-border-soft); }
 .status-item:last-child { border-right: 0; }
@@ -512,6 +545,7 @@ h3 { font-size: 15px; }
 @media (max-width: 1180px) { .model-card-grid, .info-grid { grid-template-columns: 1fr; } }
 @media (max-width: 900px) {
   .model-page-hero, .list-head, .detail-banner { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
+  .entry-band { grid-template-columns: 1fr; }
   .status-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .status-item:nth-child(2) { border-right: 0; }
   .status-item:nth-child(-n+2) { border-bottom: 1px solid var(--app-border-soft); }

@@ -23,6 +23,7 @@ COLLECTION_NAMES = [
     "optimization_suggestions",
     "optimization_observations",
     "service_integrations",
+    "llm_routing_configs",
     "audit_events",
     "research_problem_specs",
     "execution_decisions",
