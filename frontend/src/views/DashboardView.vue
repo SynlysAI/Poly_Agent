@@ -9,11 +9,13 @@ import {
 import {
   getApiErrorMessage,
   getIntegrationStatus,
+  getLlmModels,
   listAlgorithmRuns,
   listCampaigns,
   listComputations,
   listResearchRuns,
 } from '../api/polyAgentApi'
+import LlmModelSelect from '../components/LlmModelSelect.vue'
 import {
   isResearchEngineContainerCampaign,
   mapAlgorithmRunToGlobalTask,
@@ -21,6 +23,7 @@ import {
   mapComputationRunToGlobalTask,
   mapResearchRunToGlobalTask,
 } from '../tasks/taskModules'
+import { buildSelectableLlmModels } from '../utils/llmModels'
 
 const router = useRouter()
 const loading = ref(false)
@@ -36,6 +39,9 @@ const algorithmRunsTotal = ref(0)
 const researchRunsTotal = ref(0)
 const chatMode = ref('qa')
 const chatInput = ref('')
+const modelLoading = ref(false)
+const llmCatalog = ref({ providers: [], routing: {} })
+const selectedModelKey = ref('')
 
 const dashboardViewOptions = [
   { label: '问答', value: 'chat' },
@@ -45,7 +51,6 @@ const dashboardViewOptions = [
 const chatModeOptions = [
   { label: '科研问答', value: 'qa' },
   { label: '深度思考', value: 'deep' },
-  { label: '模型管理', value: 'model' },
 ]
 
 const homeGreetings = {
@@ -100,6 +105,15 @@ function getTimeGreeting(date = new Date()) {
 const homeGreeting = ref(getTimeGreeting())
 
 const currentSuggestions = computed(() => homeGreeting.value.suggestions)
+
+const selectableModels = computed(() =>
+  buildSelectableLlmModels(llmCatalog.value, {
+    dedupeByModelId: true,
+    preferredPurpose: routePurpose(),
+  }),
+)
+
+const selectedModel = computed(() => selectableModels.value.find((item) => item.key === selectedModelKey.value) || null)
 
 const stats = computed(() => {
   const visibleCampaignRows = campaignRows.value.filter((item) => !isResearchEngineContainerCampaign(item))
@@ -212,16 +226,42 @@ function goToTask(task) {
   if (task.route) router.push(task.route)
 }
 
+function routePurpose() {
+  return chatMode.value === 'deep' ? 'deep' : 'qa'
+}
+
+function selectDefaultModelForMode() {
+  if (chatMode.value === 'model') return
+  const purpose = routePurpose()
+  const route = llmCatalog.value.routing?.[purpose]
+  const key = route?.provider_id && route?.model_id ? `${route.provider_id}::${route.model_id}` : ''
+  if (key && selectableModels.value.some((item) => item.key === key)) {
+    selectedModelKey.value = key
+    return
+  }
+  selectedModelKey.value = selectableModels.value[0]?.key || ''
+}
+
 function openDialogue(prompt) {
   const text = String(prompt || chatInput.value).trim()
+  if (chatMode.value === 'model') {
+    router.push({ path: '/tools', query: { tab: 'llm-models' } })
+    return
+  }
   if (!text) return
   router.push({
     path: '/dialogue',
     query: {
       prompt: text,
       mode: chatMode.value,
+      providerId: selectedModel.value?.providerId || undefined,
+      modelId: selectedModel.value?.modelId || undefined,
     },
   })
+}
+
+function openModelManagement() {
+  router.push({ path: '/tools', query: { tab: 'llm-models' } })
 }
 
 function handleChatKeydown(event) {
@@ -257,8 +297,21 @@ async function loadDashboardData() {
   }
 }
 
+async function loadLlmCatalog() {
+  modelLoading.value = true
+  try {
+    llmCatalog.value = await getLlmModels()
+    selectDefaultModelForMode()
+  } catch (error) {
+    ElMessage.warning(`模型列表加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    modelLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadDashboardData()
+  loadLlmCatalog()
 })
 </script>
 
@@ -288,15 +341,23 @@ onMounted(() => {
           />
         </div>
         <div class="composer-toolbar">
-          <el-segmented v-model="chatMode" :options="chatModeOptions" />
-          <el-button
-            type="primary"
-            :icon="Promotion"
-            :disabled="!chatInput.trim()"
-            @click="openDialogue()"
-          >
-            发送
-          </el-button>
+          <el-segmented v-model="chatMode" :options="chatModeOptions" @change="selectDefaultModelForMode" />
+          <div class="composer-actions">
+            <LlmModelSelect
+              v-model="selectedModelKey"
+              :models="selectableModels"
+              :loading="modelLoading"
+            />
+            <el-button text type="primary" :icon="SetUp" @click="openModelManagement">模型管理</el-button>
+            <el-button
+              type="primary"
+              :icon="Promotion"
+              :disabled="!chatInput.trim()"
+              @click="openDialogue()"
+            >
+              发送
+            </el-button>
+          </div>
         </div>
       </div>
 
@@ -428,6 +489,7 @@ h2 { font-size: 16px; line-height: 1.35; }
 .composer-mark { margin-top: 8px; color: var(--app-primary-active); font-size: 20px; }
 .composer-input :deep(.el-textarea__inner) { min-height: 116px !important; border: 0; box-shadow: none; font-size: 15px; line-height: 1.7; }
 .composer-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 10px; border-top: 1px solid var(--app-border-soft); }
+.composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
 .suggestion-row { width: min(820px, 100%); display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .suggestion-row button { max-width: 100%; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-pill); background: rgba(255, 255, 255, 0.86); color: var(--app-ink-body); padding: 8px 12px; font: inherit; font-size: 13px; cursor: pointer; }
 .suggestion-row button:hover { border-color: #bfdbfe; color: var(--app-primary-active); }
@@ -466,6 +528,7 @@ h2 { font-size: 16px; line-height: 1.35; }
   .lui-hero { min-height: auto; padding: 24px 0 18px; }
   h1 { font-size: 30px; }
   .composer-toolbar, .section-heading, .command-panel-header { align-items: stretch; flex-direction: column; }
+  .composer-actions { align-items: stretch; flex-direction: column; }
   .stat-grid, .module-card-grid, .command-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {

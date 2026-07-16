@@ -46,6 +46,29 @@ const taskCategories = [
     ],
   },
   {
+    id: 'vertical',
+    label: '垂类预测模型',
+    icon: DataAnalysis,
+    entries: [
+      {
+        id: 'vertical-upload',
+        name: '垂类模型上传部署',
+        description: '上传垂类模型需求文档生成接入草案，再完成接入包、自测、部署与激活。',
+        actionText: '上传垂类模型',
+        route: '/vertical-prediction?tab=doc',
+        tags: ['垂类模型', '接入草案', '自测', '部署激活'],
+      },
+      {
+        id: 'vertical-management',
+        name: '模型管理中心',
+        description: '统一管理算法版本、指定版本发起预测调用，并追溯输入、输出、artifact 与运行状态。',
+        actionText: '进入管理中心',
+        route: '/vertical-prediction?tab=center',
+        tags: ['算法管理', '任务调用', '运行记录', '版本治理'],
+      },
+    ],
+  },
+  {
     id: 'wetlab',
     label: '湿实验优化',
     icon: SetUp,
@@ -65,29 +88,6 @@ const taskCategories = [
         actionText: '进入 Alchemist',
         route: '/optimization/alchemist',
         tags: ['变量定义', 'GP 建模', '采集优化'],
-      },
-    ],
-  },
-  {
-    id: 'vertical',
-    label: '垂类预测模型',
-    icon: DataAnalysis,
-    entries: [
-      {
-        id: 'vertical-upload',
-        name: '垂类模型上传部署',
-        description: '上传 Python 脚本或标准 ZIP，生成算法契约，并完成校验、构建、部署与激活。',
-        actionText: '上传部署',
-        route: '/vertical-prediction?tab=upload',
-        tags: ['Python', 'ZIP', '契约生成', '部署激活'],
-      },
-      {
-        id: 'vertical-management',
-        name: '模型管理中心',
-        description: '统一管理算法版本、指定版本发起预测调用，并追溯输入、输出、artifact 与运行状态。',
-        actionText: '进入管理中心',
-        route: '/vertical-prediction',
-        tags: ['算法管理', '任务调用', '运行记录', '版本治理'],
       },
     ],
   },
@@ -151,7 +151,7 @@ onMounted(() => {
       <div class="panel-header launcher-header">
         <div>
           <h3 class="panel-title">任务提交</h3>
-          <p class="panel-subtitle">统一的任务型工具入口。计算任务、湿实验优化和垂类预测模型都从这里进入。</p>
+          <p class="panel-subtitle">统一的任务型工具入口。计算任务、垂类预测模型和湿实验优化都从这里进入。</p>
         </div>
       </div>
       <div class="panel-body">

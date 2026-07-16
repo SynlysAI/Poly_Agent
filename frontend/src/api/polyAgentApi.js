@@ -5,6 +5,12 @@ import { clearAuthSession, getAuthorizationHeader } from '../auth/authState'
 const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
 
 const resolvedBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+const HIDDEN_KNOWLEDGE_SYSTEM_IDS = new Set([
+  'agirent_welding',
+  'agirent_rare_earth',
+  'agirent_surface_treatment',
+])
+const HIDDEN_KNOWLEDGE_SYSTEM_MARKERS = ['安捷睿']
 
 const apiClient = axios.create({
   baseURL: resolvedBaseUrl,
@@ -69,6 +75,26 @@ function unwrapResponse(response) {
     throw err
   }
   return payload.data
+}
+
+function isHiddenKnowledgeSystem(system) {
+  const corpusId = String(system?.corpus_id || system?.system_id || '').trim()
+  const name = String(system?.name || '').trim()
+  const tags = Array.isArray(system?.tags) ? system.tags.map((tag) => String(tag || '').trim()) : []
+  if (HIDDEN_KNOWLEDGE_SYSTEM_IDS.has(corpusId)) {
+    return true
+  }
+  const searchableText = [corpusId, name, ...tags].join(' ')
+  return HIDDEN_KNOWLEDGE_SYSTEM_MARKERS.some((marker) => searchableText.includes(marker))
+}
+
+function filterVisibleKnowledgeSystems(data) {
+  const items = Array.isArray(data?.items) ? data.items.filter((item) => !isHiddenKnowledgeSystem(item)) : []
+  return {
+    ...(data || {}),
+    items,
+    total: items.length,
+  }
 }
 
 function parseDownloadFilename(contentDisposition, fallbackName) {
@@ -339,11 +365,20 @@ export function checkIntegrationConfig(serviceKey) {
 // ── Knowledge Base API ──
 
 export function listKnowledgeSystems() {
-  return apiClient.get('/knowledge-bases/systems').then(unwrapResponse)
+  return apiClient.get('/knowledge-bases/systems').then(unwrapResponse).then(filterVisibleKnowledgeSystems)
 }
 
 export function getKnowledgeHealth() {
-  return apiClient.get('/knowledge-bases/health').then(unwrapResponse)
+  return apiClient.get('/knowledge-bases/health').then(unwrapResponse).then((data) => {
+    if (!data) {
+      return data
+    }
+    const visibleSystems = filterVisibleKnowledgeSystems({ items: data.systems || [] }).items
+    return {
+      ...data,
+      systems: visibleSystems,
+    }
+  })
 }
 
 export function queryKnowledgeBase(payload) {
@@ -406,9 +441,76 @@ export function chatWithLLM(messages) {
   return apiClient.post('/llm/chat', { messages }).then(r => r.data)
 }
 
+export async function streamAssistantChat(payload, onEvent) {
+  const headers = { 'Content-Type': 'application/json', 'X-Request-Id': generateRequestId() }
+  const authHeader = getAuthorizationHeader()
+  if (authHeader) headers.Authorization = authHeader
+  const response = await fetch(`${resolvedBaseUrl}/assistant/chat/stream`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`
+    try {
+      const data = await response.json()
+      message = data.detail || data.message || message
+    } catch {
+      // Keep the HTTP status when the response is not JSON.
+    }
+    const error = createApiError('http', message)
+    error.status = response.status
+    throw error
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() || ''
+    for (const rawEvent of events) {
+      const dataLines = rawEvent
+        .split('\n')
+        .filter((line) => line.startsWith('data: '))
+        .map((line) => line.slice(6))
+      if (dataLines.length) onEvent(JSON.parse(dataLines.join('\n')))
+    }
+    if (done) break
+  }
+  if (buffer.trim()) {
+    const dataLines = buffer
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice(6))
+    if (dataLines.length) onEvent(JSON.parse(dataLines.join('\n')))
+  }
+}
+
 /** LLM 辅助实验建议 */
 export function suggestExperiments(payload) {
   return apiClient.post('/llm/suggest-experiments', payload).then(r => r.data)
+}
+
+/** 可选 LLM 模型目录 */
+export function getLlmModels() {
+  return apiClient.get('/llm/models').then(unwrapResponse)
+}
+
+/** 刷新 LLM 模型健康状态 */
+export function checkLlmModels() {
+  return apiClient.post('/llm/models/check').then(unwrapResponse)
+}
+
+/** 获取 LLM 默认路由 */
+export function getLlmRouting() {
+  return apiClient.get('/llm/routing').then(unwrapResponse)
+}
+
+/** 更新 LLM 默认路由 */
+export function updateLlmRouting(payload) {
+  return apiClient.put('/llm/routing', payload).then(unwrapResponse)
 }
 
 // ── ResearchEngine API ──
@@ -471,6 +573,20 @@ export function downloadAlgorithmPackageTemplate() {
       filename: parseDownloadFilename(response.headers['content-disposition'], 'polyagent-algorithm-template.zip'),
       contentType: response.headers['content-type'] || 'application/zip',
     }))
+}
+
+export function downloadAlgorithmRequirementDocumentTemplate() {
+  return apiClient
+    .get('/research-engine/algorithm-requirement-docs/template', { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], 'PolyAgent_模型数据集成需求收集_填写模板.docx'),
+      contentType: response.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }))
+}
+
+export function parseAlgorithmRequirementDocument(formData) {
+  return apiClient.post('/research-engine/algorithm-requirement-docs:parse', formData).then(unwrapResponse)
 }
 
 export function listAlgorithmPackageExamples() {

@@ -98,6 +98,11 @@ def get_service_integrations_collection() -> Collection:
     return get_database()["service_integrations"]
 
 
+def get_llm_routing_configs_collection() -> Collection:
+    """获取 llm_routing_configs 集合。"""
+    return get_database()["llm_routing_configs"]
+
+
 def get_audit_events_collection() -> Collection:
     """获取 audit_events 集合。"""
     return get_database()["audit_events"]

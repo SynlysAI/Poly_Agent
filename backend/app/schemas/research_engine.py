@@ -810,6 +810,20 @@ class AlgorithmHandoffValidationResult(BaseModel):
     output_preview: dict = Field(default_factory=dict)
 
 
+class AlgorithmRequirementDocumentParseResult(BaseModel):
+    """需求文档解析结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_filename: str
+    template_version: str = "0.1"
+    ok: bool = True
+    draft: AlgorithmHandoffCreate
+    missing_fields: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    summary: dict = Field(default_factory=dict)
+
+
 class ResearchEngineExampleSummary(BaseModel):
     """ResearchEngine 示例流程摘要。"""
 

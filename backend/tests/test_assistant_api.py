@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,16 @@ except ImportError:
 
 
 class AssistantApiTest(ComputationTestCase):
+    def _assistant_stream_events(self, payload: dict) -> list[dict]:
+        with self.client.stream("POST", "/api/v1/assistant/chat/stream", json=payload) as resp:
+            self.assertEqual(resp.status_code, 200)
+            body = "".join(resp.iter_text())
+        events: list[dict] = []
+        for line in body.splitlines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+        return events
+
     def test_assistant_chat_project_grounded_uses_llm_and_project_facts(self) -> None:
         with patch("app.core.llm_client.chat", return_value="项目内回答"), patch(
             "app.services.assistant_service.AssistantWebSearchService.search",
@@ -102,6 +113,143 @@ class AssistantApiTest(ComputationTestCase):
         self.assertTrue(any(ref["type"] == "web" for ref in data["references"]))
         self.assertIn("web_search", data["grounding_facts"])
         self.assertEqual(data["grounding_facts"]["web_search"]["result_count"], 1)
+
+    def test_assistant_deep_returns_structured_reasoning_summary(self) -> None:
+        with patch(
+            "app.core.llm_client.chat",
+            return_value='{"answer_markdown":"深度回答正文","reasoning_summary":["识别目标约束","结合项目事实形成建议"]}',
+        ), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=AssertionError("project grounded question should not search web"),
+        ):
+            resp = self.client.post(
+                "/api/v1/assistant/chat",
+                json={
+                    "messages": [
+                        {"role": "user", "content": "如何查看待审批任务？"},
+                    ],
+                    "context": {"mode": "deep"},
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        self.assertEqual(data["content"], "深度回答正文")
+        self.assertEqual(data["reasoning_summary"], ["识别目标约束", "结合项目事实形成建议"])
+
+    def test_assistant_deep_falls_back_when_structured_json_is_missing(self) -> None:
+        with patch("app.core.llm_client.chat", return_value="普通深度回答"):
+            resp = self.client.post(
+                "/api/v1/assistant/chat",
+                json={
+                    "messages": [
+                        {"role": "user", "content": "如何查看待审批任务？"},
+                    ],
+                    "context": {"mode": "deep"},
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        self.assertEqual(data["content"], "普通深度回答")
+        self.assertEqual(data["reasoning_summary"], [])
+
+    def test_assistant_deep_streams_reasoning_answer_and_final_response(self) -> None:
+        from app.core.config import settings
+
+        calls = []
+        original_llm_model = settings.llm_model
+        settings.llm_model = "DeepSeek-V4-Flash-w8a8-mtp"
+
+        def fake_stream(messages, **kwargs):  # noqa: ANN001
+            calls.append(kwargs)
+            joined = "\n".join(item["content"] for item in messages)
+            self.assertIn("DEEP_STREAM_RESPONSE_FORMAT", joined)
+            yield "深度回答"
+            yield "正文"
+
+        try:
+            with patch("app.core.llm_client.chat_stream", side_effect=fake_stream, create=True), patch(
+                "app.services.assistant_service.AssistantWebSearchService.search",
+                side_effect=AssertionError("project grounded question should not search web"),
+            ):
+                events = self._assistant_stream_events(
+                    {
+                        "messages": [{"role": "user", "content": "如何查看待审批任务？"}],
+                        "context": {"mode": "deep"},
+                    }
+                )
+        finally:
+            settings.llm_model = original_llm_model
+
+        event_types = [event["type"] for event in events]
+        self.assertEqual(event_types[0], "status")
+        self.assertIn("reasoning_summary_delta", event_types)
+        self.assertIn("answer_delta", event_types)
+        self.assertEqual(event_types[-1], "final")
+        self.assertEqual("".join(event.get("delta", "") for event in events if event["type"] == "answer_delta"), "深度回答正文")
+        final = events[-1]["data"]
+        self.assertEqual(final["content"], "深度回答正文")
+        self.assertGreaterEqual(len(final["reasoning_summary"]), 2)
+        self.assertEqual(calls[0]["purpose"], "deep")
+        self.assertTrue(calls[0].get("model"))
+
+    def test_assistant_stream_emits_evidence_for_hybrid_questions(self) -> None:
+        def fake_search(_service, query: str, *, deep: bool):  # noqa: ANN001
+            from app.services.assistant_service import SearchOutcome
+            from app.services.assistant_service import WebEvidence
+
+            self.assertTrue(deep)
+            return SearchOutcome(
+                status="searched",
+                provider="bing_rss",
+                query=query,
+                results=[
+                    WebEvidence(
+                        title="Agentic RAG best practices",
+                        url="https://example.com/agentic-rag",
+                        snippet="Hybrid retrieval patterns.",
+                        content="Hybrid retrieval combines project facts and external sources.",
+                        source="bing_rss",
+                    )
+                ],
+            )
+
+        with patch("app.services.assistant_service.AssistantWebSearchService.search", new=fake_search), patch(
+            "app.core.llm_client.chat_stream",
+            return_value=iter(["混合问题答案"]),
+            create=True,
+        ):
+            events = self._assistant_stream_events(
+                {
+                    "messages": [{"role": "user", "content": "Poly Agent 怎么结合 Agentic RAG 做项目外问答？"}],
+                    "context": {"mode": "deep"},
+                }
+            )
+
+        evidence = next(event for event in events if event["type"] == "evidence")
+        self.assertEqual(evidence["status"], "searched")
+        self.assertEqual(evidence["references"][0]["type"], "web")
+        final = events[-1]["data"]
+        self.assertEqual(final["retrieval_status"], "searched")
+        self.assertTrue(any(ref["type"] == "web" for ref in final["references"]))
+
+    def test_assistant_stream_returns_error_event_when_llm_stream_fails(self) -> None:
+        def failing_stream(*_args, **_kwargs):  # noqa: ANN002, ANN003
+            raise RuntimeError("stream down")
+            yield ""  # pragma: no cover
+
+        with patch("app.core.llm_client.chat_stream", side_effect=failing_stream, create=True):
+            events = self._assistant_stream_events(
+                {
+                    "messages": [{"role": "user", "content": "如何查看待审批任务？"}],
+                    "context": {"mode": "deep"},
+                }
+            )
+
+        self.assertEqual(events[-1]["type"], "error")
+        self.assertEqual(events[-1]["code"], "ASSISTANT_STREAM_ERROR")
+        self.assertIn("stream down", events[-1]["message"])
 
     def test_assistant_chat_web_grounded_uses_search_results(self) -> None:
         def fake_search(_service, query: str, *, deep: bool):  # noqa: ANN001
@@ -224,7 +372,7 @@ class AssistantApiTest(ComputationTestCase):
         self.assertTrue(any(action["target"] == "/research-engine" for action in data["actions"]))
 
     def test_assistant_model_questions_use_project_model_facts(self) -> None:
-        with patch("app.core.llm_client.chat", return_value="模型配置回答"):
+        with patch("app.core.llm_client.chat", side_effect=AssertionError("model management should not call LLM")):
             resp = self.client.post(
                 "/api/v1/assistant/chat",
                 json={
@@ -238,8 +386,9 @@ class AssistantApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
         self.assertEqual(data["answer_scope"], "model")
-        self.assertEqual(data["answer_mode"], "llm_project_grounded")
+        self.assertEqual(data["answer_mode"], "fallback")
         self.assertIn("model_management", data["grounding_facts"])
+        self.assertTrue(any(action["target"] == "/tools?tab=llm-models" for action in data["actions"]))
 
     def test_web_search_service_handles_no_results_and_failures(self) -> None:
         from app.core.config import settings

@@ -8,6 +8,7 @@ import json
 import re
 import socket
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable
@@ -26,6 +27,7 @@ from app.schemas.assistant import AssistantChatResponse
 from app.schemas.assistant import AssistantReference
 from app.schemas.assistant import AssistantRetrievalStatus
 from app.services.integration_status_service import IntegrationStatusService
+from app.services.llm_model_service import LLMModelService
 from app.services.research_engine_defaults import DEFAULT_STAGE_SEQUENCE
 from app.services.research_engine_defaults import P0_GATE_STAGES
 from app.services.research_engine_service import ResearchEngineService
@@ -136,6 +138,12 @@ class SearchOutcome:
     filtered_result_count: int = 0
 
 
+@dataclass(frozen=True)
+class SynthesizedAnswer:
+    content: str
+    reasoning_summary: list[str]
+
+
 class AssistantIntentRouter:
     """Route user questions to the right answer scope."""
 
@@ -189,6 +197,11 @@ class ProjectGroundingService:
                 "model": settings.report_llm_model or settings.llm_model or "未配置",
             },
         }
+        try:
+            llm_catalog = LLMModelService().get_catalog(probe=False).model_dump(mode="python")
+        except Exception as exc:
+            logger.warning("assistant llm catalog unavailable: %s", exc)
+            llm_catalog = {"providers": [], "routing": {}, "warnings": [str(exc)]}
 
         production_adapters: list[dict] = []
         computation_adapters: list[dict] = []
@@ -242,6 +255,7 @@ class ProjectGroundingService:
                 "knowledge_base": "doc/knowledge-base-rag-kg-upgrade-plan.md",
             },
             "model_management": model_facts,
+            "llm_catalog": llm_catalog,
         }
 
     def build_project_references(self, text: str) -> list[AssistantReference]:
@@ -298,6 +312,14 @@ class ProjectGroundingService:
                     label="查看算法清单",
                     target="/research-engine",
                     description="在 ResearchEngine 的算法能力清单中查看真实注册条目和 Schema。",
+                )
+            )
+        if any(token in lowered for token in ("llm", "模型", "provider", "base url", "api key")):
+            actions.append(
+                AssistantAction(
+                    label="打开 LLM 模型管理",
+                    target="/tools?tab=llm-models",
+                    description="查看可选模型、能力标签、健康状态和默认路由。",
                 )
             )
         if not actions and any(token in lowered for token in ("polyagent", "poly agent", "researchengine", "autoresearch", "任务中心")):
@@ -1063,7 +1085,8 @@ class AssistantAnswerSynthesizer:
         intent: AssistantIntent,
         facts: dict,
         evidence: SearchOutcome | None,
-    ) -> str:
+        llm_route: dict,
+    ) -> SynthesizedAnswer:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -1071,8 +1094,91 @@ class AssistantAnswerSynthesizer:
                 "content": self._build_context_block(intent=intent, facts=facts, evidence=evidence),
             },
         ]
+        if intent.deep:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "DEEP_RESPONSE_FORMAT: Return only a JSON object with keys "
+                        "`answer_markdown` and `reasoning_summary`. "
+                        "`answer_markdown` is the final user-facing answer in Markdown. "
+                        "`reasoning_summary` is an array of 2-5 short, high-level reasoning steps, "
+                        "evidence checks, or decision criteria. Do not reveal hidden chain-of-thought, "
+                        "private scratchpad, token-by-token reasoning, or internal deliberation."
+                    ),
+                }
+            )
         messages.extend({"role": item.role, "content": item.content} for item in request.messages)
-        return llm_client.chat(messages, temperature=0.2)
+        content = llm_client.chat(
+            messages,
+            temperature=0.2,
+            purpose="deep" if intent.deep else "qa",
+            provider_id=llm_route.get("provider_id"),
+            model=llm_route.get("model_id"),
+        )
+        if intent.deep:
+            return self._parse_deep_response(content)
+        return SynthesizedAnswer(content=content, reasoning_summary=[])
+
+    def stream_answer(
+        self,
+        *,
+        request: AssistantChatRequest,
+        intent: AssistantIntent,
+        facts: dict,
+        evidence: SearchOutcome | None,
+        llm_route: dict,
+    ) -> Iterator[str]:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": self._build_context_block(intent=intent, facts=facts, evidence=evidence),
+            },
+        ]
+        if intent.deep:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "DEEP_STREAM_RESPONSE_FORMAT: Return the final user-facing answer directly in Markdown. "
+                        "Do not return JSON. The application will show separate high-level reasoning summary events. "
+                        "Do not reveal hidden chain-of-thought, private scratchpad, token-by-token reasoning, "
+                        "or internal deliberation."
+                    ),
+                }
+            )
+        messages.extend({"role": item.role, "content": item.content} for item in request.messages)
+        yield from llm_client.chat_stream(
+            messages,
+            temperature=0.2,
+            purpose="deep" if intent.deep else "qa",
+            provider_id=llm_route.get("provider_id"),
+            model=llm_route.get("model_id"),
+        )
+
+    def _parse_deep_response(self, raw_content: str) -> SynthesizedAnswer:
+        content = str(raw_content or "").strip()
+        try:
+            payload = json.loads(self._strip_json_fence(content))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return SynthesizedAnswer(content=content, reasoning_summary=[])
+        if not isinstance(payload, dict):
+            return SynthesizedAnswer(content=content, reasoning_summary=[])
+
+        answer = str(payload.get("answer_markdown") or payload.get("content") or "").strip() or content
+        raw_summary = payload.get("reasoning_summary") or []
+        if not isinstance(raw_summary, list):
+            raw_summary = []
+        summary = [str(item).strip() for item in raw_summary if str(item).strip()]
+        return SynthesizedAnswer(content=answer, reasoning_summary=summary[:5])
+
+    def _strip_json_fence(self, content: str) -> str:
+        text = content.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        return text.strip()
 
     def _build_context_block(self, *, intent: AssistantIntent, facts: dict, evidence: SearchOutcome | None) -> str:
         sections = [
@@ -1105,6 +1211,7 @@ class AssistantService:
         self.search_query_builder = AssistantSearchQueryBuilder()
         self.web_service = AssistantWebSearchService()
         self.answer_synthesizer = AssistantAnswerSynthesizer()
+        self.llm_model_service = LLMModelService()
 
     def chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
         user_text = self._latest_user_text(request.messages)
@@ -1114,6 +1221,27 @@ class AssistantService:
         project_refs = self.project_service.build_project_references(user_text)
         actions = self.project_service.build_actions(user_text)
         suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
+        llm_route = self._resolve_llm_route(mode=mode, request=request)
+
+        if mode == "model":
+            response_facts = self._build_response_facts(
+                facts=facts,
+                web_outcome=None,
+                request=request,
+                search_query_plan=None,
+                llm_route=llm_route,
+            )
+            return AssistantChatResponse(
+                content=self._fallback_content(user_text, facts=facts, intent=intent),
+                actions=actions,
+                references=project_refs,
+                suggested_questions=suggested_questions,
+                grounding_facts=response_facts,
+                confidence="medium",
+                answer_mode="fallback",
+                answer_scope="model",
+                retrieval_status="not_needed",
+            )
 
         web_outcome: SearchOutcome | None = None
         search_query_plan: SearchQueryPlan | None = None
@@ -1130,19 +1258,24 @@ class AssistantService:
             web_outcome=web_outcome,
             request=request,
             search_query_plan=search_query_plan,
+            llm_route=llm_route,
         )
 
         try:
-            content = self.answer_synthesizer.synthesize(
+            synthesized = self.answer_synthesizer.synthesize(
                 request=request,
                 intent=intent,
                 facts=response_facts,
                 evidence=web_outcome,
+                llm_route=llm_route,
             )
+            content = synthesized.content
+            reasoning_summary = synthesized.reasoning_summary
             confidence = "medium"
         except Exception as exc:
             logger.warning("assistant LLM fallback: %s", exc)
             content = self._fallback_content(user_text, facts=facts, intent=intent)
+            reasoning_summary = []
             confidence = "medium"
             answer_mode = "fallback"
             if web_outcome and web_outcome.status == "searched":
@@ -1150,6 +1283,7 @@ class AssistantService:
 
         return AssistantChatResponse(
             content=content,
+            reasoning_summary=reasoning_summary,
             actions=actions,
             references=references,
             suggested_questions=suggested_questions,
@@ -1160,6 +1294,123 @@ class AssistantService:
             retrieval_status=retrieval_status,
         )
 
+    def stream_chat(self, request: AssistantChatRequest) -> Iterator[dict]:
+        try:
+            yield {"type": "status", "stage": "intent", "message": "正在识别问题范围..."}
+            user_text = self._latest_user_text(request.messages)
+            mode = self._normalize_mode(request.context.get("mode"))
+            intent = self.intent_router.route(user_text, mode=mode)
+
+            yield {"type": "status", "stage": "facts", "message": "正在收集项目事实..."}
+            facts = self.project_service.build_facts(intent=intent)
+            project_refs = self.project_service.build_project_references(user_text)
+            actions = self.project_service.build_actions(user_text)
+            suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
+            llm_route = self._resolve_llm_route(mode=mode, request=request)
+
+            if mode == "model":
+                response_facts = self._build_response_facts(
+                    facts=facts,
+                    web_outcome=None,
+                    request=request,
+                    search_query_plan=None,
+                    llm_route=llm_route,
+                )
+                content = self._fallback_content(user_text, facts=facts, intent=intent)
+                if content:
+                    yield {"type": "answer_delta", "delta": content}
+                yield {
+                    "type": "final",
+                    "data": AssistantChatResponse(
+                        content=content,
+                        actions=actions,
+                        references=project_refs,
+                        suggested_questions=suggested_questions,
+                        grounding_facts=response_facts,
+                        confidence="medium",
+                        answer_mode="fallback",
+                        answer_scope="model",
+                        retrieval_status="not_needed",
+                    ).model_dump(mode="python"),
+                }
+                return
+
+            web_outcome: SearchOutcome | None = None
+            search_query_plan: SearchQueryPlan | None = None
+            if intent.use_web:
+                yield {"type": "status", "stage": "search", "message": "正在检索外部证据..."}
+                search_query_plan = self.search_query_builder.build(user_text)
+                web_outcome = self.web_service.search(search_query_plan.query, deep=intent.deep)
+
+            web_refs = self._web_references(web_outcome)
+            references = project_refs + web_refs
+            retrieval_status = web_outcome.status if web_outcome else "not_needed"
+            if web_outcome:
+                yield {
+                    "type": "evidence",
+                    "status": web_outcome.status,
+                    "message": self._evidence_message(web_outcome),
+                    "references": [item.model_dump(mode="python") for item in web_refs],
+                }
+
+            answer_mode = self._answer_mode(intent)
+            response_facts = self._build_response_facts(
+                facts=facts,
+                web_outcome=web_outcome,
+                request=request,
+                search_query_plan=search_query_plan,
+                llm_route=llm_route,
+            )
+
+            reasoning_summary = self._visible_reasoning_summary(intent=intent, web_outcome=web_outcome)
+            if intent.deep:
+                for item in reasoning_summary:
+                    yield {"type": "reasoning_summary_delta", "item": item}
+
+            yield {"type": "status", "stage": "generation", "message": "正在生成回答..."}
+            chunks: list[str] = []
+            for chunk in self.answer_synthesizer.stream_answer(
+                request=request,
+                intent=intent,
+                facts=response_facts,
+                evidence=web_outcome,
+                llm_route=llm_route,
+            ):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                yield {"type": "answer_delta", "delta": chunk}
+
+            content = "".join(chunks).strip()
+            if not content:
+                content = self._fallback_content(user_text, facts=facts, intent=intent)
+                yield {"type": "answer_delta", "delta": content}
+                answer_mode = "fallback"
+                reasoning_summary = []
+
+            yield {
+                "type": "final",
+                "data": AssistantChatResponse(
+                    content=content,
+                    reasoning_summary=reasoning_summary if intent.deep else [],
+                    actions=actions,
+                    references=references,
+                    suggested_questions=suggested_questions,
+                    grounding_facts=response_facts,
+                    confidence="medium",
+                    answer_mode=answer_mode,
+                    answer_scope=intent.scope,
+                    retrieval_status=retrieval_status,
+                ).model_dump(mode="python"),
+            }
+        except Exception as exc:
+            logger.warning("assistant stream failed: %s", exc)
+            yield {
+                "type": "error",
+                "code": "ASSISTANT_STREAM_ERROR",
+                "message": str(exc),
+            }
+
     def _build_response_facts(
         self,
         *,
@@ -1167,9 +1418,11 @@ class AssistantService:
         web_outcome: SearchOutcome | None,
         request: AssistantChatRequest,
         search_query_plan: SearchQueryPlan | None = None,
+        llm_route: dict | None = None,
     ) -> dict:
         response_facts = dict(facts)
         response_facts["request_context"] = dict(request.context)
+        response_facts["llm_route"] = self._safe_llm_route(llm_route or {})
         if web_outcome:
             raw_count = web_outcome.raw_result_count or len(web_outcome.results)
             filtered_count = web_outcome.filtered_result_count or len(web_outcome.results)
@@ -1221,10 +1474,57 @@ class AssistantService:
             }
         return response_facts
 
+    def _resolve_llm_route(self, *, mode: str, request: AssistantChatRequest) -> dict:
+        purpose = "deep" if mode == "deep" else "qa"
+        try:
+            return self.llm_model_service.resolve_route(
+                purpose=purpose,
+                requested_model=(request.context or {}).get("model"),
+            )
+        except Exception as exc:
+            logger.warning("assistant llm route unavailable: %s", exc)
+            return {
+                "purpose": purpose,
+                "provider_id": None,
+                "model_id": settings.llm_model or None,
+                "capabilities": [],
+                "reasoning_model_available": False,
+            }
+
+    def _safe_llm_route(self, route: dict) -> dict:
+        return {
+            "purpose": route.get("purpose"),
+            "provider_id": route.get("provider_id"),
+            "model_id": route.get("model_id"),
+            "capabilities": list(route.get("capabilities") or []),
+            "reasoning_model_available": bool(route.get("reasoning_model_available")),
+        }
+
     def _web_references(self, outcome: SearchOutcome | None) -> list[AssistantReference]:
         if not outcome or not outcome.results:
             return []
         return [AssistantReference(label=item.title, target=item.url, type="web") for item in outcome.results[:3]]
+
+    def _evidence_message(self, outcome: SearchOutcome) -> str:
+        if outcome.status == "searched":
+            return f"已检索到 {len(outcome.results)} 条可用证据"
+        if outcome.status == "no_results":
+            return "未检索到可用证据"
+        if outcome.status == "failed":
+            return "外部检索失败，继续使用可用项目事实"
+        if outcome.status == "skipped_disabled":
+            return "外部检索未启用"
+        return "无需外部检索"
+
+    def _visible_reasoning_summary(self, *, intent: AssistantIntent, web_outcome: SearchOutcome | None) -> list[str]:
+        summary = [
+            f"识别回答范围为 {intent.scope}，确认是否需要项目事实或外部证据。",
+            "整合项目配置、算法清单、任务入口和模型路由等可核查事实。",
+        ]
+        if web_outcome:
+            summary.append(f"检查外部检索状态为 {web_outcome.status}，筛选可引用证据。")
+        summary.append("基于已验证事实组织结论、依据和可执行建议。")
+        return summary[:5]
 
     def _answer_mode(self, intent: AssistantIntent) -> AssistantAnswerMode:
         if intent.scope == "web":
@@ -1248,13 +1548,17 @@ class AssistantService:
     def _fallback_content(self, text: str, *, facts: dict, intent: AssistantIntent) -> str:
         lowered = text.lower()
         if intent.scope == "model":
+            llm_catalog = facts.get("llm_catalog", {})
+            routing = llm_catalog.get("routing") or {}
             model_facts = facts.get("model_management", {})
             chat_model = (model_facts.get("chat") or {}).get("model", "未配置")
             report_provider = (model_facts.get("report") or {}).get("provider", "unknown")
             return (
-                f"当前问答链路优先使用 `LLM_*` 配置，已配置模型：`{chat_model}`。"
-                f"报告链路则使用 `REPORT_LLM_*`，当前报告 provider 为 `{report_provider}`。"
-                "如果你要切换问答模型，请修改 `LLM_MODEL` / `LLM_BASE_URL` / `LLM_API_KEY`。"
+                "模型管理已迁移为 LLM 模型选择与路由管理。\n\n"
+                f"- 科研问答默认模型：`{(routing.get('qa') or {}).get('model_id') or chat_model}`。\n"
+                f"- 深度思考默认模型：`{(routing.get('deep') or {}).get('model_id') or '未配置'}`。\n"
+                f"- 报告链路 provider：`{report_provider}`。\n\n"
+                "请进入 `/tools?tab=llm-models` 查看可选模型、能力标签、健康状态并设置默认路由。"
             )
         if "审批" in text or "autoresearch" in lowered or "blocked_approval" in lowered:
             return self._approval_answer(facts)
@@ -1354,3 +1658,7 @@ _assistant_service = AssistantService()
 
 def chat_assistant(request: AssistantChatRequest) -> AssistantChatResponse:
     return _assistant_service.chat(request)
+
+
+def stream_chat_assistant(request: AssistantChatRequest) -> Iterator[dict]:
+    yield from _assistant_service.stream_chat(request)

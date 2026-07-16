@@ -133,6 +133,11 @@ class Settings:
         self.llm_api_key: str = os.getenv("LLM_API_KEY", "")
         self.llm_base_url: str = os.getenv("LLM_BASE_URL", "")
         self.llm_model: str = os.getenv("LLM_MODEL", "")
+        self.llm_default_provider: str = os.getenv("LLM_DEFAULT_PROVIDER", "").strip()
+        self.llm_default_model: str = os.getenv("LLM_DEFAULT_MODEL", "").strip()
+        self.llm_reasoning_provider: str = os.getenv("LLM_REASONING_PROVIDER", "").strip()
+        self.llm_reasoning_model: str = os.getenv("LLM_REASONING_MODEL", "").strip()
+        self.llm_provider_configs_json: str = os.getenv("LLM_PROVIDER_CONFIGS_JSON", "").strip()
 
         # Report generation 配置
         self.reports_enabled: bool = os.getenv("REPORTS_ENABLED", "true").strip().lower() in {

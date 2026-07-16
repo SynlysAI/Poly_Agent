@@ -1,28 +1,38 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Check, Edit, Refresh, View as ViewIcon } from '@element-plus/icons-vue'
 
 import {
+  checkLlmModels,
   checkIntegrationConfig,
   getAlgorithm,
   getApiErrorMessage,
   getIntegrationStatus,
+  getLlmModels,
   listAlgorithms,
   listIntegrationConfigs,
+  updateLlmRouting,
   upsertIntegrationConfig,
 } from '../api/polyAgentApi'
 
+const route = useRoute()
+const router = useRouter()
 const services = ref([])
 const configs = ref([])
+const llmCatalog = ref({ providers: [], routing: {} })
 const loadingStatus = ref(false)
 const loadingConfigs = ref(false)
+const loadingLlm = ref(false)
 const saving = ref(false)
+const savingLlmRouting = ref(false)
 const actionLoading = ref('')
 const configError = ref('')
+const llmError = ref('')
 const editVisible = ref(false)
 const editingServiceKey = ref('')
-const activeTab = ref('status')
+const activeTab = ref(normalizeTab(route.query.tab))
 
 // ── ResearchEngine 算法清单 ──
 const algorithms = ref([])
@@ -32,6 +42,12 @@ const algoDetail = ref(null)
 const algoFilters = reactive({ type: '', material_scope: '', keyword: '' })
 const configDetailVisible = ref(false)
 const selectedConfig = ref(null)
+const llmRouteForm = reactive({ qa: '', deep: '', report: '' })
+
+function normalizeTab(value) {
+  const tab = Array.isArray(value) ? value[0] : value
+  return ['status', 'algorithms', 'configs', 'llm-models'].includes(tab) ? tab : 'status'
+}
 
 const algoTypeOptions = [
   { label: '全部类型', value: '' },
@@ -209,6 +225,37 @@ const serviceHealthStats = computed(() => {
   ]
 })
 
+const llmModelOptions = computed(() => {
+  const rows = []
+  for (const provider of llmCatalog.value.providers || []) {
+    for (const model of provider.models || []) {
+      rows.push({
+        key: `${provider.provider_id}::${model.model_id}`,
+        providerId: provider.provider_id,
+        providerName: provider.display_name || provider.provider_id,
+        modelId: model.model_id,
+        label: model.display_name || model.model_id,
+        capabilities: model.capabilities || [],
+        status: provider.status,
+      })
+    }
+  }
+  return rows
+})
+
+const llmProviderStats = computed(() => {
+  const providers = llmCatalog.value.providers || []
+  const available = providers.filter((item) => ['available', 'unknown'].includes(item.status)).length
+  const models = providers.reduce((sum, item) => sum + (item.models?.length || 0), 0)
+  const reasoning = llmModelOptions.value.filter((item) => item.capabilities.includes('reasoning')).length
+  return [
+    { label: 'Provider', value: String(providers.length), hint: '已登记' },
+    { label: '模型', value: String(models), hint: '可选择' },
+    { label: '推理模型', value: String(reasoning), hint: 'deep 路由' },
+    { label: '可用/未知', value: String(available), hint: '未失败' },
+  ]
+})
+
 function statusTag(status) {
   if (['up', 'available', 'built_in'].includes(status)) return 'success'
   if (['degraded', 'not_configured', 'disabled', 'not_available'].includes(status)) return 'warning'
@@ -259,6 +306,26 @@ function statusLabel(status) {
   return map[status] || status
 }
 
+function llmCapabilityLabel(capability) {
+  const map = {
+    chat: '聊天',
+    fast: '快速',
+    reasoning: '推理',
+    long_context: '长上下文',
+    structured_json: 'JSON',
+    tool_calling: '工具调用',
+    local: '本地',
+  }
+  return map[capability] || capability
+}
+
+function llmCapabilityTag(capability) {
+  if (capability === 'reasoning') return 'success'
+  if (capability === 'fast') return 'primary'
+  if (capability === 'long_context') return 'warning'
+  return 'info'
+}
+
 function servicePrimaryDetail(row) {
   const details = row.details || {}
   if (details.path) return details.path
@@ -293,6 +360,24 @@ function compactConfigSummary(row) {
 
 function maskedSecretRefs(refs = {}) {
   return Object.fromEntries(Object.keys(refs || {}).map((key) => [key, 'configured reference']))
+}
+
+function routeKeyFromValue(value) {
+  if (!value?.provider_id || !value?.model_id) return ''
+  return `${value.provider_id}::${value.model_id}`
+}
+
+function routeValueFromKey(key) {
+  const [providerId, ...modelParts] = String(key || '').split('::')
+  const modelId = modelParts.join('::')
+  if (!providerId || !modelId) return null
+  return { provider_id: providerId, model_id: modelId }
+}
+
+function syncLlmRouteForm() {
+  llmRouteForm.qa = routeKeyFromValue(llmCatalog.value.routing?.qa)
+  llmRouteForm.deep = routeKeyFromValue(llmCatalog.value.routing?.deep)
+  llmRouteForm.report = routeKeyFromValue(llmCatalog.value.routing?.report)
 }
 
 function parseJsonObject(value, label) {
@@ -338,6 +423,53 @@ async function loadConfigs({ quiet = false } = {}) {
 
 async function loadAll() {
   await Promise.all([loadStatus(), loadConfigs({ quiet: true })])
+}
+
+async function loadLlmModels({ quiet = false } = {}) {
+  loadingLlm.value = true
+  llmError.value = ''
+  try {
+    llmCatalog.value = await getLlmModels()
+    syncLlmRouteForm()
+  } catch (error) {
+    llmError.value = getApiErrorMessage(error)
+    if (!quiet) ElMessage.error(llmError.value)
+  } finally {
+    loadingLlm.value = false
+  }
+}
+
+async function refreshLlmModels() {
+  loadingLlm.value = true
+  llmError.value = ''
+  try {
+    llmCatalog.value = await checkLlmModels()
+    syncLlmRouteForm()
+    ElMessage.success('LLM 模型状态已刷新')
+  } catch (error) {
+    llmError.value = getApiErrorMessage(error)
+    ElMessage.error(llmError.value)
+  } finally {
+    loadingLlm.value = false
+  }
+}
+
+async function saveLlmRouting() {
+  savingLlmRouting.value = true
+  try {
+    const payload = {
+      qa: routeValueFromKey(llmRouteForm.qa),
+      deep: routeValueFromKey(llmRouteForm.deep),
+      report: routeValueFromKey(llmRouteForm.report),
+    }
+    await updateLlmRouting(payload)
+    ElMessage.success('LLM 默认路由已保存')
+    await loadLlmModels({ quiet: true })
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    savingLlmRouting.value = false
+  }
 }
 
 function openEdit(row) {
@@ -416,6 +548,21 @@ async function handleCheck(row) {
 onMounted(() => {
   loadAll()
   loadAlgos()
+  loadLlmModels({ quiet: true })
+})
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    activeTab.value = normalizeTab(tab)
+  },
+)
+
+watch(activeTab, (tab) => {
+  const query = { ...route.query }
+  if (tab === 'status') delete query.tab
+  else query.tab = tab
+  if (JSON.stringify(query) !== JSON.stringify(route.query)) router.replace({ query })
 })
 </script>
 
@@ -610,6 +757,96 @@ onMounted(() => {
               </el-table-column>
             </el-table>
           </el-tab-pane>
+          <el-tab-pane label="LLM 模型" name="llm-models">
+            <div class="llm-toolbar">
+              <div>
+                <h4>LLM 模型选择</h4>
+                <p>维护问答、深度思考和报告生成的默认模型路由。</p>
+              </div>
+              <div class="llm-toolbar-actions">
+                <el-button :icon="Refresh" :loading="loadingLlm" @click="loadLlmModels">刷新列表</el-button>
+                <el-button type="primary" plain :icon="Check" :loading="loadingLlm" @click="refreshLlmModels">探测模型</el-button>
+              </div>
+            </div>
+            <el-alert v-if="llmError" :title="llmError" type="warning" :closable="false" class="config-alert" />
+            <div v-loading="loadingLlm" class="llm-model-panel">
+              <div class="llm-stat-grid">
+                <article v-for="stat in llmProviderStats" :key="stat.label" class="llm-stat">
+                  <span>{{ stat.label }}</span>
+                  <strong>{{ stat.value }}</strong>
+                  <small>{{ stat.hint }}</small>
+                </article>
+              </div>
+
+              <section class="llm-routing-card">
+                <div class="llm-routing-head">
+                  <div>
+                    <strong>默认路由</strong>
+                    <span>用户仍可在对话页临时切换当前会话模型。</span>
+                  </div>
+                  <el-button type="primary" :loading="savingLlmRouting" @click="saveLlmRouting">保存路由</el-button>
+                </div>
+                <div class="llm-routing-grid">
+                  <el-form-item label="科研问答">
+                    <el-select v-model="llmRouteForm.qa" placeholder="选择模型" style="width:100%">
+                      <el-option v-for="item in llmModelOptions" :key="`qa-${item.key}`" :label="`${item.label} · ${item.providerName}`" :value="item.key" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="深度思考">
+                    <el-select v-model="llmRouteForm.deep" placeholder="选择模型" style="width:100%">
+                      <el-option v-for="item in llmModelOptions" :key="`deep-${item.key}`" :label="`${item.label} · ${item.providerName}`" :value="item.key">
+                        <span>{{ item.label }} · {{ item.providerName }}</span>
+                      </el-option>
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="报告生成">
+                    <el-select v-model="llmRouteForm.report" placeholder="选择模型" style="width:100%">
+                      <el-option v-for="item in llmModelOptions" :key="`report-${item.key}`" :label="`${item.label} · ${item.providerName}`" :value="item.key" />
+                    </el-select>
+                  </el-form-item>
+                </div>
+              </section>
+
+              <div class="llm-provider-grid">
+                <article v-for="provider in llmCatalog.providers || []" :key="provider.provider_id" class="llm-provider-card">
+                  <div class="llm-provider-head">
+                    <div>
+                      <strong>{{ provider.display_name }}</strong>
+                      <span>{{ provider.provider_id }} · {{ provider.provider_type }}</span>
+                    </div>
+                    <el-tag size="small" :type="statusTag(provider.status)">{{ statusLabel(provider.status) }}</el-tag>
+                  </div>
+                  <dl class="llm-provider-meta">
+                    <div>
+                      <dt>Endpoint</dt>
+                      <dd>{{ provider.base_url_label || (provider.base_url_configured ? '已配置' : '未配置') }}</dd>
+                    </div>
+                    <div>
+                      <dt>Secret</dt>
+                      <dd>{{ provider.api_key_configured ? (provider.api_key_ref || '已配置') : '未配置' }}</dd>
+                    </div>
+                  </dl>
+                  <div class="llm-model-list">
+                    <div v-for="model in provider.models || []" :key="model.model_id" class="llm-model-row">
+                      <span>{{ model.display_name || model.model_id }}</span>
+                      <div>
+                        <el-tag
+                          v-for="cap in model.capabilities || []"
+                          :key="`${model.model_id}-${cap}`"
+                          size="small"
+                          :type="llmCapabilityTag(cap)"
+                          effect="plain"
+                        >
+                          {{ llmCapabilityLabel(cap) }}
+                        </el-tag>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <el-empty v-if="!(llmCatalog.providers || []).length && !loadingLlm" description="暂无 LLM provider 配置" :image-size="80" />
+            </div>
+          </el-tab-pane>
         </el-tabs>
       </div>
     </section>
@@ -726,6 +963,144 @@ onMounted(() => {
   color: var(--app-ink-body);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.llm-toolbar,
+.llm-routing-head,
+.llm-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.llm-toolbar h4 {
+  margin: 0;
+  color: var(--app-ink);
+  font-size: 15px;
+}
+
+.llm-toolbar p,
+.llm-routing-head span,
+.llm-provider-head span {
+  margin: 4px 0 0;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.llm-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.llm-model-panel {
+  min-height: 280px;
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.llm-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.llm-stat,
+.llm-routing-card,
+.llm-provider-card {
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #fff;
+}
+
+.llm-stat {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+}
+
+.llm-stat span,
+.llm-stat small {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.llm-stat strong {
+  color: var(--app-ink);
+  font-size: 22px;
+}
+
+.llm-routing-card,
+.llm-provider-card {
+  padding: 14px;
+}
+
+.llm-routing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.llm-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.llm-provider-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.llm-provider-meta dt {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.llm-provider-meta dd {
+  min-width: 0;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--app-ink-body);
+  font-size: 13px;
+}
+
+.llm-model-list {
+  display: grid;
+  gap: 8px;
+}
+
+.llm-model-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.llm-model-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-model-row div {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .algo-board {
@@ -1219,6 +1594,20 @@ summary {
   .algo-board {
     grid-template-columns: 1fr;
   }
+
+  .llm-toolbar,
+  .llm-routing-head,
+  .llm-provider-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .llm-stat-grid,
+  .llm-routing-grid,
+  .llm-provider-grid,
+  .llm-provider-meta {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (min-width: 721px) and (max-width: 1180px) {
@@ -1232,6 +1621,15 @@ summary {
 
   .algo-board {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .llm-stat-grid,
+  .llm-provider-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .llm-routing-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

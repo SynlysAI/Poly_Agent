@@ -62,8 +62,8 @@ export const TASK_MODULES = [
     primaryActionText: '进入预测工作台',
     centerActionText: '算法与运行管理',
     routes: {
-      submit: '/vertical-prediction',
-      center: '/vertical-prediction',
+      submit: '/vertical-prediction?tab=doc',
+      center: '/vertical-prediction?tab=center',
     },
   },
 ]

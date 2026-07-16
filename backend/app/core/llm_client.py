@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from openai import OpenAI
 
 from app.core.config import settings
+from app.services.llm_model_service import LLMModelService
 
 
 _client: OpenAI | None = None
@@ -28,6 +31,17 @@ def chat(messages: list[dict], **kwargs) -> str:
     Returns:
         模型回复的文本内容。
     """
+    provider_id = kwargs.pop("provider_id", None)
+    model = kwargs.pop("model", None)
+    purpose = kwargs.pop("purpose", "qa")
+    if provider_id or model:
+        return LLMModelService().complete_text(
+            messages=messages,
+            purpose=purpose,
+            provider_id=provider_id,
+            model=model,
+            **kwargs,
+        )
     client = get_client()
     response = client.chat.completions.create(
         model=settings.llm_model,
@@ -35,3 +49,33 @@ def chat(messages: list[dict], **kwargs) -> str:
         **kwargs,
     )
     return response.choices[0].message.content
+
+
+def chat_stream(messages: list[dict], **kwargs) -> Iterator[str]:
+    """发送对话请求并逐段返回模型回复文本。"""
+    provider_id = kwargs.pop("provider_id", None)
+    model = kwargs.pop("model", None)
+    purpose = kwargs.pop("purpose", "qa")
+    if provider_id or model:
+        yield from LLMModelService().stream_text(
+            messages=messages,
+            purpose=purpose,
+            provider_id=provider_id,
+            model=model,
+            **kwargs,
+        )
+        return
+    client = get_client()
+    response = client.chat.completions.create(
+        model=settings.llm_model,
+        messages=messages,
+        stream=True,
+        **kwargs,
+    )
+    for chunk in response:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        content = getattr(delta, "content", None)
+        if content:
+            yield content

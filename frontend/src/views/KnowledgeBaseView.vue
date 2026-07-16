@@ -686,23 +686,24 @@ onMounted(loadBootstrap)
           <el-select
             v-model="selectedSystemId"
             class="system-select"
+            popper-class="knowledge-system-select-popper"
             :disabled="!hasSystems"
             placeholder="暂无可用知识库体系"
             @change="handleSystemChange"
+        >
+          <el-option
+            v-for="system in systems"
+            :key="system.system_id"
+            :label="system.name"
+            :value="system.system_id"
           >
-            <el-option
-              v-for="system in systems"
-              :key="system.system_id"
-              :label="system.name"
-              :value="system.system_id"
-            >
-              <div class="system-option">
-                <div>
-                  <strong>{{ system.name }}</strong>
-                  <small>{{ system.provider || 'unknown' }}:{{ system.corpus_id || system.system_id }} · {{ system.indexed_document_count || system.document_count || 0 }} docs · {{ sourceStatusLabel(system) || system.graph_backend || 'unknown' }}</small>
-                </div>
-                <el-tag size="small" :type="statusTagType(system.status)" effect="plain">{{ systemStatusLabel(system.status, system) }}</el-tag>
+            <div class="system-option">
+              <div class="system-option-meta">
+                <strong>{{ system.name }}</strong>
+                <small>{{ system.provider || 'unknown' }}:{{ system.corpus_id || system.system_id }} · {{ system.indexed_document_count || system.document_count || 0 }} docs · {{ sourceStatusLabel(system) || system.graph_backend || 'unknown' }}</small>
               </div>
+              <el-tag size="small" :type="statusTagType(system.status)" effect="plain">{{ systemStatusLabel(system.status, system) }}</el-tag>
+            </div>
             </el-option>
           </el-select>
           <el-tag v-if="health || selectedSystem" :type="statusTagType(currentStatus)" effect="plain">
@@ -1032,7 +1033,9 @@ onMounted(loadBootstrap)
 }
 
 .knowledge-header {
-  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px 16px;
 }
 
 .panel-subtitle {
@@ -1058,33 +1061,70 @@ onMounted(loadBootstrap)
 }
 
 .header-actions {
+  flex: 1 1 560px;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 10px 12px;
 }
 
 .system-select {
-  width: 320px;
+  width: clamp(280px, 34vw, 440px);
+  max-width: 100%;
 }
 
 .system-option {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+  width: 100%;
 }
 
-.system-option div {
+:global(.knowledge-system-select-popper .el-select-dropdown__item) {
+  height: auto;
+  min-height: 76px;
+  padding: 12px 14px;
+  align-items: flex-start;
+  line-height: normal;
+}
+
+.system-option :deep(.el-tag) {
+  flex: 0 0 auto;
+}
+
+.system-option-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
 }
 
 .system-option strong,
 .system-option small {
-  display: block;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.system-option strong {
+  display: -webkit-box;
+  color: var(--app-ink);
+  font-size: 14px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.system-option small {
+  display: -webkit-box;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .system-option small,
@@ -1094,6 +1134,8 @@ onMounted(loadBootstrap)
 }
 
 .status-message {
+  flex: 0 1 280px;
+  min-width: 0;
   max-width: 260px;
   overflow-wrap: anywhere;
 }
@@ -1106,7 +1148,9 @@ onMounted(loadBootstrap)
 
 .system-overview {
   min-height: 76px;
+  flex-wrap: wrap;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 16px;
   padding: 14px;
   border: 1px solid var(--app-border-soft);
@@ -1130,10 +1174,11 @@ onMounted(loadBootstrap)
 }
 
 .system-metrics {
+  flex: 1 1 440px;
   display: grid;
   grid-template-columns: repeat(4, minmax(86px, 1fr));
   gap: 8px;
-  min-width: 440px;
+  min-width: 0;
 }
 
 .system-metric {
@@ -1888,6 +1933,7 @@ onMounted(loadBootstrap)
   }
 
   .header-actions {
+    width: 100%;
     justify-content: stretch;
   }
 

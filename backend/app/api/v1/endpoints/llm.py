@@ -3,20 +3,35 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi import Depends
 from pydantic import BaseModel, Field
-from typing import Optional
 
+from app.core.auth import get_current_user
+from app.core.auth import require_admin
 from app.core.llm_client import chat
 from app.core.logging import get_logger
+from app.schemas.common import ApiResponse
+from app.schemas.llm_models import LLMModelCatalogData
+from app.schemas.llm_models import LLMRoutingData
+from app.schemas.llm_models import LLMRoutingUpdateRequest
+from app.services.llm_model_service import LLMModelService
 
 logger = get_logger("poly_agent.llm")
 
 router = APIRouter(tags=["LLM 问答与建议"])
+model_service = LLMModelService()
+
+
+def _actor_user_id(current_user: dict[str, str] | None) -> str:
+    return current_user["user_id"] if current_user else "demo_user"
 
 
 class ChatRequest(BaseModel):
     """对话请求。"""
     messages: list[dict] = Field(..., description="消息列表 [{role, content}, ...]")
+    provider_id: str | None = Field(default=None, description="可选 provider id")
+    model: str | None = Field(default=None, description="可选模型 id")
+    purpose: str = Field(default="qa", description="用途路由 qa/deep/report")
 
 
 class ChatResponse(BaseModel):
@@ -53,11 +68,51 @@ async def chat_completion(request: ChatRequest):
     可用于问答对话页面的 LLM 交互。
     """
     try:
-        content = chat(request.messages)
+        content = chat(
+            request.messages,
+            provider_id=request.provider_id,
+            model=request.model,
+            purpose=request.purpose,
+        )
         return ChatResponse(content=content)
     except Exception as e:
         logger.error(f"LLM 对话失败: {e}")
         raise HTTPException(status_code=500, detail=f"LLM 调用失败: {str(e)}")
+
+
+@router.get("/models", response_model=ApiResponse[LLMModelCatalogData])
+def list_llm_models() -> ApiResponse[LLMModelCatalogData]:
+    """List sanitized selectable LLM models and routing defaults."""
+    return ApiResponse(data=model_service.get_catalog(probe=False))
+
+
+@router.post(
+    "/models/check",
+    response_model=ApiResponse[LLMModelCatalogData],
+    dependencies=[Depends(require_admin)],
+)
+def check_llm_models() -> ApiResponse[LLMModelCatalogData]:
+    """Refresh LLM provider readiness and discovered models."""
+    return ApiResponse(data=model_service.get_catalog(probe=True))
+
+
+@router.get("/routing", response_model=ApiResponse[LLMRoutingData])
+def get_llm_routing() -> ApiResponse[LLMRoutingData]:
+    """Return global default LLM routes."""
+    return ApiResponse(data=model_service.get_routing())
+
+
+@router.put(
+    "/routing",
+    response_model=ApiResponse[LLMRoutingData],
+    dependencies=[Depends(require_admin)],
+)
+def update_llm_routing(
+    payload: LLMRoutingUpdateRequest,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[LLMRoutingData]:
+    """Update global default LLM routes."""
+    return ApiResponse(data=model_service.update_routing(payload, actor_user_id=_actor_user_id(current_user)))
 
 
 @router.post("/suggest-experiments", response_model=ExperimentSuggestResponse)
