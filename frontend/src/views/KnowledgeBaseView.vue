@@ -28,7 +28,6 @@ import {
   queryKnowledgeBase,
   streamKnowledgeQuery,
 } from '../api/polyAgentApi'
-import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 use([
   GraphChart,
@@ -699,8 +698,6 @@ onMounted(loadBootstrap)
 
 <template>
   <div class="knowledge-page">
-    <AttributionBanner module-id="knowledge" label="服务来自" compact />
-
     <section class="panel knowledge-shell" v-loading="loadingSystems">
       <div class="panel-header knowledge-header">
         <div>
@@ -1135,14 +1132,26 @@ onMounted(loadBootstrap)
   gap: 16px;
 }
 
+:global(.app-main:has(.knowledge-page)) {
+  height: calc(100vh - 58px);
+  overflow: auto;
+}
+
 .knowledge-shell {
-  overflow: hidden;
+  overflow: visible;
 }
 
 .knowledge-header {
+  position: sticky;
+  top: 0;
+  z-index: 12;
   align-items: flex-start;
   flex-wrap: wrap;
   gap: 12px 16px;
+  border-radius: var(--app-radius-lg) var(--app-radius-lg) 0 0;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 18px rgba(22, 59, 110, 0.06);
 }
 
 .panel-subtitle {
