@@ -303,6 +303,10 @@ class AlgorithmRegistryRepository(BaseRepository):
                         "deployment_status",
                         "integration_kind",
                         "capability_group",
+                        "developer_attribution",
+                        "framework_attributions",
+                        "method_attributions",
+                        "implementation_notes",
                     )
                     if key in entry and entry.get(key) != existing.get(key)
                 }

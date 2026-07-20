@@ -8,6 +8,7 @@ import ExperimentDataPanel from './alchemist/ExperimentDataPanel.vue'
 import ModelPanel from './alchemist/ModelPanel.vue'
 import AcquisitionPanel from './alchemist/AcquisitionPanel.vue'
 import VisualizationPanel from './alchemist/VisualizationPanel.vue'
+import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 /** 当前步骤索引（0-5） */
 const activeStep = ref(0)
@@ -152,6 +153,8 @@ onMounted(() => {
 
 <template>
   <div class="alchemist-tool">
+    <AttributionBanner module-id="alchemist" label="方法来源" compact />
+
     <!-- Session 管理栏 -->
     <div class="panel session-toolbar">
       <div class="session-info">

@@ -35,6 +35,7 @@ from app.schemas.research_engine import (
     AlgorithmVersion,
     AlgorithmVersionListData,
 )
+from app.schemas.attribution import AttributionItem
 from app.services.algorithm_runtimes import (
     AlgorithmRuntimeBackend,
     LocalInProcessRuntimeBackend,
@@ -278,6 +279,15 @@ class AlgorithmPackageService:
                 "deployment": {},
                 "runtime_logs": [self._runtime_log_summary("validation_dry_run", result)],
                 "contract": contract,
+                "developer_attribution": self._developer_attribution_from_contract(
+                    contract,
+                    created_by=package.created_by,
+                ).model_dump(mode="python"),
+                "method_attributions": [
+                    item.model_dump(mode="python")
+                    for item in self._method_attributions_from_contract(contract)
+                ],
+                "implementation_notes": contract.get("implementation_notes"),
                 "created_by": package.created_by,
                 "created_at": now,
                 "updated_at": now,
@@ -482,6 +492,17 @@ class AlgorithmPackageService:
             "active_version_id": version_id,
             "source": "uploaded_package",
             "deployment_status": "active",
+            "developer_attribution": (
+                version.developer_attribution.model_dump(mode="python")
+                if version.developer_attribution
+                else self._developer_attribution_from_contract(
+                    contract,
+                    created_by=version.created_by,
+                ).model_dump(mode="python")
+            ),
+            "framework_attributions": contract.get("framework_attributions") or [],
+            "method_attributions": [item.model_dump(mode="python") for item in version.method_attributions],
+            "implementation_notes": version.implementation_notes or contract.get("implementation_notes"),
         }
         AlgorithmRegistryRepository.save("algorithm_id", registry_doc)
         AlgorithmVersionRepository.update_fields(version_id, {"status": "active", "updated_at": now})
@@ -787,6 +808,12 @@ class AlgorithmPackageService:
             runtime_dependency="uploaded_python_package",
             version=contract["version"],
             source="uploaded_package",
+            developer_attribution=AlgorithmPackageService._developer_attribution_from_contract(
+                contract,
+                created_by="package_owner",
+            ),
+            method_attributions=AlgorithmPackageService._method_attributions_from_contract(contract),
+            implementation_notes=contract.get("implementation_notes"),
         )
         AlgorithmPackageService._split_callable(contract["entrypoint"])
         if contract.get("loader"):
@@ -834,7 +861,55 @@ class AlgorithmPackageService:
             "output_schema": payload.output_schema.model_dump(),
             "sample_input_path": "tests/sample_input.json",
             "description": payload.description,
+            "developer": payload.developer,
+            "developer_organization": payload.developer_organization,
+            "developer_contact": payload.developer_contact,
+            "source_url": payload.source_url,
+            "citation": payload.citation,
+            "method_attributions": [
+                item.model_dump(mode="python")
+                for item in payload.method_attributions
+            ],
+            "logo_asset": payload.logo_asset,
+            "logo_url": payload.logo_url,
+            "implementation_notes": payload.description,
         }
+
+    @staticmethod
+    def _developer_attribution_from_contract(contract: dict, *, created_by: str) -> AttributionItem:
+        """从算法包契约构建开发者来源标注。"""
+        developer = str(contract.get("developer") or "").strip() or created_by
+        organization = str(contract.get("developer_organization") or "").strip() or None
+        source_url = str(contract.get("source_url") or "").strip() or None
+        citation = str(contract.get("citation") or "").strip() or None
+        logo_asset = str(contract.get("logo_asset") or contract.get("logo_url") or "").strip() or None
+        if organization:
+            description = f"算法由 {organization} / {developer} 提供。"
+        else:
+            description = f"算法由 {developer} 提供；未提交机构 Logo 时显示文字来源牌。"
+        return AttributionItem(
+            name=developer,
+            role="developer",
+            organization=organization,
+            description=description,
+            url=source_url,
+            citation_text=citation,
+            logo_asset=logo_asset,
+            logo_alt=organization or developer,
+            visibility="prominent",
+        )
+
+    @staticmethod
+    def _method_attributions_from_contract(contract: dict) -> list[AttributionItem]:
+        """从算法包契约读取方法来源标注。"""
+        raw_items = contract.get("method_attributions") or []
+        items: list[AttributionItem] = []
+        for raw in raw_items:
+            if isinstance(raw, AttributionItem):
+                items.append(raw)
+            elif isinstance(raw, dict):
+                items.append(AttributionItem(**raw))
+        return items
 
     @staticmethod
     def _package_root(package_id: str) -> Path:

@@ -55,6 +55,7 @@ from app.schemas.research_engine import (
     WorkflowRunListData,
     WorkflowStepRun,
 )
+from app.schemas.attribution import AttributionItem
 from app.services.research_engine_access import ensure_research_engine_doc_access
 from app.services.research_engine_defaults import (
     build_adapter_algorithm_registry,
@@ -1072,6 +1073,27 @@ class ResearchEngineService:
 
         normalized["integration_kind"] = integration_kind
         normalized["capability_group"] = capability_group
+        if not normalized.get("developer_attribution"):
+            source = normalized.get("source")
+            owner = str(normalized.get("owner") or "PolyAgent")
+            if source == "uploaded_package":
+                normalized["developer_attribution"] = AttributionItem(
+                    name=owner,
+                    role="developer",
+                    organization=None,
+                    description="用户上传算法包；未提交机构 Logo 时显示文字来源牌。",
+                    logo_alt=owner,
+                    visibility="prominent",
+                ).model_dump(mode="python")
+            else:
+                normalized["developer_attribution"] = AttributionItem(
+                    name="PolyAgent",
+                    role="implementation_source",
+                    organization="PolyAgent",
+                    description="平台内置或适配算法条目，由 PolyAgent 注册表维护。",
+                    logo_alt="PolyAgent",
+                    visibility="prominent",
+                ).model_dump(mode="python")
         return normalized
 
     # ------------------------------------------------------------------

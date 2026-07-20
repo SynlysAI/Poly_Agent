@@ -55,6 +55,13 @@ const form = reactive({
   entrypoint: 'src.handler:predict',
   loader: 'src.handler:load',
   description: '',
+  developer: '',
+  developer_organization: '',
+  developer_contact: '',
+  source_url: '',
+  citation: '',
+  logo_asset: '',
+  logo_url: '',
   sample_input: JSON.stringify({ smiles: 'C=C(F)F' }, null, 2),
 })
 
@@ -95,6 +102,14 @@ const contract = computed(() => ({
   output_schema: schemaFromRows(outputFields.value),
   sample_input_path: 'tests/sample_input.json',
   description: form.description || null,
+  developer: form.developer || null,
+  developer_organization: form.developer_organization || null,
+  developer_contact: form.developer_contact || null,
+  source_url: form.source_url || null,
+  citation: form.citation || null,
+  method_attributions: [],
+  logo_asset: form.logo_asset || null,
+  logo_url: form.logo_url || null,
 }))
 
 const contractPreview = computed(() => toYaml(contract.value))
@@ -248,9 +263,26 @@ async function submit() {
       pkg = await uploadAlgorithmPackage(data)
     } else {
       const data = new FormData()
-      for (const key of ['algorithm_id', 'name', 'version', 'algorithm_family', 'type', 'entrypoint', 'loader', 'description']) {
+      for (const key of [
+        'algorithm_id',
+        'name',
+        'version',
+        'algorithm_family',
+        'type',
+        'entrypoint',
+        'loader',
+        'description',
+        'developer',
+        'developer_organization',
+        'developer_contact',
+        'source_url',
+        'citation',
+        'logo_asset',
+        'logo_url',
+      ]) {
         if (form[key]) data.append(key, form[key])
       }
+      data.append('method_attributions', JSON.stringify(contract.value.method_attributions))
       data.append('material_scope', JSON.stringify(form.material_scope))
       data.append('task_scope', JSON.stringify(form.task_scope))
       data.append('trigger_modes', JSON.stringify(form.trigger_modes))
@@ -351,6 +383,9 @@ function viewModelDetail() {
             <el-form-item label="模型名称"><el-input v-model="form.name" placeholder="例如 Polymer Tg Predictor" /></el-form-item>
             <el-form-item label="算法 ID"><el-input v-model="form.algorithm_id" placeholder="vertical_tg_predictor" /></el-form-item>
             <el-form-item label="版本"><el-input v-model="form.version" placeholder="0.1.0" /></el-form-item>
+            <el-form-item label="开发者"><el-input v-model="form.developer" placeholder="模型开发者或团队" /></el-form-item>
+            <el-form-item label="机构"><el-input v-model="form.developer_organization" placeholder="开发机构或单位" /></el-form-item>
+            <el-form-item label="联系方式"><el-input v-model="form.developer_contact" placeholder="邮箱或内部联系人" /></el-form-item>
           </div>
           <el-form-item label="一句话说明"><el-input v-model="form.description" type="textarea" :rows="2" placeholder="说明这个模型适合预测什么、输入是什么。" /></el-form-item>
         </el-form>
@@ -391,7 +426,11 @@ function viewModelDetail() {
                 </el-form-item>
                 <el-form-item label="入口函数"><el-input v-model="form.entrypoint" /></el-form-item>
                 <el-form-item label="加载函数"><el-input v-model="form.loader" clearable /></el-form-item>
+                <el-form-item label="来源链接"><el-input v-model="form.source_url" placeholder="论文、仓库或模型说明链接" /></el-form-item>
+                <el-form-item label="Logo 资产"><el-input v-model="form.logo_asset" placeholder="/attributions/example-logo.png" /></el-form-item>
+                <el-form-item label="Logo URL"><el-input v-model="form.logo_url" placeholder="仅使用授权或公开可用 Logo" /></el-form-item>
               </div>
+              <el-form-item label="推荐引用"><el-input v-model="form.citation" type="textarea" :rows="2" placeholder="可填写模型、论文或方法引用文本" /></el-form-item>
             </el-form>
 
             <section class="schema-section">

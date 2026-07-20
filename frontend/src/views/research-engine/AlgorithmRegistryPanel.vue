@@ -8,6 +8,8 @@ import {
   getApiErrorMessage,
   listAlgorithms,
 } from '../../api/polyAgentApi'
+import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
+import AttributionBanner from '../../components/attribution/AttributionBanner.vue'
 
 const emit = defineEmits(['run-created', 'workflow-confirmed'])
 
@@ -55,8 +57,8 @@ const materialOptions = [
 
 const triggerOptions = [
   { label: '全部触发', value: '' },
-  { label: '人工 Workflow', value: 'human_workflow' },
-  { label: 'AutoResearch', value: 'autoresearch' },
+  { label: '人工研发流程', value: 'human_workflow' },
+  { label: '智能研发编排', value: 'autoresearch' },
   { label: '系统', value: 'system' },
 ]
 
@@ -144,6 +146,30 @@ function statusLabel(status) {
   return map[status] || status
 }
 
+function sourceLabel(source) {
+  const map = { uploaded_package: '外部接入', builtin: '内置算法' }
+  return map[source] || source || '内置算法'
+}
+
+function callMethodLabel(method) {
+  const map = {
+    internal_python: '本地服务',
+    http: 'HTTP 服务',
+    external_api: '外部 API',
+    package_runner: '模型服务',
+  }
+  return map[method] || method || '-'
+}
+
+function triggerModeLabel(mode) {
+  const map = {
+    human_workflow: '人工研发流程',
+    autoresearch: '智能研发编排',
+    system: '系统任务',
+  }
+  return map[mode] || mode
+}
+
 function materialScopeLabel(scopes) {
   if (!scopes || !scopes.length) return '-'
   const map = {
@@ -151,6 +177,15 @@ function materialScopeLabel(scopes) {
     fluoro_carbon_copolymer: '氟碳共聚', universal: '通用',
   }
   return scopes.map(s => map[s] || s).join(', ')
+}
+
+function algorithmAttributions(algo) {
+  if (!algo) return []
+  return [
+    algo.developer_attribution,
+    ...(algo.framework_attributions || []),
+    ...(algo.method_attributions || []),
+  ].filter(Boolean)
 }
 
 async function loadData() {
@@ -271,7 +306,7 @@ onMounted(loadData)
         </el-tag>
       </div>
       <el-button type="success" size="small" @click="confirmWorkflow">
-        确认 Workflow
+        确认流程
       </el-button>
     </div>
 
@@ -286,6 +321,7 @@ onMounted(loadData)
           <el-tag size="small" :type="typeTag(algo.type)">{{ typeLabel(algo.type) }}</el-tag>
         </div>
         <p class="algo-desc">{{ algo.description || '暂无描述' }}</p>
+        <AttributionBadges :attributions="algorithmAttributions(algo)" />
         <div class="algo-tags">
           <el-tag size="small" effect="plain" :type="familyTag(algo.algorithm_family)">{{ familyLabel(algo.algorithm_family) }}</el-tag>
           <el-tag size="small" effect="plain">{{ materialScopeLabel(algo.material_scope) }}</el-tag>
@@ -315,6 +351,15 @@ onMounted(loadData)
     <!-- 算法详情 drawer -->
     <el-drawer v-model="detailVisible" :title="detail?.name || '算法详情'" size="520px">
       <template v-if="detail">
+        <AttributionBanner
+          :title="`${detail.name} 来源`"
+          summary="展示算法开发者、机构和方法来源。"
+          :attributions="algorithmAttributions(detail)"
+          label="算法开发者"
+          compact
+          class="detail-attribution-banner"
+        />
+
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="ID">{{ detail.algorithm_id }}</el-descriptions-item>
           <el-descriptions-item label="类型">
@@ -327,19 +372,19 @@ onMounted(loadData)
             <el-tag size="small" :type="statusTag(detail.status)">{{ statusLabel(detail.status) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="版本">{{ detail.version }}</el-descriptions-item>
-          <el-descriptions-item label="Active Version">{{ detail.active_version_id || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="调用方式">{{ detail.call_method }}</el-descriptions-item>
-          <el-descriptions-item label="来源">{{ detail.source || 'builtin' }}</el-descriptions-item>
+          <el-descriptions-item label="当前版本">{{ detail.active_version_id || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="接入方式">{{ callMethodLabel(detail.call_method) }}</el-descriptions-item>
+          <el-descriptions-item label="接入来源">{{ sourceLabel(detail.source) }}</el-descriptions-item>
           <el-descriptions-item label="运行依赖">{{ detail.runtime_dependency || '无' }}</el-descriptions-item>
           <el-descriptions-item label="负责人">{{ detail.owner || '-' }}</el-descriptions-item>
           <el-descriptions-item label="材料范围">{{ materialScopeLabel(detail.material_scope) }}</el-descriptions-item>
-          <el-descriptions-item label="触发方式" :span="2">{{ (detail.trigger_modes || []).join(', ') }}</el-descriptions-item>
+          <el-descriptions-item label="触发方式" :span="2">{{ (detail.trigger_modes || []).map(triggerModeLabel).join(', ') }}</el-descriptions-item>
         </el-descriptions>
 
-        <h4 style="margin:16px 0 8px">输入 Schema</h4>
+        <h4 style="margin:16px 0 8px">输入字段说明</h4>
         <pre class="schema-json">{{ JSON.stringify(detail.input_schema, null, 2) }}</pre>
 
-        <h4 style="margin:16px 0 8px">输出 Schema</h4>
+        <h4 style="margin:16px 0 8px">输出字段说明</h4>
         <pre class="schema-json">{{ JSON.stringify(detail.output_schema, null, 2) }}</pre>
 
         <h4 v-if="detail.validation_metric && Object.keys(detail.validation_metric).length" style="margin:16px 0 8px">验证指标</h4>
@@ -468,6 +513,14 @@ onMounted(loadData)
   color: var(--app-ink-body);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.algo-card :deep(.attribution-badges) {
+  margin-bottom: 10px;
+}
+
+.detail-attribution-banner {
+  margin-bottom: 14px;
 }
 
 .algo-tags {

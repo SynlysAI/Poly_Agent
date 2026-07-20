@@ -15,6 +15,7 @@ import {
   redeployAlgorithmVersion,
   rollbackAlgorithmVersion,
 } from '../../api/polyAgentApi'
+import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -128,6 +129,13 @@ function formatDate(value) {
   return new Date(value).toLocaleString()
 }
 
+function rowAttributions(row) {
+  return [
+    row?.developer_attribution || selectedAlgorithm.value?.developer_attribution,
+    ...(row?.method_attributions || selectedAlgorithm.value?.method_attributions || []),
+  ].filter(Boolean)
+}
+
 onMounted(loadAlgorithms)
 </script>
 
@@ -152,6 +160,7 @@ onMounted(loadAlgorithms)
         当前 active：{{ selectedAlgorithm.active_version_id || '无' }} · 注册表状态：{{ statusLabel(selectedAlgorithm.status) }}
       </template>
     </el-alert>
+    <AttributionBadges v-if="selectedAlgorithm" :attributions="rowAttributions(selectedAlgorithm)" />
 
     <el-table v-loading="loading" :data="versions" border empty-text="暂无上传版本">
       <el-table-column prop="version" label="Version" width="100" />
@@ -160,6 +169,7 @@ onMounted(loadAlgorithms)
       <el-table-column label="Health" width="105"><template #default="{ row }"><el-tag size="small" :type="runtimeHealth(row) === 'ready' ? 'success' : 'info'">{{ runtimeHealth(row) }}</el-tag></template></el-table-column>
       <el-table-column label="Package SHA256" min-width="170"><template #default="{ row }"><el-tooltip :content="row.package_sha256"><code>{{ shortDigest(row.package_sha256) }}</code></el-tooltip></template></el-table-column>
       <el-table-column label="Runtime Digest" min-width="170"><template #default="{ row }"><el-tooltip :content="row.runtime_digest || row.image_digest || '-'"><code>{{ shortDigest(row.runtime_digest || row.image_digest) }}</code></el-tooltip></template></el-table-column>
+      <el-table-column label="来源" min-width="170"><template #default="{ row }"><AttributionBadges :attributions="rowAttributions(row)" /></template></el-table-column>
       <el-table-column label="Environment Digest" min-width="180"><template #default="{ row }"><el-tooltip :content="row.environment_digest || '-'"><code>{{ shortDigest(row.environment_digest) }}</code></el-tooltip></template></el-table-column>
       <el-table-column prop="created_by" label="创建人" width="110" />
       <el-table-column label="创建时间" width="170"><template #default="{ row }">{{ formatDate(row.created_at) }}</template></el-table-column>

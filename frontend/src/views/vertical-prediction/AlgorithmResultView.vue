@@ -1,12 +1,15 @@
 <script setup>
 import { computed } from 'vue'
 
+import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
+
 const props = defineProps({
   outputSummary: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
   inputSnapshot: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
   artifactRefs: { type: Array, default: () => [] },
   status: { type: String, default: '' },
   error: { type: Object, default: null },
+  attributions: { type: Array, default: () => [] },
 })
 
 const priorityValueKeys = ['value', 'predicted_value', 'prediction', 'score']
@@ -251,6 +254,11 @@ function stringifyJson(value) {
 
 <template>
   <div class="algorithm-result-view">
+    <section v-if="attributions.length" class="result-attribution">
+      <span>模型开发者来源</span>
+      <AttributionBadges :attributions="attributions" :limit="3" />
+    </section>
+
     <el-alert
       v-if="error"
       class="result-error"
@@ -374,6 +382,24 @@ function stringifyJson(value) {
 
 .result-error {
   margin-bottom: 2px;
+}
+
+.result-attribution {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.result-attribution span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .prediction-summary {

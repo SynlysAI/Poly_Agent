@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.attribution import AttributionItem
+
 
 # =============================================================================
 # 枚举与 Literal 类型
@@ -75,6 +77,15 @@ AlgorithmStatus = Literal[
 
 AlgorithmIntegrationKind = Literal["real", "builtin", "simulated", "pending"]
 """算法接入形态，用于区分真实能力、内置能力、模拟演示和待接入能力。"""
+
+CapabilityLevel = Literal[
+    "production_ready",
+    "configured_pending_verification",
+    "demo_fallback",
+    "not_configured",
+    "unavailable",
+]
+"""产品能力真实性等级。"""
 
 MaterialScope = Literal[
     "fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"
@@ -571,6 +582,10 @@ class AlgorithmRegistryEntry(BaseModel):
     deployment_status: str | None = Field(default=None, max_length=40)
     integration_kind: AlgorithmIntegrationKind = "builtin"
     capability_group: str | None = Field(default=None, max_length=80)
+    developer_attribution: AttributionItem | None = None
+    framework_attributions: list[AttributionItem] = Field(default_factory=list)
+    method_attributions: list[AttributionItem] = Field(default_factory=list)
+    implementation_notes: str | None = Field(default=None, max_length=1000)
 
     @field_validator("algorithm_id")
     @classmethod
@@ -620,6 +635,14 @@ class AlgorithmPackageCreate(BaseModel):
     runtime: dict = Field(default_factory=dict)
     sample_input: dict = Field(default_factory=dict)
     description: str | None = Field(default=None, max_length=1000)
+    developer: str | None = Field(default=None, max_length=160)
+    developer_organization: str | None = Field(default=None, max_length=160)
+    developer_contact: str | None = Field(default=None, max_length=160)
+    source_url: str | None = Field(default=None, max_length=600)
+    citation: str | None = Field(default=None, max_length=1000)
+    method_attributions: list[AttributionItem] = Field(default_factory=list)
+    logo_asset: str | None = Field(default=None, max_length=300)
+    logo_url: str | None = Field(default=None, max_length=600)
 
     @field_validator("algorithm_id")
     @classmethod
@@ -682,6 +705,9 @@ class AlgorithmVersion(BaseModel):
     deployment: dict = Field(default_factory=dict)
     runtime_logs: list[dict] = Field(default_factory=list)
     contract: dict = Field(default_factory=dict)
+    developer_attribution: AttributionItem | None = None
+    method_attributions: list[AttributionItem] = Field(default_factory=list)
+    implementation_notes: str | None = Field(default=None, max_length=1000)
     created_by: str
     created_at: datetime
     updated_at: datetime
@@ -1078,11 +1104,36 @@ class ResearchEngineReadinessItem(BaseModel):
     service: str
     label: str
     status: Literal["ready", "warning", "unavailable"]
+    capability_id: str | None = None
+    level: CapabilityLevel = "not_configured"
     required: bool = False
     blocking: bool = False
     demo_fallback: bool = False
+    configured: bool = False
+    healthy: bool = False
+    provider: str | None = None
+    model: str | None = None
+    execution_mode: str | None = None
+    fallback_reason: str | None = None
+    next_action: str | None = None
     message: str
     details: dict = Field(default_factory=dict)
+
+
+class ResearchEngineStageReadiness(BaseModel):
+    """AutoResearch 阶段实际运行模式摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage_key: ResearchStageKey
+    label: str
+    capability_id: str
+    execution_mode: str
+    level: CapabilityLevel
+    provider: str | None = None
+    model: str | None = None
+    demo_fallback: bool = False
+    fallback_reason: str | None = None
 
 
 class ResearchEngineReadinessData(BaseModel):
@@ -1094,6 +1145,7 @@ class ResearchEngineReadinessData(BaseModel):
     can_start: bool
     checked_at: datetime
     items: list[ResearchEngineReadinessItem]
+    stage_modes: list[ResearchEngineStageReadiness] = Field(default_factory=list)
 
 
 # =============================================================================

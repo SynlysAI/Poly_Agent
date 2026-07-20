@@ -20,6 +20,7 @@ except ImportError:
 
 from app.services.research_engine_service import ResearchEngineService
 from app.core.auth import get_current_user
+from app.core.config import settings
 from app.main import app
 from app.schemas.knowledge import KnowledgeHealthData
 
@@ -147,7 +148,7 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertIn(ps_id, archived_ids)
 
     def test_readiness_reports_optional_demo_fallbacks_before_start(self) -> None:
-        """AutoResearch 启动前可见 RAG/Alchemist 等集成可用性。"""
+        """AutoResearch 启动前可见 RAG/Alchemist/LLM 和阶段运行模式。"""
         rag_unavailable = KnowledgeHealthData(
             status="unavailable",
             configured=False,
@@ -155,9 +156,30 @@ class ProblemSpecApiTest(ComputationTestCase):
             message="Literature RAG 服务未配置或本地未发现。",
             systems=[],
         )
-        with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
-             patch("app.services.knowledge_service.KnowledgeService.health", return_value=rag_unavailable):
-            resp = self.client.get(f"{self.base_url}/readiness")
+        original_llm_model = settings.llm_model
+        original_llm_base_url = settings.llm_base_url
+        original_llm_api_key = settings.llm_api_key
+        original_llm_default_provider = settings.llm_default_provider
+        original_llm_default_model = settings.llm_default_model
+        original_llm_provider_configs_json = settings.llm_provider_configs_json
+        settings.llm_model = "gpt-test"
+        settings.llm_base_url = "http://llm.local/v1"
+        settings.llm_api_key = "test-key"
+        settings.llm_default_provider = ""
+        settings.llm_default_model = ""
+        settings.llm_provider_configs_json = ""
+        try:
+            with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
+                 patch("app.services.knowledge_service.KnowledgeService.health", return_value=rag_unavailable), \
+                 patch("app.services.llm_model_service.LLMRoutingRepository.find_one", return_value=None):
+                resp = self.client.get(f"{self.base_url}/readiness")
+        finally:
+            settings.llm_model = original_llm_model
+            settings.llm_base_url = original_llm_base_url
+            settings.llm_api_key = original_llm_api_key
+            settings.llm_default_provider = original_llm_default_provider
+            settings.llm_default_model = original_llm_default_model
+            settings.llm_provider_configs_json = original_llm_provider_configs_json
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
@@ -166,11 +188,67 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertFalse(data["ready"])
         self.assertTrue(data["can_start"])
         self.assertEqual(by_service["literature-rag"]["status"], "warning")
+        self.assertEqual(by_service["literature-rag"]["level"], "not_configured")
         self.assertFalse(by_service["literature-rag"]["demo_fallback"])
         self.assertFalse(by_service["literature-rag"]["blocking"])
         self.assertEqual(by_service["artifact-store"]["status"], "ready")
         self.assertEqual(by_service["computation-engine"]["status"], "ready")
-        self.assertEqual(by_service["alchemist-backend"]["status"], "warning")
+        self.assertEqual(by_service["alchemist-backend"]["status"], "ready")
+        self.assertEqual(by_service["research-llm"]["provider"], "default_openai")
+        self.assertEqual(by_service["research-llm"]["model"], "gpt-test")
+        self.assertEqual(by_service["research-llm"]["level"], "configured_pending_verification")
+        stage_modes = {item["stage_key"]: item for item in data["stage_modes"]}
+        self.assertEqual(stage_modes["KNOWLEDGE_RETRIEVAL"]["capability_id"], "literature-rag")
+        self.assertEqual(stage_modes["STRUCTURE_FEATURE"]["execution_mode"], "mock_fallback")
+        self.assertEqual(stage_modes["MODEL_UPDATE"]["provider"], "default_openai")
+
+    def test_capabilities_endpoint_reports_truth_levels(self) -> None:
+        """平台能力接口返回统一真实性等级和模型配置摘要。"""
+        rag_demo = KnowledgeHealthData(
+            status="warning",
+            configured=False,
+            demo_available=True,
+            message="使用内置 demo corpus。",
+            systems=["demo"],
+            backend="memory",
+        )
+        with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
+             patch("app.services.knowledge_service.KnowledgeService.health", return_value=rag_demo):
+            resp = self.client.get("/api/v1/capabilities")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        data = resp.json()["data"]
+        items = {(item["module_id"], item["capability_id"]): item for item in data["items"]}
+        self.assertIn(("knowledge", "literature-rag"), items)
+        self.assertIn(("research-engine", "research-llm"), items)
+        self.assertEqual(items[("knowledge", "literature-rag")]["level"], "demo_fallback")
+        self.assertTrue(items[("knowledge", "literature-rag")]["demo_fallback"])
+        self.assertIn(
+            items[("research-engine", "research-llm")]["level"],
+            {"not_configured", "configured_pending_verification", "production_ready", "unavailable"},
+        )
+
+
+class AttributionApiTest(ComputationTestCase):
+    """覆盖模块来源标注 API。"""
+
+    def test_list_and_get_module_attributions(self) -> None:
+        """模块来源注册表返回机构、引用和实现边界。"""
+        list_resp = self.client.get("/api/v1/attributions/modules")
+        self.assertEqual(list_resp.status_code, 200, list_resp.text)
+        list_data = list_resp.json()["data"]
+        module_ids = {item["module_id"] for item in list_data["items"]}
+        self.assertIn("research_engine", module_ids)
+        self.assertIn("wetlab_optimization", module_ids)
+
+        detail_resp = self.client.get("/api/v1/attributions/modules/research_engine")
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.text)
+        detail = detail_resp.json()["data"]
+        self.assertIn("ChemOS", detail["summary"])
+        self.assertTrue(detail["implementation_boundary"])
+        prominent = [item for item in detail["attributions"] if item["visibility"] == "prominent"]
+        self.assertTrue(prominent)
+        self.assertTrue(prominent[0]["logo_alt"])
 
 
 class AlgorithmPackageApiTest(ComputationTestCase):
@@ -374,6 +452,7 @@ sample_input:
         self.assertEqual(algorithm_resp.status_code, 200)
         self.assertEqual(algorithm_resp.json()["data"]["active_version_id"], version_id)
         self.assertEqual(algorithm_resp.json()["data"]["source"], "uploaded_package")
+        self.assertEqual(algorithm_resp.json()["data"]["developer_attribution"]["role"], "developer")
 
         run_resp = self.client.post(
             f"{self.base_url}/algorithm-runs",
@@ -392,6 +471,39 @@ sample_input:
         self.assertEqual(run_data["runtime_snapshot"]["backend"], "local_sandbox_runtime")
         self.assertTrue(run_data["runtime_digest"].startswith("sha256:"))
         self.assertIn("worker_pid", run_data["runtime_snapshot"])
+
+    def test_pack_algorithm_package_persists_developer_attribution(self) -> None:
+        """网页打包入口会把开发者来源写入 AlgorithmVersion。"""
+        handler_source = b"""
+def predict(inputs, context=None, model=None):
+    return {"prediction": {"value": 1.0, "unit": "demo"}}
+"""
+        pack_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:pack",
+            data={
+                "algorithm_id": "vertical_source_demo",
+                "name": "Vertical Source Demo",
+                "version": "0.1.0",
+                "entrypoint": "src.handler:predict",
+                "developer": "Demo Developer",
+                "developer_organization": "Demo Institute",
+                "source_url": "https://example.org/model",
+                "citation": "Demo Developer, Vertical Source Demo.",
+                "input_schema": '{"fields":{"smiles":"string"},"required":["smiles"]}',
+                "output_schema": '{"fields":{"prediction":"object"},"required":["prediction"]}',
+                "sample_input": '{"smiles":"CCO"}',
+            },
+            files=[("files", ("handler.py", handler_source, "text/x-python"))],
+        )
+        self.assertEqual(pack_resp.status_code, 200, pack_resp.text)
+        version_id = pack_resp.json()["data"]["version_id"]
+
+        versions_resp = self.client.get(f"{self.base_url}/algorithms/vertical_source_demo/versions")
+        self.assertEqual(versions_resp.status_code, 200, versions_resp.text)
+        version = next(item for item in versions_resp.json()["data"]["items"] if item["version_id"] == version_id)
+        self.assertEqual(version["developer_attribution"]["name"], "Demo Developer")
+        self.assertEqual(version["developer_attribution"]["organization"], "Demo Institute")
+        self.assertEqual(version["developer_attribution"]["url"], "https://example.org/model")
 
     def test_upload_rejects_zip_path_traversal_on_validate(self) -> None:
         """ZIP 路径穿越在校验阶段被拒绝。"""

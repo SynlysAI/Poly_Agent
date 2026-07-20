@@ -2,6 +2,8 @@
 import { useRouter } from 'vue-router'
 import { Connection, DataAnalysis, MagicStick, SetUp, Star } from '@element-plus/icons-vue'
 
+import AttributionBanner from '../components/attribution/AttributionBanner.vue'
+
 const router = useRouter()
 
 const entries = [
@@ -44,6 +46,8 @@ function openEntry(entry) {
 
 <template>
   <div class="optimization-home">
+    <AttributionBanner module-id="wetlab_optimization" label="方法来源" compact />
+
     <section class="panel overview-panel">
       <div class="overview-content">
         <div>

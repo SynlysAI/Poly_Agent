@@ -24,6 +24,21 @@ class GlobalTaskItem(BaseModel):
     raw: dict = Field(default_factory=dict)
 
 
+class GlobalTaskIndexRecord(BaseModel):
+    """Projected task record for scalable global task-center queries."""
+
+    task_id: str
+    task_kind: str
+    module_id: str
+    owner_id: str | None = None
+    status: str
+    title: str
+    summary: str = "-"
+    route: dict = Field(default_factory=dict)
+    updated_at: datetime | None = None
+    source_ref: dict = Field(default_factory=dict)
+
+
 class GlobalTaskCenterData(BaseModel):
     """全局任务中心分页响应。"""
 

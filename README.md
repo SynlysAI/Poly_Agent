@@ -4,6 +4,20 @@
 
 ## 功能概览
 
+## 框架、方法与机构来源
+
+Poly Agent 在产品页面中维护统一的来源与引用标注。系统模块首屏会显示参考框架、方法来源和机构来源；算法卡片、垂类模型详情和预测结果会显示开发者来源。若机构 Logo 有明确授权或随算法包提交，则以右侧 Logo 卡片展示；否则使用文字来源牌，不伪造 Logo。
+
+| 模块 | 主要来源标注 | Poly Agent 实现边界 |
+|------|--------------|---------------------|
+| ResearchEngine / 计算编排 | ChemOS 2.0，University of Toronto / Aspuru-Guzik Group | 仅标注为编排思想和系统架构参考；ProblemSpec、Workflow、AlgorithmRun、Gate 和追溯为本项目实现 |
+| 湿实验优化 / Alchemist | NatLabRockies / NREL / NLR ALchemist | 实验设计、GP 建模、采集优化方法标注 ALchemist；Poly Agent 负责认证、会话、中文工作台和平台集成 |
+| ComputeEngine | RDKit、OpenBabel、xTB、CREST、ORCA | Poly Agent 负责任务、worker、artifact、审计和 campaign 联动；具体计算能力来自本地依赖 |
+| 垂类预测模型 | 算法包开发者、开发机构、来源链接和引用 | 平台治理上传、校验、部署和运行记录；模型方法与开发者来源来自算法契约 |
+| 文献知识库 | PolyAgent KnowledgeService 与独立 literature-rag 服务 | 查询、证据、图谱上下文和语料来源按服务契约追溯 |
+
+完整矩阵见 [doc/polyagent-attribution-source-matrix.md](doc/polyagent-attribution-source-matrix.md)。
+
 ### 1. Alchemist — 实验设计与贝叶斯优化（内置）
 
 基于贝叶斯优化（主动学习）的实验设计工具，用尽量少的实验次数找到最优实验条件。已从独立服务迁移为 Poly Agent 内置模块，无需额外部署。完整 6 步闭环流程：

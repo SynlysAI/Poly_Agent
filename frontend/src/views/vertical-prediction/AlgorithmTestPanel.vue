@@ -28,8 +28,10 @@ const inputs = ref({})
 const jsonDrafts = ref({})
 const lastRun = ref(null)
 
+const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === algorithmId.value) || null)
 const selectedVersion = computed(() => versions.value.find((item) => item.version_id === versionId.value) || null)
 const schemaFields = computed(() => Object.keys(selectedVersion.value?.input_schema?.fields || {}))
+const selectedAttributions = computed(() => algorithmAttributions(selectedAlgorithm.value))
 
 watch(() => props.refreshKey, loadAlgorithms)
 watch(() => props.algorithmId, loadAlgorithms)
@@ -169,6 +171,15 @@ function duration(run) {
   return `${Math.max(0, new Date(run.finished_at) - new Date(run.started_at))} ms`
 }
 
+function algorithmAttributions(algorithm) {
+  if (!algorithm) return []
+  return [
+    algorithm.developer_attribution,
+    ...(algorithm.framework_attributions || []),
+    ...(algorithm.method_attributions || []),
+  ].filter(Boolean)
+}
+
 onMounted(loadAlgorithms)
 </script>
 
@@ -216,6 +227,7 @@ onMounted(loadAlgorithms)
             :artifact-refs="lastRun.artifact_refs"
             :status="lastRun.status"
             :error="lastRun.error"
+            :attributions="selectedAttributions"
           />
         </template>
         <div v-else class="empty-output">运行后将在此显示输出 JSON、artifact、版本与耗时。</div>

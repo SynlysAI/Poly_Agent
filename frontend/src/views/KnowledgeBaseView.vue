@@ -3,10 +3,13 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
+  Close,
   ChatLineRound,
   Collection,
   Connection,
   DataAnalysis,
+  Expand,
+  Fold,
   Refresh,
   Search,
 } from '@element-plus/icons-vue'
@@ -25,6 +28,7 @@ import {
   queryKnowledgeBase,
   streamKnowledgeQuery,
 } from '../api/polyAgentApi'
+import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 use([
   GraphChart,
@@ -50,6 +54,10 @@ const selectedNodeId = ref('')
 const suggestedQuestions = ref([])
 const suggestionsLoading = ref(false)
 const queryTrace = ref([])
+const queryPaneCollapsed = ref(false)
+const citationPanelCollapsed = ref(true)
+const nodeDetailCollapsed = ref(false)
+const nodeDetailDrawerVisible = ref(false)
 
 const queryForm = reactive({
   question: '',
@@ -522,6 +530,18 @@ function handleGraphChartClick(params) {
   if (nodeId) selectNode(nodeId)
 }
 
+function shouldUseNodeDetailDrawer() {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 1100px)').matches
+}
+
+function openNodeDetailPanel() {
+  if (shouldUseNodeDetailDrawer()) {
+    nodeDetailDrawerVisible.value = true
+  } else {
+    nodeDetailCollapsed.value = false
+  }
+}
+
 async function loadBootstrap() {
   loadingSystems.value = true
   try {
@@ -669,6 +689,9 @@ async function loadSuggestedQuestions() {
 
 function selectNode(nodeId) {
   selectedNodeId.value = nodeId
+  if (nodeDetailCollapsed.value || shouldUseNodeDetailDrawer()) {
+    openNodeDetailPanel()
+  }
 }
 
 onMounted(loadBootstrap)
@@ -676,6 +699,8 @@ onMounted(loadBootstrap)
 
 <template>
   <div class="knowledge-page">
+    <AttributionBanner module-id="knowledge" label="服务来自" compact />
+
     <section class="panel knowledge-shell" v-loading="loadingSystems">
       <div class="panel-header knowledge-header">
         <div>
@@ -751,11 +776,24 @@ onMounted(loadBootstrap)
           </el-tab-pane>
         </el-tabs>
 
-        <div v-if="activeModule === 'rag'" class="rag-layout">
-          <section class="query-pane">
-            <div class="pane-heading">
-              <span>Query</span>
-              <strong>检索配置</strong>
+        <div v-if="activeModule === 'rag'" class="rag-layout" :class="{ 'query-collapsed': queryPaneCollapsed, 'citations-collapsed': citationPanelCollapsed }">
+          <button
+            v-if="queryPaneCollapsed"
+            type="button"
+            class="side-restore-button query-restore-button"
+            aria-label="展开检索配置"
+            @click="queryPaneCollapsed = false"
+          >
+            <el-icon><Expand /></el-icon>
+            <span>检索</span>
+          </button>
+          <section v-else class="query-pane">
+            <div class="pane-toolbar">
+              <div class="pane-heading">
+                <span>Query</span>
+                <strong>检索配置</strong>
+              </div>
+              <el-button text size="small" :icon="Fold" @click="queryPaneCollapsed = true">收起</el-button>
             </div>
             <el-form label-position="top">
               <el-form-item label="问题">
@@ -845,10 +883,13 @@ onMounted(loadBootstrap)
                   </template>
                 </article>
 
-                <aside class="citation-panel">
-                  <div class="pane-heading compact">
-                    <span>References</span>
-                    <strong>引用来源</strong>
+                <aside v-if="!citationPanelCollapsed" class="citation-panel">
+                  <div class="pane-toolbar compact">
+                    <div class="pane-heading compact">
+                      <span>References</span>
+                      <strong>引用来源</strong>
+                    </div>
+                    <el-button text size="small" :icon="Fold" @click="citationPanelCollapsed = true">收起</el-button>
                   </div>
                   <a
                     v-for="citation in topCitations"
@@ -864,6 +905,16 @@ onMounted(loadBootstrap)
                   </a>
                   <span v-if="!topCitations.length" class="muted-text">本次回答没有可用论文链接。</span>
                 </aside>
+                <button
+                  v-else
+                  type="button"
+                  class="side-restore-button citation-restore-button"
+                  aria-label="展开引用来源"
+                  @click="citationPanelCollapsed = false"
+                >
+                  <el-icon><Expand /></el-icon>
+                  <span>引用</span>
+                </button>
               </div>
 
               <div class="section-title-row">
@@ -932,9 +983,10 @@ onMounted(loadBootstrap)
                 { label: '分栏视图', value: 'columns' },
               ]"
             />
+            <el-button size="small" :icon="Expand" :disabled="!selectedNode" @click="openNodeDetailPanel">节点详情</el-button>
           </section>
 
-          <section class="graph-workspace" v-loading="graphLoading">
+          <section class="graph-workspace" :class="{ 'detail-collapsed': nodeDetailCollapsed }" v-loading="graphLoading">
             <div class="graph-main-pane">
               <div class="graph-chart-pane" :class="{ active: graphViewMode === 'relationship' }">
                 <VChart
@@ -981,10 +1033,24 @@ onMounted(loadBootstrap)
               </div>
             </div>
 
-            <aside class="node-detail">
+            <button
+              v-if="nodeDetailCollapsed"
+              type="button"
+              class="side-restore-button node-restore-button"
+              aria-label="展开节点详情"
+              @click="openNodeDetailPanel"
+            >
+              <el-icon><Expand /></el-icon>
+              <span>详情</span>
+            </button>
+
+            <aside v-else class="node-detail">
               <div class="node-detail-header">
                 <h4>{{ selectedNode?.label || '节点详情' }}</h4>
-                <el-tag v-if="selectedNode" :type="nodeTypeTag(selectedNode.type)" effect="plain">{{ selectedNode.type }}</el-tag>
+                <div class="node-detail-actions">
+                  <el-tag v-if="selectedNode" :type="nodeTypeTag(selectedNode.type)" effect="plain">{{ selectedNode.type }}</el-tag>
+                  <el-button text size="small" :icon="Fold" @click="nodeDetailCollapsed = true">收起</el-button>
+                </div>
               </div>
               <a
                 v-if="selectedNodeSourceUrl"
@@ -1018,6 +1084,47 @@ onMounted(loadBootstrap)
         </div>
       </div>
     </section>
+
+    <el-drawer v-model="nodeDetailDrawerVisible" title="节点详情" size="min(420px, 92vw)">
+      <template v-if="selectedNode">
+        <div class="node-detail drawer-node-detail">
+          <div class="node-detail-header">
+            <h4>{{ selectedNode.label || '节点详情' }}</h4>
+            <div class="node-detail-actions">
+              <el-tag :type="nodeTypeTag(selectedNode.type)" effect="plain">{{ selectedNode.type }}</el-tag>
+              <el-button text size="small" :icon="Close" @click="nodeDetailDrawerVisible = false">关闭</el-button>
+            </div>
+          </div>
+          <a
+            v-if="selectedNodeSourceUrl"
+            class="node-source-link"
+            :href="selectedNodeSourceUrl"
+            target="_blank"
+            rel="noreferrer"
+          >
+            打开原文/PDF
+          </a>
+          <el-descriptions :column="1" size="small" border>
+            <el-descriptions-item label="ID">
+              <span class="node-id-text" :title="selectedNode.id">{{ selectedNode.id }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="Score">{{ selectedNode.score }}</el-descriptions-item>
+          </el-descriptions>
+          <pre class="property-json">{{ JSON.stringify(selectedNode.properties, null, 2) }}</pre>
+
+          <div class="edge-list">
+            <h4>关联关系</h4>
+            <div v-for="edge in selectedNodeEdges" :key="edge.id" class="edge-item">
+              <span class="edge-node" :title="nodeLabelById(edge.source)">{{ nodeLabelById(edge.source) }}</span>
+              <el-tag size="small" effect="plain">{{ edge.type }}</el-tag>
+              <span class="edge-arrow">-&gt;</span>
+              <span class="edge-node" :title="nodeLabelById(edge.target)">{{ nodeLabelById(edge.target) }}</span>
+            </div>
+            <span v-if="!selectedNodeEdges.length" class="muted-text">暂无关联关系。</span>
+          </div>
+        </div>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
@@ -1213,6 +1320,10 @@ onMounted(loadBootstrap)
   gap: 16px;
 }
 
+.rag-layout.query-collapsed {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
 .query-pane,
 .answer-pane,
 .node-detail {
@@ -1237,6 +1348,23 @@ onMounted(loadBootstrap)
   flex-direction: column;
   gap: 2px;
   margin-bottom: 14px;
+}
+
+.pane-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.pane-toolbar .pane-heading {
+  margin-bottom: 0;
+}
+
+.pane-toolbar.compact {
+  align-items: center;
+  margin-bottom: 10px;
 }
 
 .pane-heading span {
@@ -1371,6 +1499,10 @@ onMounted(loadBootstrap)
   align-items: start;
 }
 
+.rag-layout.citations-collapsed .answer-grid {
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
 .semantic-answer {
   display: flex;
   flex-direction: column;
@@ -1436,6 +1568,38 @@ onMounted(loadBootstrap)
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
   background: #ffffff;
+}
+
+.side-restore-button {
+  width: 44px;
+  min-height: 160px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+  color: var(--app-ink-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.side-restore-button:hover {
+  border-color: var(--app-primary);
+  color: var(--app-primary-active);
+}
+
+.side-restore-button .el-icon {
+  writing-mode: horizontal-tb;
+}
+
+.query-restore-button {
+  min-height: 480px;
 }
 
 .citation-card {
@@ -1582,6 +1746,10 @@ onMounted(loadBootstrap)
   gap: 16px;
 }
 
+.graph-workspace.detail-collapsed {
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
 .graph-main-pane {
   min-width: 0;
 }
@@ -1597,7 +1765,7 @@ onMounted(loadBootstrap)
 }
 
 .graph-chart-pane {
-  min-height: 560px;
+  min-height: clamp(620px, calc(100vh - 340px), 760px);
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
   background: #ffffff;
@@ -1605,11 +1773,11 @@ onMounted(loadBootstrap)
 
 .relationship-chart {
   width: 100%;
-  height: 560px;
+  height: clamp(620px, calc(100vh - 340px), 760px);
 }
 
 .graph-board {
-  min-height: 560px;
+  min-height: clamp(620px, calc(100vh - 340px), 760px);
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
@@ -1801,7 +1969,7 @@ onMounted(loadBootstrap)
 }
 
 .node-detail {
-  min-height: 560px;
+  min-height: clamp(620px, calc(100vh - 340px), 760px);
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -1812,6 +1980,14 @@ onMounted(loadBootstrap)
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+}
+
+.node-detail-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .node-detail-header h4 {
@@ -1850,6 +2026,12 @@ onMounted(loadBootstrap)
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.drawer-node-detail {
+  min-height: 0;
+  padding: 0;
+  border: 0;
 }
 
 .edge-item {
@@ -1907,6 +2089,10 @@ onMounted(loadBootstrap)
     grid-template-columns: 1fr;
   }
 
+  .rag-layout.query-collapsed {
+    grid-template-columns: 1fr;
+  }
+
   .query-pane,
   .answer-pane,
   .node-detail {
@@ -1919,6 +2105,24 @@ onMounted(loadBootstrap)
 
   .answer-grid {
     grid-template-columns: 1fr;
+  }
+
+  .rag-layout.citations-collapsed .answer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .side-restore-button {
+    width: 100%;
+    min-height: 42px;
+    writing-mode: horizontal-tb;
+  }
+
+  .query-restore-button {
+    min-height: 42px;
+  }
+
+  .graph-workspace > .node-detail {
+    display: none;
   }
 }
 

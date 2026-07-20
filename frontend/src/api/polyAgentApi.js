@@ -17,7 +17,7 @@ const apiClient = axios.create({
   timeout: 60000,
 })
 
-function generateRequestId() {
+export function generateRequestId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
@@ -144,6 +144,16 @@ export function getApiErrorMessage(error) {
 
 export function getApiBaseUrl() {
   return resolvedBaseUrl
+}
+
+// ── 来源与引用标注 API ──
+
+export function listModuleAttributions() {
+  return apiClient.get('/attributions/modules').then(unwrapResponse)
+}
+
+export function getModuleAttribution(moduleId) {
+  return apiClient.get(`/attributions/modules/${encodeURIComponent(moduleId)}`).then(unwrapResponse)
 }
 
 // ── 认证 API ──
@@ -322,6 +332,10 @@ export function markSuggestionFailed(suggestionId, payload) {
 
 export function getIntegrationStatus() {
   return apiClient.get('/integrations/status').then(unwrapResponse)
+}
+
+export function listCapabilities() {
+  return apiClient.get('/capabilities').then(unwrapResponse)
 }
 
 // ── 数据目录 API ──

@@ -33,6 +33,8 @@ const llmError = ref('')
 const editVisible = ref(false)
 const editingServiceKey = ref('')
 const activeTab = ref(normalizeTab(route.query.tab))
+const statusDetailVisible = ref(false)
+const selectedServiceStatus = ref(null)
 
 // ── ResearchEngine 算法清单 ──
 const algorithms = ref([])
@@ -104,7 +106,7 @@ function materialScopeLabel(scopes) {
 }
 
 function triggerModeLabel(modes) {
-  const map = { human_workflow: '人工 Workflow', autoresearch: 'AutoResearch', system: '系统' }
+  const map = { human_workflow: '人工工作流', autoresearch: 'AutoResearch', system: '系统' }
   return (modes || []).map((mode) => map[mode] || mode)
 }
 
@@ -134,6 +136,16 @@ const groupedAlgos = computed(() => {
   })
   return algorithmGroupDefs.map((group) => ({ ...group, items: groups[group.key] || [] }))
 })
+
+const algorithmStats = computed(() =>
+  algorithmGroupDefs.map((group) => {
+    const count = filteredAlgos.value.filter((item) => {
+      const key = algoIntegrationKind(item)
+      return (key === group.key) || (!algorithmGroupDefs.some((def) => def.key === key) && group.key === 'builtin')
+    }).length
+    return { ...group, count }
+  }),
+)
 
 async function loadAlgos() {
   algoLoading.value = true
@@ -201,6 +213,12 @@ const serviceGroups = computed(() => {
     items: services.value.filter((item) => (serviceCatalog[item.service]?.group || '运行组件') === group),
   })).filter((group) => group.items.length)
 })
+
+const activeServiceGroups = ref([])
+
+watch(serviceGroups, (groups) => {
+  activeServiceGroups.value = groups.map((group) => group.name)
+}, { immediate: true })
 
 const healthSummary = computed(() => {
   const required = ['mongodb', 'artifact-store', 'literature-rag', 'rdkit', 'openbabel', 'xtb']
@@ -344,6 +362,11 @@ function serviceReason(row) {
 
 function serviceVersion(row) {
   return row.details?.version || row.details?.message || '-'
+}
+
+function showServiceDetail(row) {
+  selectedServiceStatus.value = row
+  statusDetailVisible.value = true
 }
 
 function formatConfigSummary(row) {
@@ -593,46 +616,45 @@ watch(activeTab, (tab) => {
                   <small>{{ stat.hint }}</small>
                 </article>
               </div>
-              <div class="service-groups">
-                <section v-for="group in serviceGroups" :key="group.name" class="service-group">
-                  <div class="service-group-title">
-                    <h4>{{ group.name }}</h4>
-                    <span>{{ group.items.length }} 项</span>
-                  </div>
-                  <div class="service-card-grid">
-                    <article v-for="row in group.items" :key="row.service" class="service-card" :class="`service-card--${statusTone(row.status)}`">
-                      <div class="service-card-header">
-                        <div>
+              <el-collapse v-model="activeServiceGroups" class="service-group-collapse">
+                <el-collapse-item v-for="group in serviceGroups" :key="group.name" :name="group.name">
+                  <template #title>
+                    <div class="service-group-title">
+                      <h4>{{ group.name }}</h4>
+                      <span>{{ group.items.length }} 项</span>
+                    </div>
+                  </template>
+                  <el-table :data="group.items" stripe class="service-status-table">
+                    <el-table-column label="服务" min-width="210">
+                      <template #default="{ row }">
+                        <div class="service-name-cell">
                           <strong>{{ serviceName(row.service) }}</strong>
-                          <span>{{ serviceHint(row.service) }}</span>
+                          <small>{{ serviceHint(row.service) }}</small>
                         </div>
-                        <div class="service-status-line">
-                          <i class="service-status-dot" aria-hidden="true" />
-                          <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
-                        </div>
-                      </div>
-                      <dl class="service-facts">
-                        <div>
-                          <dt>位置</dt>
-                          <dd class="service-fact-value" :title="servicePrimaryDetail(row)">{{ servicePrimaryDetail(row) }}</dd>
-                        </div>
-                        <div>
-                          <dt>版本</dt>
-                          <dd class="service-fact-value service-fact-value--version" :title="serviceVersion(row)">{{ serviceVersion(row) }}</dd>
-                        </div>
-                        <div v-if="serviceReason(row)" class="service-reason">
-                          <dt>原因</dt>
-                          <dd class="service-fact-value service-fact-value--reason" :title="serviceReason(row)">{{ serviceReason(row) }}</dd>
-                        </div>
-                      </dl>
-                      <details>
-                        <summary>查看原始检查结果</summary>
-                        <pre class="details-json">{{ formatDetails(row.details) }}</pre>
-                      </details>
-                    </article>
-                  </div>
-                </section>
-              </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="状态" width="110">
+                      <template #default="{ row }">
+                        <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="位置" min-width="220" show-overflow-tooltip>
+                      <template #default="{ row }">{{ servicePrimaryDetail(row) }}</template>
+                    </el-table-column>
+                    <el-table-column label="版本 / 信息" min-width="180" show-overflow-tooltip>
+                      <template #default="{ row }">{{ serviceVersion(row) }}</template>
+                    </el-table-column>
+                    <el-table-column label="原因" min-width="180" show-overflow-tooltip>
+                      <template #default="{ row }">{{ serviceReason(row) || '-' }}</template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="96" align="right">
+                      <template #default="{ row }">
+                        <el-button text type="primary" size="small" :icon="ViewIcon" @click="showServiceDetail(row)">详情</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </el-collapse-item>
+              </el-collapse>
             </div>
           </el-tab-pane>
 
@@ -651,56 +673,65 @@ watch(activeTab, (tab) => {
               <el-button text @click="algoFilters.type = ''; algoFilters.material_scope = ''; algoFilters.keyword = ''">重置</el-button>
               <el-button :icon="Refresh" :loading="algoLoading" @click="loadAlgos">刷新</el-button>
             </div>
-            <div v-if="filteredAlgos.length" v-loading="algoLoading" class="algo-board">
-              <section v-for="group in groupedAlgos" :key="group.key" class="algo-group" :class="`algo-group--${group.key}`">
-                <div class="algo-group-header">
-                  <div>
-                    <strong>{{ group.label }}</strong>
-                    <span>{{ group.hint }}</span>
-                  </div>
-                  <em>{{ group.items.length }}</em>
-                </div>
-                <div class="algo-group-body">
-                  <article v-for="algo in group.items" :key="algo.algorithm_id" class="algo-card">
-                    <div class="algo-card-top">
-                      <div class="algo-title-block">
-                        <strong :title="algo.name">{{ algo.name }}</strong>
-                        <small :title="algo.algorithm_id">{{ algo.algorithm_id }}</small>
-                      </div>
-                      <el-tag size="small" :type="algoIntegrationTag(algoIntegrationKind(algo))" effect="plain">
-                        {{ algoIntegrationLabel(algoIntegrationKind(algo)) }}
+            <div v-if="filteredAlgos.length" v-loading="algoLoading" class="algo-table-panel">
+              <div class="algo-summary-strip" aria-label="算法接入概览">
+                <span v-for="stat in algorithmStats" :key="stat.key">
+                  <strong>{{ stat.count }}</strong>
+                  {{ stat.label }}
+                </span>
+              </div>
+              <el-table :data="filteredAlgos" stripe class="algo-table">
+                <el-table-column label="算法 / ID" min-width="260">
+                  <template #default="{ row }">
+                    <div class="algo-name-cell">
+                      <strong :title="row.name">{{ row.name }}</strong>
+                      <small :title="row.algorithm_id">{{ row.algorithm_id }}</small>
+                      <span :title="row.description">{{ row.description || '暂无描述' }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="类型" width="110">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="algoTypeTag(row.type)">{{ algoTypeLabel(row.type) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="接入状态" width="140">
+                  <template #default="{ row }">
+                    <div class="algo-status-cell">
+                      <el-tag size="small" :type="algoIntegrationTag(algoIntegrationKind(row))" effect="plain">
+                        {{ algoIntegrationLabel(algoIntegrationKind(row)) }}
+                      </el-tag>
+                      <el-tag size="small" :type="algoStatusTag(row.status)" effect="plain">{{ algoStatusLabel(row.status) }}</el-tag>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="调用方式" min-width="150" show-overflow-tooltip>
+                  <template #default="{ row }">{{ row.call_method }}</template>
+                </el-table-column>
+                <el-table-column label="材料范围" min-width="180">
+                  <template #default="{ row }">
+                    <div class="compact-tag-list">
+                      <el-tag v-for="item in materialScopeLabel(row.material_scope)" :key="item" size="small" effect="plain">
+                        {{ item }}
                       </el-tag>
                     </div>
-                    <p :title="algo.description">{{ algo.description || '暂无描述' }}</p>
-                    <div class="algo-tags">
-                      <el-tag size="small" :type="algoTypeTag(algo.type)">{{ algoTypeLabel(algo.type) }}</el-tag>
-                      <el-tag size="small" :type="algoStatusTag(algo.status)" effect="plain">{{ algoStatusLabel(algo.status) }}</el-tag>
-                      <el-tag size="small" effect="plain">{{ algo.call_method }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="触发方式" min-width="180">
+                  <template #default="{ row }">
+                    <div class="compact-tag-list">
+                      <el-tag v-for="item in triggerModeLabel(row.trigger_modes)" :key="item" size="small" effect="plain">
+                        {{ item }}
+                      </el-tag>
                     </div>
-                    <div class="algo-meta-row">
-                      <span>材料</span>
-                      <div>
-                        <el-tag v-for="item in materialScopeLabel(algo.material_scope).slice(0, 3)" :key="item" size="small" effect="plain">
-                          {{ item }}
-                        </el-tag>
-                        <el-tooltip v-if="materialScopeLabel(algo.material_scope).length > 3" placement="top" :content="materialScopeLabel(algo.material_scope).join(', ')">
-                          <el-tag size="small" effect="plain">+{{ materialScopeLabel(algo.material_scope).length - 3 }}</el-tag>
-                        </el-tooltip>
-                      </div>
-                    </div>
-                    <div class="algo-meta-row">
-                      <span>触发</span>
-                      <div>
-                        <el-tag v-for="item in triggerModeLabel(algo.trigger_modes)" :key="item" size="small" effect="plain">
-                          {{ item }}
-                        </el-tag>
-                      </div>
-                    </div>
-                    <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(algo)">详情</el-button>
-                  </article>
-                  <div v-if="!group.items.length" class="algo-group-empty">无匹配算法</div>
-                </div>
-              </section>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="96" align="right">
+                  <template #default="{ row }">
+                    <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(row)">详情</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
             </div>
             <div v-else-if="!algoLoading" class="empty-inline" style="min-height:100px;justify-content:center">
               暂无算法数据
@@ -900,6 +931,24 @@ watch(activeTab, (tab) => {
       </template>
     </el-drawer>
 
+    <el-drawer v-model="statusDetailVisible" :title="selectedServiceStatus ? serviceName(selectedServiceStatus.service) : '服务详情'" size="520px">
+      <template v-if="selectedServiceStatus">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="Service">{{ selectedServiceStatus.service }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag size="small" :type="statusTag(selectedServiceStatus.status)">
+              {{ statusLabel(selectedServiceStatus.status) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="位置">{{ servicePrimaryDetail(selectedServiceStatus) }}</el-descriptions-item>
+          <el-descriptions-item label="版本 / 信息">{{ serviceVersion(selectedServiceStatus) }}</el-descriptions-item>
+          <el-descriptions-item label="原因">{{ serviceReason(selectedServiceStatus) || '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <h4 class="drawer-section-title">原始检查结果</h4>
+        <pre class="details-json drawer-json">{{ formatDetails(selectedServiceStatus.details) }}</pre>
+      </template>
+    </el-drawer>
+
     <!-- 算法详情 drawer -->
     <el-drawer v-model="algoDetailVisible" :title="algoDetail?.name || '算法详情'" size="520px">
       <template v-if="algoDetail">
@@ -934,6 +983,93 @@ watch(activeTab, (tab) => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.algo-table-panel,
+.service-group-collapse {
+  margin-top: 12px;
+}
+
+.algo-summary-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.algo-summary-strip span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.algo-summary-strip strong {
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.algo-table,
+.service-status-table {
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+}
+
+.algo-table :deep(.el-table__cell),
+.service-status-table :deep(.el-table__cell) {
+  vertical-align: top;
+}
+
+.algo-name-cell,
+.service-name-cell {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.algo-name-cell strong,
+.service-name-cell strong {
+  overflow: hidden;
+  color: var(--app-ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.algo-name-cell small,
+.service-name-cell small,
+.algo-name-cell span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.algo-status-cell,
+.compact-tag-list {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.service-group-collapse :deep(.el-collapse-item__header) {
+  min-height: 44px;
+  padding: 0 4px;
+}
+
+.service-group-collapse :deep(.el-collapse-item__content) {
+  padding-bottom: 14px;
 }
 
 .tools-header {
@@ -1346,18 +1482,14 @@ watch(activeTab, (tab) => {
   line-height: 1.1;
 }
 
-.service-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
 .service-group-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  width: 100%;
+  margin: 0;
+  padding-right: 12px;
 }
 
 .service-group-title h4 {

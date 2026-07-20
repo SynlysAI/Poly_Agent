@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { Cpu, Histogram, Promotion } from '@element-plus/icons-vue'
 
 import { createComputation, getApiErrorMessage } from '../api/polyAgentApi'
+import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 const router = useRouter()
 const formRef = ref(null)
@@ -132,6 +133,8 @@ async function handleSubmit() {
 
 <template>
   <div class="submit-layout">
+    <AttributionBanner module-id="computation" label="工具支持" compact class="submit-attribution" />
+
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -224,6 +227,10 @@ async function handleSubmit() {
   grid-template-columns: minmax(0, 1fr) 360px;
   gap: 16px;
   align-items: start;
+}
+
+.submit-attribution {
+  grid-column: 1 / -1;
 }
 
 .panel-subtitle {

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from datetime import datetime, timezone
 
+from app.schemas.attribution import AttributionItem
 from app.schemas.research_engine import (
     AlgorithmIOSchema,
     AlgorithmRegistryEntry,
@@ -260,11 +261,18 @@ class AlgorithmRegistrySchemaTest(ComputationTestCase):
                 required=["energy"],
             ),
             trigger_modes=["human_workflow", "autoresearch"],
+            developer_attribution=AttributionItem(
+                name="测试团队",
+                role="developer",
+                organization="测试机构",
+                visibility="prominent",
+            ),
         )
         self.assertEqual(entry.algorithm_id, "test_adapter")
         self.assertEqual(entry.name, "测试算法")
         self.assertEqual(entry.type, "simulator")
         self.assertIn("human_workflow", entry.trigger_modes)
+        self.assertEqual(entry.developer_attribution.organization, "测试机构")
 
     def test_rejects_empty_algorithm_id(self) -> None:
         """空算法 ID 被拒绝。"""
