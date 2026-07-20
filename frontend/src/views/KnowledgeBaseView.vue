@@ -52,6 +52,7 @@ const graphViewMode = ref('relationship')
 const selectedNodeId = ref('')
 const suggestedQuestions = ref([])
 const suggestionsLoading = ref(false)
+const topBarCollapsed = ref(false)
 const queryTrace = ref([])
 const queryPaneCollapsed = ref(false)
 const citationPanelCollapsed = ref(true)
@@ -699,7 +700,21 @@ onMounted(loadBootstrap)
 <template>
   <div class="knowledge-page">
     <section class="panel knowledge-shell" v-loading="loadingSystems">
-      <div class="panel-header knowledge-header">
+      <div v-if="topBarCollapsed" class="knowledge-dock">
+        <div class="dock-summary">
+          <span>知识库工作台</span>
+          <strong>{{ selectedSystem?.name || '未选择知识库' }}</strong>
+          <el-tag v-if="health || selectedSystem" size="small" :type="statusTagType(currentStatus)" effect="plain">
+            {{ currentStatusLabel }}
+          </el-tag>
+        </div>
+        <div class="dock-actions">
+          <span class="dock-status">{{ currentStatusMessage }}</span>
+          <el-button size="small" :icon="Expand" @click="topBarCollapsed = false">展开</el-button>
+        </div>
+      </div>
+
+      <div v-else class="panel-header knowledge-header">
         <div>
           <h3 class="panel-title">知识库工作台</h3>
           <p class="panel-subtitle">在同一工作区完成知识检索、证据核查和图谱关系浏览。</p>
@@ -733,6 +748,7 @@ onMounted(loadBootstrap)
           </el-tag>
           <span class="status-message">{{ currentStatusMessage }}</span>
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
+          <el-button :icon="Fold" @click="topBarCollapsed = true">隐藏</el-button>
         </div>
       </div>
 
@@ -1141,17 +1157,74 @@ onMounted(loadBootstrap)
   overflow: visible;
 }
 
+.knowledge-dock,
 .knowledge-header {
   position: sticky;
   top: 0;
   z-index: 12;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 18px rgba(22, 59, 110, 0.06);
+}
+
+.knowledge-dock {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-lg) var(--app-radius-lg) 0 0;
+}
+
+.dock-summary,
+.dock-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dock-summary {
+  flex: 1 1 auto;
+}
+
+.dock-summary span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dock-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-ink);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-actions {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+.dock-status {
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-header {
   align-items: flex-start;
   flex-wrap: wrap;
   gap: 12px 16px;
   border-radius: var(--app-radius-lg) var(--app-radius-lg) 0 0;
-  background: rgba(255, 255, 255, 0.96);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 8px 18px rgba(22, 59, 110, 0.06);
 }
 
 .panel-subtitle {
@@ -1161,6 +1234,8 @@ onMounted(loadBootstrap)
 }
 
 .header-actions,
+.dock-summary,
+.dock-actions,
 .system-overview,
 .system-meta,
 .system-metrics,
@@ -2136,6 +2211,7 @@ onMounted(loadBootstrap)
 }
 
 @media (max-width: 700px) {
+  .knowledge-dock,
   .knowledge-header,
   .system-overview,
   .graph-toolbar,
@@ -2143,6 +2219,16 @@ onMounted(loadBootstrap)
   .graph-summary {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .dock-summary,
+  .dock-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .dock-status {
+    max-width: none;
   }
 
   .header-actions {

@@ -19,7 +19,6 @@ import AlgorithmRunHistoryPanel from './vertical-prediction/AlgorithmRunHistoryP
 import AlgorithmTestPanel from './vertical-prediction/AlgorithmTestPanel.vue'
 import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue'
 import AttributionBadges from '../components/attribution/AttributionBadges.vue'
-import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -274,7 +273,6 @@ onMounted(() => {
         <p>通过需求文档或模型文件接入预测能力，统一完成测试、版本管理和运行追溯。</p>
       </div>
       <div class="hero-actions">
-        <AttributionBanner module-id="vertical_prediction" embedded label="模型服务来自" class="hero-attribution" />
         <el-button :icon="Refresh" :loading="loading" @click="loadData">刷新</el-button>
       </div>
       </header>
@@ -501,7 +499,6 @@ h3 { font-size: 15px; }
 .model-page-hero p:last-child, .list-head p, .detail-main p { margin: 7px 0 0; color: var(--app-ink-muted); font-size: 14px; line-height: 1.6; }
 .hero-actions, .detail-actions, .subnav-row, .list-actions, .empty-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .hero-actions { justify-content: flex-end; }
-.hero-attribution { flex: 1 1 420px; min-width: 360px; max-width: 640px; }
 .entry-band { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .entry-card { min-width: 0; display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: #fff; color: inherit; text-align: left; cursor: pointer; transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease; }
 .entry-card:hover { border-color: #bfdbfe; box-shadow: 0 10px 22px rgba(37, 99, 235, 0.09); transform: translateY(-1px); }
@@ -564,7 +561,6 @@ h3 { font-size: 15px; }
 @media (max-width: 900px) {
   .model-page-hero, .list-head, .detail-banner { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
   .hero-actions { justify-content: flex-start; }
-  .hero-attribution { flex-basis: auto; min-width: 0; width: 100%; max-width: none; }
   .entry-band { grid-template-columns: 1fr; }
   .status-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .status-item:nth-child(2) { border-right: 0; }
