@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.attribution import AttributionItem
+from app.schemas.common import UtcDatetimeJsonModel
 
 
 # =============================================================================
@@ -653,7 +654,7 @@ class AlgorithmPackageCreate(BaseModel):
         return normalized
 
 
-class AlgorithmPackage(BaseModel):
+class AlgorithmPackage(UtcDatetimeJsonModel):
     """用户上传算法包记录。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -680,7 +681,7 @@ class AlgorithmPackage(BaseModel):
     updated_at: datetime
 
 
-class AlgorithmVersion(BaseModel):
+class AlgorithmVersion(UtcDatetimeJsonModel):
     """不可变算法版本记录。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -916,7 +917,7 @@ class AlgorithmRunCreate(BaseModel):
         return normalized
 
 
-class AlgorithmRun(BaseModel):
+class AlgorithmRun(UtcDatetimeJsonModel):
     """算法运行记录。
 
     统一表达人工通道和 AutoResearch 通道的算法调用产物。

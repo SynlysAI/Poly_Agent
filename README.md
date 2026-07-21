@@ -116,12 +116,13 @@ Poly Agent 在产品页面中维护统一的来源与引用标注。系统模块
 
 ### 6. 数据管理 — Data Catalog
 
-统一的数据目录管理模块，支持材料研发数据的浏览、检索和管理。
+统一的数据目录管理模块，支持材料研发数据的浏览、检索和管理。材料数据资产使用 MongoDB `poly_data` 库和 MinIO `polymer-data/datasets/` 路径；`poly_agent` 业务库仅保存计算、算法、报告等运行态数据。
 
 | 能力 | 说明 |
 |------|------|
 | 数据目录 | 浏览和检索平台内注册的数据集 |
 | 数据浏览 | 按分类、标签筛选数据资源 |
+| 资产迁移 | `scripts/migrate_poly_data_assets.py` 将旧材料资产迁移到 `poly_data` 和 `datasets/` |
 
 ### 7. 基础功能
 
@@ -343,7 +344,7 @@ Poly_Agent/
 │   ├── stop_poly_agent_services.sh      #   停止前后端服务
 │   ├── run_compute_engine.sh            #   启动 ComputeEngine 参考服务/模拟器
 │   ├── pack_algorithm.py                #   算法包打包工具
-│   └── rename_minio_poly_agent_objects.py  # MinIO 对象重命名
+│   └── migrate_poly_data_assets.py         # Poly Data MongoDB/MinIO 资产迁移
 ├── deploy/                              # 部署配置
 │   └── toolchain/                       #   工具链部署
 │       ├── manifest.yml                 #     部署清单
@@ -453,7 +454,7 @@ pm2 save
 | 算法运行时 | `ALGORITHM_RUNTIME_BACKEND`、`ALGORITHM_RUNTIME_MAX_CONCURRENCY`、`ALGORITHM_RUNTIME_MAX_OUTPUT_BYTES` | 默认使用短生命周期 Python 子进程沙箱运行上传算法 |
 | LLM 与报告 | `LLM_*`、`REPORT_*` | 控制产品内助手、Alchemist LLM 辅助和自动报告生成 |
 | 文献 RAG | `LITERATURE_RAG_BASE_URL`、`LITERATURE_RAG_QUERY_API_KEY` | 连接独立 `services/literature-rag` 实例 |
-| 数据资产 | `DATA_ASSET_MONGODB_URI`、`MINIO_*` | 数据目录只读资产库和对象存储接入 |
+| 数据资产 | `DATA_ASSET_MONGODB_URI`、`DATA_ASSET_MONGODB_DATABASE=poly_data`、`MINIO_*` | 数据目录只读资产库和对象存储接入 |
 
 ## 认证体系
 

@@ -39,7 +39,26 @@ from app.schemas.data_catalog import (
 )
 
 
-CANONICAL_ROOT = "poly_agent/datasets/"
+CANONICAL_ROOT = "datasets/"
+POLY_DATA_SOURCE_ID = "poly_data"
+MATERIAL_COLLECTION_NAME = "material_records"
+MATERIAL_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{MATERIAL_COLLECTION_NAME}"
+RADONPY_COLLECTION_NAME = "radonpy_records"
+RADONPY_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{RADONPY_COLLECTION_NAME}"
+PI1M_COLLECTION_NAME = "pi1m_samples"
+PI1M_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{PI1M_COLLECTION_NAME}"
+SMIPOLY_COLLECTION_NAME = "smipoly_monomers"
+SMIPOLY_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{SMIPOLY_COLLECTION_NAME}"
+POLYUNIVERSE_COLLECTION_NAME = "polyuniverse_monomers"
+POLYUNIVERSE_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{POLYUNIVERSE_COLLECTION_NAME}"
+
+DATASET_RECORD_COLLECTIONS = {
+    "openpoly": (MATERIAL_COLLECTION_KEY, "full"),
+    "radonpy_pi1070": (RADONPY_COLLECTION_KEY, "full"),
+    "pi1m_v2": (PI1M_COLLECTION_KEY, "sample"),
+    "smipoly": (SMIPOLY_COLLECTION_KEY, "full"),
+    "polyuniverse": (POLYUNIVERSE_COLLECTION_KEY, "full"),
+}
 
 
 @dataclass(frozen=True)
@@ -48,7 +67,7 @@ class ObjectMapping:
 
     dataset_id: str
     role: str
-    legacy_key: str
+    legacy_key: str | None
     canonical_key: str
 
 
@@ -56,38 +75,74 @@ MINIO_OBJECT_MAPPINGS = [
     ObjectMapping(
         dataset_id="radonpy_pi1070",
         role="readme",
-        legacy_key="01_RadonPy/01_RadonPy_README(1).md",
-        canonical_key="poly_agent/datasets/radonpy_pi1070/docs/readme.md",
+        legacy_key="poly_agent/datasets/radonpy_pi1070/docs/readme.md",
+        canonical_key="datasets/radonpy_pi1070/docs/readme.md",
     ),
     ObjectMapping(
         dataset_id="radonpy_pi1070",
         role="raw_table",
-        legacy_key="01_RadonPy/PI1070.xlsx",
-        canonical_key="poly_agent/datasets/radonpy_pi1070/raw/pi1070.xlsx",
+        legacy_key="poly_agent/datasets/radonpy_pi1070/raw/pi1070.xlsx",
+        canonical_key="datasets/radonpy_pi1070/raw/pi1070.xlsx",
     ),
     ObjectMapping(
         dataset_id="pi1m_v2",
         role="readme",
-        legacy_key="02_PI1M/02_Pl1M_README(2).md",
-        canonical_key="poly_agent/datasets/pi1m_v2/docs/readme.md",
+        legacy_key="poly_agent/datasets/pi1m_v2/docs/readme.md",
+        canonical_key="datasets/pi1m_v2/docs/readme.md",
     ),
     ObjectMapping(
         dataset_id="pi1m_v2",
         role="raw_table",
-        legacy_key="02_PI1M/PI1M_v2.csv",
-        canonical_key="poly_agent/datasets/pi1m_v2/raw/pi1m_v2.csv",
+        legacy_key="poly_agent/datasets/pi1m_v2/raw/pi1m_v2.csv",
+        canonical_key="datasets/pi1m_v2/raw/pi1m_v2.csv",
     ),
     ObjectMapping(
         dataset_id="openpoly",
         role="raw_table",
-        legacy_key="OpenPoly/OpenPoly.csv",
-        canonical_key="poly_agent/datasets/openpoly/raw/openpoly.csv",
+        legacy_key="poly_agent/datasets/openpoly/raw/openpoly.csv",
+        canonical_key="datasets/openpoly/raw/openpoly.csv",
     ),
     ObjectMapping(
         dataset_id="openpoly",
         role="requirements_doc",
-        legacy_key="OpenPoly/PolyAgent模型与数据集成需求收集表.docx",
-        canonical_key="poly_agent/datasets/openpoly/docs/integration_requirements.docx",
+        legacy_key="poly_agent/datasets/openpoly/docs/integration_requirements.docx",
+        canonical_key="datasets/openpoly/docs/integration_requirements.docx",
+    ),
+    ObjectMapping(
+        dataset_id="smipoly",
+        role="readme",
+        legacy_key=None,
+        canonical_key="datasets/smipoly/docs/readme.md",
+    ),
+    ObjectMapping(
+        dataset_id="smipoly",
+        role="raw_table",
+        legacy_key=None,
+        canonical_key="datasets/smipoly/raw/202207_smip_monset.csv",
+    ),
+    ObjectMapping(
+        dataset_id="polyuniverse",
+        role="readme",
+        legacy_key=None,
+        canonical_key="datasets/polyuniverse/docs/readme.md",
+    ),
+    ObjectMapping(
+        dataset_id="polyuniverse",
+        role="raw_diCOOH",
+        legacy_key=None,
+        canonical_key="datasets/polyuniverse/raw/diCOOH.csv",
+    ),
+    ObjectMapping(
+        dataset_id="polyuniverse",
+        role="raw_epoxy_diE",
+        legacy_key=None,
+        canonical_key="datasets/polyuniverse/raw/epoxy_diE.csv",
+    ),
+    ObjectMapping(
+        dataset_id="polyuniverse",
+        role="raw_epoxy_diN",
+        legacy_key=None,
+        canonical_key="datasets/polyuniverse/raw/epoxy_diN.csv",
     ),
 ]
 
@@ -100,7 +155,7 @@ DATASET_DEFINITIONS = {
         "description": "包含单体结构、量子化学描述符、模拟条件、热力学性质、介电/光学性质和热导率分量。",
         "row_count": 1077,
         "column_count": 157,
-        "storage_prefix": "poly_agent/datasets/radonpy_pi1070/",
+        "storage_prefix": "datasets/radonpy_pi1070/",
         "field_summaries": [
             ("smiles", "smiles", "重复单元结构", 1077, 1077, "*CC*"),
             ("density", "density", "密度", 1077, 1077, "0.837971504"),
@@ -115,7 +170,7 @@ DATASET_DEFINITIONS = {
         "description": "约百万规模聚合物结构库，包含 p-SMILES 与合成可及性评分。",
         "row_count": 995799,
         "column_count": 2,
-        "storage_prefix": "poly_agent/datasets/pi1m_v2/",
+        "storage_prefix": "datasets/pi1m_v2/",
         "field_summaries": [
             ("SMILES", "smiles", "聚合物重复单元 p-SMILES", 995799, 995799, "*CCC[Fe]CCCC(=O)OCCCCOCCCNCC(*)=O"),
             ("SA Score", "sa_score", "合成可及性评分，越低通常越容易合成", 995799, 995799, "4.174851129781874"),
@@ -128,12 +183,42 @@ DATASET_DEFINITIONS = {
         "description": "包含结构、PSCORE、多类热/电/力/渗透物性及参考来源。",
         "row_count": 13116,
         "column_count": 44,
-        "storage_prefix": "poly_agent/datasets/openpoly/",
+        "storage_prefix": "datasets/openpoly/",
         "field_summaries": [
             ("PSMILES", "psmiles", "聚合物结构表示", 13116, 13116, "[*]CC(C(NC(C)C)=O)[*]"),
             ("Tg_K", "tg_k", "玻璃化转变温度", 8471, 13116, "405.775"),
             ("Bandgap_Chain_eV", "bandgap_chain_ev", "链态带隙", 3380, 13116, "6.5196"),
             ("Dielectric_Constant_Electronic", "dielectric_constant_electronic", "电子介电常数", 295, 13116, "4.41"),
+        ],
+    },
+    "smipoly": {
+        "display_name": "SMiPoly",
+        "source_category": "公开资料整理 / 结构数据",
+        "confidence_label": "单体结构库，无物性标签",
+        "description": "SMiPoly 单体输入库，包含单体编号、分子式、分子量、SMILES 和 IUPAC 名称。",
+        "row_count": 1083,
+        "column_count": 5,
+        "storage_prefix": "datasets/smipoly/",
+        "field_summaries": [
+            ("comID", "com_id", "单体记录编号", 1083, 1083, "CID174"),
+            ("MolecularFormula", "molecular_formula", "分子式", 1083, 1083, "C2H6O2"),
+            ("MolecularWeight", "molecular_weight", "分子量", 1083, 1083, "62.07"),
+            ("SMILES", "smiles", "单体 SMILES", 1083, 1083, "C(CO)O"),
+            ("IUPACName", "iupac_name", "IUPAC 名称", 1082, 1083, "ethane-1,2-diol"),
+        ],
+    },
+    "polyuniverse": {
+        "display_name": "PolyUniverse",
+        "source_category": "虚拟结构生成 / 候选单体",
+        "confidence_label": "生成候选单体，无物性标签",
+        "description": "PolyUniverse Generation 示例小分子原料库，包含二羧酸、双环氧和双胺候选单体 SMILES。",
+        "row_count": 51787,
+        "column_count": 1,
+        "storage_prefix": "datasets/polyuniverse/",
+        "field_summaries": [
+            ("Smiles", "smiles", "候选单体 SMILES", 51787, 51787, "CC12CC1C(CC2C(O)=O)C(O)=O"),
+            ("source_file", "source_file", "来源 CSV 文件", 51787, 51787, "diCOOH.csv"),
+            ("monomer_class", "monomer_class", "单体类别", 51787, 51787, "dicarboxylic_acid"),
         ],
     },
 }
@@ -142,8 +227,7 @@ DATASET_DEFINITIONS = {
 _OBJECT_STATUS_CACHE: dict[str, tuple[float, dict[str, list[DataCatalogObjectInfo]]]] = {}
 SENSITIVE_FIELD_PATTERNS = ("secret", "token", "password", "api_key", "access_key", "credential", "authorization")
 POLY_AGENT_SOURCE_ID = "poly_agent"
-MATERIAL_SOURCE_ID = "ai4ms"
-MATERIAL_COLLECTION_KEY = "ai4ms.Poly_Agent"
+MATERIAL_SOURCE_ID = POLY_DATA_SOURCE_ID
 
 
 @dataclass(frozen=True)
@@ -163,15 +247,59 @@ class MongoCollectionDefinition:
 
 MONGO_COLLECTION_DEFINITIONS = [
     MongoCollectionDefinition(
-        "ai4ms.Poly_Agent",
-        "Poly_Agent",
+        MATERIAL_COLLECTION_KEY,
+        MATERIAL_COLLECTION_NAME,
         MATERIAL_SOURCE_ID,
         "高分子材料记录",
         "材料数据资产",
         "materials",
-        "高分子结构、来源、物性、参考文献和导入追溯记录。",
+        "Poly Data 高分子结构、来源、物性、参考文献和导入追溯记录。",
         ["polymer_record_id"],
         ["dataset", "polymer", "properties", "reference", "provenance"],
+    ),
+    MongoCollectionDefinition(
+        RADONPY_COLLECTION_KEY,
+        RADONPY_COLLECTION_NAME,
+        MATERIAL_SOURCE_ID,
+        "RadonPy PI1070 记录",
+        "材料数据资产",
+        "radonpy_records",
+        "RadonPy PI1070 全量行级记录，包含重复单元结构、计算描述符和热/电/输运物性。",
+        ["radonpy_record_id"],
+        ["dataset", "smiles", "properties", "simulation", "source_file"],
+    ),
+    MongoCollectionDefinition(
+        PI1M_COLLECTION_KEY,
+        PI1M_COLLECTION_NAME,
+        MATERIAL_SOURCE_ID,
+        "PI1M v2 样本",
+        "材料数据资产",
+        "pi1m_samples",
+        "PI1M v2 结构库前 10,000 条样本记录，包含 p-SMILES 和合成可及性评分。",
+        ["pi1m_record_id"],
+        ["dataset", "smiles", "sa_score", "sample_index"],
+    ),
+    MongoCollectionDefinition(
+        SMIPOLY_COLLECTION_KEY,
+        SMIPOLY_COLLECTION_NAME,
+        MATERIAL_SOURCE_ID,
+        "SMiPoly 单体记录",
+        "材料数据资产",
+        "smipoly_monomers",
+        "SMiPoly 单体输入库全量记录，包含结构、分子式、分子量和 IUPAC 名称。",
+        ["smipoly_record_id"],
+        ["dataset", "com_id", "smiles", "molecular_formula", "molecular_weight", "source_file"],
+    ),
+    MongoCollectionDefinition(
+        POLYUNIVERSE_COLLECTION_KEY,
+        POLYUNIVERSE_COLLECTION_NAME,
+        MATERIAL_SOURCE_ID,
+        "PolyUniverse 单体记录",
+        "材料数据资产",
+        "polyuniverse_monomers",
+        "PolyUniverse 候选单体全量记录，按来源文件区分二羧酸、双环氧和双胺类别。",
+        ["polyuniverse_record_id"],
+        ["dataset", "monomer_class", "source_file", "smiles", "row_index"],
     ),
     MongoCollectionDefinition(
         "computation_runs",
@@ -431,6 +559,7 @@ class DataCatalogService:
         total_columns = sum(dataset.column_count for dataset in dataset_data.items)
         minio_status = self._minio_status(dataset_data.items)
         mongo_status = self._mongo_status(mongo_data.items)
+        material_record_count = self._material_record_count(mongo_data.items)
         status = "ready" if minio_status == "ready" and mongo_status == "ready" else "degraded"
         if minio_status == "not_configured":
             status = "not_configured"
@@ -443,6 +572,7 @@ class DataCatalogService:
             object_count=object_count,
             total_rows=total_rows,
             total_columns=total_columns,
+            material_record_count=material_record_count,
             canonical_root=CANONICAL_ROOT,
             legacy_objects=dataset_data.legacy_objects,
             sources=[
@@ -459,26 +589,36 @@ class DataCatalogService:
                     database=settings.mongodb_database,
                 ),
                 DataCatalogSourceStatus(
-                    source="mongodb.ai4ms.Poly_Agent",
+                    source="mongodb.poly_data",
                     status=material_status,
-                    detail="只读高分子材料记录、结构、物性和来源追溯",
+                    detail="Poly Data 高分子材料数据资产、结构、物性和来源追溯",
                     database=settings.data_asset_mongodb_database,
                 ),
             ],
             relationship_notes=[
-                "MinIO 保存原始数据文件和大表对象，路径采用 poly_agent/datasets/* 规范命名。",
-                "MongoDB ai4ms.Poly_Agent 保存材料结构、物性、来源和导入追溯。",
+                "MinIO 保存原始数据文件和大表对象，路径采用 datasets/* 规范命名。",
+                "MongoDB poly_data 保存材料结构、物性、来源和导入追溯。",
                 "MongoDB poly_agent 保存计算任务、产物、研发流程、优化闭环和报告产物。",
             ],
         )
 
+    def _material_record_count(self, collections: list[DataCatalogCollectionSummary]) -> int | None:
+        material_collections = [item for item in collections if item.source_id == MATERIAL_SOURCE_ID]
+        if not material_collections:
+            return None
+        if any(item.count is None or item.status == "degraded" for item in material_collections):
+            return None
+        return sum(int(item.count or 0) for item in material_collections)
+
     def list_datasets(self) -> DataCatalogDatasetListData:
         """Return dataset catalog items."""
         object_status = self._load_object_status()
+        definitions = self._load_dataset_definitions()
         datasets: list[DataCatalogDataset] = []
         legacy_objects: list[str] = []
-        for dataset_id, definition in DATASET_DEFINITIONS.items():
+        for dataset_id, definition in definitions.items():
             objects = object_status.get(dataset_id, [])
+            record_info = self._dataset_record_info(dataset_id)
             legacy_objects.extend(item.legacy_object_key for item in objects if item.legacy_exists and item.legacy_object_key)
             datasets.append(
                 DataCatalogDataset(
@@ -490,6 +630,9 @@ class DataCatalogService:
                     row_count=int(definition["row_count"]),
                     column_count=int(definition["column_count"]),
                     storage_prefix=str(definition["storage_prefix"]),
+                    record_collection_key=record_info["record_collection_key"],
+                    record_count=record_info["record_count"],
+                    record_mode=record_info["record_mode"],
                     objects=objects,
                     field_summaries=[
                         DataCatalogFieldSummary(
@@ -507,6 +650,79 @@ class DataCatalogService:
                 )
             )
         return DataCatalogDatasetListData(items=datasets, legacy_objects=sorted(set(legacy_objects)))
+
+    def _dataset_record_info(self, dataset_id: str) -> dict[str, Any]:
+        collection_info = DATASET_RECORD_COLLECTIONS.get(dataset_id)
+        if not collection_info:
+            return {"record_collection_key": None, "record_count": None, "record_mode": "metadata_only"}
+        collection_key, configured_mode = collection_info
+        definition = COLLECTION_DEFINITION_BY_NAME.get(collection_key)
+        if not definition:
+            return {"record_collection_key": None, "record_count": None, "record_mode": "metadata_only"}
+        count: int | None = None
+        if not settings.require_mongodb:
+            count = len(demo_store.load().get(collection_key, []))
+        elif settings.data_asset_mongodb_uri:
+            try:
+                db = self._database_for_definition(definition)
+                if definition.collection_name == MATERIAL_COLLECTION_NAME:
+                    count = int(db[definition.collection_name].count_documents({"dataset.dataset_code": dataset_id}))
+                else:
+                    count = int(db[definition.collection_name].estimated_document_count())
+            except PyMongoError:
+                count = None
+        mode = configured_mode if count else "metadata_only"
+        return {"record_collection_key": collection_key, "record_count": count, "record_mode": mode}
+
+    def _load_dataset_definitions(self) -> dict[str, dict[str, Any]]:
+        """Load dataset metadata from poly_data, falling back to built-in definitions."""
+        if not settings.require_mongodb or not settings.data_asset_mongodb_uri:
+            return DATASET_DEFINITIONS
+        try:
+            db = get_data_asset_database()
+            dataset_docs = list(db["datasets"].find({}, {"_id": 0}))
+            if not dataset_docs:
+                return DATASET_DEFINITIONS
+            field_docs = list(db["dataset_fields"].find({}, {"_id": 0}))
+        except PyMongoError:
+            return DATASET_DEFINITIONS
+
+        fields_by_dataset: dict[str, list[tuple[Any, ...]]] = {}
+        for field in field_docs:
+            dataset_id = str(field.get("dataset_id") or "")
+            if not dataset_id:
+                continue
+            fields_by_dataset.setdefault(dataset_id, []).append(
+                (
+                    field.get("raw_name") or field.get("canonical_name") or "",
+                    field.get("canonical_name") or field.get("raw_name") or "",
+                    field.get("label") or field.get("canonical_name") or field.get("raw_name") or "",
+                    field.get("non_empty_count"),
+                    field.get("total_count"),
+                    field.get("example"),
+                )
+            )
+
+        loaded: dict[str, dict[str, Any]] = {}
+        ordered_ids = [*DATASET_DEFINITIONS.keys(), *[str(doc.get("dataset_id")) for doc in dataset_docs]]
+        docs_by_id = {str(doc.get("dataset_id")): doc for doc in dataset_docs if doc.get("dataset_id")}
+        for dataset_id in dict.fromkeys(ordered_ids):
+            doc = docs_by_id.get(dataset_id)
+            fallback = DATASET_DEFINITIONS.get(dataset_id, {})
+            if not doc and not fallback:
+                continue
+            doc = doc or {}
+            loaded[dataset_id] = {
+                "display_name": doc.get("display_name") or fallback.get("display_name") or dataset_id,
+                "source_category": doc.get("source_category") or fallback.get("source_category") or "材料数据",
+                "confidence_label": doc.get("confidence_label") or fallback.get("confidence_label") or "已登记数据",
+                "description": doc.get("description") or fallback.get("description") or "",
+                "row_count": doc.get("row_count") if doc.get("row_count") is not None else fallback.get("row_count", 0),
+                "column_count": doc.get("column_count") if doc.get("column_count") is not None else fallback.get("column_count", 0),
+                "storage_prefix": doc.get("storage_prefix") or fallback.get("storage_prefix") or f"{CANONICAL_ROOT}{dataset_id}/",
+                "field_summaries": fields_by_dataset.get(dataset_id) or fallback.get("field_summaries", []),
+            }
+        return loaded or DATASET_DEFINITIONS
 
     def list_mongo_collections(self) -> DataCatalogMongoCollectionListData:
         """Return Mongo collection summaries."""
@@ -528,7 +744,11 @@ class DataCatalogService:
         if not settings.data_asset_mongodb_uri:
             return False
         try:
-            return bool(get_data_asset_database()["Poly_Agent"].count_documents({"polymer_record_id": material_record_id}, limit=1))
+            return bool(
+                get_data_asset_database()[MATERIAL_COLLECTION_NAME].count_documents(
+                    {"polymer_record_id": material_record_id}, limit=1
+                )
+            )
         except PyMongoError:
             return False
 
@@ -550,7 +770,11 @@ class DataCatalogService:
             material_rows = []
             if settings.data_asset_mongodb_uri:
                 try:
-                    material_rows = list(get_data_asset_database()["Poly_Agent"].find({}, {"_id": 0, "polymer_record_id": 1}))
+                    material_rows = list(
+                        get_data_asset_database()[MATERIAL_COLLECTION_NAME].find(
+                            {}, {"_id": 0, "polymer_record_id": 1}
+                        )
+                    )
                 except PyMongoError:
                     material_rows = []
             collections = {
@@ -811,7 +1035,7 @@ class DataCatalogService:
         if not normalized:
             return {}
         escaped = re.escape(normalized)
-        if definition.source_id == MATERIAL_SOURCE_ID:
+        if definition.data_domain == "materials":
             field_names = [
                 *definition.primary_keys,
                 "dataset.dataset_name",
@@ -821,6 +1045,42 @@ class DataCatalogService:
                 "polymer.psmiles",
                 "reference.source_type",
                 "provenance.created_by",
+            ]
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.data_domain == "radonpy_records":
+            field_names = [
+                *definition.primary_keys,
+                "dataset.dataset_id",
+                "smiles",
+                "source_file",
+                "properties.density",
+                "properties.static_dielectric_const",
+                "properties.thermal_conductivity",
+            ]
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.data_domain == "pi1m_samples":
+            field_names = [*definition.primary_keys, "dataset.dataset_id", "smiles", "sa_score"]
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.data_domain == "smipoly_monomers":
+            field_names = [
+                *definition.primary_keys,
+                "dataset.dataset_id",
+                "dataset.dataset_name",
+                "com_id",
+                "molecular_formula",
+                "smiles",
+                "iupac_name",
+                "source_file",
+            ]
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.data_domain == "polyuniverse_monomers":
+            field_names = [
+                *definition.primary_keys,
+                "dataset.dataset_id",
+                "dataset.dataset_name",
+                "monomer_class",
+                "source_file",
+                "smiles",
             ]
             return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
         field_names = list(dict.fromkeys([*definition.primary_keys, "status", "created_by", "workflow_type", "engine"]))
@@ -838,12 +1098,43 @@ class DataCatalogService:
         }
         first_key = definition.primary_keys[0] if definition.primary_keys else ""
         record_id = str(row.get(first_key) or "")
-        if definition.source_id == MATERIAL_SOURCE_ID:
+        if definition.data_domain == "materials":
             title = self._material_title(row) or record_id or definition.display_name
             subtitle = self._material_subtitle(row)
             preview_fields = self._material_preview_fields(row)
             created_at = self._nested_value(row, "provenance.created_at")
             updated_at = self._nested_value(row, "provenance.updated_at")
+        elif definition.data_domain == "radonpy_records":
+            title = str(row.get("smiles") or record_id or definition.display_name)
+            subtitle = f"RadonPy PI1070 · {record_id}" if record_id else "RadonPy PI1070"
+            preview_fields = self._dataset_record_preview_fields(row, ["density", "static_dielectric_const", "thermal_conductivity"])
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
+        elif definition.data_domain == "pi1m_samples":
+            title = str(row.get("smiles") or record_id or definition.display_name)
+            subtitle = f"PI1M v2 sample · {record_id}" if record_id else "PI1M v2 sample"
+            preview_fields = self._dataset_record_preview_fields(row, ["sa_score", "sample_index"])
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
+        elif definition.data_domain == "smipoly_monomers":
+            title = str(row.get("iupac_name") or row.get("smiles") or record_id or definition.display_name)
+            subtitle = f"SMiPoly · {row.get('com_id') or record_id}" if record_id else "SMiPoly"
+            preview_fields = self._dataset_record_preview_fields(
+                row,
+                ["com_id", "smiles", "molecular_formula", "molecular_weight", "source_file"],
+            )
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
+        elif definition.data_domain == "polyuniverse_monomers":
+            title = str(row.get("smiles") or record_id or definition.display_name)
+            monomer_class = row.get("monomer_class") or "candidate_monomer"
+            subtitle = f"PolyUniverse · {monomer_class} · {row.get('source_file') or ''}".strip(" ·")
+            preview_fields = self._dataset_record_preview_fields(
+                row,
+                ["monomer_class", "source_file", "row_index"],
+            )
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
         else:
             title = record_id or self._first_non_empty(row, ["name", "display_name", "title"]) or definition.display_name
             subtitle = self._build_record_subtitle(row)
@@ -895,6 +1186,20 @@ class DataCatalogService:
             preview["reference_count"] = reference.get("n")
         return preview
 
+    def _dataset_record_preview_fields(self, row: dict[str, Any], preferred_fields: list[str]) -> dict[str, Any]:
+        preview: dict[str, Any] = {}
+        dataset = row.get("dataset") if isinstance(row.get("dataset"), dict) else {}
+        properties = row.get("properties") if isinstance(row.get("properties"), dict) else {}
+        if dataset.get("dataset_name") or dataset.get("dataset_id"):
+            preview["dataset"] = dataset.get("dataset_name") or dataset.get("dataset_id")
+        if row.get("smiles"):
+            preview["smiles"] = row.get("smiles")
+        for field in preferred_fields:
+            value = row.get(field) if field in row else properties.get(field)
+            if value is not None:
+                preview[field] = value
+        return preview
+
     def _preview_fields(self, row: dict[str, Any], primary_keys: list[str]) -> dict[str, Any]:
         preferred = [
             "workflow_type",
@@ -940,8 +1245,10 @@ class DataCatalogService:
         return None
 
     def _preferred_sort_field(self, definition: MongoCollectionDefinition) -> str:
-        if definition.source_id == MATERIAL_SOURCE_ID:
+        if definition.data_domain == "materials":
             return "provenance.created_at"
+        if definition.data_domain in {"radonpy_records", "pi1m_samples", "smipoly_monomers", "polyuniverse_monomers"}:
+            return definition.primary_keys[0] if definition.primary_keys else "created_at"
         if definition.collection_name == "optimization_candidates":
             return "candidate_key"
         return "created_at"
@@ -993,7 +1300,7 @@ class DataCatalogService:
         status: dict[str, list[DataCatalogObjectInfo]] = {}
         for mapping in MINIO_OBJECT_MAPPINGS:
             canonical = self._head_object(mapping.canonical_key)
-            legacy = self._head_object(mapping.legacy_key)
+            legacy = self._head_object(mapping.legacy_key) if mapping.legacy_key else None
             status.setdefault(mapping.dataset_id, []).append(
                 DataCatalogObjectInfo(
                     object_key=mapping.canonical_key,

@@ -390,6 +390,7 @@ sample_input:
         self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
         package_id = upload_resp.json()["data"]["package_id"]
         self.assertEqual(upload_resp.json()["data"]["status"], "uploaded")
+        self.assertTrue(upload_resp.json()["data"]["created_at"].endswith("Z"))
 
         download_resp = self.client.get(f"{self.base_url}/algorithm-packages/{package_id}/download")
         self.assertEqual(download_resp.status_code, 200, download_resp.text)
@@ -421,6 +422,8 @@ sample_input:
         )
         self.assertEqual(deploy_resp.status_code, 200, deploy_resp.text)
         self.assertEqual(deploy_resp.json()["data"]["status"], "deployed_staging")
+        self.assertTrue(deploy_resp.json()["data"]["created_at"].endswith("Z"))
+        self.assertTrue(deploy_resp.json()["data"]["updated_at"].endswith("Z"))
         self.assertEqual(deploy_resp.json()["data"]["deployment"]["backend"], "local_sandbox_runtime")
         self.assertEqual(deploy_resp.json()["data"]["deployment"]["endpoint_type"], "subprocess")
 
@@ -465,6 +468,9 @@ sample_input:
         self.assertEqual(run_resp.status_code, 200, run_resp.text)
         run_data = run_resp.json()["data"]
         self.assertEqual(run_data["status"], "completed")
+        self.assertTrue(run_data["created_at"].endswith("Z"))
+        self.assertTrue(run_data["started_at"].endswith("Z"))
+        self.assertTrue(run_data["finished_at"].endswith("Z"))
         self.assertEqual(run_data["algorithm_version_id"], version_id)
         self.assertIn("prediction", run_data["output_summary"])
         self.assertIn("feature_summary", run_data["output_summary"])

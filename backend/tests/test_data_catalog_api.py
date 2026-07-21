@@ -16,6 +16,7 @@ from app.main import app
 from app.core.auth import get_current_user
 from app.infra.demo_store import demo_store
 from app.schemas.data_catalog import (
+    DataCatalogCollectionSummary,
     DataCatalogMongoCollectionListData,
     DataCatalogOverviewData,
     DataCatalogSourceStatus,
@@ -42,6 +43,42 @@ class FakeS3Client:
         return self.objects.get(object_key)
 
 
+class FakeMongoCollection:
+    """Small Mongo collection fake for dataset metadata tests."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    def find(self, filters: dict, projection: dict | None = None) -> list[dict]:
+        return [dict(row) for row in self.rows]
+
+    def count_documents(self, filters: dict) -> int:
+        if not filters:
+            return len(self.rows)
+        return sum(1 for row in self.rows if all(self._nested_value(row, key) == value for key, value in filters.items()))
+
+    def estimated_document_count(self) -> int:
+        return len(self.rows)
+
+    def _nested_value(self, row: dict, dotted_key: str):
+        value = row
+        for part in dotted_key.split("."):
+            if not isinstance(value, dict):
+                return None
+            value = value.get(part)
+        return value
+
+
+class FakeMongoDatabase:
+    """Collection lookup fake."""
+
+    def __init__(self, collections: dict[str, list[dict]]) -> None:
+        self.collections = collections
+
+    def __getitem__(self, name: str) -> FakeMongoCollection:
+        return FakeMongoCollection(self.collections.get(name, []))
+
+
 class DataCatalogServiceTest(unittest.TestCase):
     """覆盖数据目录服务的 MinIO 对象状态逻辑。"""
 
@@ -50,11 +87,11 @@ class DataCatalogServiceTest(unittest.TestCase):
         service = DataCatalogService(
             s3_client=FakeS3Client(
                 {
-                    "poly_agent/datasets/radonpy_pi1070/docs/readme.md": {
+                    "datasets/radonpy_pi1070/docs/readme.md": {
                         "size_bytes": 10211,
                         "last_modified": now,
                     },
-                    "01_RadonPy/01_RadonPy_README(1).md": {
+                    "poly_agent/datasets/radonpy_pi1070/docs/readme.md": {
                         "size_bytes": 10211,
                         "last_modified": now,
                     },
@@ -66,25 +103,123 @@ class DataCatalogServiceTest(unittest.TestCase):
         radonpy = next(item for item in data.items if item.dataset_id == "radonpy_pi1070")
         readme = next(item for item in radonpy.objects if item.role == "readme")
 
-        self.assertEqual(readme.object_key, "poly_agent/datasets/radonpy_pi1070/docs/readme.md")
+        self.assertEqual(readme.object_key, "datasets/radonpy_pi1070/docs/readme.md")
         self.assertTrue(readme.exists)
-        self.assertEqual(readme.legacy_object_key, "01_RadonPy/01_RadonPy_README(1).md")
+        self.assertEqual(readme.legacy_object_key, "poly_agent/datasets/radonpy_pi1070/docs/readme.md")
         self.assertTrue(readme.legacy_exists)
-        self.assertIn("01_RadonPy/01_RadonPy_README(1).md", data.legacy_objects)
+        self.assertIn("poly_agent/datasets/radonpy_pi1070/docs/readme.md", data.legacy_objects)
 
     def test_unconfigured_minio_returns_dataset_metadata_without_object_exists(self) -> None:
         service = DataCatalogService(s3_client=FakeS3Client(configured=False))
 
         data = service.list_datasets()
 
-        self.assertEqual(len(data.items), 3)
+        self.assertEqual(len(data.items), 5)
         self.assertFalse(any(obj.exists for dataset in data.items for obj in dataset.objects))
+
+    def test_dataset_catalog_prefers_poly_data_metadata(self) -> None:
+        service = DataCatalogService(s3_client=FakeS3Client(configured=False))
+        fake_db = FakeMongoDatabase(
+            {
+                "datasets": [
+                    {
+                        "dataset_id": "openpoly",
+                        "display_name": "OpenPoly Mongo",
+                        "source_category": "Mongo metadata",
+                        "confidence_label": "Mongo verified",
+                        "description": "从 poly_data.datasets 读取的数据集说明。",
+                        "row_count": 10,
+                        "column_count": 2,
+                        "storage_prefix": "datasets/openpoly/",
+                    }
+                ],
+                "dataset_fields": [
+                    {
+                        "dataset_id": "openpoly",
+                        "raw_name": "PSMILES",
+                        "canonical_name": "psmiles",
+                        "label": "Mongo 字段说明",
+                        "non_empty_count": 9,
+                        "total_count": 10,
+                        "example": "[*]CC[*]",
+                    }
+                ],
+                "material_records": [
+                    {
+                        "polymer_record_id": "OPENPOLY-1",
+                        "dataset": {"dataset_code": "openpoly"},
+                    }
+                ],
+            }
+        )
+
+        with (
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+        ):
+            data = service.list_datasets()
+
+        self.assertEqual(len(data.items), 5)
+        openpoly = next(item for item in data.items if item.dataset_id == "openpoly")
+        self.assertEqual(openpoly.display_name, "OpenPoly Mongo")
+        self.assertEqual(openpoly.description, "从 poly_data.datasets 读取的数据集说明。")
+        self.assertEqual(openpoly.record_collection_key, "poly_data.material_records")
+        self.assertEqual(openpoly.record_count, 1)
+        self.assertEqual(openpoly.record_mode, "full")
+        self.assertEqual(openpoly.field_summaries[0].label, "Mongo 字段说明")
+        self.assertIn("smipoly", {item.dataset_id for item in data.items})
+
+    def test_overview_material_record_count_sums_poly_data_collections(self) -> None:
+        original = demo_store.load()
+        try:
+            demo_store.save({
+                "poly_data.material_records": [{"polymer_record_id": "OPENPOLY-1"}],
+                "poly_data.radonpy_records": [{"radonpy_record_id": "RADONPY-1"}],
+                "poly_data.pi1m_samples": [{"pi1m_record_id": "PI1M-1"}, {"pi1m_record_id": "PI1M-2"}],
+                "poly_data.smipoly_monomers": [{"smipoly_record_id": "SMIPOLY-1"}],
+                "poly_data.polyuniverse_monomers": [{"polyuniverse_record_id": "POLYUNIVERSE-1"}],
+            })
+            with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+                data = DataCatalogService(s3_client=FakeS3Client(configured=False)).get_overview()
+        finally:
+            demo_store.save(original)
+
+        self.assertEqual(data.material_record_count, 6)
+        self.assertNotEqual(data.material_record_count, data.total_rows)
+        self.assertEqual(next(item for item in data.sources if item.source == "mongodb.poly_data").status, "ready")
+
+    def test_material_record_count_returns_none_for_degraded_poly_data_collection(self) -> None:
+        data = DataCatalogService(s3_client=FakeS3Client(configured=False))._material_record_count([
+            DataCatalogCollectionSummary(
+                collection_key="poly_data.material_records",
+                collection_name="material_records",
+                source_id="poly_data",
+                display_name="高分子材料记录",
+                group="材料数据资产",
+                description="material records",
+                count=1,
+                status="ready",
+            ),
+            DataCatalogCollectionSummary(
+                collection_key="poly_data.radonpy_records",
+                collection_name="radonpy_records",
+                source_id="poly_data",
+                display_name="RadonPy PI1070 记录",
+                group="材料数据资产",
+                description="radonpy records",
+                count=None,
+                status="degraded",
+            ),
+        ])
+
+        self.assertIsNone(data)
 
     def test_relationships_only_count_persisted_foreign_keys(self) -> None:
         original = demo_store.load()
         try:
             demo_store.save({
-                "ai4ms.Poly_Agent": [{"polymer_record_id": "mat-1"}],
+                "poly_data.material_records": [{"polymer_record_id": "mat-1"}],
                 "computation_runs": [
                     {"run_id": "comp-1", "material_record_id": "mat-1"},
                     {"run_id": "comp-2"},
@@ -128,7 +263,8 @@ class DataCatalogApiTest(unittest.TestCase):
             object_count=6,
             total_rows=1019992,
             total_columns=203,
-            canonical_root="poly_agent/datasets/",
+            material_record_count=13117,
+            canonical_root="datasets/",
             legacy_objects=["OpenPoly/OpenPoly.csv"],
             sources=[
                 DataCatalogSourceStatus(
@@ -146,8 +282,9 @@ class DataCatalogApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["code"], 0)
-        self.assertEqual(payload["data"]["canonical_root"], "poly_agent/datasets/")
+        self.assertEqual(payload["data"]["canonical_root"], "datasets/")
         self.assertEqual(payload["data"]["legacy_objects"], ["OpenPoly/OpenPoly.csv"])
+        self.assertEqual(payload["data"]["material_record_count"], 13117)
 
     def test_mongo_collections_endpoint_returns_total(self) -> None:
         data = DataCatalogMongoCollectionListData(items=[], total=0)
@@ -222,7 +359,7 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
                         "created_at": "2026-07-11T12:30:00Z",
                     }
                 ],
-                "ai4ms.Poly_Agent": [
+                "poly_data.material_records": [
                     {
                         "polymer_record_id": "OPENPOLY-16172",
                         "dataset": {
@@ -249,6 +386,54 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
                         },
                     }
                 ],
+                "poly_data.radonpy_records": [
+                    {
+                        "radonpy_record_id": "RADONPY_PI1070-000001",
+                        "dataset": {"dataset_id": "radonpy_pi1070", "dataset_name": "RadonPy PI1070"},
+                        "smiles": "*CC*",
+                        "source_file": "pi1070.xlsx",
+                        "properties": {
+                            "density": 0.837971504,
+                            "static_dielectric_const": 2.2102,
+                            "thermal_conductivity": 0.2361,
+                        },
+                        "created_at": "2026-07-21T03:00:00Z",
+                    }
+                ],
+                "poly_data.pi1m_samples": [
+                    {
+                        "pi1m_record_id": "PI1M_V2-000001",
+                        "dataset": {"dataset_id": "pi1m_v2", "dataset_name": "PI1M v2"},
+                        "smiles": "*CCC[Fe]CCCC(=O)OCCCCOCCCNCC(*)=O",
+                        "sa_score": 4.174851129781874,
+                        "sample_index": 1,
+                        "created_at": "2026-07-21T03:00:00Z",
+                    }
+                ],
+                "poly_data.smipoly_monomers": [
+                    {
+                        "smipoly_record_id": "SMIPOLY-CID174",
+                        "dataset": {"dataset_id": "smipoly", "dataset_name": "SMiPoly"},
+                        "com_id": "CID174",
+                        "molecular_formula": "C2H6O2",
+                        "molecular_weight": 62.07,
+                        "smiles": "C(CO)O",
+                        "iupac_name": "ethane-1,2-diol",
+                        "source_file": "202207_smip_monset.csv",
+                        "created_at": "2026-07-21T03:00:00Z",
+                    }
+                ],
+                "poly_data.polyuniverse_monomers": [
+                    {
+                        "polyuniverse_record_id": "POLYUNIVERSE-epoxy_diE-000001",
+                        "dataset": {"dataset_id": "polyuniverse", "dataset_name": "PolyUniverse"},
+                        "monomer_class": "diepoxy",
+                        "source_file": "epoxy_diE.csv",
+                        "row_index": 1,
+                        "smiles": "C1OC1",
+                        "created_at": "2026-07-21T03:00:00Z",
+                    }
+                ],
             }
         )
 
@@ -262,17 +447,41 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         data = response.json()["data"]
         keys = {item["collection_key"] for item in data["items"]}
         self.assertIn("computation_runs", keys)
-        self.assertIn("ai4ms.Poly_Agent", keys)
+        self.assertIn("poly_data.material_records", keys)
+        self.assertIn("poly_data.radonpy_records", keys)
+        self.assertIn("poly_data.pi1m_samples", keys)
+        self.assertIn("poly_data.smipoly_monomers", keys)
+        self.assertIn("poly_data.polyuniverse_monomers", keys)
         self.assertNotIn("audit_events", keys)
         self.assertNotIn("service_integrations", keys)
-        material = next(item for item in data["items"] if item["collection_key"] == "ai4ms.Poly_Agent")
-        self.assertEqual(material["source_id"], "ai4ms")
-        self.assertEqual(material["database"], "ai4ms")
-        self.assertEqual(material["collection_name"], "Poly_Agent")
+        material = next(item for item in data["items"] if item["collection_key"] == "poly_data.material_records")
+        self.assertEqual(material["source_id"], "poly_data")
+        self.assertEqual(material["database"], "poly_data")
+        self.assertEqual(material["collection_name"], "material_records")
         self.assertEqual(material["group"], "材料数据资产")
         self.assertEqual(material["data_domain"], "materials")
         self.assertIn("properties", material["analysis_facets"])
         self.assertIn("polymer_record_id", material["schema_summary"]["sample_fields"])
+
+        radonpy = next(item for item in data["items"] if item["collection_key"] == "poly_data.radonpy_records")
+        self.assertEqual(radonpy["collection_name"], "radonpy_records")
+        self.assertEqual(radonpy["data_domain"], "radonpy_records")
+        self.assertEqual(radonpy["primary_keys"], ["radonpy_record_id"])
+
+        pi1m = next(item for item in data["items"] if item["collection_key"] == "poly_data.pi1m_samples")
+        self.assertEqual(pi1m["collection_name"], "pi1m_samples")
+        self.assertEqual(pi1m["data_domain"], "pi1m_samples")
+        self.assertEqual(pi1m["primary_keys"], ["pi1m_record_id"])
+
+        smipoly = next(item for item in data["items"] if item["collection_key"] == "poly_data.smipoly_monomers")
+        self.assertEqual(smipoly["collection_name"], "smipoly_monomers")
+        self.assertEqual(smipoly["data_domain"], "smipoly_monomers")
+        self.assertEqual(smipoly["primary_keys"], ["smipoly_record_id"])
+
+        polyuniverse = next(item for item in data["items"] if item["collection_key"] == "poly_data.polyuniverse_monomers")
+        self.assertEqual(polyuniverse["collection_name"], "polyuniverse_monomers")
+        self.assertEqual(polyuniverse["data_domain"], "polyuniverse_monomers")
+        self.assertEqual(polyuniverse["primary_keys"], ["polyuniverse_record_id"])
 
     def test_unknown_collection_returns_404(self) -> None:
         self._login_as("admin-user")
@@ -338,16 +547,16 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         self._login_as("admin-user")
 
         response = self.client.get(
-            "/api/v1/data-catalog/mongo-collections/ai4ms.Poly_Agent/records",
+            "/api/v1/data-catalog/mongo-collections/poly_data.material_records/records",
             params={"keyword": "isopropyl", "page": 1, "page_size": 10},
         )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
-        self.assertEqual(data["collection_key"], "ai4ms.Poly_Agent")
-        self.assertEqual(data["source_id"], "ai4ms")
-        self.assertEqual(data["database"], "ai4ms")
-        self.assertEqual(data["collection_name"], "Poly_Agent")
+        self.assertEqual(data["collection_key"], "poly_data.material_records")
+        self.assertEqual(data["source_id"], "poly_data")
+        self.assertEqual(data["database"], "poly_data")
+        self.assertEqual(data["collection_name"], "material_records")
         self.assertEqual(data["total"], 1)
         item = data["items"][0]
         self.assertEqual(item["record_id"], "OPENPOLY-16172")
@@ -363,15 +572,88 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         self._login_as("admin-user")
 
         response = self.client.get(
-            "/api/v1/data-catalog/mongo-collections/ai4ms.Poly_Agent/records/OPENPOLY-16172"
+            "/api/v1/data-catalog/mongo-collections/poly_data.material_records/records/OPENPOLY-16172"
         )
 
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
-        self.assertEqual(data["collection_key"], "ai4ms.Poly_Agent")
-        self.assertEqual(data["source_id"], "ai4ms")
-        self.assertEqual(data["database"], "ai4ms")
-        self.assertEqual(data["collection_name"], "Poly_Agent")
+        self.assertEqual(data["collection_key"], "poly_data.material_records")
+        self.assertEqual(data["source_id"], "poly_data")
+        self.assertEqual(data["database"], "poly_data")
+        self.assertEqual(data["collection_name"], "material_records")
         self.assertEqual(data["title"], "poly(N -isopropylacrylamide)")
         self.assertEqual(data["primary_key"], {"polymer_record_id": "OPENPOLY-16172"})
         self.assertEqual(data["document"]["polymer"]["psmiles"], "[*]CC(C(NC(C)C)=O)[*]")
+
+    def test_radonpy_collection_records_use_dataset_summary(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+
+        response = self.client.get(
+            "/api/v1/data-catalog/mongo-collections/poly_data.radonpy_records/records",
+            params={"keyword": "0.2361", "page": 1, "page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_key"], "poly_data.radonpy_records")
+        self.assertEqual(data["collection_name"], "radonpy_records")
+        self.assertEqual(data["total"], 1)
+        item = data["items"][0]
+        self.assertEqual(item["record_id"], "RADONPY_PI1070-000001")
+        self.assertEqual(item["title"], "*CC*")
+        self.assertEqual(item["preview_fields"]["dataset"], "RadonPy PI1070")
+        self.assertEqual(item["preview_fields"]["thermal_conductivity"], 0.2361)
+
+    def test_pi1m_collection_detail_uses_sample_key(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+
+        response = self.client.get(
+            "/api/v1/data-catalog/mongo-collections/poly_data.pi1m_samples/records/PI1M_V2-000001"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_key"], "poly_data.pi1m_samples")
+        self.assertEqual(data["collection_name"], "pi1m_samples")
+        self.assertEqual(data["primary_key"], {"pi1m_record_id": "PI1M_V2-000001"})
+        self.assertEqual(data["title"], "*CCC[Fe]CCCC(=O)OCCCCOCCCNCC(*)=O")
+        self.assertEqual(data["document"]["sa_score"], 4.174851129781874)
+
+    def test_smipoly_collection_records_use_monomer_summary(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+
+        response = self.client.get(
+            "/api/v1/data-catalog/mongo-collections/poly_data.smipoly_monomers/records",
+            params={"keyword": "ethane", "page": 1, "page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_key"], "poly_data.smipoly_monomers")
+        self.assertEqual(data["collection_name"], "smipoly_monomers")
+        self.assertEqual(data["total"], 1)
+        item = data["items"][0]
+        self.assertEqual(item["record_id"], "SMIPOLY-CID174")
+        self.assertEqual(item["title"], "ethane-1,2-diol")
+        self.assertEqual(item["preview_fields"]["dataset"], "SMiPoly")
+        self.assertEqual(item["preview_fields"]["molecular_formula"], "C2H6O2")
+        self.assertEqual(item["preview_fields"]["molecular_weight"], 62.07)
+
+    def test_polyuniverse_collection_detail_uses_source_row_key(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+
+        response = self.client.get(
+            "/api/v1/data-catalog/mongo-collections/poly_data.polyuniverse_monomers/records/POLYUNIVERSE-epoxy_diE-000001"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_key"], "poly_data.polyuniverse_monomers")
+        self.assertEqual(data["collection_name"], "polyuniverse_monomers")
+        self.assertEqual(data["primary_key"], {"polyuniverse_record_id": "POLYUNIVERSE-epoxy_diE-000001"})
+        self.assertEqual(data["title"], "C1OC1")
+        self.assertEqual(data["document"]["monomer_class"], "diepoxy")

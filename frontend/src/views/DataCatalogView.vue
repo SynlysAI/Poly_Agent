@@ -23,6 +23,7 @@ import {
   listDataCatalogMongoCollections,
 } from '../api/polyAgentApi'
 import { authState } from '../auth/authState'
+import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 use([
   BarChart,
@@ -52,6 +53,7 @@ const computationAnalysisRecords = ref([])
 const artifactAnalysisRecords = ref([])
 const selectedDataset = ref(null)
 const datasetDrawerVisible = ref(false)
+const datasetCoverageVisible = ref(false)
 const selectedCollectionName = ref('')
 const collectionRecords = ref([])
 const collectionTotal = ref(0)
@@ -68,7 +70,8 @@ const canDrilldownRecords = computed(() => !authState.authEnabled || authState.r
 const sourceReadyCount = computed(() => (overview.value?.sources || []).filter((item) => item.status === 'ready').length)
 const sourceTotalCount = computed(() => (overview.value?.sources || []).length)
 const selectedCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === selectedCollectionName.value) || null)
-const materialCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === 'ai4ms.Poly_Agent') || null)
+const polyDataSource = computed(() => (overview.value?.sources || []).find((item) => item.source === 'mongodb.poly_data') || null)
+const materialCollection = computed(() => mongoCollections.value.find((item) => item.data_domain === 'materials') || null)
 const computationRunCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === 'computation_runs') || null)
 const computationArtifactCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === 'computation_artifacts') || null)
 
@@ -85,8 +88,8 @@ const keyMetrics = computed(() => [
   {
     key: 'materials',
     label: '材料记录',
-    value: formatNumber(materialCollection.value?.count || 0),
-    meta: materialCollection.value ? statusLabel(materialCollection.value.status) : '未配置',
+    value: formatNumber(overview.value?.material_record_count),
+    meta: polyDataSource.value ? statusLabel(polyDataSource.value.status) : '未配置',
     icon: DataAnalysis,
   },
   {
@@ -370,6 +373,28 @@ function objectStatusType(row) {
   return 'info'
 }
 
+function datasetRecordModeLabel(mode) {
+  const map = { full: '全量记录', sample: '样本记录', metadata_only: '仅元数据' }
+  return map[mode] || '仅元数据'
+}
+
+function datasetRecordModeTag(mode) {
+  const map = { full: 'success', sample: 'warning', metadata_only: 'info' }
+  return map[mode] || 'info'
+}
+
+function datasetObjectSummary(dataset) {
+  const objects = dataset?.objects || []
+  const ready = objects.filter((item) => item.exists).length
+  return `${ready}/${objects.length || 0} 文件`
+}
+
+function datasetRecordCountText(dataset) {
+  if (!dataset?.record_collection_key) return '未导入'
+  if (dataset.record_count === null || dataset.record_count === undefined) return '未配置'
+  return `${formatNumber(dataset.record_count)} 条`
+}
+
 function countBy(items, field) {
   const counts = {}
   for (const item of items) {
@@ -438,7 +463,17 @@ function trendOption(items, color) {
 }
 
 function detectDistributionField(items) {
-  const candidates = ['workflow_type', 'engine', 'artifact_type', 'event_type', 'planner_type', 'trigger_source']
+  const candidates = [
+    'monomer_class',
+    'source_file',
+    'dataset',
+    'workflow_type',
+    'engine',
+    'artifact_type',
+    'event_type',
+    'planner_type',
+    'trigger_source',
+  ]
   return candidates.find((field) => items.some((item) => item.preview_fields?.[field] || item[field]))
 }
 
@@ -495,8 +530,11 @@ async function loadAnalysisSamples() {
     artifactAnalysisRecords.value = []
     return
   }
+  const materialCollectionName = materialCollection.value ? collectionIdentity(materialCollection.value) : ''
   const requests = [
-    listDataCatalogCollectionRecords('ai4ms.Poly_Agent', { page: 1, page_size: 100 }),
+    materialCollectionName
+      ? listDataCatalogCollectionRecords(materialCollectionName, { page: 1, page_size: 100 })
+      : Promise.resolve({ items: [] }),
     listDataCatalogCollectionRecords('computation_runs', { page: 1, page_size: 100 }),
     listDataCatalogCollectionRecords('computation_artifacts', { page: 1, page_size: 100 }),
   ]
@@ -508,7 +546,34 @@ async function loadAnalysisSamples() {
 
 function openDataset(dataset) {
   selectedDataset.value = dataset
+  datasetCoverageVisible.value = false
   datasetDrawerVisible.value = true
+}
+
+function showDatasetCoverageChart() {
+  datasetCoverageVisible.value = true
+}
+
+function hideDatasetCoverageChart() {
+  datasetCoverageVisible.value = false
+}
+
+async function openDatasetRecords(dataset) {
+  if (!dataset?.record_collection_key) {
+    ElMessage.info('该数据集当前只登记了文件和字段说明')
+    return
+  }
+  if (!canDrilldownRecords.value) {
+    ElMessage.warning('集合记录下钻仅管理员可用')
+    return
+  }
+  datasetDrawerVisible.value = false
+  activeTab.value = 'mongo'
+  selectedCollectionName.value = dataset.record_collection_key
+  recordFilters.page = 1
+  recordFilters.keyword = ''
+  syncRouteQuery({ tab: 'mongo', collection: selectedCollectionName.value, page: 1, keyword: undefined })
+  await loadCollectionRecords()
 }
 
 async function openCollection(collection) {
@@ -610,6 +675,8 @@ onMounted(async () => {
       <el-button :icon="Refresh" :loading="loading" @click="loadDataCatalog">刷新</el-button>
     </header>
 
+    <AttributionBanner module-id="data_catalog" label="数据来源" compact />
+
     <section class="metric-grid" aria-label="数据管理关键指标">
       <article v-for="metric in keyMetrics" :key="metric.key" class="metric-panel">
         <el-icon><component :is="metric.icon" /></el-icon>
@@ -635,6 +702,42 @@ onMounted(async () => {
     <el-tabs v-model="activeTab" class="catalog-tabs">
       <el-tab-pane label="数据分析" name="analysis" lazy>
         <div class="analysis-layout">
+          <section class="catalog-section dataset-section">
+            <div class="section-heading">
+              <h2>Poly Data 数据集</h2>
+              <span>{{ datasets.length }} 个数据集</span>
+            </div>
+            <div class="dataset-grid">
+              <button
+                v-for="dataset in datasets"
+                :key="dataset.dataset_id"
+                type="button"
+                class="dataset-card dataset-card-button"
+                @click="openDataset(dataset)"
+              >
+                <div class="dataset-card-main">
+                  <div>
+                    <h3>{{ dataset.display_name }}</h3>
+                    <p>{{ dataset.description }}</p>
+                  </div>
+                  <el-tag size="small" :type="datasetRecordModeTag(dataset.record_mode)">
+                    {{ datasetRecordModeLabel(dataset.record_mode) }}
+                  </el-tag>
+                </div>
+                <div class="dataset-meta">
+                  <el-tag size="small" effect="plain">{{ dataset.source_category }}</el-tag>
+                  <el-tag size="small" effect="plain">{{ dataset.confidence_label }}</el-tag>
+                  <el-tag size="small" effect="plain">{{ datasetObjectSummary(dataset) }}</el-tag>
+                </div>
+                <div class="dataset-stats">
+                  <span><strong>{{ formatNumber(dataset.row_count) }}</strong>原始行数</span>
+                  <span><strong>{{ formatNumber(dataset.column_count) }}</strong>字段数</span>
+                  <span><strong>{{ datasetRecordCountText(dataset) }}</strong>已入库记录</span>
+                </div>
+              </button>
+            </div>
+          </section>
+
           <section class="catalog-section analysis-main">
             <div class="section-heading">
               <h2>材料数据分级</h2>
@@ -838,23 +941,43 @@ onMounted(async () => {
       </el-tab-pane>
     </el-tabs>
 
-    <el-drawer v-model="datasetDrawerVisible" size="56%" class="catalog-drawer" title="数据集详情">
+    <el-drawer
+      v-model="datasetDrawerVisible"
+      size="56%"
+      class="catalog-drawer"
+      title="数据集详情"
+      @opened="showDatasetCoverageChart"
+      @closed="hideDatasetCoverageChart"
+    >
       <template v-if="selectedDataset">
         <div class="drawer-heading">
           <div>
             <h2>{{ selectedDataset.display_name }}</h2>
             <p>{{ selectedDataset.description }}</p>
           </div>
-          <el-tag type="success" effect="plain">{{ selectedDataset.confidence_label }}</el-tag>
+          <div class="drawer-actions">
+            <el-tag :type="datasetRecordModeTag(selectedDataset.record_mode)" effect="plain">
+              {{ datasetRecordModeLabel(selectedDataset.record_mode) }}
+            </el-tag>
+            <el-button
+              v-if="selectedDataset.record_collection_key"
+              type="primary"
+              :icon="View"
+              @click="openDatasetRecords(selectedDataset)"
+            >
+              查看记录
+            </el-button>
+          </div>
         </div>
         <div class="drawer-stat-row">
           <span>{{ formatNumber(selectedDataset.row_count) }} 行</span>
           <span>{{ formatNumber(selectedDataset.column_count) }} 列</span>
+          <span>{{ datasetRecordCountText(selectedDataset) }}</span>
           <code>{{ selectedDataset.storage_prefix }}</code>
         </div>
 
         <h3 class="drawer-section-title">字段覆盖率</h3>
-        <v-chart class="coverage-chart" :option="datasetCoverageOption" autoresize />
+        <v-chart v-if="datasetCoverageVisible" class="coverage-chart" :option="datasetCoverageOption" autoresize />
         <el-table :data="selectedDataset.field_summaries" size="small" border>
           <el-table-column prop="label" label="字段" min-width="150" />
           <el-table-column prop="canonical_name" label="Canonical" min-width="160">
@@ -1079,6 +1202,21 @@ onMounted(async () => {
 .dataset-card {
   padding: 14px;
   box-shadow: none;
+}
+
+.dataset-card-button {
+  width: 100%;
+  min-height: 188px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dataset-card-button:hover,
+.dataset-card-button:focus-visible {
+  border-color: #9fc2fb;
+  background: #f8fbff;
+  outline: none;
 }
 
 .dataset-card h3,
@@ -1336,6 +1474,13 @@ code {
   font-size: 18px;
 }
 
+.drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .drawer-stat-row {
   display: flex;
   flex-wrap: wrap;
@@ -1400,6 +1545,10 @@ code {
   .record-header,
   .drawer-heading {
     flex-direction: column;
+  }
+
+  .drawer-actions {
+    justify-content: flex-start;
   }
 
   .metric-grid,

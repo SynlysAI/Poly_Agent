@@ -16,6 +16,7 @@ import {
   rollbackAlgorithmVersion,
 } from '../../api/polyAgentApi'
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
+import { formatApiDateTime } from '../../utils/datetime'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -125,8 +126,7 @@ function runtimeHealth(row) {
 }
 
 function formatDate(value) {
-  if (!value) return '-'
-  return new Date(value).toLocaleString()
+  return formatApiDateTime(value)
 }
 
 function rowAttributions(row) {

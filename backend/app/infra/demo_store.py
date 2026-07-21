@@ -37,7 +37,11 @@ COLLECTION_NAMES = [
     "research_runs",
     "report_jobs",
     "report_artifacts",
-    "ai4ms.Poly_Agent",
+    "poly_data.material_records",
+    "poly_data.radonpy_records",
+    "poly_data.pi1m_samples",
+    "poly_data.smipoly_monomers",
+    "poly_data.polyuniverse_monomers",
 ]
 
 

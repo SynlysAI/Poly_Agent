@@ -19,6 +19,7 @@ import AlgorithmRunHistoryPanel from './vertical-prediction/AlgorithmRunHistoryP
 import AlgorithmTestPanel from './vertical-prediction/AlgorithmTestPanel.vue'
 import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue'
 import AttributionBadges from '../components/attribution/AttributionBadges.vue'
+import { formatApiDateTime } from '../utils/datetime'
 
 const route = useRoute()
 const router = useRouter()
@@ -215,9 +216,7 @@ function openDetail(algorithmId, tab = 'experience') {
 }
 
 function formatDate(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+  return formatApiDateTime(value)
 }
 
 function statusType(status) {

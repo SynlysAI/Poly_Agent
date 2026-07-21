@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 
 CatalogStatus = Literal["ready", "degraded", "not_configured"]
+DatasetRecordMode = Literal["full", "sample", "metadata_only"]
 
 
 class DataCatalogObjectInfo(BaseModel):
@@ -45,6 +46,9 @@ class DataCatalogDataset(BaseModel):
     row_count: int
     column_count: int
     storage_prefix: str
+    record_collection_key: str | None = None
+    record_count: int | None = None
+    record_mode: DatasetRecordMode = "metadata_only"
     objects: list[DataCatalogObjectInfo] = Field(default_factory=list)
     field_summaries: list[DataCatalogFieldSummary] = Field(default_factory=list)
 
@@ -87,6 +91,7 @@ class DataCatalogOverviewData(BaseModel):
     object_count: int
     total_rows: int
     total_columns: int
+    material_record_count: int | None = None
     canonical_root: str
     legacy_objects: list[str] = Field(default_factory=list)
     sources: list[DataCatalogSourceStatus] = Field(default_factory=list)
