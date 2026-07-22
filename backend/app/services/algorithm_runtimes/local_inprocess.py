@@ -79,6 +79,9 @@ class LocalInProcessRuntimeBackend:
         loader: str | None,
         inputs: dict[str, Any],
         timeout_seconds: int,
+        input_files: dict[str, str] | None = None,
+        output_dir: Path | None = None,
+        resource_assets: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
     ) -> RuntimeExecutionResult:
         module_name, func_name = self._split_callable(entrypoint)
@@ -91,6 +94,9 @@ class LocalInProcessRuntimeBackend:
             os.chdir(package_path)
             run_context = {
                 "package_path": str(package_path),
+                "input_files": input_files or {},
+                "output_dir": str(output_dir) if output_dir else None,
+                "resource_assets": resource_assets or {},
                 "runtime": self.legacy_kind,
                 "runtime_backend": self.backend_name,
                 **(context or {}),

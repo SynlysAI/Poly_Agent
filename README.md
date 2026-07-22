@@ -2,7 +2,35 @@
 
 **Poly Agent** 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec Agent](https://github.com/SynlysAI/Spec_Agent) 同属一个产品线。平台围绕高分子材料研发场景，提供实验设计与贝叶斯优化（Alchemist）、计算智能任务管理（ComputeEngine）、AI 驱动材料研发引擎（ResearchEngine）、垂类预测模型管理、文献知识库 RAG + 知识图谱、智能报告生成和产品内助手，帮助材料科学家系统化地定义研发任务、管理计算任务、编排算法工作流并追踪优化闭环。
 
+当前版本适合作为“计算智能 + ResearchEngine P0 双通道闭环”的演示和继续迭代基线。真实 ORCA/HPC/AiiDA、SpecLabOS 设备提交和生产级外部模型服务仍按集成配置逐步接入；未配置真实依赖时，系统会使用受控 demo store、mock、fixture 或 fallback 路径支撑本地验收。
+
 ## 功能概览
+
+| 模块 | 当前入口 | 当前能力 |
+|------|----------|----------|
+| Alchemist | `/optimization`、`/alchemist` | 实验变量、DoE/OED、实验数据、GP 建模、采集优化和诊断可视化 |
+| ComputeEngine | `/computations`、`/computation-runs`、`/campaigns` | 计算任务提交、worker 执行、artifact 管理、campaign 优化和集成状态 |
+| ResearchEngine | `/research-engine` | ProblemSpec、人工算法 Workflow、Pipeline Run、AutoResearch Gate、追溯和报告生成 |
+| 垂类预测 | `/vertical-prediction` | 算法包上传、治理、在线测试、运行历史、结果查看和 handoff |
+| Knowledge Base | `/knowledge-base` | 文献 RAG 问答、证据清单、知识图谱上下文和 KrF demo corpus |
+| Data Catalog | `/data-catalog` | 材料数据资产浏览、检索和外部数据源只读接入 |
+| 基础工作台 | `/dashboard`、`/tasks`、`/assistant`、`/tool-services` | 统一任务中心、产品内助手、LLM 模型选择和工具服务配置 |
+
+完整文档入口见 [doc/README.md](doc/README.md)。
+
+## 框架、方法与机构来源
+
+Poly Agent 在产品页面中维护统一的来源与引用标注。系统模块首屏会显示参考框架、方法来源和机构来源；算法卡片、垂类模型详情和预测结果会显示开发者来源。若机构 Logo 有明确授权或随算法包提交，则以右侧 Logo 卡片展示；否则使用文字来源牌，不伪造 Logo。
+
+| 模块 | 主要来源标注 | Poly Agent 实现边界 |
+|------|--------------|---------------------|
+| ResearchEngine / 计算编排 | ChemOS 2.0，University of Toronto / Aspuru-Guzik Group | 仅标注为编排思想和系统架构参考；ProblemSpec、Workflow、AlgorithmRun、Gate 和追溯为本项目实现 |
+| 湿实验优化 / Alchemist | NatLabRockies / NREL / NLR ALchemist | 实验设计、GP 建模、采集优化方法标注 ALchemist；Poly Agent 负责认证、会话、中文工作台和平台集成 |
+| ComputeEngine | RDKit、OpenBabel、xTB、CREST、ORCA | Poly Agent 负责任务、worker、artifact、审计和 campaign 联动；具体计算能力来自本地依赖 |
+| 垂类预测模型 | 算法包开发者、开发机构、来源链接和引用 | 平台治理上传、校验、部署和运行记录；模型方法与开发者来源来自算法契约 |
+| 文献知识库 | PolyAgent KnowledgeService 与独立 literature-rag 服务 | 查询、证据、图谱上下文和语料来源按服务契约追溯 |
+
+完整矩阵见 [doc/polyagent-attribution-source-matrix.md](doc/polyagent-attribution-source-matrix.md)。
 
 ### 1. Alchemist — 实验设计与贝叶斯优化（内置）
 
@@ -88,12 +116,13 @@
 
 ### 6. 数据管理 — Data Catalog
 
-统一的数据目录管理模块，支持材料研发数据的浏览、检索和管理。
+统一的数据目录管理模块，支持材料研发数据的浏览、检索和管理。材料数据资产使用 MongoDB `poly_data` 库和 MinIO `polymer-data/datasets/` 路径；`poly_agent` 业务库仅保存计算、算法、报告等运行态数据。
 
 | 能力 | 说明 |
 |------|------|
 | 数据目录 | 浏览和检索平台内注册的数据集 |
 | 数据浏览 | 按分类、标签筛选数据资源 |
+| 资产迁移 | `scripts/migrate_poly_data_assets.py` 将旧材料资产迁移到 `poly_data` 和 `datasets/` |
 
 ### 7. 基础功能
 
@@ -110,7 +139,7 @@
 |------|------|--------|
 | Alchemist 实验设计与优化 | ✅ MVP 完成 | ~95% |
 | ComputeEngine 计算智能 | ✅ MVP 基本完成 | ~92-95% |
-| ResearchEngine | ✅ P0 已完成 / ⚠️ 有已知测试缺口 | 双通道闭环、前端工作台、追溯、报告生成和示例流程可用 |
+| ResearchEngine | ✅ P0 已完成 / ⚠️ 存在历史测试缺口 | 双通道闭环、前端工作台、追溯、报告生成和示例流程可用 |
 | 垂类预测 | ✅ 基础可用 | 算法包上传、测试、运行历史追踪已集成 |
 | Knowledge Base 文献 RAG + 图谱 | ✅ 独立服务已接入 | KrF memory demo 可用；production 接 MongoDB/MinIO/Neo4j |
 | 数据管理 Data Catalog | ✅ 基础可用 | 数据目录浏览和检索 |
@@ -124,7 +153,21 @@
 - ResearchEngine P1：Schema 驱动算法表单、AlgorithmRegistry 管理、checkpoint/rerun 语义和真实算法服务接入
 - 生产级 worker 运维和持久化
 
-当前后端 ResearchEngine/assistant 相关测试存在 2 个已知失败用例，详见 [doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md) 的"当前已知测试失败"。
+ResearchEngine/assistant 相关历史测试状态见 [doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md) 的“历史已知测试失败与当前状态”；更新文档前未重新跑全量后端测试。
+
+## 文档导航
+
+项目文档统一放在 [doc/](doc/)；建议先读 [doc/README.md](doc/README.md)：
+
+| 场景 | 推荐文档 |
+|------|----------|
+| 本地运行和部署 | [快速开始](#快速开始)、[doc/poly-agent-toolchain-deployment-pack.md](doc/poly-agent-toolchain-deployment-pack.md) |
+| 计算任务和 campaign | [doc/computation-workflows-user-guide.md](doc/computation-workflows-user-guide.md)、[doc/compute-engine-computation-progress-and-plan.md](doc/compute-engine-computation-progress-and-plan.md) |
+| 实验设计与优化 | [doc/optimization-workflow-user-guide.md](doc/optimization-workflow-user-guide.md) |
+| ResearchEngine / AutoResearch | [doc/autoresearch-user-guide.md](doc/autoresearch-user-guide.md)、[doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md) |
+| 算法包上传与垂类模型 | [doc/algorithm-upload-user-guide.md](doc/algorithm-upload-user-guide.md) |
+| 文献 RAG 和知识图谱 | [services/literature-rag/README.md](services/literature-rag/README.md)、[doc/literature-rag-service-design.md](doc/literature-rag-service-design.md) |
+| 来源与引用标注 | [doc/polyagent-attribution-source-matrix.md](doc/polyagent-attribution-source-matrix.md) |
 
 ## 技术栈
 
@@ -264,6 +307,7 @@ Poly_Agent/
 │   │   │       ├── AlgorithmUploadPanel.vue       #   算法包上传
 │   │   │       ├── AlgorithmTestPanel.vue         #   算法测试
 │   │   │       ├── AlgorithmRunHistoryPanel.vue   #   运行历史
+│   │   │       ├── AlgorithmHandoffPanel.vue      #   算法交付说明
 │   │   │       └── AlgorithmResultView.vue        #   结果查看
 │   │   ├── App.vue                      # 主布局 (侧边栏 + 顶栏)
 │   │   ├── style.css                    # 全局样式
@@ -273,6 +317,7 @@ Poly_Agent/
 │   ├── vite.config.js
 │   └── package.json
 ├── doc/                                 # 文档
+│   ├── README.md                                      # 文档地图
 │   ├── optimization-workflow-user-guide.md              # Alchemist 操作流程
 │   ├── computation-workflows-user-guide.md              # 计算工作流用户指南
 │   ├── compute-engine-computation-product-prd.md        # ComputeEngine 产品需求文档
@@ -297,9 +342,9 @@ Poly_Agent/
 │   ├── setup_poly_agent_env.sh          #   Conda 环境初始化
 │   ├── restart_poly_agent_services.sh   #   重启前后端服务
 │   ├── stop_poly_agent_services.sh      #   停止前后端服务
-│   ├── run_compute_engine.sh            #   启动计算引擎 worker
+│   ├── run_compute_engine.sh            #   启动 ComputeEngine 参考服务/模拟器
 │   ├── pack_algorithm.py                #   算法包打包工具
-│   └── rename_minio_poly_agent_objects.py  # MinIO 对象重命名
+│   └── migrate_poly_data_assets.py         # Poly Data MongoDB/MinIO 资产迁移
 ├── deploy/                              # 部署配置
 │   └── toolchain/                       #   工具链部署
 │       ├── manifest.yml                 #     部署清单
@@ -344,7 +389,7 @@ bash scripts/stop_poly_agent_services.sh
 - 前端：`http://127.0.0.1:5200`
 - 后端：`http://127.0.0.1:5201`
 
-前端开发服务器会自动把 `/api` 和 `/static` 代理到后端。
+重启脚本会启动后端、前端和 computation worker；日志默认写入 `/tmp/poly_agent_backend.log`、`/tmp/poly_agent_frontend.log`、`/tmp/poly_agent_worker.log`。前端开发服务器会自动把 `/api` 和 `/static` 代理到后端。
 
 知识库功能需要独立 Literature RAG 服务。开发环境可单独启动 memory demo：
 
@@ -356,7 +401,27 @@ python -m uvicorn app.main:app --app-dir services/literature-rag --host 127.0.0.
 
 Poly Agent 后端在本地 `APP_ENV=dev` 时会自动探测 `127.0.0.1:8200`；生产环境请显式配置 `LITERATURE_RAG_BASE_URL` 和 `LITERATURE_RAG_QUERY_API_KEY`。
 
-### 4. 生产部署
+### 4. 常用命令
+
+| 命令 | 说明 |
+|------|------|
+| `bash scripts/setup_poly_agent_env.sh` | 创建或更新 `poly_agent` Conda 环境，并安装前端依赖 |
+| `bash scripts/restart_poly_agent_services.sh` | 重启本地后端、前端和 computation worker |
+| `bash scripts/stop_poly_agent_services.sh` | 停止本地开发服务 |
+| `make test-backend` | 运行后端 pytest，默认目标为 `backend/tests` |
+| `make test-frontend-build` | 运行前端生产构建 |
+| `make check-all` | 顺序运行后端测试、前端构建和当前占位 e2e 目标 |
+| `make init-mongo-indexes` | 初始化 MongoDB 索引 |
+| `python scripts/pack_algorithm.py --help` | 查看垂类算法包打包工具参数 |
+
+如需单独启动 ComputeEngine 参考服务或模拟器，见：
+
+```bash
+bash scripts/run_compute_engine.sh status
+bash scripts/run_compute_engine.sh base
+```
+
+### 5. 生产部署
 
 ```bash
 # 准备环境文件
@@ -374,6 +439,22 @@ pm2 save
 
 生产模式下直接访问 `http://<host>:5201` 即可，后端自动提供前端 SPA 页面。  
 知识库服务独立运行，Poly Agent 只连接本次部署的专用 `literature-rag` 实例，不改动共享焊接/稀土/表面处理数据。
+
+## 配置要点
+
+后端从 `backend/.env` 读取配置，模板见 [backend/.env.example](backend/.env.example)。常用配置按职责分组：
+
+| 配置组 | 关键变量 | 说明 |
+|--------|----------|------|
+| 运行环境与安全 | `APP_ENV`、`CORS_ALLOWED_ORIGINS`、`CORS_ALLOW_CREDENTIALS` | 非本地环境会强制校验认证、CORS 和密钥安全 |
+| 认证 | `AUTH_ENABLED`、`AUTH_SECRET`、`AUTH_MONGODB_URI`、`AUTH_MONGODB_DATABASE` | 支持本地账号和 AI4MS 共享认证库；生产环境必须设置足够长度的 `AUTH_SECRET` |
+| 主数据存储 | `MONGODB_HOST`、`MONGODB_PORT`、`MONGODB_DATABASE`、`REQUIRE_MONGODB` | `REQUIRE_MONGODB=false` 时可回退本地 demo store，适合演示，不适合生产 |
+| 运行时目录 | `POLY_AGENT_RUNTIME_ROOT`、`POLY_AGENT_UPLOAD_ROOT`、`POLY_AGENT_OUTPUT_ROOT`、`POLY_AGENT_LOG_ROOT` | 控制上传、产物、日志和报告输出位置 |
+| 计算工具链 | `XTB_EXECUTABLE`、`CREST_EXECUTABLE`、`ORCA_EXECUTABLE`、`ORCA_EXECUTION_MODE` | 本地 xTB/CREST/ORCA 真实执行依赖这些命令和许可证状态 |
+| 算法运行时 | `ALGORITHM_RUNTIME_BACKEND`、`ALGORITHM_RUNTIME_MAX_CONCURRENCY`、`ALGORITHM_RUNTIME_MAX_OUTPUT_BYTES` | 默认使用短生命周期 Python 子进程沙箱运行上传算法 |
+| LLM 与报告 | `LLM_*`、`REPORT_*` | 控制产品内助手、Alchemist LLM 辅助和自动报告生成 |
+| 文献 RAG | `LITERATURE_RAG_BASE_URL`、`LITERATURE_RAG_QUERY_API_KEY` | 连接独立 `services/literature-rag` 实例 |
+| 数据资产 | `DATA_ASSET_MONGODB_URI`、`DATA_ASSET_MONGODB_DATABASE=poly_data`、`MINIO_*` | 数据目录只读资产库和对象存储接入 |
 
 ## 认证体系
 

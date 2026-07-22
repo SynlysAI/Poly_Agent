@@ -75,9 +75,11 @@ class ReportService:
         self._validate_template_and_pipeline(request.template_id, request.skill_pipeline_id)
         self._ensure_subject_access(request.subject_type, request.subject_id, actor_user_id=actor_user_id, is_admin=is_admin)
         now = self._now()
-        provider = settings.report_llm_provider if request.provider == "auto" else request.provider
+        provider, model, route_hint = self._resolve_provider_selection(request.provider)
         report_id = f"report_{uuid.uuid4().hex[:16]}"
         input_snapshot = request.model_dump(mode="python")
+        if route_hint:
+            input_snapshot["resolved_model_route"] = route_hint
         job = {
             "report_id": report_id,
             "subject_type": request.subject_type,
@@ -93,7 +95,7 @@ class ReportService:
             "input_snapshot": input_snapshot,
             "context_ref": None,
             "provider": provider,
-            "model": self._configured_model(provider),
+            "model": model,
             "skill_pipeline_id": request.skill_pipeline_id,
             "skill_runs": [],
             "artifact_refs": [],
@@ -212,6 +214,7 @@ class ReportService:
             ReportJobRepository.update_status(report_id, status="running", stage="draft", progress=35)
             provider, result = self._run_plan_with_provider_fallback(
                 primary_provider=job["provider"],
+                primary_route_hint=(job.get("input_snapshot") or {}).get("resolved_model_route"),
                 plan=plan,
                 context=context,
             )
@@ -282,6 +285,7 @@ class ReportService:
         self,
         *,
         primary_provider: str,
+        primary_route_hint: dict[str, Any] | None = None,
         plan: dict[str, Any],
         context: dict[str, Any],
     ) -> tuple[Any, dict[str, Any]]:
@@ -289,7 +293,10 @@ class ReportService:
         last_error: Exception | None = None
         for provider_name in provider_names:
             try:
-                provider = ReportProviderRegistry().get_provider(provider_name)
+                route = None
+                if provider_name == primary_provider and primary_route_hint:
+                    route = ReportProviderRegistry().resolve_report_route(primary_route_hint)
+                provider = ReportProviderRegistry().get_provider(provider_name, model_route=route)
                 result = ReportSkillOrchestrator().run_plan(plan, provider=provider, context=context)
                 return provider, result
             except Exception as exc:
@@ -337,6 +344,22 @@ class ReportService:
             raise HTTPException(status_code=400, detail="仅失败的报告任务允许重试")
         new_report_id = f"report_{uuid.uuid4().hex[:16]}"
         retry_doc = ReportJobRepository.create_retry_job(report_id, new_report_id=new_report_id, created_by=created_by)
+        requested_provider = str((retry_doc.get("input_snapshot") or {}).get("provider") or retry_doc.get("provider") or "auto")
+        provider, model, route_hint = self._resolve_provider_selection(requested_provider)
+        input_snapshot = dict(retry_doc.get("input_snapshot") or {})
+        if route_hint:
+            input_snapshot["resolved_model_route"] = route_hint
+        else:
+            input_snapshot.pop("resolved_model_route", None)
+        retry_doc.update({"provider": provider, "model": model, "input_snapshot": input_snapshot})
+        ReportJobRepository.update_fields(
+            new_report_id,
+            {
+                "provider": provider,
+                "model": model,
+                "input_snapshot": input_snapshot,
+            },
+        )
         self._audit(
             "report.created",
             report_id=new_report_id,
@@ -610,6 +633,31 @@ class ReportService:
             if provider and provider not in deduped:
                 deduped.append(provider)
         return deduped
+
+    def _resolve_provider_selection(self, requested_provider: str) -> tuple[str, str | None, dict[str, Any] | None]:
+        if requested_provider != "auto":
+            return requested_provider, self._configured_model(requested_provider), None
+        if settings.report_llm_provider == "mock":
+            return "mock", self._configured_model("mock"), None
+        try:
+            route = ReportProviderRegistry().resolve_report_route()
+        except Exception:
+            return settings.report_llm_provider, self._configured_model(settings.report_llm_provider), None
+        provider = self._provider_name_from_route(route)
+        route_hint = {
+            "provider_id": route.get("provider_id"),
+            "provider_type": route.get("provider_type"),
+            "model_id": route.get("model_id"),
+        }
+        return provider, route.get("model_id") or self._configured_model(provider), route_hint
+
+    def _provider_name_from_route(self, route: dict[str, Any]) -> str:
+        provider_type = str(route.get("provider_type") or "")
+        if provider_type == "ollama":
+            return "local_ollama"
+        if provider_type == "custom_http":
+            return "custom_http"
+        return "openai_compatible"
 
     def _safe_filename(self, filename: str) -> str:
         safe = Path(filename).name.strip()

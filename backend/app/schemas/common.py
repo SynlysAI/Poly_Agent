@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+from datetime import datetime
 from typing import Generic, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 T = TypeVar("T")
+
+
+def serialize_utc_datetime(value: datetime) -> str:
+    """Serialize backend UTC datetimes with an explicit UTC designator."""
+    normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return normalized.isoformat().replace("+00:00", "Z")
+
+
+class UtcDatetimeJsonModel(BaseModel):
+    """Base model that emits datetime fields as explicit UTC JSON strings."""
+
+    @field_serializer("*", when_used="json", check_fields=False)
+    def serialize_datetime_fields(self, value):
+        if isinstance(value, datetime):
+            return serialize_utc_datetime(value)
+        return value
 
 
 class ApiResponse(BaseModel, Generic[T]):

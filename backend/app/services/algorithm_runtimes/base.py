@@ -98,6 +98,9 @@ class AlgorithmRuntimeBackend(Protocol):
         loader: str | None,
         inputs: dict[str, Any],
         timeout_seconds: int,
+        input_files: dict[str, str] | None = None,
+        output_dir: Path | None = None,
+        resource_assets: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
     ) -> RuntimeExecutionResult:
         """Run one prediction."""

@@ -58,6 +58,8 @@ def _public_artifact(artifact: ComputationArtifact) -> ComputationArtifactRespon
     return ComputationArtifactResponse(
         artifact_id=artifact.artifact_id,
         run_id=artifact.run_id,
+        owner_type=artifact.owner_type,
+        owner_id=artifact.owner_id or artifact.run_id,
         step_key=artifact.step_key,
         artifact_type=artifact.artifact_type,
         name=artifact.name,

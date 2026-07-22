@@ -136,6 +136,28 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertEqual(reasoning_provider["status"], "available")
         self.assertEqual(reasoning_provider["models"][0]["model_id"], "Qwen3.6-35B-A3B")
 
+    def test_routing_can_restore_qa_and_deep_to_default_deepseek(self) -> None:
+        qwen_payload = {
+            "qa": {"provider_id": "reasoning_primary", "model_id": "Qwen3.6-35B-A3B"},
+            "deep": {"provider_id": "reasoning_primary", "model_id": "Qwen3.6-35B-A3B"},
+        }
+        resp = self.client.put("/api/v1/llm/routing", json=qwen_payload)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["data"]["qa"]["provider_id"], "reasoning_primary")
+
+        deepseek_payload = {
+            "qa": {"provider_id": "default_openai", "model_id": "DeepSeek-V4-Flash-w8a8-mtp"},
+            "deep": {"provider_id": "default_openai", "model_id": "DeepSeek-V4-Flash-w8a8-mtp"},
+        }
+        resp = self.client.put("/api/v1/llm/routing", json=deepseek_payload)
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        self.assertEqual(data["qa"]["provider_id"], "default_openai")
+        self.assertEqual(data["qa"]["model_id"], "DeepSeek-V4-Flash-w8a8-mtp")
+        self.assertEqual(data["deep"]["provider_id"], "default_openai")
+        self.assertEqual(data["deep"]["model_id"], "DeepSeek-V4-Flash-w8a8-mtp")
+
     def test_legacy_llm_chat_uses_default_route(self) -> None:
         calls = []
 

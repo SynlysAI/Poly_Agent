@@ -165,7 +165,7 @@ onMounted(() => {
       <div class="panel-header task-header">
         <div>
           <h3 class="panel-title">任务中心</h3>
-          <p class="panel-subtitle">这里是全局任务管理器。计算任务、湿实验优化和预测模型任务统一从这里回访。</p>
+          <p class="panel-subtitle">全局任务管理器用于统一追踪计算任务、湿实验优化任务和预测模型任务，并支持跨模块回访。</p>
         </div>
         <div class="header-actions">
           <el-button :icon="Refresh" :loading="loading" @click="loadTasks">刷新</el-button>

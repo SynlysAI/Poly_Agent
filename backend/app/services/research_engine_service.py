@@ -6,11 +6,16 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.computation_adapters.base import ArtifactSpec
+from app.core.config import settings
+from app.core.time import utc_date_id
 from app.infra.computation_repositories import (
     AuditEventRepository,
     OptimizationCampaignRepository,
@@ -26,7 +31,9 @@ from app.infra.research_engine_repositories import (
     WorkflowRunRepository,
 )
 from app.services.research_engine_algorithm_package_service import AlgorithmPackageService
+from app.services.computation_service import ComputationService
 from app.services.algorithm_runtimes import AlgorithmRuntimeError
+from app.services.algorithm_file_adapters import AlgorithmFileAdapterRegistry
 from app.schemas.research_engine import (
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
@@ -34,6 +41,8 @@ from app.schemas.research_engine import (
     AlgorithmRunCreate,
     AlgorithmRunListData,
     AlgorithmRunTraceability,
+    AlgorithmAssetSpec,
+    AlgorithmVersion,
     AuditEventItem,
     EntityAuditListData,
     ExecutionDecision,
@@ -55,6 +64,7 @@ from app.schemas.research_engine import (
     WorkflowRunListData,
     WorkflowStepRun,
 )
+from app.schemas.attribution import AttributionItem
 from app.services.research_engine_access import ensure_research_engine_doc_access
 from app.services.research_engine_defaults import (
     build_adapter_algorithm_registry,
@@ -1072,6 +1082,27 @@ class ResearchEngineService:
 
         normalized["integration_kind"] = integration_kind
         normalized["capability_group"] = capability_group
+        if not normalized.get("developer_attribution"):
+            source = normalized.get("source")
+            owner = str(normalized.get("owner") or "PolyAgent")
+            if source == "uploaded_package":
+                normalized["developer_attribution"] = AttributionItem(
+                    name=owner,
+                    role="developer",
+                    organization=None,
+                    description="用户上传算法包；未提交机构 Logo 时显示文字来源牌。",
+                    logo_alt=owner,
+                    visibility="prominent",
+                ).model_dump(mode="python")
+            else:
+                normalized["developer_attribution"] = AttributionItem(
+                    name="PolyAgent",
+                    role="implementation_source",
+                    organization="PolyAgent",
+                    description="平台内置或适配算法条目，由 PolyAgent 注册表维护。",
+                    logo_alt="PolyAgent",
+                    visibility="prominent",
+                ).model_dump(mode="python")
         return normalized
 
     # ------------------------------------------------------------------
@@ -1273,6 +1304,7 @@ class ResearchEngineService:
         actor_user_id: str,
         is_admin: bool = False,
         request_id: str | None = None,
+        input_asset_uploads: dict[str, dict[str, Any]] | None = None,
     ) -> AlgorithmRun:
         """创建并执行算法运行。
 
@@ -1410,22 +1442,59 @@ class ResearchEngineService:
                     payload.input_snapshot,
                     algorithm_version.input_schema.model_dump(),
                 )
-                runtime_result = package_service.run_version_with_metadata(algorithm_version, payload.input_snapshot)
-                output_summary = runtime_result.output
+                prepared_assets = self._prepare_algorithm_run_assets(
+                    run_id=run_id,
+                    version=algorithm_version,
+                    payload=payload,
+                    input_asset_uploads=input_asset_uploads or {},
+                    actor_user_id=actor_user_id,
+                    is_admin=is_admin,
+                    created_at=now,
+                )
+                runtime_result = package_service.run_version_with_metadata(
+                    algorithm_version,
+                    payload.input_snapshot,
+                    input_files=prepared_assets["input_files"],
+                    parsed_inputs=prepared_assets["parsed_inputs"],
+                    output_dir=prepared_assets["output_dir"],
+                )
+                output_summary, output_artifacts = package_service._parse_result_envelope(
+                    runtime_result.output,
+                    algorithm_version.contract or {},
+                )
+                package_service._validate_declared_output_artifacts(
+                    prepared_assets["output_dir"],
+                    output_artifacts,
+                    algorithm_version.contract or {},
+                )
                 run_doc["runtime_snapshot"] = {
                     **run_doc.get("runtime_snapshot", {}),
                     **runtime_result.runtime,
                     "logs": runtime_result.logs.model_dump(),
                 }
-                artifact_specs = [
-                    {
-                        "type": "json_artifact",
-                        "name": f"{payload.algorithm_id}_{algorithm_version.version}_output",
-                        "content": output_summary,
-                        "content_type": "application/json",
-                        "description": "上传算法运行输出",
-                    }
-                ]
+                registered_output_artifacts = self._register_algorithm_output_artifacts(
+                    run_id=run_id,
+                    output_dir=prepared_assets["output_dir"],
+                    output_artifacts=output_artifacts,
+                    output_asset_specs=algorithm_version.output_assets,
+                    actor_user_id=actor_user_id,
+                    created_at=now,
+                )
+                if prepared_assets["artifact_refs"] or registered_output_artifacts:
+                    artifact_specs = [
+                        *prepared_assets["artifact_refs"],
+                        *self._artifact_refs_from_registered(registered_output_artifacts),
+                    ]
+                else:
+                    artifact_specs = [
+                        {
+                            "type": "json_artifact",
+                            "name": f"{payload.algorithm_id}_{algorithm_version.version}_output",
+                            "content": output_summary,
+                            "content_type": "application/json",
+                            "description": "上传算法运行输出",
+                        }
+                    ]
             else:
                 # 校验输入
                 runner.validate_input(payload.input_snapshot)
@@ -2220,6 +2289,255 @@ class ResearchEngineService:
             request_id=request_id,
         )
         return result.run_id if result else None
+
+    def _prepare_algorithm_run_assets(
+        self,
+        *,
+        run_id: str,
+        version: AlgorithmVersion,
+        payload: AlgorithmRunCreate,
+        input_asset_uploads: dict[str, dict[str, Any]],
+        actor_user_id: str,
+        is_admin: bool,
+        created_at,
+    ) -> dict[str, Any]:
+        """准备上传算法运行的输入文件和输出目录。"""
+        run_root = settings.outputs_root / "algorithm-runs" / utc_date_id() / run_id
+        input_dir = run_root / "inputs"
+        output_dir = run_root / "outputs"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        input_specs = {spec.key: spec for spec in version.input_assets}
+        input_files: dict[str, str] = {}
+        parsed_inputs: dict[str, Any] = {}
+        artifact_refs: list[dict] = []
+        artifact_specs: list[ArtifactSpec] = []
+        adapter_registry = AlgorithmFileAdapterRegistry()
+
+        for key, upload in input_asset_uploads.items():
+            spec = input_specs.get(key)
+            if spec is None:
+                raise HTTPException(status_code=422, detail=f"未声明的输入文件: {key}")
+            filename = str(upload.get("filename") or key)
+            content = upload.get("content") or b""
+            content_type = str(upload.get("content_type") or "application/octet-stream")
+            self._validate_input_asset_upload(key, filename, content_type, content, spec)
+            suffix = Path(filename).suffix.lower()
+            target = input_dir / f"{self._safe_asset_filename(key)}{suffix or '.dat'}"
+            target.write_bytes(content)
+            input_files[key] = str(target)
+            parsed = adapter_registry.parse(spec=spec, path=target, filename=filename, mime_type=content_type)
+            if parsed:
+                parsed_inputs[key] = parsed.payload
+                parsed_target = input_dir / f"{self._safe_asset_filename(key)}.parsed.json"
+                parsed_target.write_text(json.dumps(parsed.payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                artifact_specs.append(
+                    ArtifactSpec(
+                        step_key="INPUT_PARSE",
+                        artifact_type=parsed.artifact_type,
+                        name=f"{filename}.parsed.json",
+                        path=parsed_target,
+                        mime_type=parsed.mime_type,
+                        parser_name=parsed.parser,
+                        parser_version="1",
+                        metadata={
+                            "asset_key": key,
+                            "source": "platform_file_adapter",
+                            "data_kind": parsed.data_kind,
+                            "warnings": parsed.warnings,
+                        },
+                    )
+                )
+            artifact_specs.append(
+                ArtifactSpec(
+                    step_key="INPUT",
+                    artifact_type="input_file",
+                    name=filename,
+                    path=target,
+                    mime_type=content_type,
+                    parser_name="algorithm_run_input",
+                    parser_version="0.2",
+                    metadata={"asset_key": key, "source": "multipart_upload"},
+                )
+            )
+
+        computation_service = ComputationService()
+        for key, raw_ref in payload.input_asset_refs.items():
+            if key in input_files:
+                continue
+            if key not in input_specs:
+                raise HTTPException(status_code=422, detail=f"未声明的输入文件: {key}")
+            artifact_id = raw_ref.get("artifact_id") if isinstance(raw_ref, dict) else raw_ref
+            if not artifact_id:
+                continue
+            artifact = computation_service.get_artifact(
+                str(artifact_id),
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
+            )
+            input_files[key] = str(computation_service.resolve_artifact_path(artifact))
+            parsed = adapter_registry.parse(
+                spec=input_specs[key],
+                path=Path(input_files[key]),
+                filename=artifact.name,
+                mime_type=artifact.mime_type,
+            )
+            if parsed:
+                parsed_inputs[key] = parsed.payload
+            artifact_refs.append(self._artifact_ref_from_registered(artifact, asset_key=key))
+
+        missing = [key for key, spec in input_specs.items() if spec.required and key not in input_files]
+        if missing:
+            raise HTTPException(status_code=422, detail=f"缺少必填输入文件: {', '.join(missing)}")
+
+        if artifact_specs:
+            registered_inputs = computation_service.register_owner_artifacts(
+                owner_type="algorithm_run",
+                owner_id=run_id,
+                legacy_run_id=run_id,
+                created_by=actor_user_id,
+                artifact_specs=artifact_specs,
+                actor_worker_id="system",
+                created_at=created_at,
+            )
+            artifact_refs.extend(self._artifact_refs_from_registered(registered_inputs))
+
+        return {
+            "input_files": input_files,
+            "parsed_inputs": parsed_inputs,
+            "output_dir": output_dir,
+            "artifact_refs": artifact_refs,
+        }
+
+    def _register_algorithm_output_artifacts(
+        self,
+        *,
+        run_id: str,
+        output_dir: Path,
+        output_artifacts: list[dict],
+        output_asset_specs: list[AlgorithmAssetSpec],
+        actor_user_id: str,
+        created_at,
+    ) -> list:
+        """登记上传算法返回的输出文件 artifacts。"""
+        declared = {spec.key: spec for spec in output_asset_specs}
+        specs: list[ArtifactSpec] = []
+        for item in output_artifacts:
+            key = str(item.get("key") or "").strip()
+            declared_spec = declared.get(key)
+            artifact_type = str(
+                item.get("artifact_type")
+                or (declared_spec.artifact_type if declared_spec else "")
+                or "binary_file"
+            )
+            mime_type = str(
+                item.get("mime_type")
+                or (declared_spec.mime_type if declared_spec else "")
+                or "application/octet-stream"
+            )
+            rel_path = str(item.get("path") or "").strip()
+            path = (output_dir / rel_path).resolve()
+            specs.append(
+                ArtifactSpec(
+                    step_key=str(item.get("step_key") or "PREDICT"),
+                    artifact_type=artifact_type,
+                    name=str(item.get("name") or Path(rel_path).name or key),
+                    path=path,
+                    mime_type=mime_type,
+                    parser_name=str(item.get("parser_name") or "algorithm_run_output"),
+                    parser_version=str(item.get("parser_version") or "0.2"),
+                    metadata={"asset_key": key, **(item.get("metadata") or {})},
+                )
+            )
+        if not specs:
+            return []
+        return ComputationService().register_owner_artifacts(
+            owner_type="algorithm_run",
+            owner_id=run_id,
+            legacy_run_id=run_id,
+            created_by=actor_user_id,
+            artifact_specs=specs,
+            actor_worker_id="system",
+            created_at=created_at,
+        )
+
+    @staticmethod
+    def _validate_input_asset_upload(
+        key: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        spec: AlgorithmAssetSpec,
+    ) -> None:
+        if spec.max_size_bytes and len(content) > spec.max_size_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "INPUT_ASSET_TOO_LARGE",
+                    "message": f"输入文件 {key} 超过大小限制",
+                    "details": {"asset_key": key, "max_size_bytes": spec.max_size_bytes},
+                },
+            )
+        suffix = Path(filename).suffix.lower()
+        allowed_extensions = {item.lower() for item in spec.extensions}
+        if allowed_extensions and suffix not in allowed_extensions:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "UNSUPPORTED_INPUT_ASSET_TYPE",
+                    "message": f"输入文件 {key} 扩展名不受支持",
+                    "details": {
+                        "asset_key": key,
+                        "filename": filename,
+                        "extension": suffix,
+                        "supported_extensions": spec.extensions,
+                    },
+                },
+            )
+        allowed_mime_types = set(spec.mime_types)
+        if allowed_mime_types and content_type not in allowed_mime_types:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "UNSUPPORTED_INPUT_ASSET_TYPE",
+                    "message": f"输入文件 {key} MIME 类型不受支持",
+                    "details": {
+                        "asset_key": key,
+                        "filename": filename,
+                        "mime_type": content_type,
+                        "supported_mime_types": spec.mime_types,
+                    },
+                },
+            )
+        AlgorithmFileAdapterRegistry().validate_supported(spec=spec, filename=filename, mime_type=content_type)
+
+    @staticmethod
+    def _safe_asset_filename(value: str) -> str:
+        return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value) or "asset"
+
+    @staticmethod
+    def _artifact_ref_from_registered(artifact, *, asset_key: str | None = None) -> dict:
+        metadata = dict(artifact.metadata or {})
+        if asset_key:
+            metadata["asset_key"] = asset_key
+        return {
+            "artifact_id": artifact.artifact_id,
+            "run_id": artifact.run_id,
+            "owner_type": artifact.owner_type,
+            "owner_id": artifact.owner_id or artifact.run_id,
+            "step_key": artifact.step_key,
+            "artifact_type": artifact.artifact_type,
+            "name": artifact.name,
+            "mime_type": artifact.mime_type,
+            "size_bytes": artifact.size_bytes,
+            "checksum_sha256": artifact.checksum_sha256,
+            "metadata": metadata,
+        }
+
+    @classmethod
+    def _artifact_refs_from_registered(cls, artifacts) -> list[dict]:
+        return [cls._artifact_ref_from_registered(artifact) for artifact in artifacts]
 
     @staticmethod
     def _new_id(prefix: str) -> str:

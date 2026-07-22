@@ -27,7 +27,11 @@ class OpenAICompatibleReportProvider:
         schema: dict[str, Any],
         options: dict[str, Any],
     ) -> dict[str, Any]:
-        client = OpenAI(api_key=self.api_key or "EMPTY", base_url=self.base_url or None)
+        client = OpenAI(
+            api_key=self.api_key or "EMPTY",
+            base_url=self.base_url or None,
+            max_retries=int(options.get("transport_max_retries", settings.report_llm_max_retries)),
+        )
         def generate(attempt_messages: list[dict[str, Any]]) -> str:
             response = client.chat.completions.create(
                 model=self.model,

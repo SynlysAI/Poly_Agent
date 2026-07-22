@@ -338,7 +338,12 @@ class AlgorithmRequirementDocService:
             warnings.append("未填写 algorithm_id，已根据标题自动生成")
         if draft.example_id == "generic_python_predictor" and "smiles" not in draft.input_schema.fields:
             warnings.append("未识别到明显模板，已使用通用接入模板")
-        if not self._extract_section(body, "依赖和说明"):
+        has_dependency_notes = (
+            self._extract_section(body, "依赖和说明")
+            or "算法运行方式" in body
+            or "上传解析补充元数据" in body
+        )
+        if not has_dependency_notes:
             warnings.append("文档正文较短，建议补充依赖和上线约束")
         return warnings
 
@@ -358,13 +363,24 @@ class AlgorithmRequirementDocService:
         sample_input = self._normalize_mapping(metadata.get("sample_input"), default_value={})
         input_schema = self._normalize_schema(metadata.get("input_schema"), default_fields={})
         field_names = set(input_schema.fields.keys()) | set(sample_input.keys())
+        body_lower = body.lower()
         if "formulations" in field_names:
             return "batch_formulation_predictor"
         if "smiles" in field_names:
             return "smiles_property_predictor"
         if {"file_ref", "file_path", "path"} & field_names:
             return "file_based_predictor"
-        if {"payload", "request", "request_body"} & field_names or "http" in body.lower():
+        file_markers = {
+            "input_assets",
+            "spectrum_file",
+            "multipart",
+            "sample_assets",
+            "data_kind",
+            "parser:",
+        }
+        if any(marker in body_lower for marker in file_markers):
+            return "file_based_predictor"
+        if {"payload", "request", "request_body"} & field_names or "http" in body_lower:
             return "http_service_adapter"
         return "generic_python_predictor"
 

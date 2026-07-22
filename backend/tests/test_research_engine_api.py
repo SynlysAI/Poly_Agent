@@ -6,10 +6,13 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -20,6 +23,7 @@ except ImportError:
 
 from app.services.research_engine_service import ResearchEngineService
 from app.core.auth import get_current_user
+from app.core.config import settings
 from app.main import app
 from app.schemas.knowledge import KnowledgeHealthData
 
@@ -147,7 +151,7 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertIn(ps_id, archived_ids)
 
     def test_readiness_reports_optional_demo_fallbacks_before_start(self) -> None:
-        """AutoResearch 启动前可见 RAG/Alchemist 等集成可用性。"""
+        """AutoResearch 启动前可见 RAG/Alchemist/LLM 和阶段运行模式。"""
         rag_unavailable = KnowledgeHealthData(
             status="unavailable",
             configured=False,
@@ -155,9 +159,30 @@ class ProblemSpecApiTest(ComputationTestCase):
             message="Literature RAG 服务未配置或本地未发现。",
             systems=[],
         )
-        with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
-             patch("app.services.knowledge_service.KnowledgeService.health", return_value=rag_unavailable):
-            resp = self.client.get(f"{self.base_url}/readiness")
+        original_llm_model = settings.llm_model
+        original_llm_base_url = settings.llm_base_url
+        original_llm_api_key = settings.llm_api_key
+        original_llm_default_provider = settings.llm_default_provider
+        original_llm_default_model = settings.llm_default_model
+        original_llm_provider_configs_json = settings.llm_provider_configs_json
+        settings.llm_model = "gpt-test"
+        settings.llm_base_url = "http://llm.local/v1"
+        settings.llm_api_key = "test-key"
+        settings.llm_default_provider = ""
+        settings.llm_default_model = ""
+        settings.llm_provider_configs_json = ""
+        try:
+            with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
+                 patch("app.services.knowledge_service.KnowledgeService.health", return_value=rag_unavailable), \
+                 patch("app.services.llm_model_service.LLMRoutingRepository.find_one", return_value=None):
+                resp = self.client.get(f"{self.base_url}/readiness")
+        finally:
+            settings.llm_model = original_llm_model
+            settings.llm_base_url = original_llm_base_url
+            settings.llm_api_key = original_llm_api_key
+            settings.llm_default_provider = original_llm_default_provider
+            settings.llm_default_model = original_llm_default_model
+            settings.llm_provider_configs_json = original_llm_provider_configs_json
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
@@ -166,11 +191,67 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertFalse(data["ready"])
         self.assertTrue(data["can_start"])
         self.assertEqual(by_service["literature-rag"]["status"], "warning")
+        self.assertEqual(by_service["literature-rag"]["level"], "not_configured")
         self.assertFalse(by_service["literature-rag"]["demo_fallback"])
         self.assertFalse(by_service["literature-rag"]["blocking"])
         self.assertEqual(by_service["artifact-store"]["status"], "ready")
         self.assertEqual(by_service["computation-engine"]["status"], "ready")
-        self.assertEqual(by_service["alchemist-backend"]["status"], "warning")
+        self.assertEqual(by_service["alchemist-backend"]["status"], "ready")
+        self.assertEqual(by_service["research-llm"]["provider"], "default_openai")
+        self.assertEqual(by_service["research-llm"]["model"], "gpt-test")
+        self.assertEqual(by_service["research-llm"]["level"], "configured_pending_verification")
+        stage_modes = {item["stage_key"]: item for item in data["stage_modes"]}
+        self.assertEqual(stage_modes["KNOWLEDGE_RETRIEVAL"]["capability_id"], "literature-rag")
+        self.assertEqual(stage_modes["STRUCTURE_FEATURE"]["execution_mode"], "mock_fallback")
+        self.assertEqual(stage_modes["MODEL_UPDATE"]["provider"], "default_openai")
+
+    def test_capabilities_endpoint_reports_truth_levels(self) -> None:
+        """平台能力接口返回统一真实性等级和模型配置摘要。"""
+        rag_demo = KnowledgeHealthData(
+            status="warning",
+            configured=False,
+            demo_available=True,
+            message="使用内置 demo corpus。",
+            systems=["demo"],
+            backend="memory",
+        )
+        with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
+             patch("app.services.knowledge_service.KnowledgeService.health", return_value=rag_demo):
+            resp = self.client.get("/api/v1/capabilities")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        data = resp.json()["data"]
+        items = {(item["module_id"], item["capability_id"]): item for item in data["items"]}
+        self.assertIn(("knowledge", "literature-rag"), items)
+        self.assertIn(("research-engine", "research-llm"), items)
+        self.assertEqual(items[("knowledge", "literature-rag")]["level"], "demo_fallback")
+        self.assertTrue(items[("knowledge", "literature-rag")]["demo_fallback"])
+        self.assertIn(
+            items[("research-engine", "research-llm")]["level"],
+            {"not_configured", "configured_pending_verification", "production_ready", "unavailable"},
+        )
+
+
+class AttributionApiTest(ComputationTestCase):
+    """覆盖模块来源标注 API。"""
+
+    def test_list_and_get_module_attributions(self) -> None:
+        """模块来源注册表返回机构、引用和实现边界。"""
+        list_resp = self.client.get("/api/v1/attributions/modules")
+        self.assertEqual(list_resp.status_code, 200, list_resp.text)
+        list_data = list_resp.json()["data"]
+        module_ids = {item["module_id"] for item in list_data["items"]}
+        self.assertIn("research_engine", module_ids)
+        self.assertIn("wetlab_optimization", module_ids)
+
+        detail_resp = self.client.get("/api/v1/attributions/modules/research_engine")
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.text)
+        detail = detail_resp.json()["data"]
+        self.assertIn("ChemOS", detail["summary"])
+        self.assertTrue(detail["implementation_boundary"])
+        prominent = [item for item in detail["attributions"] if item["visibility"] == "prominent"]
+        self.assertTrue(prominent)
+        self.assertTrue(prominent[0]["logo_alt"])
 
 
 class AlgorithmPackageApiTest(ComputationTestCase):
@@ -179,6 +260,71 @@ class AlgorithmPackageApiTest(ComputationTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.base_url = "/api/v1/research-engine"
+
+    @staticmethod
+    def _managed_resource_package_zip(algorithm_id: str = "managed_resource_demo") -> bytes:
+        """Build a minimal package that requires a platform-managed resource."""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr(
+                "polyagent.algorithm.yaml",
+                f"""contract_version: "0.2"
+algorithm_id: {algorithm_id}
+name: Managed Resource Demo
+version: 0.1.0
+algorithm_family: vertical_prediction
+type: predictor
+material_scope:
+  - universal
+task_scope:
+  - COMPUTE_PREDICT
+trigger_modes:
+  - human_workflow
+entrypoint: src.handler:predict
+runtime:
+  python: "3.11"
+  resources:
+    cpu: 1
+    memory: 1Gi
+    gpu: false
+  timeout_seconds: 30
+input_schema:
+  fields: {{}}
+  required: []
+output_schema:
+  fields:
+    resource_ready: boolean
+    resource_id: string
+  required:
+    - resource_ready
+resource_assets:
+  - key: model_weights
+    required: true
+    binding_required: true
+    resource_type: checkpoints
+    required_files:
+      - ready.txt
+sample_input_path: tests/sample_input.json
+""",
+            )
+            zf.writestr(
+                "src/handler.py",
+                """
+from pathlib import Path
+
+
+def predict(inputs, context=None, model=None):
+    context = context or {}
+    resource = context["resource_assets"]["model_weights"]
+    path = Path(resource["path"])
+    return {
+        "resource_ready": (path / "ready.txt").is_file(),
+        "resource_id": resource.get("resource_id", ""),
+    }
+""",
+            )
+            zf.writestr("tests/sample_input.json", "{}")
+        return buffer.getvalue()
 
     def test_requirement_document_template_download_and_parse(self) -> None:
         template_resp = self.client.get(f"{self.base_url}/algorithm-requirement-docs/template")
@@ -276,6 +422,51 @@ sample_input:
         self.assertEqual(data["draft"]["output_schema"]["fields"]["prediction"], "number")
         self.assertEqual(data["draft"]["sample_input"]["temperature"], 298)
 
+    def test_requirement_document_docx_parse_file_based_raman(self) -> None:
+        document = self._build_requirement_docx(
+            paragraphs=[
+                "PolyAgent 模型与数据集成需求收集表",
+                "运行时通过 multipart 上传 spectrum_file，平台按 input_assets 解析为 series_json。",
+                "2.2 算法运行方式",
+                "输入 JSON 示例：",
+                '{\n  "spectype": "raman",\n  "mode": "beam_search",\n  "k": 3\n}',
+                "输出 JSON 示例：",
+                '{\n  "candidates": [],\n  "point_count": 8,\n  "metadata": {},\n  "preprocessing": {}\n}',
+            ],
+            tables=[
+                [
+                    ["字段", "填写内容"],
+                    ["算法名称 / 代号", "Raman Structure Analyzer / raman_structure_analyzer"],
+                    ["负责人", "Raman Demo Adapter / raman-demo@example.local"],
+                    ["算法功能介绍", "输入 Raman/IR 光谱 x-y 序列和 JSON 参数，输出候选结构。"],
+                    ["适用体系", "通用"],
+                    ["依赖（附 requirements.txt）", "numpy, pandas, scipy, torch, transformers, rdkit"],
+                ],
+                [
+                    ["字段", "填写内容"],
+                    ["文件类型 / 数量 / 大小", ".txt/.dat/.csv/.xlsx，运行时上传 1 个 spectrum_file"],
+                    ["提交方式", "AlgorithmRun multipart 上传"],
+                ],
+            ],
+        )
+        parse_resp = self.client.post(
+            f"{self.base_url}/algorithm-requirement-docs:parse",
+            files={
+                "file": (
+                    "raman-requirement.docx",
+                    document,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+        self.assertEqual(parse_resp.status_code, 200, parse_resp.text)
+        data = parse_resp.json()["data"]
+        self.assertEqual(data["draft"]["algorithm_id"], "raman_structure_analyzer")
+        self.assertEqual(data["draft"]["example_id"], "file_based_predictor")
+        self.assertEqual(data["draft"]["input_schema"]["fields"]["spectype"], "string")
+        self.assertEqual(data["draft"]["output_schema"]["fields"]["candidates"], "list")
+        self.assertNotIn("文档正文较短，建议补充依赖和上线约束", data["warnings"])
+
     @staticmethod
     def _build_requirement_docx(*, paragraphs: list[str], tables: list[list[list[str]]]) -> bytes:
         def text_nodes(value: str) -> str:
@@ -312,6 +503,7 @@ sample_input:
         self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
         package_id = upload_resp.json()["data"]["package_id"]
         self.assertEqual(upload_resp.json()["data"]["status"], "uploaded")
+        self.assertTrue(upload_resp.json()["data"]["created_at"].endswith("Z"))
 
         download_resp = self.client.get(f"{self.base_url}/algorithm-packages/{package_id}/download")
         self.assertEqual(download_resp.status_code, 200, download_resp.text)
@@ -343,6 +535,8 @@ sample_input:
         )
         self.assertEqual(deploy_resp.status_code, 200, deploy_resp.text)
         self.assertEqual(deploy_resp.json()["data"]["status"], "deployed_staging")
+        self.assertTrue(deploy_resp.json()["data"]["created_at"].endswith("Z"))
+        self.assertTrue(deploy_resp.json()["data"]["updated_at"].endswith("Z"))
         self.assertEqual(deploy_resp.json()["data"]["deployment"]["backend"], "local_sandbox_runtime")
         self.assertEqual(deploy_resp.json()["data"]["deployment"]["endpoint_type"], "subprocess")
 
@@ -374,6 +568,7 @@ sample_input:
         self.assertEqual(algorithm_resp.status_code, 200)
         self.assertEqual(algorithm_resp.json()["data"]["active_version_id"], version_id)
         self.assertEqual(algorithm_resp.json()["data"]["source"], "uploaded_package")
+        self.assertEqual(algorithm_resp.json()["data"]["developer_attribution"]["role"], "developer")
 
         run_resp = self.client.post(
             f"{self.base_url}/algorithm-runs",
@@ -386,12 +581,590 @@ sample_input:
         self.assertEqual(run_resp.status_code, 200, run_resp.text)
         run_data = run_resp.json()["data"]
         self.assertEqual(run_data["status"], "completed")
+        self.assertTrue(run_data["created_at"].endswith("Z"))
+        self.assertTrue(run_data["started_at"].endswith("Z"))
+        self.assertTrue(run_data["finished_at"].endswith("Z"))
         self.assertEqual(run_data["algorithm_version_id"], version_id)
         self.assertIn("prediction", run_data["output_summary"])
         self.assertIn("feature_summary", run_data["output_summary"])
         self.assertEqual(run_data["runtime_snapshot"]["backend"], "local_sandbox_runtime")
         self.assertTrue(run_data["runtime_digest"].startswith("sha256:"))
         self.assertIn("worker_pid", run_data["runtime_snapshot"])
+
+    def test_pack_algorithm_package_persists_developer_attribution(self) -> None:
+        """网页打包入口会把开发者来源写入 AlgorithmVersion。"""
+        handler_source = b"""
+def predict(inputs, context=None, model=None):
+    return {"prediction": {"value": 1.0, "unit": "demo"}}
+"""
+        pack_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:pack",
+            data={
+                "algorithm_id": "vertical_source_demo",
+                "name": "Vertical Source Demo",
+                "version": "0.1.0",
+                "entrypoint": "src.handler:predict",
+                "developer": "Demo Developer",
+                "developer_organization": "Demo Institute",
+                "source_url": "https://example.org/model",
+                "citation": "Demo Developer, Vertical Source Demo.",
+                "input_schema": '{"fields":{"smiles":"string"},"required":["smiles"]}',
+                "output_schema": '{"fields":{"prediction":"object"},"required":["prediction"]}',
+                "sample_input": '{"smiles":"CCO"}',
+            },
+            files=[("files", ("handler.py", handler_source, "text/x-python"))],
+        )
+        self.assertEqual(pack_resp.status_code, 200, pack_resp.text)
+        version_id = pack_resp.json()["data"]["version_id"]
+
+        versions_resp = self.client.get(f"{self.base_url}/algorithms/vertical_source_demo/versions")
+        self.assertEqual(versions_resp.status_code, 200, versions_resp.text)
+        version = next(item for item in versions_resp.json()["data"]["items"] if item["version_id"] == version_id)
+        self.assertEqual(version["developer_attribution"]["name"], "Demo Developer")
+        self.assertEqual(version["developer_attribution"]["organization"], "Demo Institute")
+        self.assertEqual(version["developer_attribution"]["url"], "https://example.org/model")
+
+    def test_multipart_algorithm_run_registers_input_and_output_artifacts(self) -> None:
+        """v0.2 文件型算法可通过 multipart 输入文件并登记输出 artifact。"""
+        buffer = io.BytesIO()
+        contract = """contract_version: "0.2"
+algorithm_id: spectrum_file_demo
+name: Spectrum File Demo
+version: 0.1.0
+algorithm_family: vertical_prediction
+type: predictor
+material_scope:
+  - universal
+task_scope:
+  - COMPUTE_PREDICT
+trigger_modes:
+  - human_workflow
+entrypoint: src.handler:predict
+runtime:
+  python: "3.11"
+  resources:
+    cpu: 1
+    memory: 1Gi
+    gpu: false
+  timeout_seconds: 30
+input_schema:
+  fields:
+    x0: number
+    x1: number
+  required:
+    - x0
+    - x1
+output_schema:
+  fields:
+    candidates: list
+  required:
+    - candidates
+input_assets:
+  - key: spectrum_file
+    label: Spectrum file
+    required: true
+    data_kind: series
+    parser: series_xy.v1
+    mime_types:
+      - text/plain
+      - text/csv
+    extensions:
+      - .txt
+      - .csv
+      - .dat
+    max_size_bytes: 2048
+    sample_path: tests/sample_assets/spectrum.txt
+output_assets:
+  - key: parsed_spectrum
+    artifact_type: spectrum_json
+    mime_type: application/json
+result_envelope: polyagent_run_result.v1
+sample_input_path: tests/sample_input.json
+developer: Demo Developer
+developer_organization: Demo Institute
+"""
+        handler = b"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+def predict(inputs, context=None, model=None):
+    context = context or {}
+    parsed = context["parsed_inputs"]["spectrum_file"]
+    points = parsed["data"]["points"]
+    output_dir = Path(context["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    parsed_path = output_dir / "parsed_spectrum.json"
+    parsed_path.write_text(json.dumps({
+        "kind": "xy",
+        "x_label": "Raman shift",
+        "y_label": "Intensity",
+        "points": points,
+    }, ensure_ascii=False), encoding="utf-8")
+    return {
+        "output_summary": {
+            "candidates": [{"structure": "CCO", "score": 0.91}],
+            "point_count": len(points),
+        },
+        "artifacts": [
+            {
+                "key": "parsed_spectrum",
+                "path": "parsed_spectrum.json",
+                "artifact_type": "spectrum_json",
+                "mime_type": "application/json",
+            }
+        ],
+    }
+"""
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("polyagent.algorithm.yaml", contract)
+            zf.writestr("requirements.txt", "")
+            zf.writestr("src/handler.py", handler)
+            zf.writestr("tests/sample_input.json", '{"x0": 100, "x1": 1800}')
+            zf.writestr("tests/sample_assets/spectrum.txt", "100 0.1\n200 0.8\n300 0.3\n")
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("spectrum-demo.zip", buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package_id = upload_resp.json()["data"]["package_id"]
+        validate_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:validate")
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        version_id = validate_resp.json()["data"]["version_id"]
+        version_resp = self.client.get(f"{self.base_url}/algorithms/spectrum_file_demo/versions")
+        version = next(item for item in version_resp.json()["data"]["items"] if item["version_id"] == version_id)
+        self.assertEqual(version["input_assets"][0]["key"], "spectrum_file")
+        self.assertEqual(version["output_assets"][0]["artifact_type"], "spectrum_json")
+
+        self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:build")
+        self.client.post(f"{self.base_url}/algorithms/spectrum_file_demo/versions/{version_id}:deploy")
+        self.client.post(f"{self.base_url}/algorithms/spectrum_file_demo/versions/{version_id}:activate")
+
+        run_resp = self.client.post(
+            f"{self.base_url}/algorithm-runs:multipart",
+            data={
+                "payload": json.dumps(
+                    {
+                        "algorithm_id": "spectrum_file_demo",
+                        "trigger_source": "human_workflow",
+                        "algorithm_version_id": version_id,
+                        "input_snapshot": {"x0": 100, "x1": 1800},
+                    }
+                )
+            },
+            files={"spectrum_file": ("run_spectrum.txt", b"100 0.2\n200 0.9\n", "text/plain")},
+        )
+        self.assertEqual(run_resp.status_code, 200, run_resp.text)
+        run = run_resp.json()["data"]
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["output_summary"]["point_count"], 2)
+        self.assertEqual(len(run["artifact_refs"]), 3)
+        artifact_types = {item["artifact_type"] for item in run["artifact_refs"]}
+        self.assertEqual(artifact_types, {"input_file", "series_json", "spectrum_json"})
+
+        artifacts_resp = self.client.get(f"{self.base_url}/algorithm-runs/{run['run_id']}/artifacts")
+        self.assertEqual(artifacts_resp.status_code, 200, artifacts_resp.text)
+        artifacts = artifacts_resp.json()["data"]["items"]
+        parsed_artifact = next(item for item in artifacts if item["artifact_type"] == "series_json")
+        self.assertEqual(parsed_artifact["owner_type"], "algorithm_run")
+        parsed_preview_resp = self.client.get(f"/api/v1/artifacts/{parsed_artifact['artifact_id']}/preview")
+        self.assertEqual(parsed_preview_resp.status_code, 200, parsed_preview_resp.text)
+        self.assertEqual(parsed_preview_resp.json()["data"]["preview"]["data_kind"], "series")
+        parsed_spectrum_resp = self.client.get(f"/api/v1/artifacts/{parsed_artifact['artifact_id']}/spectrum")
+        self.assertEqual(parsed_spectrum_resp.status_code, 200, parsed_spectrum_resp.text)
+        self.assertEqual(len(parsed_spectrum_resp.json()["data"]["spectrum"]["points"]), 2)
+        spectrum_artifact = next(item for item in artifacts if item["artifact_type"] == "spectrum_json")
+        self.assertEqual(spectrum_artifact["owner_type"], "algorithm_run")
+        self.assertEqual(spectrum_artifact["owner_id"], run["run_id"])
+
+        preview_resp = self.client.get(f"/api/v1/artifacts/{spectrum_artifact['artifact_id']}/preview")
+        self.assertEqual(preview_resp.status_code, 200, preview_resp.text)
+        self.assertEqual(preview_resp.json()["data"]["preview"]["kind"], "xy")
+
+        spectrum_resp = self.client.get(f"/api/v1/artifacts/{spectrum_artifact['artifact_id']}/spectrum")
+        self.assertEqual(spectrum_resp.status_code, 200, spectrum_resp.text)
+        self.assertEqual(len(spectrum_resp.json()["data"]["spectrum"]["points"]), 2)
+
+    def test_v02_package_validation_requires_declared_sample_asset(self) -> None:
+        """required input asset 没有 sample 文件时校验失败。"""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr(
+                "polyagent.algorithm.yaml",
+                """contract_version: "0.2"
+algorithm_id: missing_sample_asset_demo
+name: Missing Sample Asset Demo
+version: 0.1.0
+algorithm_family: vertical_prediction
+type: predictor
+material_scope:
+  - universal
+task_scope:
+  - COMPUTE_PREDICT
+trigger_modes:
+  - human_workflow
+entrypoint: src.handler:predict
+runtime:
+  python: "3.11"
+  resources:
+    cpu: 1
+    memory: 1Gi
+    gpu: false
+  timeout_seconds: 30
+input_schema:
+  fields: {}
+  required: []
+output_schema:
+  fields:
+    ok: boolean
+  required:
+    - ok
+input_assets:
+  - key: spectrum_file
+    required: true
+    sample_path: tests/sample_assets/spectrum.txt
+sample_input_path: tests/sample_input.json
+""",
+            )
+            zf.writestr("src/handler.py", "def predict(inputs, context=None, model=None):\n    return {'ok': True}\n")
+            zf.writestr("tests/sample_input.json", "{}")
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("missing-sample.zip", buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        validate_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages/{upload_resp.json()['data']['package_id']}:validate"
+        )
+        self.assertEqual(validate_resp.status_code, 422)
+        self.assertIn("sample asset", validate_resp.text)
+
+    def test_v02_resource_asset_requires_env_binding(self) -> None:
+        """resource_assets.env_var 缺失时校验失败且不创建版本。"""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr(
+                "polyagent.algorithm.yaml",
+                """contract_version: "0.2"
+algorithm_id: missing_resource_env_demo
+name: Missing Resource Env Demo
+version: 0.1.0
+algorithm_family: vertical_prediction
+type: predictor
+material_scope:
+  - universal
+task_scope:
+  - COMPUTE_PREDICT
+trigger_modes:
+  - human_workflow
+entrypoint: src.handler:predict
+runtime:
+  python: "3.11"
+  resources:
+    cpu: 1
+    memory: 1Gi
+    gpu: false
+  timeout_seconds: 30
+input_schema:
+  fields: {}
+  required: []
+output_schema:
+  fields:
+    ok: boolean
+  required:
+    - ok
+resource_assets:
+  - key: model_weights
+    required: true
+    env_var: MODEL_WEIGHTS_ROOT
+sample_input_path: tests/sample_input.json
+""",
+            )
+            zf.writestr("src/handler.py", "def predict(inputs, context=None, model=None):\n    return {'ok': True}\n")
+            zf.writestr("tests/sample_input.json", "{}")
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("missing-resource-env.zip", buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        with patch.dict("os.environ", {}, clear=True):
+            validate_resp = self.client.post(
+                f"{self.base_url}/algorithm-packages/{upload_resp.json()['data']['package_id']}:validate"
+            )
+        self.assertEqual(validate_resp.status_code, 422)
+        self.assertIn("MODEL_WEIGHTS_ROOT", validate_resp.text)
+
+    def test_algorithm_resource_registers_mounted_path_and_lists_it(self) -> None:
+        """可登记合法 mounted_path 算法大资源并按 key 查询。"""
+        resource_dir = self.runtime_root / "algorithm-resources" / "managed-resource-demo"
+        resource_dir.mkdir(parents=True)
+        (resource_dir / "ready.txt").write_text("ok", encoding="utf-8")
+
+        create_resp = self.client.post(
+            f"{self.base_url}/algorithm-resources",
+            json={
+                "algorithm_id": "managed_resource_demo",
+                "asset_key": "model_weights",
+                "name": "Managed Resource Demo Weights",
+                "path": str(resource_dir),
+                "resource_type": "checkpoints",
+                "required_files": ["ready.txt"],
+            },
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.text)
+        resource = create_resp.json()["data"]
+        self.assertTrue(resource["resource_id"].startswith("ares_"))
+        self.assertEqual(resource["status"], "active")
+
+        list_resp = self.client.get(
+            f"{self.base_url}/algorithm-resources",
+            params={"algorithm_id": "managed_resource_demo", "asset_key": "model_weights"},
+        )
+        self.assertEqual(list_resp.status_code, 200, list_resp.text)
+        self.assertEqual(list_resp.json()["data"]["total"], 1)
+        self.assertEqual(list_resp.json()["data"]["items"][0]["resource_id"], resource["resource_id"])
+
+    def test_algorithm_resource_rejects_invalid_path_missing_files_and_non_admin_create(self) -> None:
+        """路径越界、必需文件缺失和非管理员登记都会被拒绝。"""
+        outside = self.runtime_root / "outside-resource-root"
+        outside.mkdir(parents=True)
+        outside_resp = self.client.post(
+            f"{self.base_url}/algorithm-resources",
+            json={
+                "algorithm_id": "managed_resource_demo",
+                "asset_key": "model_weights",
+                "name": "Outside Resource",
+                "path": str(outside),
+            },
+        )
+        self.assertEqual(outside_resp.status_code, 422)
+        self.assertIn("允许的资源目录", outside_resp.text)
+
+        resource_dir = self.runtime_root / "algorithm-resources" / "missing-required"
+        resource_dir.mkdir(parents=True)
+        missing_file_resp = self.client.post(
+            f"{self.base_url}/algorithm-resources",
+            json={
+                "algorithm_id": "managed_resource_demo",
+                "asset_key": "model_weights",
+                "name": "Missing Required File",
+                "path": str(resource_dir),
+                "required_files": ["ready.txt"],
+            },
+        )
+        self.assertEqual(missing_file_resp.status_code, 422)
+        self.assertIn("缺少必需文件", missing_file_resp.text)
+
+        try:
+            app.dependency_overrides[get_current_user] = lambda: {
+                "user_id": "normal_user",
+                "username": "normal_user",
+                "role": "user",
+            }
+            forbidden_resp = self.client.post(
+                f"{self.base_url}/algorithm-resources",
+                json={
+                    "algorithm_id": "managed_resource_demo",
+                    "asset_key": "model_weights",
+                    "name": "User Resource",
+                    "path": str(resource_dir),
+                },
+            )
+            self.assertEqual(forbidden_resp.status_code, 403)
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
+
+    def test_package_validate_and_active_run_use_version_resource_binding(self) -> None:
+        """正式校验保存资源绑定，active 运行不依赖 env var 也能注入大资源路径。"""
+        resource_dir = self.runtime_root / "algorithm-resources" / "managed-resource-demo"
+        resource_dir.mkdir(parents=True)
+        (resource_dir / "ready.txt").write_text("ok", encoding="utf-8")
+        resource_resp = self.client.post(
+            f"{self.base_url}/algorithm-resources",
+            json={
+                "algorithm_id": "managed_resource_demo",
+                "asset_key": "model_weights",
+                "name": "Managed Resource Demo Weights",
+                "path": str(resource_dir),
+                "resource_type": "checkpoints",
+                "required_files": ["ready.txt"],
+            },
+        )
+        self.assertEqual(resource_resp.status_code, 200, resource_resp.text)
+        resource_id = resource_resp.json()["data"]["resource_id"]
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={
+                "file": (
+                    "managed-resource-demo.zip",
+                    self._managed_resource_package_zip(),
+                    "application/zip",
+                )
+            },
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package_id = upload_resp.json()["data"]["package_id"]
+        with patch.dict("os.environ", {}, clear=True):
+            validate_resp = self.client.post(
+                f"{self.base_url}/algorithm-packages/{package_id}:validate",
+                json={"resource_bindings": [{"asset_key": "model_weights", "resource_id": resource_id}]},
+            )
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        version_id = validate_resp.json()["data"]["version_id"]
+
+        version_resp = self.client.get(f"{self.base_url}/algorithms/managed_resource_demo/versions")
+        self.assertEqual(version_resp.status_code, 200, version_resp.text)
+        self.assertEqual(
+            version_resp.json()["data"]["items"][0]["resource_bindings"],
+            [{"asset_key": "model_weights", "resource_id": resource_id}],
+        )
+
+        build_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:build")
+        self.assertEqual(build_resp.status_code, 200, build_resp.text)
+        deploy_resp = self.client.post(
+            f"{self.base_url}/algorithms/managed_resource_demo/versions/{version_id}:deploy"
+        )
+        self.assertEqual(deploy_resp.status_code, 200, deploy_resp.text)
+        activate_resp = self.client.post(
+            f"{self.base_url}/algorithms/managed_resource_demo/versions/{version_id}:activate"
+        )
+        self.assertEqual(activate_resp.status_code, 200, activate_resp.text)
+
+        with patch.dict("os.environ", {}, clear=True):
+            run_resp = self.client.post(
+                f"{self.base_url}/algorithm-runs",
+                json={
+                    "algorithm_id": "managed_resource_demo",
+                    "trigger_source": "human_workflow",
+                    "input_snapshot": {},
+                },
+            )
+        self.assertEqual(run_resp.status_code, 200, run_resp.text)
+        run_data = run_resp.json()["data"]
+        self.assertEqual(run_data["status"], "completed")
+        self.assertTrue(run_data["output_summary"]["resource_ready"])
+        self.assertEqual(run_data["output_summary"]["resource_id"], resource_id)
+
+    def test_handoff_self_test_accepts_platform_resource_binding_without_env(self) -> None:
+        """handoff 自测可通过 resource_bindings 使用平台已登记大资源。"""
+        resource_dir = self.runtime_root / "algorithm-resources" / "managed-handoff-resource"
+        resource_dir.mkdir(parents=True)
+        (resource_dir / "ready.txt").write_text("ok", encoding="utf-8")
+        resource_resp = self.client.post(
+            f"{self.base_url}/algorithm-resources",
+            json={
+                "algorithm_id": "managed_resource_handoff_demo",
+                "asset_key": "model_weights",
+                "name": "Managed Handoff Weights",
+                "path": str(resource_dir),
+                "required_files": ["ready.txt"],
+            },
+        )
+        self.assertEqual(resource_resp.status_code, 200, resource_resp.text)
+        resource_id = resource_resp.json()["data"]["resource_id"]
+
+        create_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs",
+            json={
+                "algorithm_id": "managed_resource_handoff_demo",
+                "name": "Managed Resource Handoff Demo",
+                "version": "0.1.0",
+                "example_id": "generic_python_predictor",
+                "input_schema": {"fields": {}, "required": []},
+                "output_schema": {
+                    "fields": {"resource_ready": "boolean", "resource_id": "string"},
+                    "required": ["resource_ready"],
+                },
+                "sample_input": {},
+            },
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.text)
+        handoff_id = create_resp.json()["data"]["handoff_id"]
+
+        with patch.dict("os.environ", {}, clear=True):
+            validate_resp = self.client.post(
+                f"{self.base_url}/algorithm-handoffs/{handoff_id}:validate",
+                data={
+                    "resource_bindings": json.dumps([
+                        {"asset_key": "model_weights", "resource_id": resource_id}
+                    ])
+                },
+                files={
+                    "file": (
+                        "managed-resource-handoff.zip",
+                        self._managed_resource_package_zip("managed_resource_handoff_demo"),
+                        "application/zip",
+                    )
+                },
+            )
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        validation = validate_resp.json()["data"]
+        self.assertTrue(validation["ok"], validation)
+        self.assertEqual(validation["output_preview"]["resource_id"], resource_id)
+
+    def test_v02_resource_asset_rejects_path_outside_allowed_roots(self) -> None:
+        """resource_assets.env_var 指向非允许目录时校验失败。"""
+        outside = self.runtime_root / "outside-resources"
+        outside.mkdir(parents=True)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr(
+                "polyagent.algorithm.yaml",
+                """contract_version: "0.2"
+algorithm_id: outside_resource_env_demo
+name: Outside Resource Env Demo
+version: 0.1.0
+algorithm_family: vertical_prediction
+type: predictor
+material_scope:
+  - universal
+task_scope:
+  - COMPUTE_PREDICT
+trigger_modes:
+  - human_workflow
+entrypoint: src.handler:predict
+runtime:
+  python: "3.11"
+  resources:
+    cpu: 1
+    memory: 1Gi
+    gpu: false
+  timeout_seconds: 30
+input_schema:
+  fields: {}
+  required: []
+output_schema:
+  fields:
+    ok: boolean
+  required:
+    - ok
+resource_assets:
+  - key: model_weights
+    required: true
+    env_var: MODEL_WEIGHTS_ROOT
+sample_input_path: tests/sample_input.json
+""",
+            )
+            zf.writestr("src/handler.py", "def predict(inputs, context=None, model=None):\n    return {'ok': True}\n")
+            zf.writestr("tests/sample_input.json", "{}")
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("outside-resource-env.zip", buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        with patch.dict("os.environ", {"MODEL_WEIGHTS_ROOT": str(outside)}, clear=True):
+            validate_resp = self.client.post(
+                f"{self.base_url}/algorithm-packages/{upload_resp.json()['data']['package_id']}:validate"
+            )
+        self.assertEqual(validate_resp.status_code, 422)
+        self.assertIn("允许的资源目录", validate_resp.text)
 
     def test_upload_rejects_zip_path_traversal_on_validate(self) -> None:
         """ZIP 路径穿越在校验阶段被拒绝。"""
@@ -611,6 +1384,236 @@ sample_input:
 
         packages_resp = self.client.get(f"{self.base_url}/algorithm-packages")
         self.assertEqual(packages_resp.json()["data"]["total"], 0)
+
+    def test_file_based_handoff_generates_raman_asset_package(self) -> None:
+        """文件型 Raman 对接包应使用 v0.2 asset 契约，而不是 SMILES 默认模板。"""
+        create_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs",
+            json={
+                "algorithm_id": "raman_structure_analyzer",
+                "name": "Raman Structure Analyzer",
+                "version": "0.1.0",
+                "example_id": "file_based_predictor",
+                "material_scope": ["universal"],
+                "input_schema": {
+                    "fields": {
+                        "spectype": "string",
+                        "mode": "string",
+                        "x0": "number",
+                        "x1": "number",
+                        "k": "integer",
+                        "transmittance": "boolean",
+                        "device": "string",
+                    },
+                    "required": ["spectype", "mode"],
+                },
+                "output_schema": {
+                    "fields": {
+                        "candidates": "list",
+                        "point_count": "integer",
+                        "metadata": "object",
+                        "preprocessing": "object",
+                    },
+                    "required": ["candidates"],
+                },
+                "sample_input": {
+                    "spectype": "raman",
+                    "mode": "beam_search",
+                    "x0": 400,
+                    "x1": 1800,
+                    "k": 3,
+                    "transmittance": False,
+                    "device": "cpu",
+                },
+                "requirements_hint": ["numpy", "pandas", "scipy", "torch", "transformers", "rdkit"],
+                "description": "输入 Raman/IR 光谱 x-y 序列和 JSON 参数，输出候选结构。",
+            },
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.text)
+        handoff_id = create_resp.json()["data"]["handoff_id"]
+
+        package_resp = self.client.get(f"{self.base_url}/algorithm-handoffs/{handoff_id}/package")
+        self.assertEqual(package_resp.status_code, 200, package_resp.text)
+        with zipfile.ZipFile(io.BytesIO(package_resp.content)) as handoff_zip:
+            names = set(handoff_zip.namelist())
+            self.assertIn("src/raman_core/main.py", names)
+            self.assertIn("tests/sample_assets/sample_spectrum.dat", names)
+            self.assertNotIn("model/.gitkeep", names)
+            self.assertNotIn("scikit-learn", handoff_zip.read("requirements.txt").decode("utf-8"))
+            contract = handoff_zip.read("polyagent.algorithm.yaml").decode("utf-8")
+            contract_data = yaml.safe_load(contract)
+            self.assertEqual(contract_data["contract_version"], "0.2")
+            self.assertEqual(contract_data["input_assets"][0]["key"], "spectrum_file")
+            self.assertEqual(contract_data["resource_assets"][0]["env_var"], "RAMAN_CHECKPOINTS_ROOT")
+            self.assertEqual(contract_data["result_envelope"], "polyagent_run_result.v1")
+
+    def test_file_based_handoff_self_test_reports_missing_raman_resources(self) -> None:
+        """Raman 对接包自测缺资源时应给出 managed resource 环境变量修复线索。"""
+        create_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs",
+            json={
+                "algorithm_id": "raman_structure_analyzer",
+                "name": "Raman Structure Analyzer",
+                "version": "0.1.0",
+                "example_id": "file_based_predictor",
+                "input_schema": {
+                    "fields": {"spectype": "string", "mode": "string"},
+                    "required": ["spectype", "mode"],
+                },
+                "output_schema": {
+                    "fields": {"candidates": "list"},
+                    "required": ["candidates"],
+                },
+                "sample_input": {"spectype": "raman", "mode": "beam_search"},
+                "requirements_hint": ["numpy", "pandas", "scipy", "torch", "transformers", "rdkit"],
+            },
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.text)
+        handoff_id = create_resp.json()["data"]["handoff_id"]
+        package_resp = self.client.get(f"{self.base_url}/algorithm-handoffs/{handoff_id}/package")
+        self.assertEqual(package_resp.status_code, 200, package_resp.text)
+
+        with patch.dict("os.environ", {}, clear=True):
+            validate_resp = self.client.post(
+                f"{self.base_url}/algorithm-handoffs/{handoff_id}:validate",
+                files={"file": ("raman-handoff.zip", package_resp.content, "application/zip")},
+            )
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        validation = validate_resp.json()["data"]
+        self.assertFalse(validation["ok"])
+        self.assertEqual(validation["status"], "self_test_failed")
+        messages = " ".join([item["message"] for item in validation["checks"]] + validation["fixes"])
+        self.assertIn("RAMAN_CHECKPOINTS_ROOT", messages)
+        self.assertIn("managed resource", messages)
+
+    def test_handoff_self_test_uses_v02_file_and_resource_context(self) -> None:
+        """handoff 自测应与正式校验一样注入 sample 文件、解析结果和受管资源。"""
+        create_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs",
+            json={
+                "algorithm_id": "resource_file_handoff_demo",
+                "name": "Resource File Handoff Demo",
+                "version": "0.1.0",
+                "example_id": "generic_python_predictor",
+                "input_schema": {"fields": {"x0": "number"}, "required": ["x0"]},
+                "output_schema": {"fields": {"candidates": "list"}, "required": ["candidates"]},
+                "sample_input": {"x0": 100},
+            },
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.text)
+        handoff_id = create_resp.json()["data"]["handoff_id"]
+
+        contract = """contract_version: "0.2"
+algorithm_id: resource_file_handoff_demo
+name: Resource File Handoff Demo
+version: 0.1.0
+algorithm_family: vertical_prediction
+type: predictor
+material_scope:
+  - universal
+task_scope:
+  - COMPUTE_PREDICT
+trigger_modes:
+  - human_workflow
+entrypoint: src.handler:predict
+runtime:
+  python: "3.11"
+  resources:
+    cpu: 1
+    memory: 1Gi
+    gpu: false
+  timeout_seconds: 30
+input_schema:
+  fields:
+    x0: number
+  required:
+    - x0
+output_schema:
+  fields:
+    candidates: list
+  required:
+    - candidates
+input_assets:
+  - key: spectrum_file
+    required: true
+    data_kind: series
+    parser: series_xy.v1
+    extensions:
+      - .dat
+    sample_path: tests/sample_assets/sample_spectrum.dat
+output_assets:
+  - key: parsed_series
+    artifact_type: series_json
+    mime_type: application/json
+resource_assets:
+  - key: demo_resource
+    required: true
+    env_var: DEMO_RESOURCE_ROOT
+result_envelope: polyagent_run_result.v1
+sample_input_path: tests/sample_input.json
+"""
+        handler = b"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+def predict(inputs, context=None, model=None):
+    context = context or {}
+    resource_path = Path(context["resource_assets"]["demo_resource"]["path"])
+    if not (resource_path / "ready.txt").is_file():
+        raise RuntimeError("demo resource was not injected")
+    points = context["parsed_inputs"]["spectrum_file"]["data"]["points"]
+    output_dir = Path(context["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "parsed_series.json").write_text(
+        json.dumps({"points": points}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return {
+        "output_summary": {"candidates": [{"structure": "CCO", "score": 1.0}]},
+        "artifacts": [
+            {
+                "key": "parsed_series",
+                "path": "parsed_series.json",
+                "artifact_type": "series_json",
+                "mime_type": "application/json",
+            }
+        ],
+    }
+"""
+        package_buffer = io.BytesIO()
+        with zipfile.ZipFile(package_buffer, "w") as zf:
+            zf.writestr("polyagent.algorithm.yaml", contract)
+            zf.writestr("requirements.txt", "")
+            zf.writestr("src/handler.py", handler)
+            zf.writestr("tests/sample_input.json", '{"x0": 100}')
+            zf.writestr("tests/sample_assets/sample_spectrum.dat", "100 0.2\n200 0.9\n")
+        package_content = package_buffer.getvalue()
+
+        resource_dir = self.runtime_root / "algorithm-resources" / "resource-file-handoff-demo"
+        resource_dir.mkdir(parents=True)
+        (resource_dir / "ready.txt").write_text("ok", encoding="utf-8")
+        with patch.dict("os.environ", {"DEMO_RESOURCE_ROOT": str(resource_dir)}):
+            validate_resp = self.client.post(
+                f"{self.base_url}/algorithm-handoffs/{handoff_id}:validate",
+                files={"file": ("resource-file-handoff.zip", package_content, "application/zip")},
+            )
+            upload_resp = self.client.post(
+                f"{self.base_url}/algorithm-packages",
+                files={"file": ("resource-file-handoff.zip", package_content, "application/zip")},
+            )
+            formal_validate_resp = self.client.post(
+                f"{self.base_url}/algorithm-packages/{upload_resp.json()['data']['package_id']}:validate"
+            )
+
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        validation = validate_resp.json()["data"]
+        self.assertTrue(validation["ok"], validation)
+        self.assertEqual(validation["output_preview"]["candidates"][0]["structure"], "CCO")
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        self.assertEqual(formal_validate_resp.status_code, 200, formal_validate_resp.text)
 
     def test_algorithm_handoff_validation_reports_missing_sample_input_fix(self) -> None:
         """对接包缺关键文件时返回面向对接人的修复建议。"""

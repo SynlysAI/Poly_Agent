@@ -17,7 +17,7 @@ const apiClient = axios.create({
   timeout: 60000,
 })
 
-function generateRequestId() {
+export function generateRequestId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
@@ -144,6 +144,16 @@ export function getApiErrorMessage(error) {
 
 export function getApiBaseUrl() {
   return resolvedBaseUrl
+}
+
+// ── 来源与引用标注 API ──
+
+export function listModuleAttributions() {
+  return apiClient.get('/attributions/modules').then(unwrapResponse)
+}
+
+export function getModuleAttribution(moduleId) {
+  return apiClient.get(`/attributions/modules/${encodeURIComponent(moduleId)}`).then(unwrapResponse)
 }
 
 // ── 认证 API ──
@@ -324,6 +334,10 @@ export function getIntegrationStatus() {
   return apiClient.get('/integrations/status').then(unwrapResponse)
 }
 
+export function listCapabilities() {
+  return apiClient.get('/capabilities').then(unwrapResponse)
+}
+
 // ── 数据目录 API ──
 
 export function getDataCatalogOverview() {
@@ -332,6 +346,18 @@ export function getDataCatalogOverview() {
 
 export function listDataCatalogDatasets() {
   return apiClient.get('/data-catalog/datasets').then(unwrapResponse)
+}
+
+export function getDataCatalogDatasetProfile(datasetId) {
+  return apiClient.get(`/data-catalog/datasets/${encodeURIComponent(datasetId)}/profile`).then(unwrapResponse)
+}
+
+export function listDataCatalogDatasetRecords(datasetId, params = {}) {
+  return apiClient.get(`/data-catalog/datasets/${encodeURIComponent(datasetId)}/records`, { params }).then(unwrapResponse)
+}
+
+export function getDataCatalogDatasetVisualSamples(datasetId, params = {}) {
+  return apiClient.get(`/data-catalog/datasets/${encodeURIComponent(datasetId)}/visual-samples`, { params }).then(unwrapResponse)
 }
 
 export function listDataCatalogMongoCollections() {
@@ -589,6 +615,18 @@ export function parseAlgorithmRequirementDocument(formData) {
   return apiClient.post('/research-engine/algorithm-requirement-docs:parse', formData).then(unwrapResponse)
 }
 
+export function createAlgorithmResource(payload) {
+  return apiClient.post('/research-engine/algorithm-resources', payload).then(unwrapResponse)
+}
+
+export function listAlgorithmResources(params = {}) {
+  return apiClient.get('/research-engine/algorithm-resources', { params }).then(unwrapResponse)
+}
+
+export function checkAlgorithmResource(resourceId) {
+  return apiClient.post(`/research-engine/algorithm-resources/${resourceId}:check`).then(unwrapResponse)
+}
+
 export function listAlgorithmPackageExamples() {
   return apiClient.get('/research-engine/algorithm-package-examples').then(unwrapResponse)
 }
@@ -659,8 +697,9 @@ export function downloadAlgorithmPackage(packageId, fallbackName = 'algorithm-pa
     }))
 }
 
-export function validateAlgorithmPackage(packageId) {
-  return apiClient.post(`/research-engine/algorithm-packages/${packageId}:validate`).then(unwrapResponse)
+export function validateAlgorithmPackage(packageId, resourceBindings = []) {
+  const payload = resourceBindings.length ? { resource_bindings: resourceBindings } : undefined
+  return apiClient.post(`/research-engine/algorithm-packages/${packageId}:validate`, payload).then(unwrapResponse)
 }
 
 export function buildAlgorithmPackage(packageId) {
@@ -719,12 +758,29 @@ export function createAlgorithmRun(payload) {
   return apiClient.post('/research-engine/algorithm-runs', payload).then(unwrapResponse)
 }
 
+export function createAlgorithmRunMultipart(payload, files = {}) {
+  const formData = new FormData()
+  formData.append('payload', JSON.stringify(payload))
+  Object.entries(files).forEach(([key, file]) => {
+    if (file) formData.append(key, file)
+  })
+  return apiClient.post('/research-engine/algorithm-runs:multipart', formData).then(unwrapResponse)
+}
+
 export function listAlgorithmRuns(params = {}) {
   return apiClient.get('/research-engine/algorithm-runs', { params }).then(unwrapResponse)
 }
 
 export function getAlgorithmRun(runId) {
   return apiClient.get(`/research-engine/algorithm-runs/${runId}`).then(unwrapResponse)
+}
+
+export function getAlgorithmRunTraceability(runId) {
+  return apiClient.get(`/research-engine/algorithm-runs/${runId}/traceability`).then(unwrapResponse)
+}
+
+export function listAlgorithmRunArtifacts(runId) {
+  return apiClient.get(`/research-engine/algorithm-runs/${runId}/artifacts`).then(unwrapResponse)
 }
 
 // ── ManualWorkflow / WorkflowRun ──

@@ -4,11 +4,12 @@
  * 所有请求通过 Poly_Agent 的代理路由 /api/v1/alchemist/* 转发到 ALchemist 后端。
  * 认证拦截器与 polyAgentApi.js 共用同一套 auth state。
  */
-import { getApiBaseUrl } from './polyAgentApi'
-import { getAuthorizationHeader } from '../auth/authState'
+import { generateRequestId, getApiBaseUrl } from './polyAgentApi'
+import { clearAuthSession, getAuthorizationHeader } from '../auth/authState'
 import axios from 'axios'
 
 const BASE = `${getApiBaseUrl()}/alchemist`
+const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
 
 const alchemistClient = axios.create({
   baseURL: BASE,
@@ -16,6 +17,7 @@ const alchemistClient = axios.create({
 })
 
 alchemistClient.interceptors.request.use((config) => {
+  config.headers['X-Request-Id'] = generateRequestId()
   const authHeader = getAuthorizationHeader()
   if (authHeader) {
     config.headers['Authorization'] = authHeader
@@ -26,7 +28,12 @@ alchemistClient.interceptors.request.use((config) => {
 alchemistClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    const message = error.response?.data?.detail || error.message || '请求失败'
+    if (error.response?.status === 401) {
+      clearAuthSession()
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT_NAME))
+    }
+    const data = error.response?.data
+    const message = data?.data?.detail || data?.message || data?.detail || error.message || '请求失败'
     return Promise.reject(new Error(message))
   }
 )

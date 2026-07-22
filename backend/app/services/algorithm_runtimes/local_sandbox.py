@@ -122,6 +122,9 @@ class LocalSandboxRuntimeBackend:
         loader: str | None,
         inputs: dict[str, Any],
         timeout_seconds: int,
+        input_files: dict[str, str] | None = None,
+        output_dir: Path | None = None,
+        resource_assets: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
     ) -> RuntimeExecutionResult:
         request = {
@@ -129,6 +132,9 @@ class LocalSandboxRuntimeBackend:
             "entrypoint": entrypoint,
             "loader": loader,
             "inputs": inputs,
+            "input_files": input_files or {},
+            "output_dir": str(output_dir) if output_dir else None,
+            "resource_assets": resource_assets or {},
             "context": context or {},
         }
         runtime_base = {

@@ -25,6 +25,8 @@ function purposePriority(row, route, preferredPurpose) {
   if (preferredPurpose === 'deep' && row.capabilities.includes('reasoning')) return -60
   if (preferredPurpose === 'deep' && row.capabilities.includes('long_context')) return -50
   if (preferredPurpose === 'qa' && row.capabilities.includes('fast')) return -60
+  if (preferredPurpose === 'qa' && row.recommendedFor.includes('deep')) return 30
+  if (preferredPurpose === 'qa' && row.capabilities.includes('reasoning') && !row.capabilities.includes('fast')) return 20
   return 0
 }
 

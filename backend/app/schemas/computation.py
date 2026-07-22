@@ -16,6 +16,10 @@ LegacyEngineType = Literal["MOCK"]
 PersistedWorkflowType = WorkflowType | LegacyWorkflowType
 PersistedEngineType = EngineType | LegacyEngineType
 ArtifactType = Literal[
+    "input_file",
+    "parsed_input_json",
+    "table_json",
+    "series_json",
     "result_json",
     "log_text",
     "structure_json",
@@ -25,7 +29,12 @@ ArtifactType = Literal[
     "xyz",
     "spectrum_json",
     "metrics_json",
+    "report_json",
+    "image_png",
+    "csv",
+    "binary_file",
 ]
+ArtifactOwnerType = Literal["computation_run", "algorithm_run"]
 
 ALLOWED_METHODS = {
     "GFN2-XTB": "GFN2-xTB",
@@ -185,6 +194,8 @@ class ComputationArtifact(BaseModel):
 
     artifact_id: str
     run_id: str
+    owner_type: ArtifactOwnerType = "computation_run"
+    owner_id: str | None = None
     step_key: str
     artifact_type: ArtifactType
     name: str
@@ -203,6 +214,8 @@ class ComputationArtifactResponse(BaseModel):
 
     artifact_id: str
     run_id: str
+    owner_type: ArtifactOwnerType = "computation_run"
+    owner_id: str | None = None
     step_key: str
     artifact_type: ArtifactType
     name: str

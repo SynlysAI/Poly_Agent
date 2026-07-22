@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from app.schemas.attribution import AttributionItem
 from app.schemas.research_engine import (
     AlgorithmIOSchema,
     AlgorithmRegistryEntry,
@@ -16,6 +17,53 @@ from app.schemas.research_engine import (
     ResearchStageKey,
     StageGate,
     TriggerSource,
+)
+
+
+def source_item(
+    name: str,
+    role: str,
+    organization: str | None,
+    description: str,
+    url: str | None = None,
+    visibility: str = "detail",
+) -> AttributionItem:
+    """构建默认算法来源标注。"""
+    return AttributionItem(
+        name=name,
+        role=role,
+        organization=organization,
+        description=description,
+        url=url,
+        logo_alt=organization or name,
+        visibility=visibility,
+    )
+
+
+POLYAGENT_DEVELOPER = source_item(
+    "PolyAgent",
+    "implementation_source",
+    "PolyAgent",
+    "平台内置或适配算法条目，由 PolyAgent 注册表维护。",
+    visibility="prominent",
+)
+
+CHEMOS_ATTRIBUTION = source_item(
+    "ChemOS 2.0",
+    "framework_reference",
+    "University of Toronto / Aspuru-Guzik Group",
+    "ResearchEngine 与计算编排参考其自驱实验室任务编排思想；PolyAgent 为本项目适配实现。",
+    "https://github.com/malcolmsimgithub/ChemOS2.0",
+    "prominent",
+)
+
+ALCHEMIST_ATTRIBUTION = source_item(
+    "ALchemist",
+    "framework_reference",
+    "NatLabRockies / NREL / NLR",
+    "主动学习、实验设计、GP 建模与采集优化工具包。",
+    "https://github.com/NatLabRockies/ALchemist",
+    "prominent",
 )
 
 # =============================================================================
@@ -269,6 +317,27 @@ def build_default_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             owner="computation_team",
             status="active",
             description="基于 RDKit/OpenBabel 的三维分子结构生成，支持 SMILES 到 3D 坐标转换",
+            developer_attribution=POLYAGENT_DEVELOPER,
+            framework_attributions=[CHEMOS_ATTRIBUTION],
+            method_attributions=[
+                source_item(
+                    "RDKit",
+                    "dependency",
+                    "RDKit project",
+                    "用于 SMILES 解析、三维构象生成和结构文件输出。",
+                    "https://www.rdkit.org/",
+                    "prominent",
+                ),
+                source_item(
+                    "OpenBabel",
+                    "dependency",
+                    "Open Babel project",
+                    "作为可选结构生成和化学文件转换后端。",
+                    "https://openbabel.org/",
+                    "prominent",
+                ),
+            ],
+            implementation_notes="PolyAgent 负责任务契约、worker 编排、artifact 和审计；结构处理能力依赖 RDKit/OpenBabel。",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="local_xtb_adapter",
@@ -325,6 +394,19 @@ def build_default_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             owner="computation_team",
             status="active",
             description="基于 CREST 构象搜索 + xTB 半经验方法的能量计算，支持 GFN2-xTB/GFN1-xTB/GFN0-xTB",
+            developer_attribution=POLYAGENT_DEVELOPER,
+            framework_attributions=[CHEMOS_ATTRIBUTION],
+            method_attributions=[
+                source_item(
+                    "xTB / CREST",
+                    "dependency",
+                    "Grimme Lab",
+                    "用于半经验量子化学计算与构象搜索。",
+                    "https://xtb-docs.readthedocs.io/",
+                    "prominent",
+                ),
+            ],
+            implementation_notes="PolyAgent 封装执行、日志、artifact、错误归一和 campaign 回填；量化计算能力来自本地 xTB/CREST。",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="orca_compute_engine_laser_adapter",
@@ -375,6 +457,26 @@ def build_default_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             owner="computation_team",
             status="active",
             description="CREST 构象搜索 + xTB 预优化 + ORCA DFT 精加工，提供高精度单点能计算",
+            developer_attribution=POLYAGENT_DEVELOPER,
+            framework_attributions=[CHEMOS_ATTRIBUTION],
+            method_attributions=[
+                source_item(
+                    "ORCA",
+                    "dependency",
+                    "ORCA quantum chemistry program",
+                    "用于可选 DFT 精加工计算，需本地 license 与执行环境。",
+                    "https://orcaforum.kofo.mpg.de/",
+                    "prominent",
+                ),
+                source_item(
+                    "xTB / CREST",
+                    "dependency",
+                    "Grimme Lab",
+                    "用于构象搜索和预优化。",
+                    "https://xtb-docs.readthedocs.io/",
+                ),
+            ],
+            implementation_notes="PolyAgent 负责任务编排与结果解析；ORCA、xTB 和 CREST 由本地计算环境提供。",
         ),
     ]
 
@@ -453,6 +555,17 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             owner="research_engine_team",
             status="active",
             description="通过 PolyAgent 知识库服务查询独立文献 RAG；未配置时明确返回服务不可用。",
+            developer_attribution=POLYAGENT_DEVELOPER,
+            method_attributions=[
+                source_item(
+                    "PolyAgent KnowledgeService",
+                    "implementation_source",
+                    "PolyAgent",
+                    "知识库体系、RAG 查询、图谱上下文和证据追溯为本项目服务契约。",
+                    visibility="prominent",
+                ),
+            ],
+            implementation_notes="独立文献 RAG 服务由 PolyAgent 通过 KnowledgeService 适配调用。",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="knowledge_graph_adapter",
@@ -495,6 +608,17 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             owner="research_engine_team",
             status="active",
             description="返回指定知识库体系的知识图谱或查询相关子图，供人工 Workflow 和 AutoResearch 证据追溯使用。",
+            developer_attribution=POLYAGENT_DEVELOPER,
+            method_attributions=[
+                source_item(
+                    "PolyAgent KnowledgeGraph Adapter",
+                    "implementation_source",
+                    "PolyAgent",
+                    "图谱节点、边、统计和子图检索响应由 PolyAgent 知识服务契约维护。",
+                    visibility="prominent",
+                ),
+            ],
+            implementation_notes="未配置图谱服务时返回明确状态，不伪装真实外部能力。",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="vertical_predictor_adapter",
@@ -541,6 +665,23 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             owner="model_platform_team",
             status="active",
             description="垂类性质预测服务调用契约；未配置模型服务时返回可操作错误。",
+            developer_attribution=source_item(
+                "垂类模型服务开发者",
+                "developer",
+                "模型平台或算法提供方",
+                "具体模型开发者来源由接入服务或上传算法包提供；缺失时页面显示文字来源牌。",
+                visibility="prominent",
+            ),
+            method_attributions=[
+                source_item(
+                    "Vertical Predictor Service",
+                    "implementation_source",
+                    "PolyAgent / 外部模型服务",
+                    "通过 VERTICAL_PREDICTOR_URL 接入垂类性质预测模型服务。",
+                    visibility="prominent",
+                ),
+            ],
+            implementation_notes="该条目是模型服务调用契约，具体算法开发者以服务返回或上传包 metadata 为准。",
         ),
         AlgorithmRegistryEntry(
             algorithm_id="mobo_alchemist_adapter",
@@ -587,6 +728,10 @@ def build_adapter_algorithm_registry() -> list[AlgorithmRegistryEntry]:
             owner="optimization_team",
             status="active",
             description="调用 Alchemist session/variable/experiment/model/acquisition API 生成 BO/MOBO 推荐。",
+            developer_attribution=POLYAGENT_DEVELOPER,
+            framework_attributions=[ALCHEMIST_ATTRIBUTION, CHEMOS_ATTRIBUTION],
+            method_attributions=[ALCHEMIST_ATTRIBUTION],
+            implementation_notes="PolyAgent 负责 AlgorithmRun 契约和 Alchemist API 适配；优化方法来源标注为 ALchemist。",
         ),
     ]
 

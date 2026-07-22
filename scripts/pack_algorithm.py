@@ -30,6 +30,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trigger-modes", default='["human_workflow","autoresearch"]')
     parser.add_argument("--input-schema", default='{"fields":{"smiles":"string"},"required":["smiles"]}')
     parser.add_argument("--output-schema", default='{"fields":{"prediction":"object"},"required":["prediction"]}')
+    parser.add_argument("--input-assets", default="[]", help="JSON array of input asset specs")
+    parser.add_argument("--output-assets", default="[]", help="JSON array of output asset specs")
+    parser.add_argument("--resource-assets", default="[]", help="JSON array of managed resource specs")
+    parser.add_argument("--result-envelope", default=None, help="Optional result envelope id, e.g. polyagent_run_result.v1")
+    parser.add_argument("--sample-assets-dir", type=Path, default=None, help="Optional directory copied to tests/sample_assets/")
     return parser.parse_args()
 
 
@@ -68,12 +73,18 @@ def main() -> int:
         raise SystemExit(f"sample input does not exist: {args.sample_input}")
     if args.requirements and not args.requirements.is_file():
         raise SystemExit(f"requirements file does not exist: {args.requirements}")
+    if args.sample_assets_dir and not args.sample_assets_dir.is_dir():
+        raise SystemExit(f"sample assets dir does not exist: {args.sample_assets_dir}")
     assert_callable_ref(args.entrypoint, "--entrypoint")
     assert_callable_ref(args.loader, "--loader")
 
     sample_input = json.loads(args.sample_input.read_text(encoding="utf-8"))
+    input_assets = load_json_arg(args.input_assets, "--input-assets")
+    output_assets = load_json_arg(args.output_assets, "--output-assets")
+    resource_assets = load_json_arg(args.resource_assets, "--resource-assets")
+    uses_assets = bool(input_assets or output_assets or resource_assets or args.result_envelope)
     contract = {
-        "contract_version": "0.1",
+        "contract_version": "0.2" if uses_assets else "0.1",
         "algorithm_id": args.algorithm_id,
         "name": args.name,
         "version": args.version,
@@ -91,6 +102,10 @@ def main() -> int:
         },
         "input_schema": load_json_arg(args.input_schema, "--input-schema"),
         "output_schema": load_json_arg(args.output_schema, "--output-schema"),
+        "input_assets": input_assets,
+        "output_assets": output_assets,
+        "resource_assets": resource_assets,
+        "result_envelope": args.result_envelope,
         "sample_input_path": "tests/sample_input.json",
     }
 
@@ -105,6 +120,11 @@ def main() -> int:
         for path, rel in iter_source_files(args.source_dir):
             archive_name = str(rel).replace("\\", "/")
             zf.write(path, archive_name)
+        if args.sample_assets_dir:
+            for path, rel in iter_source_files(args.sample_assets_dir):
+                sample_rel = str(rel).replace("\\", "/")
+                archive_name = f"tests/sample_assets/{sample_rel}"
+                zf.write(path, archive_name)
 
     print(f"Created {args.output}")
     print("Upload it in Poly Agent: ResearchEngine -> Algorithm Registry -> Upload Algorithm")

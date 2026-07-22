@@ -1,12 +1,15 @@
 <script setup>
 import { computed } from 'vue'
 
+import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
+
 const props = defineProps({
   outputSummary: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
   inputSnapshot: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
   artifactRefs: { type: Array, default: () => [] },
   status: { type: String, default: '' },
   error: { type: Object, default: null },
+  attributions: { type: Array, default: () => [] },
 })
 
 const priorityValueKeys = ['value', 'predicted_value', 'prediction', 'score']
@@ -22,8 +25,15 @@ const predictionObject = computed(() => {
   return outputObject.value
 })
 
+const batchResultSections = computed(() => buildBatchResultSections(outputObject.value))
+const batchHighlights = computed(() => buildBatchHighlights(batchResultSections.value))
 const mainPrediction = computed(() => buildMainPrediction(predictionObject.value, outputObject.value))
-const evidence = computed(() => buildEvidence(outputObject.value, predictionObject.value, mainPrediction.value))
+const evidence = computed(() => buildEvidence(
+  outputObject.value,
+  predictionObject.value,
+  mainPrediction.value,
+  new Set(batchResultSections.value.map((section) => section.key)),
+))
 const rawPanels = computed(() => {
   const panels = [
     { name: 'input', title: '输入 JSON', data: props.inputSnapshot },
@@ -34,14 +44,30 @@ const rawPanels = computed(() => {
   return panels
 })
 
-const artifactRows = computed(() => props.artifactRefs.map((item, index) => ({
-  id: item.artifact_id || item.id || `${index + 1}`,
-  name: item.name || item.filename || item.artifact_id || item.id || `artifact_${index + 1}`,
-  type: item.type || item.artifact_type || '-',
-  description: item.description || '-',
-  contentType: item.content_type || item.mime_type || '-',
-  contentSummary: item.content === undefined ? '-' : summarizeValue(item.content),
-})))
+const artifactRows = computed(() => {
+  const rows = props.artifactRefs.map((item, index) => ({
+    id: item.artifact_id || item.id || `${index + 1}`,
+    name: item.name || item.filename || item.artifact_id || item.id || `artifact_${index + 1}`,
+    type: item.type || item.artifact_type || '-',
+    stepKey: item.step_key || item.stepKey || '-',
+    group: artifactGroup(item),
+    description: item.description || '-',
+    contentType: item.content_type || item.mime_type || '-',
+    contentSummary: item.content === undefined ? '-' : summarizeValue(item.content),
+    downloadUrl: item.download_url || item.downloadUrl || '',
+  }))
+  if (rows.length || isEmptyValue(props.outputSummary)) return rows
+  return [{
+    id: 'output_summary',
+    name: '运行输出 JSON',
+    type: 'json_artifact',
+    stepKey: 'PREDICT',
+    group: '模型输出',
+    description: '模型运行输出',
+    contentType: 'application/json',
+    contentSummary: summarizeValue(props.outputSummary),
+  }]
+})
 
 const hasOutput = computed(() => !isEmptyValue(props.outputSummary))
 const hasStructuredContent = computed(() => Boolean(
@@ -53,6 +79,42 @@ const hasStructuredContent = computed(() => Boolean(
   artifactRows.value.length,
 ))
 const inputHighlights = computed(() => scalarEntries(inputObject.value).slice(0, 4))
+
+function artifactGroup(item) {
+  const stepKey = item.step_key || item.stepKey || ''
+  const type = item.artifact_type || item.type || ''
+  if (stepKey === 'INPUT' || type === 'input_file') return '输入文件'
+  if (stepKey === 'INPUT_PARSE' || ['parsed_input_json', 'table_json', 'series_json'].includes(type)) return '平台解析'
+  return '模型输出'
+}
+
+function buildBatchResultSections(output) {
+  return Object.entries(output)
+    .filter(([, value]) => Array.isArray(value) && value.length && value.every(isPlainObject))
+    .map(([key, rows]) => buildFlatTableSection(key, rows, { preferredNestedKey: 'predictions', limitColumns: 14 }))
+}
+
+function buildBatchHighlights(sections) {
+  const section = sections[0]
+  if (!section) return []
+  const numericColumns = section.columns.filter((column) =>
+    section.rows.some((row) => typeof row[column] === 'number'),
+  )
+  const metricCards = numericColumns.slice(0, 5).map((column) => {
+    const values = section.rows.map((row) => row[column]).filter((value) => typeof value === 'number')
+    const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+    return {
+      key: column,
+      label: formatLabel(column),
+      value: average,
+      caption: values.length > 1 ? '平均值' : '预测值',
+    }
+  })
+  return [
+    { key: `${section.key}.count`, label: '结果数量', value: section.totalRows, caption: section.title },
+    ...metricCards,
+  ]
+}
 
 function buildMainPrediction(prediction, output) {
   const valueEntry = findMainValue(prediction)
@@ -85,7 +147,7 @@ function findMainValue(source) {
   return null
 }
 
-function buildEvidence(output, prediction, main) {
+function buildEvidence(output, prediction, main, hiddenKeys = new Set()) {
   const metricSections = []
   const listSections = []
   const tableSections = []
@@ -100,6 +162,7 @@ function buildEvidence(output, prediction, main) {
 
   const predictionMetrics = []
   for (const [key, value] of Object.entries(prediction)) {
+    if (hiddenKeys.has(key)) continue
     if (skippedPredictionKeys.has(key)) continue
     routeEvidenceValue(key, value, predictionMetrics, listSections, tableSections, otherSections)
   }
@@ -115,6 +178,7 @@ function buildEvidence(output, prediction, main) {
   }
 
   for (const [key, value] of Object.entries(output)) {
+    if (hiddenKeys.has(key)) continue
     if (key === 'prediction' || semanticObjectKeys.includes(key)) continue
     routeEvidenceValue(key, value, topLevelMetrics, listSections, tableSections, otherSections)
   }
@@ -150,17 +214,39 @@ function routeEvidenceValue(key, value, metricEntries, listSections, tableSectio
 }
 
 function buildTableSection(key, rows) {
-  const columns = Array.from(rows.reduce((set, row) => {
-    Object.keys(row).forEach((column) => set.add(column))
-    return set
-  }, new Set())).slice(0, 6)
+  return buildFlatTableSection(key, rows, { limitColumns: 8 })
+}
+
+function buildFlatTableSection(key, rows, { preferredNestedKey = '', limitColumns = 8 } = {}) {
+  const flatRows = rows.slice(0, 20).map((row) => flattenRow(row, preferredNestedKey))
+  const allColumns = Array.from(new Set(rows.flatMap((row) => Object.keys(flattenRow(row, preferredNestedKey)))))
   return {
+    key,
     title: formatLabel(key),
-    rows: rows.slice(0, 20),
-    columns,
+    rows: flatRows,
+    columns: allColumns.slice(0, limitColumns),
     totalRows: rows.length,
-    totalColumns: Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).length,
+    totalColumns: allColumns.length,
+    limitColumns,
   }
+}
+
+function flattenRow(row, preferredNestedKey = '') {
+  const result = {}
+  for (const [key, value] of Object.entries(row)) {
+    if (key === preferredNestedKey && isPlainObject(value)) {
+      Object.entries(value).forEach(([nestedKey, nestedValue]) => {
+        result[nestedKey] = nestedValue
+      })
+    } else if (isPlainObject(value)) {
+      Object.entries(value).forEach(([nestedKey, nestedValue]) => {
+        result[`${key}.${nestedKey}`] = nestedValue
+      })
+    } else {
+      result[key] = value
+    }
+  }
+  return result
 }
 
 function findFirstKey(source, keys) {
@@ -251,6 +337,11 @@ function stringifyJson(value) {
 
 <template>
   <div class="algorithm-result-view">
+    <section v-if="attributions.length" class="result-attribution">
+      <span>模型开发者来源</span>
+      <AttributionBadges :attributions="attributions" :limit="3" />
+    </section>
+
     <el-alert
       v-if="error"
       class="result-error"
@@ -261,6 +352,14 @@ function stringifyJson(value) {
     />
 
     <template v-if="status !== 'failed' && hasOutput">
+      <section v-if="batchHighlights.length" class="prediction-dashboard" aria-label="批量预测概览">
+        <article v-for="item in batchHighlights" :key="item.key" class="signal-card">
+          <span>{{ item.label }}</span>
+          <strong>{{ formatScalar(item.value) }}</strong>
+          <small>{{ item.caption }}</small>
+        </article>
+      </section>
+
       <section v-if="mainPrediction.value !== null" class="prediction-summary" aria-label="预测结论">
         <div class="prediction-main">
           <span class="summary-label">{{ mainPrediction.title }}</span>
@@ -280,6 +379,27 @@ function stringifyJson(value) {
             <strong>{{ formatScalar(entry.value) }}</strong>
           </div>
         </div>
+      </section>
+
+      <section v-for="section in batchResultSections" :key="section.key" class="result-section featured-table-section">
+        <div class="section-heading">
+          <h4>{{ section.title }}</h4>
+          <span v-if="section.totalRows > 20 || section.totalColumns > section.limitColumns">
+            已显示前 20 行 / {{ section.limitColumns }} 列
+          </span>
+        </div>
+        <el-table :data="section.rows" border size="small" class="result-table featured-table">
+          <el-table-column
+            v-for="column in section.columns"
+            :key="column"
+            :prop="column"
+            :label="formatLabel(column)"
+            min-width="128"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">{{ summarizeValue(row[column]) }}</template>
+          </el-table-column>
+        </el-table>
       </section>
 
       <section v-if="inputHighlights.length" class="result-section">
@@ -315,7 +435,9 @@ function stringifyJson(value) {
       <section v-for="section in evidence.tableSections" :key="section.title" class="result-section">
         <div class="section-heading">
           <h4>{{ section.title }}</h4>
-          <span v-if="section.totalRows > 20 || section.totalColumns > 6">已显示前 20 行 / 6 列</span>
+          <span v-if="section.totalRows > 20 || section.totalColumns > section.limitColumns">
+            已显示前 20 行 / {{ section.limitColumns }} 列
+          </span>
         </div>
         <el-table :data="section.rows" border size="small" class="result-table">
           <el-table-column
@@ -325,7 +447,9 @@ function stringifyJson(value) {
             :label="formatLabel(column)"
             min-width="120"
             show-overflow-tooltip
-          />
+          >
+            <template #default="{ row }">{{ summarizeValue(row[column]) }}</template>
+          </el-table-column>
         </el-table>
       </section>
 
@@ -343,19 +467,30 @@ function stringifyJson(value) {
       暂无结构化输出
     </div>
 
-    <section v-if="artifactRows.length" class="result-section">
-      <h4>Artifacts</h4>
+    <section v-if="artifactRows.length" class="result-section artifact-section">
+      <div class="section-heading">
+        <h4>运行产物</h4>
+        <span>{{ artifactRows.length }} 项</span>
+      </div>
       <el-table :data="artifactRows" border size="small" class="result-table">
         <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="group" label="分组" width="100" show-overflow-tooltip />
         <el-table-column prop="type" label="类型" width="130" show-overflow-tooltip />
+        <el-table-column prop="stepKey" label="步骤" width="120" show-overflow-tooltip />
         <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
         <el-table-column prop="contentType" label="内容类型" width="150" show-overflow-tooltip />
         <el-table-column prop="contentSummary" label="内容摘要" width="120" show-overflow-tooltip />
+        <el-table-column label="下载" width="86">
+          <template #default="{ row }">
+            <el-link v-if="row.downloadUrl" :href="row.downloadUrl" type="primary">下载</el-link>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
       </el-table>
     </section>
 
     <section class="result-section">
-      <h4>原始数据</h4>
+      <h4>补充数据</h4>
       <el-collapse>
         <el-collapse-item v-for="panel in rawPanels" :key="panel.name" :title="panel.title" :name="panel.name">
           <pre class="json-block">{{ stringifyJson(panel.data) }}</pre>
@@ -374,6 +509,58 @@ function stringifyJson(value) {
 
 .result-error {
   margin-bottom: 2px;
+}
+
+.result-attribution {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.result-attribution span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.prediction-dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+}
+
+.signal-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-stat-border);
+  border-radius: var(--app-radius-sm);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 251, 255, 0.96) 100%),
+    linear-gradient(90deg, rgba(59, 130, 246, 0.15), rgba(14, 165, 233, 0.08));
+}
+
+.signal-card span,
+.signal-card small {
+  display: block;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.signal-card strong {
+  display: block;
+  margin: 5px 0 3px;
+  color: var(--app-ink);
+  font-size: 22px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
 }
 
 .prediction-summary {
@@ -518,6 +705,24 @@ function stringifyJson(value) {
 
 .result-table {
   width: 100%;
+}
+
+.featured-table-section {
+  padding: 12px;
+  border: 1px solid var(--app-stat-border);
+  border-radius: var(--app-radius-sm);
+  background: #fbfdff;
+}
+
+.featured-table {
+  margin-top: 2px;
+}
+
+.artifact-section {
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
 }
 
 .json-block {

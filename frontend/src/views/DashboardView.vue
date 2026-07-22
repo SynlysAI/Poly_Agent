@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, ChatLineRound, Check, FolderOpened, Histogram, MagicStick, Promotion, SetUp, View,
+  Aim, ChatLineRound, Check, FolderOpened, Histogram, MagicStick, Promotion, SetUp,
 } from '@element-plus/icons-vue'
 
 import {
@@ -445,31 +445,6 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="panel recent-panel">
-        <div class="panel-header">
-          <h2 class="panel-title">最近任务</h2>
-        </div>
-        <div class="panel-body">
-          <el-table :data="recentTasks" v-loading="loading" stripe style="width:100%">
-            <el-table-column prop="task_id" label="任务编号" min-width="190" />
-            <el-table-column prop="task_type" label="任务类型" min-width="120" />
-            <el-table-column prop="module_name" label="模块" min-width="120" />
-            <el-table-column label="状态" min-width="100">
-              <template #default="{ row }">
-                <el-tag :type="getStatusTag(row.status)" size="small">{{ row.status_text || row.status }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="提交时间" min-width="170">
-              <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="100">
-              <template #default="{ row }">
-                <el-button text type="primary" size="small" :icon="View" @click="goToTask(row)">查看</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-      </section>
     </template>
   </div>
 </template>
@@ -518,7 +493,6 @@ h2 { font-size: 16px; line-height: 1.35; }
 .attention-item span, .service-health-item span { min-width: 0; display: grid; gap: 3px; }
 .attention-item strong, .service-health-item strong { overflow: hidden; color: var(--app-ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .attention-item small, .service-health-item small { overflow: hidden; color: var(--app-ink-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.recent-panel { overflow: hidden; }
 @media (max-width: 1280px) {
   .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .module-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }

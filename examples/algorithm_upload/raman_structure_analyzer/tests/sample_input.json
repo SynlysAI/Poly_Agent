@@ -1,0 +1,9 @@
+{
+  "spectype": "raman",
+  "mode": "beam_search",
+  "x0": 400,
+  "x1": 1800,
+  "k": 3,
+  "transmittance": false,
+  "device": "cpu"
+}

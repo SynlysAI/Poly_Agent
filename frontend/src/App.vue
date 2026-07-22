@@ -9,6 +9,7 @@ import {
 
 import { getAuthStatus, getApiErrorMessage, getCurrentUser } from './api/polyAgentApi'
 import { acceptPortalToken, authState, clearAuthSession, setAuthEnabled, setAuthSession } from './auth/authState'
+import { formatAppDate } from './utils/datetime'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,6 +22,7 @@ const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
 const APP_VERSION = '0.1.0'
 const BRAND_LOGO_SRC = '/brand/JG-logo.png'
 const BRAND_PARTNER_TEXT = '智储大装置｜嘉庚实验室｜厦门大学｜苏州实验室｜浦江实验室'
+let currentDateTimer = null
 
 const currentUserDisplayName = computed(() => {
   if (!authState.authEnabled) return '管理员'
@@ -99,11 +101,7 @@ function handleLogout() {
 }
 
 function formatCurrentDate() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+  return formatAppDate()
 }
 
 async function redirectToLogin() {
@@ -174,12 +172,20 @@ function handleAuthExpired() {
 
 onMounted(() => {
   window.addEventListener(AUTH_EXPIRED_EVENT_NAME, handleAuthExpired)
+  currentDate.value = formatCurrentDate()
+  currentDateTimer = window.setInterval(() => {
+    currentDate.value = formatCurrentDate()
+  }, 60000)
   acceptPortalToken()
   initializeAuthState()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener(AUTH_EXPIRED_EVENT_NAME, handleAuthExpired)
+  if (currentDateTimer) {
+    window.clearInterval(currentDateTimer)
+    currentDateTimer = null
+  }
 })
 </script>
 

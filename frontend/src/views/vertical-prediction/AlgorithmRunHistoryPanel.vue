@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, View } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, listAlgorithmRuns } from '../../api/polyAgentApi'
+import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
 import AlgorithmResultView from './AlgorithmResultView.vue'
 
 const props = defineProps({ refreshKey: { type: Number, default: 0 } })
@@ -17,8 +18,10 @@ const filters = reactive({ algorithm_id: '', version_id: '', status: '', date_ra
 const filteredRuns = computed(() => runs.value.filter((run) => {
   if (filters.version_id && !String(run.algorithm_version_id || '').includes(filters.version_id.trim())) return false
   if (filters.date_range?.length === 2) {
-    const created = new Date(run.created_at).getTime()
-    if (created < filters.date_range[0].getTime() || created > filters.date_range[1].getTime() + 86400000) return false
+    const created = apiDateTimeMs(run.created_at)
+    const endExclusive = new Date(filters.date_range[1])
+    endExclusive.setDate(endExclusive.getDate() + 1)
+    if (Number.isNaN(created) || created < filters.date_range[0].getTime() || created >= endExclusive.getTime()) return false
   }
   return true
 }))
@@ -54,12 +57,15 @@ function openDetail(run) {
 }
 
 function formatDate(value) {
-  return value ? new Date(value).toLocaleString() : '-'
+  return formatApiDateTime(value)
 }
 
 function duration(run) {
   if (!run.started_at || !run.finished_at) return '-'
-  return `${Math.max(0, new Date(run.finished_at) - new Date(run.started_at))} ms`
+  const started = apiDateTimeMs(run.started_at)
+  const finished = apiDateTimeMs(run.finished_at)
+  if (Number.isNaN(started) || Number.isNaN(finished)) return '-'
+  return `${Math.max(0, finished - started)} ms`
 }
 
 function shortDigest(value) {

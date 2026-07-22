@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Check, ArrowRight, DataAnalysis, MagicStick, Star, SetUp, Document, CircleCheck, CircleClose, Clock, Collection,
+  Check, ArrowRight, DataAnalysis, MagicStick, Star, SetUp, Document, Download, CircleCheck, CircleClose, Clock, Collection,
 } from '@element-plus/icons-vue'
 
 import ProblemSpecPanel from './research-engine/ProblemSpecPanel.vue'
@@ -14,14 +14,19 @@ import ResearchRunPanel from './research-engine/ResearchRunPanel.vue'
 import GateReviewDialog from './research-engine/GateReviewDialog.vue'
 import ReportGenerateDrawer from './research-engine/ReportGenerateDrawer.vue'
 import ReportJobPanel from './research-engine/ReportJobPanel.vue'
+import AttributionBanner from '../components/attribution/AttributionBanner.vue'
+import { formatApiDateTime } from '../utils/datetime'
 import {
   createReport,
   createExecutionDecision,
   downloadReportArtifact,
   getActiveExecutionDecision,
+  getAlgorithmRun,
   getApiErrorMessage,
   getManualWorkflow,
   getProblemSpec,
+  getReportReadiness,
+  getResearchEngineReadiness,
   getResearchRun,
   getResearchRunTraceability,
   instantiateResearchEngineExample,
@@ -58,6 +63,12 @@ const reportDrawerVisible = ref(false)
 const reportJobs = ref([])
 const reportJobsLoading = ref(false)
 const reportSubmitting = ref(false)
+const reportReadiness = ref(null)
+const reportReadinessLoading = ref(false)
+const readiness = ref(null)
+const readinessLoading = ref(false)
+const readinessError = ref('')
+const advancedMode = ref(route.query.mode === 'manual_workbench' || Boolean(route.query.workflow_id))
 let reportPollingTimer = null
 const REPORT_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 
@@ -100,19 +111,128 @@ const reportSubjectKey = computed(() =>
   reportSubject.value ? `${reportSubject.value.subject_type}:${reportSubject.value.subject_id}` : '',
 )
 
+const normalizedReportStatus = job => String(job?.status || '').trim().toLowerCase()
 const hasActiveReportJobs = computed(() =>
-  reportJobs.value.some(job => !REPORT_TERMINAL_STATUSES.has(job.status)),
+  reportJobs.value.some(job => !REPORT_TERMINAL_STATUSES.has(normalizedReportStatus(job))),
 )
 
-const reportPrimaryButtonText = computed(() => (hasActiveReportJobs.value ? '生成中' : '生成报告'))
+const downloadableReportArtifacts = job =>
+  (job?.artifact_refs || []).filter(item => ['pdf', 'markdown'].includes(item.artifact_type))
+
+const latestCompletedReport = computed(() =>
+  reportJobs.value.find(job => normalizedReportStatus(job) === 'completed' && downloadableReportArtifacts(job).length) || null,
+)
+
+const preferredReportArtifact = computed(() => {
+  const artifacts = downloadableReportArtifacts(latestCompletedReport.value)
+  return artifacts.find(item => item.artifact_type === 'pdf') || artifacts.find(item => item.artifact_type === 'markdown') || null
+})
+
+const hasDownloadableReport = computed(() => Boolean(latestCompletedReport.value && preferredReportArtifact.value))
+
+const reportPrimaryButtonText = computed(() => {
+  if (hasDownloadableReport.value) return '下载报告'
+  if (hasActiveReportJobs.value) return '生成中'
+  return '生成报告'
+})
+
+const reportReadinessWarnings = computed(() => reportReadiness.value?.warnings || [])
+const isReportGenerationReady = computed(() =>
+  Boolean(
+    reportReadiness.value?.reports_enabled
+      && reportReadiness.value?.output_root_ready
+      && reportReadiness.value?.provider_ready
+      && reportReadiness.value?.skill_pipeline_ready,
+  ),
+)
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const isCurrentRunTerminal = computed(() => {
   const status = researchRun.value?.status || workflowRun.value?.status || algorithmRun.value?.status
   return TERMINAL_RUN_STATUSES.has(status)
 })
 
+const readinessItemsByService = computed(() => {
+  const items = readiness.value?.items || []
+  return Object.fromEntries(items.map(item => [item.service, item]))
+})
+
+const llmReadiness = computed(() => readinessItemsByService.value['research-llm'] || null)
+const ragReadiness = computed(() => readinessItemsByService.value['literature-rag'] || null)
+const autoResearchStageModes = computed(() => readiness.value?.stage_modes || [])
+
+const researchStages = computed(() =>
+  researchTraceability.value?.research_run?.stage_runs || researchRun.value?.stage_runs || [],
+)
+
+const visibleResearchStages = computed(() =>
+  researchStages.value.filter(stage => {
+    if (!stage) return false
+    if (['pending', 'draft'].includes(stage.status)) return false
+    return Boolean(
+      stage.started_at
+        || stage.finished_at
+        || stage.status
+        || stage.output_summary
+        || stage.error
+        || (stage.linked_algorithm_runs || []).length,
+    )
+  }),
+)
+
+const linkedResearchAlgorithmRuns = computed(() => researchTraceability.value?.linked_algorithm_runs || [])
+const linkedResearchComputations = computed(() => researchTraceability.value?.linked_computations || [])
+const linkedResearchObservations = computed(() => researchTraceability.value?.linked_observations || [])
+const researchAuditEvents = computed(() => researchTraceability.value?.audit_events || [])
+const hasResearchTraceContent = computed(() =>
+  Boolean(
+    visibleResearchStages.value.length
+      || linkedResearchAlgorithmRuns.value.length
+      || linkedResearchComputations.value.length
+      || linkedResearchObservations.value.length
+      || researchAuditEvents.value.length,
+  ),
+)
+
+const mainActions = computed(() => [
+  {
+    key: 'problem',
+    title: '定义研发任务',
+    description: problemSpec.value ? problemSpec.value.name : '创建或选择研发任务',
+    step: 1,
+    tag: problemSpec.value ? '已选择' : '开始',
+    type: problemSpec.value ? 'success' : 'primary',
+    disabled: false,
+  },
+  {
+    key: 'auto',
+    title: '启动 AutoResearch',
+    description: executionMode.value === 'autoresearch' ? '自动编排已选择' : '以自动编排推进研发任务',
+    step: executionMode.value === 'autoresearch' ? 3 : 2,
+    tag: executionMode.value === 'autoresearch' ? '已选择' : readinessLevelLabel(llmReadiness.value?.level),
+    type: executionMode.value === 'autoresearch' ? 'success' : capabilityTagType(llmReadiness.value?.level),
+    disabled: !problemSpec.value,
+  },
+  {
+    key: 'runs',
+    title: isCurrentRunTerminal.value ? '结果与报告' : '查看运行与审批',
+    description: pendingResearchApprovalStage.value ? '有步骤等待审批' : (researchRun.value?.run_id || algorithmRun.value?.run_id || '查看当前运行状态'),
+    step: isCurrentRunTerminal.value ? 5 : (researchRun.value || algorithmRun.value ? 4 : 3),
+    tag: pendingResearchApprovalStage.value ? '待审批' : (isCurrentRunTerminal.value ? '可下载' : (researchRun.value || algorithmRun.value ? '可查看' : '待运行')),
+    type: pendingResearchApprovalStage.value ? 'warning' : 'info',
+    disabled: !(executionMode.value || researchRun.value || algorithmRun.value),
+  },
+])
+
+const activeMainAction = computed(() => {
+  if (currentStep.value === 1) return 'problem'
+  if (currentStep.value === 2 || currentStep.value === 3) return 'auto'
+  return 'runs'
+})
+
 if (route.query.run_id) {
   algorithmRun.value = { run_id: String(route.query.run_id) }
+  executionMode.value = 'manual_workbench'
+  currentStep.value = 5
 }
 if (route.query.research_run_id) {
   currentStep.value = 3
@@ -129,14 +249,14 @@ const steps = computed(() => [
     key: 1,
     title: '研发任务定义',
     icon: DataAnalysis,
-    description: '创建/选择/冻结 ProblemSpec',
+    description: '创建、选择并确认研发任务',
     status: stepStatus(1),
   },
   {
     key: 2,
     title: '执行路径选择',
     icon: MagicStick,
-    description: '选择 manual_workbench 或 autoresearch',
+    description: '选择人工编排或自动编排',
     status: stepStatus(2),
     detail: executionMode.value
       ? (executionMode.value === 'manual_workbench' ? '人工算法工作台' : 'AutoResearch 自动编排')
@@ -144,11 +264,11 @@ const steps = computed(() => [
   },
   {
     key: 3,
-    title: executionMode.value === 'autoresearch' ? 'AutoResearch 编排' : '人工 Workflow 运行',
+    title: executionMode.value === 'autoresearch' ? 'AutoResearch 编排' : '人工任务流运行',
     icon: executionMode.value === 'autoresearch' ? Star : SetUp,
     description: executionMode.value === 'autoresearch'
-      ? '创建并管理 ResearchRun'
-      : '选择算法、配置参数、运行 Workflow',
+      ? '创建并管理自动研发运行'
+      : '选择算法、配置参数、运行任务流',
     status: stepStatus(3),
   },
   {
@@ -160,9 +280,9 @@ const steps = computed(() => [
   },
   {
     key: 5,
-    title: '追溯/结果汇总',
+    title: '结果与报告',
     icon: Document,
-    description: '查看完整追溯链与结果摘要',
+    description: '下载报告并查看关键记录',
     status: stepStatus(5),
   },
 ])
@@ -194,7 +314,7 @@ function handleSpecSelected(spec, options = {}) {
 // ── 执行路径选择 ──
 async function selectExecutionMode(mode) {
   if (!problemSpec.value) {
-    ElMessage.warning('请先选择或创建 ProblemSpec')
+    ElMessage.warning('请先选择或创建研发任务')
     return
   }
   modeSelecting.value = true
@@ -307,8 +427,11 @@ async function loadReportJobs(options = {}) {
     reportJobs.value = []
     return
   }
-  if (reportJobsLoading.value) return
-  reportJobsLoading.value = true
+  if (reportJobsLoading.value && !options.force) return
+  const showLoading = !options.silent
+  if (showLoading) {
+    reportJobsLoading.value = true
+  }
   try {
     const data = await listReports({
       subject_type: reportSubject.value.subject_type,
@@ -322,7 +445,22 @@ async function loadReportJobs(options = {}) {
       ElMessage.error(getApiErrorMessage(error))
     }
   } finally {
-    reportJobsLoading.value = false
+    if (showLoading) {
+      reportJobsLoading.value = false
+    }
+  }
+}
+
+async function loadReportReadiness(options = {}) {
+  reportReadinessLoading.value = true
+  try {
+    reportReadiness.value = await getReportReadiness()
+  } catch (error) {
+    if (!options.silent) {
+      ElMessage.error(getApiErrorMessage(error))
+    }
+  } finally {
+    reportReadinessLoading.value = false
   }
 }
 
@@ -331,7 +469,26 @@ function openReportDrawer() {
     ElMessage.warning('暂无可生成报告的运行对象')
     return
   }
+  if (!reportReadiness.value) {
+    loadReportReadiness({ silent: true })
+  }
   reportDrawerVisible.value = true
+}
+
+async function handleReportPrimaryAction() {
+  if (!reportSubject.value) {
+    ElMessage.warning('暂无可生成报告的运行对象')
+    return
+  }
+  if (hasDownloadableReport.value) {
+    await handleReportDownload(latestCompletedReport.value, preferredReportArtifact.value)
+    return
+  }
+  if (hasActiveReportJobs.value) {
+    await loadReportJobs()
+    return
+  }
+  openReportDrawer()
 }
 
 async function handleReportSubmit(payload) {
@@ -354,7 +511,7 @@ async function handleReportRetry(job) {
   try {
     await retryReport(job.report_id)
     ElMessage.success('报告任务已重试')
-    await loadReportJobs()
+    await loadReportJobs({ force: true })
     syncReportPolling()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -386,11 +543,11 @@ function saveBlob(blob, filename) {
 function startReportPolling() {
   if (reportPollingTimer) return
   reportPollingTimer = window.setInterval(async () => {
-    if (currentStep.value !== 5 || !reportSubject.value) {
+    if (!reportSubject.value) {
       stopReportPolling()
       return
     }
-    await loadReportJobs({ silent: true })
+    await loadReportJobs({ silent: true, force: true })
     if (!hasActiveReportJobs.value) {
       stopReportPolling()
     }
@@ -404,7 +561,7 @@ function stopReportPolling() {
 }
 
 function syncReportPolling() {
-  if (currentStep.value === 5 && reportSubject.value && hasActiveReportJobs.value) {
+  if (reportSubject.value && hasActiveReportJobs.value) {
     startReportPolling()
   } else {
     stopReportPolling()
@@ -416,11 +573,70 @@ function statusTag(status) {
   return map[status] || 'info'
 }
 
+function capabilityTagType(level) {
+  const map = {
+    production_ready: 'success',
+    configured_pending_verification: 'warning',
+    demo_fallback: 'info',
+    not_configured: 'danger',
+    unavailable: 'danger',
+  }
+  return map[level] || 'info'
+}
+
+function readinessLevelLabel(level) {
+  const map = {
+    production_ready: '真实已接入',
+    configured_pending_verification: '已配置待验证',
+    demo_fallback: '演示路径',
+    not_configured: '未配置',
+    unavailable: '不可用',
+  }
+  return map[level] || '待检查'
+}
+
+function stageModeLabel(mode) {
+  const map = {
+    adapter: '真实接入',
+    llm: 'AI 模型',
+    demo_fallback: '演示路径',
+    mock_fallback: '演示路径',
+    not_configured: '未配置',
+    human_approval: '人工审批',
+    system: '系统处理',
+    manual_or_adapter: '人工确认',
+  }
+  return map[mode] || mode || '-'
+}
+
+async function loadReadiness() {
+  readinessLoading.value = true
+  readinessError.value = ''
+  try {
+    readiness.value = await getResearchEngineReadiness()
+  } catch (error) {
+    readinessError.value = getApiErrorMessage(error)
+  } finally {
+    readinessLoading.value = false
+  }
+}
+
+function handleMainAction(action) {
+  if (action.disabled) return
+  if (action.key === 'auto' && problemSpec.value && executionMode.value !== 'autoresearch') {
+    selectExecutionMode('autoresearch')
+    return
+  }
+  currentStep.value = action.step
+}
+
+function enableAdvancedMode(targetStep = currentStep.value) {
+  advancedMode.value = true
+  currentStep.value = targetStep
+}
+
 function formatDate(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
+  return formatApiDateTime(value)
 }
 
 function shortJson(value) {
@@ -439,12 +655,16 @@ function workflowStepsFromWorkflow(workflow) {
 }
 
 async function restoreRouteState() {
+  const algorithmRunId = route.query.run_id ? String(route.query.run_id) : ''
   const problemSpecId = route.query.problem_spec_id ? String(route.query.problem_spec_id) : ''
   const workflowId = route.query.workflow_id ? String(route.query.workflow_id) : ''
   const researchRunId = route.query.research_run_id ? String(route.query.research_run_id) : ''
   const mode = route.query.mode ? String(route.query.mode) : ''
 
   try {
+    if (workflowId || mode === 'manual_workbench') {
+      advancedMode.value = true
+    }
     if (problemSpecId) {
       problemSpec.value = await getProblemSpec(problemSpecId)
       try {
@@ -471,6 +691,24 @@ async function restoreRouteState() {
       selectedAlgorithm.value = null
       pipelineSteps.value = workflowStepsFromWorkflow(workflow)
       currentStep.value = 3
+    }
+
+    if (algorithmRunId && !researchRunId) {
+      const run = await getAlgorithmRun(algorithmRunId)
+      algorithmRun.value = run
+      researchRun.value = null
+      workflowRun.value = null
+      selectedAlgorithm.value = null
+      pipelineSteps.value = []
+      executionMode.value = run.trigger_source === 'autoresearch' ? 'autoresearch' : 'manual_workbench'
+      if (!problemSpec.value && run.problem_spec_id) {
+        problemSpec.value = await getProblemSpec(run.problem_spec_id)
+      }
+      executionDecision.value = executionDecision.value || {
+        decision_id: run.workflow_run_id || run.research_run_id || '',
+        mode: executionMode.value,
+      }
+      currentStep.value = TERMINAL_RUN_STATUSES.has(run.status) ? 5 : 4
     }
 
     if (researchRunId) {
@@ -555,9 +793,15 @@ function stepIconComponent(step) {
   return step.icon
 }
 
-onMounted(() => {
+onMounted(async () => {
+  loadReadiness()
+  loadReportReadiness({ silent: true })
   loadExamples()
-  restoreRouteState()
+  await restoreRouteState()
+  if (reportSubject.value) {
+    await loadReportJobs({ silent: true })
+    syncReportPolling()
+  }
 })
 
 onUnmounted(() => {
@@ -565,7 +809,7 @@ onUnmounted(() => {
 })
 
 watch(
-  () => [route.query.problem_spec_id, route.query.workflow_id, route.query.research_run_id, route.query.mode],
+  () => [route.query.run_id, route.query.problem_spec_id, route.query.workflow_id, route.query.research_run_id, route.query.mode],
   () => {
     restoreRouteState()
   },
@@ -581,16 +825,19 @@ watch(
 )
 
 watch(
-  () => [currentStep.value, reportSubjectKey.value],
+  () => reportSubjectKey.value,
   () => {
-    if (currentStep.value === 5 && reportSubject.value) {
+    if (reportSubject.value) {
       loadReportJobs()
+      loadReportReadiness({ silent: true })
+    } else {
+      reportJobs.value = []
     }
   },
 )
 
 watch(
-  () => [currentStep.value, reportSubjectKey.value, hasActiveReportJobs.value],
+  () => [reportSubjectKey.value, hasActiveReportJobs.value],
   () => {
     syncReportPolling()
   },
@@ -603,7 +850,7 @@ watch(
     <section class="workflow-topbar">
       <div class="topbar-left">
         <h3>ResearchEngine 研发引擎</h3>
-        <span class="topbar-subtitle">引导式工作流：从任务定义到结果追溯</span>
+        <span class="topbar-subtitle">材料研发任务编排与结果追溯</span>
       </div>
       <div class="topbar-right">
         <el-button :icon="Collection" @click="openExamples">示例流程</el-button>
@@ -617,12 +864,58 @@ watch(
       </div>
     </section>
 
+    <AttributionBanner module-id="research_engine" label="参考框架" compact />
+
     <!-- 主体：左侧工作流树 + 右侧工作区 -->
     <div class="workflow-body">
       <!-- 左侧工作流树 -->
       <aside class="workflow-tree">
-        <div class="tree-header">工作流步骤</div>
-        <div class="tree-steps">
+        <div class="tree-header">主流程</div>
+        <div class="primary-action-list">
+          <button
+            v-for="action in mainActions"
+            :key="action.key"
+            type="button"
+            class="primary-action-card"
+            :class="{ 'is-active': activeMainAction === action.key, 'is-disabled': action.disabled }"
+            :disabled="action.disabled"
+            @click="handleMainAction(action)"
+          >
+            <span>
+              <strong>{{ action.title }}</strong>
+              <small>{{ action.description }}</small>
+            </span>
+            <el-tag size="small" :type="action.type" effect="plain">{{ action.tag }}</el-tag>
+          </button>
+        </div>
+
+        <section v-if="advancedMode" class="capability-mini-panel" v-loading="readinessLoading">
+          <div class="capability-mini-row">
+            <span>AI 模型</span>
+            <el-tag size="small" :type="capabilityTagType(llmReadiness?.level)" effect="plain">
+              {{ readinessLevelLabel(llmReadiness?.level) }}
+            </el-tag>
+          </div>
+          <p v-if="llmReadiness?.provider || llmReadiness?.model">
+            {{ llmReadiness?.provider || '-' }} / {{ llmReadiness?.model || '-' }}
+          </p>
+          <p v-else>未配置时会明确标注演示路径。</p>
+          <div class="capability-mini-row">
+            <span>知识检索</span>
+            <el-tag size="small" :type="capabilityTagType(ragReadiness?.level)" effect="plain">
+              {{ readinessLevelLabel(ragReadiness?.level) }}
+            </el-tag>
+          </div>
+          <p v-if="readinessError" class="capability-error">{{ readinessError }}</p>
+        </section>
+
+        <div class="advanced-toggle-row">
+          <el-button text size="small" @click="advancedMode = !advancedMode">
+            {{ advancedMode ? '收起高级工作区' : '更多 / 高级工作区' }}
+          </el-button>
+        </div>
+
+        <div v-if="advancedMode" class="tree-steps advanced-steps">
           <div
             v-for="step in steps"
             :key="step.key"
@@ -659,7 +952,7 @@ watch(
         <div v-if="problemSpec || researchRun || algorithmRun" class="tree-status">
           <div class="status-title">当前状态</div>
           <div v-if="problemSpec" class="status-row">
-            <el-tag size="small" type="success" effect="plain">ProblemSpec</el-tag>
+            <el-tag size="small" type="success" effect="plain">研发任务</el-tag>
             <span>{{ problemSpec.status === 'frozen' ? '已冻结' : '草稿' }}</span>
           </div>
           <div v-if="executionDecision" class="status-row">
@@ -667,12 +960,12 @@ watch(
             <span>{{ executionMode === 'manual_workbench' ? '人工工作台' : 'AutoResearch' }}</span>
           </div>
           <div v-if="algorithmRun" class="status-row">
-            <el-tag size="small" type="warning" effect="plain">AlgorithmRun</el-tag>
+            <el-tag size="small" type="warning" effect="plain">算法运行</el-tag>
             <span>{{ algorithmRun.status || 'completed' }}</span>
           </div>
           <div v-if="researchRun" class="status-row">
             <el-tag size="small" :type="researchRun.status === 'completed' ? 'success' : researchRun.status === 'failed' ? 'danger' : 'warning'" effect="plain">
-              ResearchRun
+              自动运行
             </el-tag>
             <span>{{ researchRun.status }}</span>
           </div>
@@ -687,7 +980,7 @@ watch(
             <el-icon :size="20"><DataAnalysis /></el-icon>
             <h4>步骤 1：研发任务定义</h4>
           </div>
-          <p class="step-panel-desc">创建、编辑或选择已有的 ProblemSpec。冻结后即可进入下一步选择执行路径。</p>
+          <p class="step-panel-desc">创建、编辑或选择已有研发任务。确认后即可进入下一步选择执行路径。</p>
           <ProblemSpecPanel
             :current-problem-spec-id="problemSpec?.problem_spec_id || (route.query.problem_spec_id ? String(route.query.problem_spec_id) : '')"
             @spec-selected="handleSpecSelected"
@@ -701,17 +994,16 @@ watch(
             <h4>步骤 2：执行路径选择</h4>
           </div>
           <p class="step-panel-desc">
-            为已选择的研发任务指定执行通道：
-            <strong>人工算法工作台</strong> 由用户手动编排算法节点；
-            <strong>AutoResearch 自动编排</strong> 由系统按十阶段自动推进。
+            默认使用 AutoResearch 自动编排；人工算法工作台、任务流和算法注册表保留在高级工作区。
           </p>
 
           <div v-if="!problemSpec" class="empty-hint">
-            请先在步骤 1 中选择或创建 ProblemSpec
+            请先在步骤 1 中选择或创建研发任务
           </div>
 
           <div v-else class="mode-choice-grid">
             <div
+              v-if="advancedMode"
               class="mode-choice-card"
               :class="{ 'is-selected': executionMode === 'manual_workbench' }"
               @click="selectExecutionMode('manual_workbench')"
@@ -720,7 +1012,7 @@ watch(
                 <el-icon :size="24"><MagicStick /></el-icon>
               </div>
               <h5>人工算法工作台</h5>
-              <p>从算法清单中选择节点，手动编排 Workflow 并逐个运行。</p>
+              <p>从算法清单中选择节点，手动编排任务流并逐个运行。</p>
               <el-button
                 size="small"
                 type="primary"
@@ -740,7 +1032,15 @@ watch(
                 <el-icon :size="24"><Star /></el-icon>
               </div>
               <h5>AutoResearch 自动编排</h5>
-              <p>系统自动按十阶段推进：文献检索 → 结构表示 → 计算预测 → 候选推荐 → Gate 审批 → 实验执行 → 结果回填 → 模型更新 → 经验归档。</p>
+              <p>系统按阶段推进，关键节点等待人工审批；每个阶段会标明真实接入能力、AI 模型或演示路径。</p>
+              <div v-if="advancedMode" class="mode-capability-line">
+                <el-tag size="small" :type="capabilityTagType(llmReadiness?.level)" effect="plain">
+                  AI：{{ readinessLevelLabel(llmReadiness?.level) }}
+                </el-tag>
+                <el-tag size="small" :type="capabilityTagType(ragReadiness?.level)" effect="plain">
+                  RAG：{{ readinessLevelLabel(ragReadiness?.level) }}
+                </el-tag>
+              </div>
               <el-button
                 size="small"
                 type="success"
@@ -752,6 +1052,11 @@ watch(
             </div>
           </div>
 
+          <div v-if="!advancedMode" class="advanced-inline-entry">
+            <span>需要手工任务流、流水线或算法注册表？</span>
+            <el-button text size="small" @click="enableAdvancedMode(2)">打开高级工作区</el-button>
+          </div>
+
           <!-- 已选择执行路径后 -->
           <div v-if="executionDecision && executionMode" class="decision-confirmed">
             <el-alert
@@ -761,7 +1066,7 @@ watch(
               show-icon
             >
               <template #default>
-                <p style="margin:4px 0 0">执行决策 ID: {{ executionDecision.decision_id }}</p>
+                <p style="margin:4px 0 0">编排记录 ID: {{ executionDecision.decision_id }}</p>
                 <el-button style="margin-top:8px" type="primary" size="small" @click="currentStep = 3">
                   进入工作区 <el-icon style="margin-left:4px"><ArrowRight /></el-icon>
                 </el-button>
@@ -772,11 +1077,16 @@ watch(
 
         <!-- 步骤 3: 分支工作区 -->
         <div v-if="currentStep === 3" class="step-panel">
-          <!-- 人工 Workflow -->
+          <!-- 人工任务流 -->
           <template v-if="executionMode === 'manual_workbench'">
+            <div v-if="!advancedMode" class="empty-hint">
+              人工任务流属于高级工作区。
+              <el-button type="primary" size="small" @click="enableAdvancedMode(3)">打开高级工作区</el-button>
+            </div>
+            <template v-else>
             <div class="step-panel-header">
               <el-icon :size="20"><SetUp /></el-icon>
-              <h4>步骤 3：人工 Workflow 运行</h4>
+              <h4>步骤 3：人工任务流运行</h4>
             </div>
             <p class="step-panel-desc">
               从算法清单中选择多个算法串联成流水线，配置每个步骤的输入参数，一键运行。
@@ -821,10 +1131,11 @@ watch(
                 </div>
                 <div class="col-right">
                   <AlgorithmRunDetail v-if="algorithmRun?.run_id" :run-id="algorithmRun.run_id" />
-                  <div v-else class="empty-hint">运行 Workflow 后将在此处显示 AlgorithmRun 详情</div>
+                  <div v-else class="empty-hint">运行任务流后将在此处显示算法运行详情</div>
                 </div>
               </div>
             </div>
+            </template>
           </template>
 
           <!-- AutoResearch -->
@@ -833,7 +1144,31 @@ watch(
               <el-icon :size="20"><Star /></el-icon>
               <h4>步骤 3：AutoResearch 编排</h4>
             </div>
-            <p class="step-panel-desc">创建 ResearchRun，启动后系统自动按十阶段推进，Gate 阶段会等待人工审批。</p>
+            <p class="step-panel-desc">创建自动研发运行，启动后系统按阶段推进，关键节点会等待人工审批。</p>
+            <section v-if="advancedMode" class="autoresearch-readiness-panel" v-loading="readinessLoading">
+              <div class="readiness-header">
+                <div>
+                  <strong>AutoResearch 能力路径</strong>
+                  <span>启动前确认真实接入、待验证和演示路径</span>
+                </div>
+                <el-button text size="small" @click="loadReadiness">刷新</el-button>
+              </div>
+              <div class="stage-mode-grid">
+                <article v-for="stage in autoResearchStageModes" :key="stage.stage_key" class="stage-mode-item">
+                  <div>
+                    <strong>{{ stage.label }}</strong>
+                    <span>{{ stage.capability_id }}</span>
+                  </div>
+                  <el-tag size="small" :type="capabilityTagType(stage.level)" effect="plain">
+                    {{ stageModeLabel(stage.execution_mode) }}
+                  </el-tag>
+                </article>
+              </div>
+              <p v-if="llmReadiness?.demo_fallback || ragReadiness?.demo_fallback" class="readiness-note">
+                当前包含演示路径，结果页会保留该标记，避免误认为真实科研结论。
+              </p>
+              <p v-if="readinessError" class="readiness-note readiness-error">{{ readinessError }}</p>
+            </section>
             <ResearchRunPanel @research-run-updated="handleResearchRunUpdated" />
           </template>
 
@@ -851,17 +1186,17 @@ watch(
           </div>
           <p class="step-panel-desc">查看当前正在执行或最近完成的运行结果。</p>
 
-          <!-- AlgorithmRun 结果 -->
+          <!-- 算法运行结果 -->
           <template v-if="algorithmRun">
             <AlgorithmRunDetail v-if="algorithmRun.run_id" :run-id="algorithmRun.run_id" />
-            <div v-else class="empty-hint">暂无 AlgorithmRun 数据</div>
+            <div v-else class="empty-hint">暂无算法运行数据</div>
           </template>
 
-          <!-- ResearchRun 结果 -->
+          <!-- 自动研发运行结果 -->
           <template v-if="researchRun">
             <div class="run-summary-card">
               <div class="summary-header">
-                <span>ResearchRun · {{ researchRun.run_id }}</span>
+                <span>自动研发运行 · {{ researchRun.run_id }}</span>
                 <el-tag
                   :type="researchRun.status === 'completed' ? 'success' : researchRun.status === 'failed' ? 'danger' : 'warning'"
                 >
@@ -869,7 +1204,7 @@ watch(
                 </el-tag>
               </div>
               <el-descriptions :column="2" border size="small" style="margin-top:12px">
-                <el-descriptions-item label="ProblemSpec">{{ researchRun.problem_spec_id }}</el-descriptions-item>
+                <el-descriptions-item label="研发任务">{{ researchRun.problem_spec_id }}</el-descriptions-item>
                 <el-descriptions-item label="Profile">{{ researchRun.profile_id }}</el-descriptions-item>
                 <el-descriptions-item label="当前阶段">{{ researchRun.current_stage || '-' }}</el-descriptions-item>
                 <el-descriptions-item label="阶段进度">
@@ -885,7 +1220,7 @@ watch(
                 size="small"
                 @click="currentStep = 5"
               >
-                查看完整追溯链 <el-icon style="margin-left:4px"><ArrowRight /></el-icon>
+                查看结果与报告 <el-icon style="margin-left:4px"><ArrowRight /></el-icon>
               </el-button>
               <el-button
                 v-if="pendingResearchApprovalStage"
@@ -907,7 +1242,7 @@ watch(
           </template>
 
           <div v-if="!algorithmRun && !researchRun" class="empty-hint">
-            暂无运行数据。请先在步骤 3 中创建并执行 Workflow 或 ResearchRun。
+            暂无运行数据。请先在步骤 3 中创建并执行任务流或自动研发运行。
           </div>
         </div>
 
@@ -916,18 +1251,38 @@ watch(
           <div class="step-panel-header step-panel-header-with-actions">
             <div class="step-panel-title">
               <el-icon :size="20"><Document /></el-icon>
-              <h4>步骤 5：追溯与结果汇总</h4>
+              <h4>步骤 5：结果与报告</h4>
             </div>
             <el-button
               type="primary"
-              :icon="Document"
+              :icon="hasDownloadableReport ? Download : Document"
               :disabled="!reportSubject"
-              @click="hasActiveReportJobs ? loadReportJobs() : openReportDrawer()"
+              @click="handleReportPrimaryAction"
             >
               {{ reportPrimaryButtonText }}
             </el-button>
+            <el-button
+              v-if="reportSubject && hasDownloadableReport"
+              :icon="Document"
+              @click="openReportDrawer"
+            >
+              重新生成
+            </el-button>
           </div>
-          <p class="step-panel-desc">查看完整追溯链，包括审计事件、关联计算任务和观测记录。</p>
+          <p class="step-panel-desc">优先查看报告下载、关键结果和本次运行实际产生的追溯记录。</p>
+
+          <el-alert
+            v-if="reportSubject && reportReadiness && (!isReportGenerationReady || reportReadinessWarnings.length)"
+            class="report-readiness-alert"
+            :title="isReportGenerationReady ? '报告服务有提示信息' : '报告生成配置未完全就绪'"
+            type="warning"
+            :closable="false"
+            show-icon
+          >
+            <template #default>
+              <span>{{ reportReadinessWarnings[0] || '请检查报告 provider、输出目录或 Skill pipeline 配置。' }}</span>
+            </template>
+          </el-alert>
 
           <ReportJobPanel
             v-if="reportSubject"
@@ -954,11 +1309,13 @@ watch(
                 </el-tag>
               </div>
 
-              <section class="trace-section">
-                <h5>阶段追溯</h5>
+              <div v-if="!hasResearchTraceContent" class="empty-hint">暂无已产生的追溯记录</div>
+
+              <section v-if="visibleResearchStages.length" class="trace-section">
+                <h5>已执行阶段</h5>
                 <div class="trace-stage-list">
                   <article
-                    v-for="stage in (researchTraceability?.research_run?.stage_runs || researchRun.stage_runs || [])"
+                    v-for="stage in visibleResearchStages"
                     :key="stage.stage_run_id"
                     class="trace-stage-item"
                   >
@@ -973,62 +1330,76 @@ watch(
                     <div v-if="stage.linked_algorithm_runs?.length" class="trace-tags">
                       <el-tag v-for="id in stage.linked_algorithm_runs" :key="id" size="small" effect="plain">{{ id }}</el-tag>
                     </div>
-                    <details class="trace-json">
-                      <summary>输入 / 输出 / 审批</summary>
-                      <pre>input: {{ shortJson(stage.input_snapshot) }}</pre>
-                      <pre>output: {{ shortJson(stage.output_summary) }}</pre>
-                      <pre v-if="stage.decisions?.length">decisions: {{ shortJson(stage.decisions) }}</pre>
-                      <pre v-if="stage.error">error: {{ shortJson(stage.error) }}</pre>
-                    </details>
                   </article>
                 </div>
               </section>
 
-              <section class="trace-section">
+              <section
+                v-if="linkedResearchAlgorithmRuns.length || linkedResearchComputations.length || linkedResearchObservations.length"
+                class="trace-section"
+              >
                 <h5>关联项</h5>
                 <div class="trace-link-grid">
-                  <div>
-                    <strong>AlgorithmRun</strong>
-                    <p v-if="!researchTraceability?.linked_algorithm_runs?.length">暂无</p>
-                    <el-tag v-for="run in researchTraceability?.linked_algorithm_runs || []" :key="run.run_id" size="small" :type="statusTag(run.status)">
+                  <div v-if="linkedResearchAlgorithmRuns.length">
+                    <strong>算法运行</strong>
+                    <el-tag v-for="run in linkedResearchAlgorithmRuns" :key="run.run_id" size="small" :type="statusTag(run.status)">
                       {{ run.algorithm_id }} · {{ run.run_id }}
                     </el-tag>
                   </div>
-                  <div>
-                    <strong>ComputationRun</strong>
-                    <p v-if="!researchTraceability?.linked_computations?.length">暂无</p>
-                    <el-tag v-for="run in researchTraceability?.linked_computations || []" :key="run.run_id" size="small" :type="statusTag(run.status)">
+                  <div v-if="linkedResearchComputations.length">
+                    <strong>计算任务</strong>
+                    <el-tag v-for="run in linkedResearchComputations" :key="run.run_id" size="small" :type="statusTag(run.status)">
                       {{ run.workflow_type || run.engine || 'computation' }} · {{ run.run_id }}
                     </el-tag>
                   </div>
-                  <div>
-                    <strong>Observation</strong>
-                    <p v-if="!researchTraceability?.linked_observations?.length">暂无</p>
-                    <el-tag v-for="(item, idx) in researchTraceability?.linked_observations || []" :key="idx" size="small" effect="plain">
+                  <div v-if="linkedResearchObservations.length">
+                    <strong>观测记录</strong>
+                    <el-tag v-for="(item, idx) in linkedResearchObservations" :key="idx" size="small" effect="plain">
                       {{ item.observation_id || item.id || `observation_${idx + 1}` }}
                     </el-tag>
                   </div>
                 </div>
               </section>
 
-              <section class="trace-section">
-                <h5>审计事件</h5>
-                <el-timeline v-if="researchTraceability?.audit_events?.length">
-                  <el-timeline-item
-                    v-for="event in researchTraceability.audit_events"
-                    :key="event.event_id"
-                    :timestamp="formatDate(event.created_at)"
-                    :type="event.event_type === 'failed' || event.event_type === 'rejected' ? 'danger' : event.event_type === 'completed' || event.event_type === 'approved' ? 'success' : 'primary'"
-                  >
-                    <div class="audit-item">
-                      <strong>{{ event.event_type }}</strong>
-                      <span>{{ event.entity_type }} · {{ event.entity_id }}</span>
-                      <p v-if="event.reason">{{ event.reason }}</p>
+              <el-collapse v-if="researchStages.length || researchAuditEvents.length" class="trace-detail-collapse">
+                <el-collapse-item title="展开完整追溯明细" name="research-trace">
+                  <section v-if="researchStages.length" class="trace-section">
+                    <h5>阶段输入 / 输出 / 审批</h5>
+                    <div class="trace-stage-list">
+                      <article v-for="stage in researchStages" :key="`detail-${stage.stage_run_id}`" class="trace-stage-item">
+                        <div class="trace-stage-header">
+                          <strong>{{ stageLabels[stage.stage_key] || stage.stage_key }}</strong>
+                          <el-tag size="small" :type="statusTag(stage.status)">{{ stage.status }}</el-tag>
+                        </div>
+                        <div class="trace-json">
+                          <pre>input: {{ shortJson(stage.input_snapshot) }}</pre>
+                          <pre>output: {{ shortJson(stage.output_summary) }}</pre>
+                          <pre v-if="stage.decisions?.length">decisions: {{ shortJson(stage.decisions) }}</pre>
+                          <pre v-if="stage.error">error: {{ shortJson(stage.error) }}</pre>
+                        </div>
+                      </article>
                     </div>
-                  </el-timeline-item>
-                </el-timeline>
-                <div v-else class="empty-hint">暂无审计事件</div>
-              </section>
+                  </section>
+
+                  <section v-if="researchAuditEvents.length" class="trace-section">
+                    <h5>审计事件</h5>
+                    <el-timeline>
+                      <el-timeline-item
+                        v-for="event in researchAuditEvents"
+                        :key="event.event_id"
+                        :timestamp="formatDate(event.created_at)"
+                        :type="event.event_type === 'failed' || event.event_type === 'rejected' ? 'danger' : event.event_type === 'completed' || event.event_type === 'approved' ? 'success' : 'primary'"
+                      >
+                        <div class="audit-item">
+                          <strong>{{ event.event_type }}</strong>
+                          <span>{{ event.entity_type }} · {{ event.entity_id }}</span>
+                          <p v-if="event.reason">{{ event.reason }}</p>
+                        </div>
+                      </el-timeline-item>
+                    </el-timeline>
+                  </section>
+                </el-collapse-item>
+              </el-collapse>
             </div>
           </template>
 
@@ -1046,7 +1417,7 @@ watch(
           </div>
           <div class="context-list">
             <div class="context-row">
-              <span>ProblemSpec</span>
+              <span>研发任务</span>
               <strong>{{ problemSpec?.name || problemSpec?.problem_spec_id || '未选择' }}</strong>
             </div>
             <div class="context-row">
@@ -1071,16 +1442,24 @@ watch(
               size="small"
               @click="openGateReviewFromStatus"
             >
-              审批 Gate
+              审批关键节点
             </el-button>
             <el-button
               v-if="reportSubject"
               type="primary"
               size="small"
+              :icon="hasDownloadableReport ? Download : Document"
               :disabled="reportSubmitting"
-              @click="hasActiveReportJobs ? loadReportJobs() : openReportDrawer()"
+              @click="handleReportPrimaryAction"
             >
               {{ reportPrimaryButtonText }}
+            </el-button>
+            <el-button
+              v-if="reportSubject && hasDownloadableReport"
+              size="small"
+              @click="openReportDrawer"
+            >
+              重新生成
             </el-button>
             <el-button size="small" @click="openExamples">示例流程</el-button>
           </div>
@@ -1110,8 +1489,8 @@ watch(
               <strong>{{ hasActiveReportJobs ? '有' : '无' }}</strong>
             </div>
             <div class="context-row">
-              <span>追溯链</span>
-              <strong>{{ researchTraceability ? '已加载' : '待加载' }}</strong>
+              <span>过程记录</span>
+              <strong>{{ researchRun ? (researchTraceability ? '已加载' : '待加载') : (algorithmRun ? '已加载' : '待加载') }}</strong>
             </div>
           </div>
         </section>
@@ -1290,6 +1669,96 @@ watch(
   display: flex;
   flex-direction: column;
   padding: 0 12px;
+}
+
+.primary-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.primary-action-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #fff;
+  color: var(--app-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.primary-action-card.is-active {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.primary-action-card.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.primary-action-card span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.primary-action-card strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.primary-action-card small {
+  overflow: hidden;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capability-mini-panel {
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #fff;
+}
+
+.capability-mini-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--app-ink-body);
+}
+
+.capability-mini-panel p {
+  margin: 0 0 8px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.capability-error {
+  color: #dc2626 !important;
+}
+
+.advanced-toggle-row {
+  padding: 0 12px 10px;
+}
+
+.advanced-steps {
+  padding-top: 4px;
+  border-top: 1px solid var(--app-border-soft);
 }
 
 .tree-step {
@@ -1540,6 +2009,10 @@ watch(
   line-height: 1.6;
 }
 
+.report-readiness-alert {
+  margin-bottom: 12px;
+}
+
 /* ── 执行路径选择卡片 ── */
 .mode-choice-grid {
   display: grid;
@@ -1598,6 +2071,102 @@ watch(
   font-size: 13px;
   color: var(--app-ink-body);
   line-height: 1.6;
+}
+
+.mode-capability-line,
+.advanced-inline-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mode-capability-line {
+  margin-bottom: 14px;
+}
+
+.advanced-inline-entry {
+  margin-top: 12px;
+  color: var(--app-ink-muted);
+  font-size: 13px;
+}
+
+.autoresearch-readiness-panel {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #fbfdff;
+}
+
+.readiness-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.readiness-header div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.readiness-header strong {
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.readiness-header span,
+.readiness-note {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.stage-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stage-mode-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #fff;
+}
+
+.stage-mode-item div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stage-mode-item strong {
+  color: var(--app-ink);
+  font-size: 12px;
+}
+
+.stage-mode-item span {
+  overflow: hidden;
+  color: var(--app-ink-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readiness-note {
+  margin: 10px 0 0;
+}
+
+.readiness-error {
+  color: #dc2626;
 }
 
 /* ── 确认提示 ── */
@@ -1716,11 +2285,6 @@ watch(
   color: var(--app-ink-body);
 }
 
-.trace-json summary {
-  cursor: pointer;
-  color: #2563eb;
-}
-
 .trace-json pre {
   overflow-x: auto;
   margin: 8px 0 0;
@@ -1749,6 +2313,10 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+.trace-detail-collapse {
+  margin-top: 4px;
 }
 
 /* ── 算法选择区域 ── */
@@ -1811,6 +2379,10 @@ watch(
   }
 
   .mode-choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stage-mode-grid {
     grid-template-columns: 1fr;
   }
 

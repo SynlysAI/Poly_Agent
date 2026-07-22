@@ -8,16 +8,21 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 
 from app.core.auth import get_current_user
+from app.core.config import settings
 from app.schemas.common import ApiResponse
+from app.schemas.computation import ArtifactListResponseData, ComputationArtifact, ComputationArtifactResponse
 from app.schemas.research_engine import (
     AlgorithmHandoff,
     AlgorithmHandoffCreate,
     AlgorithmHandoffListData,
     AlgorithmHandoffValidationResult,
+    AlgorithmManagedResource,
+    AlgorithmManagedResourceCreate,
+    AlgorithmManagedResourceListData,
     AlgorithmRequirementDocumentParseResult,
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
@@ -28,6 +33,7 @@ from app.schemas.research_engine import (
     AlgorithmRun,
     AlgorithmRunCreate,
     AlgorithmRunListData,
+    AlgorithmResourceBinding,
     AlgorithmRunTraceability,
     AlgorithmVersion,
     AlgorithmVersionListData,
@@ -57,10 +63,12 @@ from app.schemas.research_engine import (
 )
 from app.services.algorithm_requirement_doc_service import AlgorithmRequirementDocService
 from app.services.algorithm_handoff_service import AlgorithmHandoffService
+from app.services.algorithm_resource_service import AlgorithmManagedResourceService
 from app.services.research_engine_algorithm_package_service import AlgorithmPackageService
 from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
 from app.services.research_engine_readiness_service import ResearchEngineReadinessService
 from app.services.research_engine_service import ResearchEngineService
+from app.services.computation_service import ComputationService
 
 router = APIRouter(prefix="/research-engine", tags=["research-engine"])
 service = ResearchEngineService()
@@ -68,7 +76,10 @@ orchestrator = ResearchEngineOrchestrator()
 readiness_service = ResearchEngineReadinessService()
 package_service = AlgorithmPackageService()
 handoff_service = AlgorithmHandoffService()
+algorithm_resource_service = AlgorithmManagedResourceService()
 requirement_doc_service = AlgorithmRequirementDocService()
+artifact_service = ComputationService()
+MAX_MULTIPART_ASSET_BYTES = 50 * 1024 * 1024
 
 
 def _actor_user_id(current_user: dict[str, str] | None) -> str:
@@ -91,9 +102,39 @@ def _has_full_access(current_user: dict[str, str] | None) -> bool:
     return current_user is None or _is_admin(current_user)
 
 
+def _require_full_access(current_user: dict[str, str] | None) -> None:
+    """限制宿主机路径类治理操作只能由全权限用户执行。"""
+    if not _has_full_access(current_user):
+        raise HTTPException(status_code=403, detail="无权限管理算法资源")
+
+
 def _request_id(request: Request) -> str | None:
     """读取请求追踪 ID。"""
     return getattr(request.state, "request_id", None) or request.headers.get("x-request-id")
+
+
+def _artifact_download_url(artifact_id: str) -> str:
+    return f"{settings.api_prefix}/artifacts/{artifact_id}/download"
+
+
+def _public_artifact(artifact: ComputationArtifact) -> ComputationArtifactResponse:
+    return ComputationArtifactResponse(
+        artifact_id=artifact.artifact_id,
+        run_id=artifact.run_id,
+        owner_type=artifact.owner_type,
+        owner_id=artifact.owner_id or artifact.run_id,
+        step_key=artifact.step_key,
+        artifact_type=artifact.artifact_type,
+        name=artifact.name,
+        mime_type=artifact.mime_type,
+        size_bytes=artifact.size_bytes,
+        checksum_sha256=artifact.checksum_sha256,
+        download_url=_artifact_download_url(artifact.artifact_id),
+        parser_name=artifact.parser_name,
+        parser_version=artifact.parser_version,
+        metadata=artifact.metadata,
+        created_at=artifact.created_at,
+    )
 
 
 def _ensure_package_access(package_id: str, current_user: dict[str, str] | None) -> AlgorithmPackage:
@@ -137,6 +178,49 @@ def _json_form_object(raw: str | None, fallback: object) -> object:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail=f"JSON 字段格式错误: {exc.msg}") from exc
+
+
+@router.post("/algorithm-resources", response_model=ApiResponse[AlgorithmManagedResource])
+def create_algorithm_resource(
+    payload: AlgorithmManagedResourceCreate,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmManagedResource]:
+    """登记后端宿主机可访问的算法大资源路径。"""
+    _require_full_access(current_user)
+    data = algorithm_resource_service.create_resource(
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/algorithm-resources", response_model=ApiResponse[AlgorithmManagedResourceListData])
+def list_algorithm_resources(
+    algorithm_id: str | None = Query(default=None),
+    asset_key: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> ApiResponse[AlgorithmManagedResourceListData]:
+    """查询已登记的算法大资源。"""
+    data = algorithm_resource_service.list_resources(
+        algorithm_id=algorithm_id,
+        asset_key=asset_key,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/algorithm-resources/{resource_id}:check", response_model=ApiResponse[AlgorithmManagedResource])
+def check_algorithm_resource(
+    resource_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmManagedResource]:
+    """重新检查已登记算法资源的路径健康状态。"""
+    _require_full_access(current_user)
+    return ApiResponse(code=0, message="ok", data=algorithm_resource_service.check_resource(resource_id))
 
 
 @router.get("/algorithm-packages/template")
@@ -252,6 +336,7 @@ def download_algorithm_handoff_package(handoff_id: str) -> Response:
 async def validate_algorithm_handoff_package(
     handoff_id: str,
     file: UploadFile = File(...),
+    resource_bindings: str = Form(default="[]"),
 ) -> ApiResponse[AlgorithmHandoffValidationResult]:
     """对算法对接包做上传前自测，不创建正式算法版本。"""
     content = await file.read()
@@ -259,6 +344,7 @@ async def validate_algorithm_handoff_package(
         handoff_id,
         filename=file.filename or "handoff.zip",
         content=content,
+        resource_bindings=_json_form_object(resource_bindings, []),
     )
     return ApiResponse(code=0, message="ok", data=data)
 
@@ -284,9 +370,21 @@ async def pack_algorithm_package(
     loader: str | None = Form(default=None),
     input_schema: str = Form(default='{"fields":{"smiles":"string"},"required":["smiles"]}'),
     output_schema: str = Form(default='{"fields":{"prediction":"object"},"required":["prediction"]}'),
+    input_assets: str = Form(default="[]"),
+    output_assets: str = Form(default="[]"),
+    resource_assets: str = Form(default="[]"),
+    result_envelope: str | None = Form(default=None),
     runtime: str = Form(default='{"python":"3.11","resources":{"cpu":1,"memory":"1Gi","gpu":false},"timeout_seconds":30}'),
     sample_input: str = Form(default='{"smiles":"C=C(F)F"}'),
     description: str | None = Form(default=None),
+    developer: str | None = Form(default=None),
+    developer_organization: str | None = Form(default=None),
+    developer_contact: str | None = Form(default=None),
+    source_url: str | None = Form(default=None),
+    citation: str | None = Form(default=None),
+    method_attributions: str = Form(default="[]"),
+    logo_asset: str | None = Form(default=None),
+    logo_url: str | None = Form(default=None),
     files: list[UploadFile] = File(default=[]),
     requirements: UploadFile | None = File(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
@@ -305,9 +403,21 @@ async def pack_algorithm_package(
         loader=loader or None,
         input_schema=_json_form_object(input_schema, {}),
         output_schema=_json_form_object(output_schema, {}),
+        input_assets=_json_form_object(input_assets, []),
+        output_assets=_json_form_object(output_assets, []),
+        resource_assets=_json_form_object(resource_assets, []),
+        result_envelope=result_envelope or None,
         runtime=_json_form_object(runtime, {}),
         sample_input=_json_form_object(sample_input, {}),
         description=description,
+        developer=developer,
+        developer_organization=developer_organization,
+        developer_contact=developer_contact,
+        source_url=source_url,
+        citation=citation,
+        method_attributions=_json_form_object(method_attributions, []),
+        logo_asset=logo_asset,
+        logo_url=logo_url,
     )
     source_files: dict[str, bytes] = {}
     for upload in files:
@@ -390,11 +500,16 @@ def download_algorithm_package(
 @router.post("/algorithm-packages/{package_id}:validate", response_model=ApiResponse[AlgorithmPackage])
 def validate_algorithm_package(
     package_id: str,
+    resource_bindings: list[AlgorithmResourceBinding] | None = Body(default=None, embed=True),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmPackage]:
     """校验算法包并生成 AlgorithmVersion。"""
     _ensure_package_access(package_id, current_user)
-    return ApiResponse(code=0, message="ok", data=package_service.validate_package(package_id))
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=package_service.validate_package(package_id, resource_bindings=resource_bindings),
+    )
 
 
 @router.post("/algorithm-packages/{package_id}:build", response_model=ApiResponse[AlgorithmPackage])
@@ -952,6 +1067,70 @@ def create_algorithm_run(
         request_id=_request_id(request),
     )
     return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/algorithm-runs:multipart", response_model=ApiResponse[AlgorithmRun])
+async def create_algorithm_run_multipart(
+    request: Request,
+    payload: str = Form(...),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmRun]:
+    """创建带文件输入的算法运行。
+
+    multipart 中 `payload` 是 AlgorithmRunCreate JSON，其余文件 part 名称必须匹配 input_assets.key。
+    """
+    try:
+        run_payload = AlgorithmRunCreate(**json.loads(payload))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="payload 必须是合法 JSON") from exc
+    form = await request.form()
+    input_asset_uploads: dict[str, dict[str, object]] = {}
+    for key, value in form.multi_items():
+        if key == "payload":
+            continue
+        if hasattr(value, "filename") and hasattr(value, "read"):
+            content = await value.read(MAX_MULTIPART_ASSET_BYTES + 1)
+            if len(content) > MAX_MULTIPART_ASSET_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail={
+                        "code": "INPUT_ASSET_TOO_LARGE",
+                        "message": f"输入文件 {key} 超过平台上传上限",
+                        "details": {"asset_key": key, "max_size_bytes": MAX_MULTIPART_ASSET_BYTES},
+                    },
+                )
+            input_asset_uploads[key] = {
+                "filename": value.filename or key,
+                "content": content,
+                "content_type": value.content_type or "application/octet-stream",
+            }
+    data = service.create_algorithm_run(
+        run_payload,
+        actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+        request_id=_request_id(request),
+        input_asset_uploads=input_asset_uploads,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/algorithm-runs/{run_id}/artifacts", response_model=ApiResponse[ArtifactListResponseData])
+def list_algorithm_run_artifacts(
+    run_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ArtifactListResponseData]:
+    """查询 AlgorithmRun 关联文件产物。"""
+    artifacts = artifact_service.list_owner_artifacts(
+        owner_type="algorithm_run",
+        owner_id=run_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=ArtifactListResponseData(items=[_public_artifact(item) for item in artifacts]),
+    )
 
 
 @router.get("/algorithm-runs", response_model=ApiResponse[AlgorithmRunListData])

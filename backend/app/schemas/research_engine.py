@@ -12,6 +12,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.attribution import AttributionItem
+from app.schemas.common import UtcDatetimeJsonModel
+
 
 # =============================================================================
 # 枚举与 Literal 类型
@@ -76,6 +79,15 @@ AlgorithmStatus = Literal[
 AlgorithmIntegrationKind = Literal["real", "builtin", "simulated", "pending"]
 """算法接入形态，用于区分真实能力、内置能力、模拟演示和待接入能力。"""
 
+CapabilityLevel = Literal[
+    "production_ready",
+    "configured_pending_verification",
+    "demo_fallback",
+    "not_configured",
+    "unavailable",
+]
+"""产品能力真实性等级。"""
+
 MaterialScope = Literal[
     "fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"
 ]
@@ -111,6 +123,12 @@ AlgorithmHandoffStatus = Literal[
     "submitted",
 ]
 """算法对接任务状态。"""
+
+AlgorithmManagedResourceStorageMode = Literal["mounted_path"]
+"""算法大资源存储方式：mounted_path=后端宿主机可访问的服务器/挂载路径。"""
+
+AlgorithmManagedResourceStatus = Literal["active", "missing", "invalid", "disabled"]
+"""算法大资源状态。"""
 
 AlgorithmPackageExampleId = Literal[
     "batch_formulation_predictor",
@@ -542,6 +560,108 @@ class AlgorithmIOSchema(BaseModel):
     """
 
 
+class AlgorithmAssetSpec(BaseModel):
+    """算法文件/资源输入输出声明。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str = Field(min_length=1, max_length=120)
+    label: str | None = Field(default=None, max_length=160)
+    required: bool = False
+    asset_role: str | None = Field(default=None, max_length=80)
+    data_kind: str | None = Field(default=None, max_length=80)
+    parser: str | None = Field(default=None, max_length=120)
+    artifact_type: str | None = Field(default=None, max_length=80)
+    mime_type: str | None = Field(default=None, max_length=160)
+    mime_types: list[str] = Field(default_factory=list)
+    extensions: list[str] = Field(default_factory=list)
+    max_size_bytes: int | None = Field(default=None, ge=1)
+    sample_path: str | None = Field(default=None, max_length=300)
+    env_var: str | None = Field(default=None, max_length=120)
+    resource_type: str | None = Field(default=None, max_length=80)
+    required_files: list[str] = Field(default_factory=list)
+    binding_required: bool = False
+    description: str | None = Field(default=None, max_length=600)
+
+    @field_validator("key")
+    @classmethod
+    def normalize_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("asset key 不能为空")
+        return normalized
+
+
+class AlgorithmResourceBinding(BaseModel):
+    """算法版本与平台受管资源的绑定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_key: str = Field(min_length=1, max_length=120)
+    resource_id: str = Field(min_length=1, max_length=120)
+
+    @field_validator("asset_key", "resource_id")
+    @classmethod
+    def normalize_binding_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("resource binding 字段不能为空")
+        return normalized
+
+
+class AlgorithmManagedResourceCreate(BaseModel):
+    """登记服务器/挂载路径上的算法大资源。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm_id: str = Field(min_length=1, max_length=80)
+    asset_key: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=160)
+    storage_mode: AlgorithmManagedResourceStorageMode = "mounted_path"
+    path: str = Field(min_length=1, max_length=1000)
+    resource_type: str | None = Field(default=None, max_length=80)
+    required_files: list[str] = Field(default_factory=list)
+    description: str | None = Field(default=None, max_length=600)
+
+    @field_validator("algorithm_id", "asset_key", "name", "path")
+    @classmethod
+    def normalize_resource_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("资源字段不能为空")
+        return normalized
+
+
+class AlgorithmManagedResource(UtcDatetimeJsonModel):
+    """平台登记的算法大资源。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    algorithm_id: str
+    asset_key: str
+    name: str
+    storage_mode: AlgorithmManagedResourceStorageMode = "mounted_path"
+    path: str
+    resource_type: str | None = None
+    required_files: list[str] = Field(default_factory=list)
+    status: AlgorithmManagedResourceStatus = "active"
+    status_message: str | None = None
+    description: str | None = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlgorithmManagedResourceListData(BaseModel):
+    """算法大资源分页响应。"""
+
+    items: list[AlgorithmManagedResource]
+    page: int
+    page_size: int
+    total: int
+
+
 class AlgorithmRegistryEntry(BaseModel):
     """算法能力登记条目。
 
@@ -558,6 +678,10 @@ class AlgorithmRegistryEntry(BaseModel):
     task_scope: list[ResearchStageKey] = Field(default_factory=list)
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    input_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    output_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    resource_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    result_envelope: str | None = Field(default=None, max_length=120)
     call_method: str = Field(default="REST", max_length=40)
     trigger_modes: list[TriggerSource] = Field(default_factory=lambda: ["human_workflow"])
     runtime_dependency: str | None = Field(default=None, max_length=200)
@@ -571,6 +695,10 @@ class AlgorithmRegistryEntry(BaseModel):
     deployment_status: str | None = Field(default=None, max_length=40)
     integration_kind: AlgorithmIntegrationKind = "builtin"
     capability_group: str | None = Field(default=None, max_length=80)
+    developer_attribution: AttributionItem | None = None
+    framework_attributions: list[AttributionItem] = Field(default_factory=list)
+    method_attributions: list[AttributionItem] = Field(default_factory=list)
+    implementation_notes: str | None = Field(default=None, max_length=1000)
 
     @field_validator("algorithm_id")
     @classmethod
@@ -617,9 +745,21 @@ class AlgorithmPackageCreate(BaseModel):
     loader: str | None = Field(default=None, max_length=200)
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    input_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    output_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    resource_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    result_envelope: str | None = Field(default=None, max_length=120)
     runtime: dict = Field(default_factory=dict)
     sample_input: dict = Field(default_factory=dict)
     description: str | None = Field(default=None, max_length=1000)
+    developer: str | None = Field(default=None, max_length=160)
+    developer_organization: str | None = Field(default=None, max_length=160)
+    developer_contact: str | None = Field(default=None, max_length=160)
+    source_url: str | None = Field(default=None, max_length=600)
+    citation: str | None = Field(default=None, max_length=1000)
+    method_attributions: list[AttributionItem] = Field(default_factory=list)
+    logo_asset: str | None = Field(default=None, max_length=300)
+    logo_url: str | None = Field(default=None, max_length=600)
 
     @field_validator("algorithm_id")
     @classmethod
@@ -630,7 +770,7 @@ class AlgorithmPackageCreate(BaseModel):
         return normalized
 
 
-class AlgorithmPackage(BaseModel):
+class AlgorithmPackage(UtcDatetimeJsonModel):
     """用户上传算法包记录。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -657,7 +797,7 @@ class AlgorithmPackage(BaseModel):
     updated_at: datetime
 
 
-class AlgorithmVersion(BaseModel):
+class AlgorithmVersion(UtcDatetimeJsonModel):
     """不可变算法版本记录。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -676,12 +816,20 @@ class AlgorithmVersion(BaseModel):
     runtime: dict = Field(default_factory=dict)
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    input_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    output_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    resource_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    resource_bindings: list[AlgorithmResourceBinding] = Field(default_factory=list)
+    result_envelope: str | None = Field(default=None, max_length=120)
     entrypoint: str
     loader: str | None = None
     package_path: str
     deployment: dict = Field(default_factory=dict)
     runtime_logs: list[dict] = Field(default_factory=list)
     contract: dict = Field(default_factory=dict)
+    developer_attribution: AttributionItem | None = None
+    method_attributions: list[AttributionItem] = Field(default_factory=list)
+    implementation_notes: str | None = Field(default=None, max_length=1000)
     created_by: str
     created_at: datetime
     updated_at: datetime
@@ -877,6 +1025,7 @@ class AlgorithmRunCreate(BaseModel):
     research_run_id: str | None = Field(default=None, max_length=80)
     stage_run_id: str | None = Field(default=None, max_length=80)
     input_snapshot: dict = Field(default_factory=dict)
+    input_asset_refs: dict[str, object] = Field(default_factory=dict)
     algorithm_version_id: str | None = Field(default=None, max_length=120)
     reason: str | None = Field(default=None, max_length=1000)
 
@@ -890,7 +1039,7 @@ class AlgorithmRunCreate(BaseModel):
         return normalized
 
 
-class AlgorithmRun(BaseModel):
+class AlgorithmRun(UtcDatetimeJsonModel):
     """算法运行记录。
 
     统一表达人工通道和 AutoResearch 通道的算法调用产物。
@@ -1078,11 +1227,36 @@ class ResearchEngineReadinessItem(BaseModel):
     service: str
     label: str
     status: Literal["ready", "warning", "unavailable"]
+    capability_id: str | None = None
+    level: CapabilityLevel = "not_configured"
     required: bool = False
     blocking: bool = False
     demo_fallback: bool = False
+    configured: bool = False
+    healthy: bool = False
+    provider: str | None = None
+    model: str | None = None
+    execution_mode: str | None = None
+    fallback_reason: str | None = None
+    next_action: str | None = None
     message: str
     details: dict = Field(default_factory=dict)
+
+
+class ResearchEngineStageReadiness(BaseModel):
+    """AutoResearch 阶段实际运行模式摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage_key: ResearchStageKey
+    label: str
+    capability_id: str
+    execution_mode: str
+    level: CapabilityLevel
+    provider: str | None = None
+    model: str | None = None
+    demo_fallback: bool = False
+    fallback_reason: str | None = None
 
 
 class ResearchEngineReadinessData(BaseModel):
@@ -1094,6 +1268,7 @@ class ResearchEngineReadinessData(BaseModel):
     can_start: bool
     checked_at: datetime
     items: list[ResearchEngineReadinessItem]
+    stage_modes: list[ResearchEngineStageReadiness] = Field(default_factory=list)
 
 
 # =============================================================================

@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 
 
 CatalogStatus = Literal["ready", "degraded", "not_configured"]
+DatasetRecordMode = Literal["full", "sample", "metadata_only"]
+DatasetRecordSortBy = Literal["row_index", "sa_score"]
 
 
 class DataCatalogObjectInfo(BaseModel):
@@ -45,6 +47,9 @@ class DataCatalogDataset(BaseModel):
     row_count: int
     column_count: int
     storage_prefix: str
+    record_collection_key: str | None = None
+    record_count: int | None = None
+    record_mode: DatasetRecordMode = "metadata_only"
     objects: list[DataCatalogObjectInfo] = Field(default_factory=list)
     field_summaries: list[DataCatalogFieldSummary] = Field(default_factory=list)
 
@@ -87,6 +92,7 @@ class DataCatalogOverviewData(BaseModel):
     object_count: int
     total_rows: int
     total_columns: int
+    material_record_count: int | None = None
     canonical_root: str
     legacy_objects: list[str] = Field(default_factory=list)
     sources: list[DataCatalogSourceStatus] = Field(default_factory=list)
@@ -171,3 +177,70 @@ class DataCatalogCollectionRecordDetailData(BaseModel):
     created_at: datetime | str | None = None
     updated_at: datetime | str | None = None
     document: dict[str, Any] = Field(default_factory=dict)
+
+
+class DataCatalogDatasetImportStatus(BaseModel):
+    """数据集最近一次导入状态。"""
+
+    job_id: str | None = None
+    status: str = "unknown"
+    imported_count: int | None = None
+    failed_count: int | None = None
+    started_at: datetime | str | None = None
+    finished_at: datetime | str | None = None
+    throughput_rows_per_second: float | None = None
+    error: str | None = None
+
+
+class DataCatalogHistogramBin(BaseModel):
+    """数值字段直方图区间。"""
+
+    start: float
+    end: float
+    count: int
+
+
+class DataCatalogDatasetProfileData(BaseModel):
+    """数据集画像与导入健康。"""
+
+    dataset_id: str
+    row_count: int
+    record_count: int
+    coverage_percent: float
+    record_mode: DatasetRecordMode
+    field_completeness: list[DataCatalogFieldSummary] = Field(default_factory=list)
+    sa_score_histogram: list[DataCatalogHistogramBin] = Field(default_factory=list)
+    duplicate_smiles_count: int | None = None
+    unique_smiles_count: int | None = None
+    import_status: DataCatalogDatasetImportStatus = Field(default_factory=DataCatalogDatasetImportStatus)
+
+
+class DataCatalogDatasetRecordListData(BaseModel):
+    """数据集游标分页记录。"""
+
+    dataset_id: str
+    collection_key: str
+    items: list[DataCatalogRecordSummary]
+    page_size: int
+    next_cursor: str | None = None
+    total: int | None = None
+
+
+class DataCatalogVisualSamplePoint(BaseModel):
+    """前端可视化抽样点。"""
+
+    record_id: str
+    row_index: int | None = None
+    x: float
+    y: float
+    sa_score: float | None = None
+    smiles: str | None = None
+
+
+class DataCatalogDatasetVisualSamplesData(BaseModel):
+    """数据集可视化抽样数据。"""
+
+    dataset_id: str
+    sample_count: int
+    total: int | None = None
+    points: list[DataCatalogVisualSamplePoint] = Field(default_factory=list)

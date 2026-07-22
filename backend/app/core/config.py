@@ -226,7 +226,7 @@ class Settings:
 
         # 只读材料数据资产 MongoDB 配置
         self.data_asset_mongodb_uri: str = os.getenv("DATA_ASSET_MONGODB_URI", "").strip()
-        self.data_asset_mongodb_database: str = os.getenv("DATA_ASSET_MONGODB_DATABASE", "ai4ms").strip() or "ai4ms"
+        self.data_asset_mongodb_database: str = os.getenv("DATA_ASSET_MONGODB_DATABASE", "poly_data").strip() or "poly_data"
 
         # MinIO / S3 数据目录配置
         self.minio_endpoint: str = os.getenv("MINIO_ENDPOINT", "").strip()

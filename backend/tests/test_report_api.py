@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.infra import computation_repositories
 from app.infra.demo_store import demo_store
 from app.infra.computation_repositories import AuditEventRepository
+from app.infra.report_repositories import ReportJobRepository
 from app.infra.research_engine_repositories import AlgorithmRunRepository
 
 
@@ -117,11 +118,15 @@ class ReportApiTest(unittest.TestCase):
         created_job = create_resp.json()["data"]
         self.assertEqual(created_job["status"], "queued")
         self.assertEqual(created_job["subject_id"], "ar_api_001")
+        self.assertTrue(created_job["created_at"].endswith("Z"))
 
         get_resp = self.client.get(f"/api/v1/reports/{created_job['report_id']}")
         self.assertEqual(get_resp.status_code, 200)
         job = get_resp.json()["data"]
         self.assertEqual(job["status"], "completed")
+        self.assertTrue(job["created_at"].endswith("Z"))
+        self.assertTrue(job["started_at"].endswith("Z"))
+        self.assertTrue(job["finished_at"].endswith("Z"))
         artifact_types = {item["artifact_type"] for item in job["artifact_refs"]}
         self.assertIn("markdown", artifact_types)
         self.assertNotIn("latex", artifact_types)
@@ -132,6 +137,7 @@ class ReportApiTest(unittest.TestCase):
         )
         self.assertEqual(list_resp.status_code, 200)
         self.assertEqual(list_resp.json()["data"]["total"], 1)
+        self.assertTrue(list_resp.json()["data"]["items"][0]["created_at"].endswith("Z"))
 
         markdown_artifact = next(item for item in job["artifact_refs"] if item["artifact_type"] == "markdown")
         download_resp = self.client.get(
@@ -262,6 +268,67 @@ class ReportApiTest(unittest.TestCase):
         self.assertEqual(retry_resp.status_code, 400)
         self.assertIn("失败", retry_resp.json()["detail"])
 
+    def test_retry_failed_auto_report_refreshes_report_model_route(self) -> None:
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        ReportJobRepository.save_job(
+            {
+                "report_id": "report_failed_old_route",
+                "subject_type": "algorithm_run",
+                "subject_id": "ar_retry_route_001",
+                "problem_spec_id": None,
+                "campaign_id": None,
+                "template_id": "algorithm_run_summary_zh",
+                "language": "zh-CN",
+                "formats": ["markdown"],
+                "status": "failed",
+                "stage": "persist",
+                "progress": 100,
+                "input_snapshot": {
+                    "subject_type": "algorithm_run",
+                    "subject_id": "ar_retry_route_001",
+                    "provider": "auto",
+                    "retry_of": None,
+                    "resolved_model_route": {
+                        "provider_id": "default_openai",
+                        "provider_type": "openai_compatible",
+                        "model_id": "DeepSeek-V4-Flash-w8a8-mtp",
+                    },
+                },
+                "context_ref": None,
+                "provider": "openai_compatible",
+                "model": "DeepSeek-V4-Flash-w8a8-mtp",
+                "skill_pipeline_id": "nature_research_report_zh",
+                "skill_runs": [],
+                "artifact_refs": [],
+                "error": {"message": "Error code: 502", "error_type": "InternalServerError"},
+                "created_by": "demo_user",
+                "created_at": now,
+                "updated_at": now,
+                "started_at": now,
+                "finished_at": now,
+            }
+        )
+        route = {
+            "purpose": "report",
+            "provider_id": "qwen_reasoning_primary",
+            "provider_type": "openai_compatible",
+            "model_id": "Qwen3.6-35B-A3B",
+            "provider_config": {"base_url": "https://llm.example.test/v1", "api_key": "route-key"},
+        }
+        settings.report_llm_provider = "openai_compatible"
+        with (
+            patch("app.services.report_service.ReportService.execute_report_job", return_value=None),
+            patch("app.services.report_providers.registry.ReportProviderRegistry.resolve_report_route", return_value=route),
+        ):
+            retry_resp = self.client.post("/api/v1/reports/report_failed_old_route/retry")
+
+        self.assertEqual(retry_resp.status_code, 200)
+        retry_job = retry_resp.json()["data"]
+        self.assertEqual(retry_job["model"], "Qwen3.6-35B-A3B")
+        self.assertEqual(retry_job["input_snapshot"]["resolved_model_route"]["provider_id"], "qwen_reasoning_primary")
+
     def test_provider_fallback_completes_report_when_primary_fails(self) -> None:
         from app.services.report_providers.mock import MockReportProvider
 
@@ -272,7 +339,7 @@ class ReportApiTest(unittest.TestCase):
             def complete_json(self, *, messages, schema, options):
                 raise RuntimeError("primary provider failed")
 
-        def fake_get_provider(self, provider_name=None):
+        def fake_get_provider(self, provider_name=None, *, model_route=None):
             if provider_name == "openai_responses":
                 return BrokenProvider()
             if provider_name == "mock":
@@ -299,6 +366,53 @@ class ReportApiTest(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         self.assertEqual(job["provider"], "mock")
         self.assertEqual(job["model"], "fallback-model")
+
+    def test_auto_report_uses_resolved_report_model_route(self) -> None:
+        structured_report = {
+            "title": "Routed report",
+            "abstract": "Generated with the routed report model.",
+            "key_findings": [{"finding": "F", "evidence": ["ar_routed_001"], "confidence": "high"}],
+            "methods": ["M"],
+            "results": [{"name": "Result", "summary": "S", "evidence": ["ar_routed_001"]}],
+            "limitations": ["L"],
+            "next_steps": ["N"],
+        }
+        route = {
+            "purpose": "report",
+            "provider_id": "qwen_reasoning_primary",
+            "provider_type": "openai_compatible",
+            "model_id": "Qwen3.6-35B-A3B",
+            "provider_config": {
+                "base_url": "https://llm.example.test/v1",
+                "api_key": "route-key",
+            },
+        }
+        settings.report_llm_provider = "openai_compatible"
+        with (
+            patch("app.services.report_service.ReportContextService.collect_context", return_value=_context(subject_id="ar_routed_001")),
+            patch("app.services.report_providers.registry.ReportProviderRegistry.resolve_report_route", return_value=route),
+            patch(
+                "app.services.report_providers.openai_compatible.OpenAICompatibleReportProvider.complete_json",
+                return_value=structured_report,
+            ),
+        ):
+            create_resp = self.client.post(
+                "/api/v1/reports",
+                json={
+                    "subject_type": "algorithm_run",
+                    "subject_id": "ar_routed_001",
+                    "formats": ["markdown"],
+                    "provider": "auto",
+                },
+            )
+
+        report_id = create_resp.json()["data"]["report_id"]
+        job = self.client.get(f"/api/v1/reports/{report_id}").json()["data"]
+
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["provider"], "openai_compatible")
+        self.assertEqual(job["model"], "Qwen3.6-35B-A3B")
+        self.assertEqual(job["input_snapshot"]["resolved_model_route"]["provider_id"], "qwen_reasoning_primary")
 
     def test_authenticated_user_cannot_access_another_users_report(self) -> None:
         AlgorithmRunRepository.save("run_id", _algorithm_run_doc("ar_owned_by_a", "user-a"))
