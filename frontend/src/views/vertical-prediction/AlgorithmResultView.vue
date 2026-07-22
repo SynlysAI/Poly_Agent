@@ -44,14 +44,25 @@ const rawPanels = computed(() => {
   return panels
 })
 
-const artifactRows = computed(() => props.artifactRefs.map((item, index) => ({
-  id: item.artifact_id || item.id || `${index + 1}`,
-  name: item.name || item.filename || item.artifact_id || item.id || `artifact_${index + 1}`,
-  type: item.type || item.artifact_type || '-',
-  description: item.description || '-',
-  contentType: item.content_type || item.mime_type || '-',
-  contentSummary: item.content === undefined ? '-' : summarizeValue(item.content),
-})))
+const artifactRows = computed(() => {
+  const rows = props.artifactRefs.map((item, index) => ({
+    id: item.artifact_id || item.id || `${index + 1}`,
+    name: item.name || item.filename || item.artifact_id || item.id || `artifact_${index + 1}`,
+    type: item.type || item.artifact_type || '-',
+    description: item.description || '-',
+    contentType: item.content_type || item.mime_type || '-',
+    contentSummary: item.content === undefined ? '-' : summarizeValue(item.content),
+  }))
+  if (rows.length || isEmptyValue(props.outputSummary)) return rows
+  return [{
+    id: 'output_summary',
+    name: '运行输出 JSON',
+    type: 'json_artifact',
+    description: '模型运行输出',
+    contentType: 'application/json',
+    contentSummary: summarizeValue(props.outputSummary),
+  }]
+})
 
 const hasOutput = computed(() => !isEmptyValue(props.outputSummary))
 const hasStructuredContent = computed(() => Boolean(
@@ -443,18 +454,23 @@ function stringifyJson(value) {
       暂无结构化输出
     </div>
 
+    <section v-if="artifactRows.length" class="result-section artifact-section">
+      <div class="section-heading">
+        <h4>运行产物</h4>
+        <span>{{ artifactRows.length }} 项</span>
+      </div>
+      <el-table :data="artifactRows" border size="small" class="result-table">
+        <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="type" label="类型" width="130" show-overflow-tooltip />
+        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="contentType" label="内容类型" width="150" show-overflow-tooltip />
+        <el-table-column prop="contentSummary" label="内容摘要" width="120" show-overflow-tooltip />
+      </el-table>
+    </section>
+
     <section class="result-section">
       <h4>补充数据</h4>
       <el-collapse>
-        <el-collapse-item v-if="artifactRows.length" title="Artifacts" name="artifacts-table">
-          <el-table :data="artifactRows" border size="small" class="result-table">
-            <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
-            <el-table-column prop="type" label="类型" width="130" show-overflow-tooltip />
-            <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
-            <el-table-column prop="contentType" label="内容类型" width="150" show-overflow-tooltip />
-            <el-table-column prop="contentSummary" label="内容摘要" width="120" show-overflow-tooltip />
-          </el-table>
-        </el-collapse-item>
         <el-collapse-item v-for="panel in rawPanels" :key="panel.name" :title="panel.title" :name="panel.name">
           <pre class="json-block">{{ stringifyJson(panel.data) }}</pre>
         </el-collapse-item>
@@ -679,6 +695,13 @@ function stringifyJson(value) {
 
 .featured-table {
   margin-top: 2px;
+}
+
+.artifact-section {
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
 }
 
 .json-block {

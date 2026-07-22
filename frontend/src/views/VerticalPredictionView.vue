@@ -195,6 +195,10 @@ function handleChanged(packageInfo) {
   loadData()
 }
 
+function handleRunCreated() {
+  loadData()
+}
+
 function openUpload() {
   activeMode.value = 'upload'
 }
@@ -346,7 +350,7 @@ onMounted(() => {
       <section class="detail-panel">
         <el-tabs v-model="detailActiveTab" class="detail-tabs">
           <el-tab-pane label="互动体验" name="experience">
-            <AlgorithmTestPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-toolbar="false" @run-created="handleChanged" />
+            <AlgorithmTestPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-toolbar="false" @run-created="handleRunCreated" />
           </el-tab-pane>
           <el-tab-pane label="亮点介绍" name="highlights">
             <div class="info-grid">

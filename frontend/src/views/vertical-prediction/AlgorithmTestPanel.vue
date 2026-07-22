@@ -29,10 +29,12 @@ const versionId = ref('')
 const inputs = ref({})
 const fullJsonDraft = ref('{}')
 const jsonParseError = ref('')
-const inputMode = ref('form')
+const startSections = ref([])
+const advancedSections = ref([])
 const templateRuns = ref([])
 const templateRunId = ref('')
 const newNestedField = ref({})
+const newNestedValue = ref({})
 const lastRun = ref(null)
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === algorithmId.value) || null)
@@ -43,14 +45,43 @@ const templateOptions = computed(() => templateRuns.value.map((run) => ({
   value: run.run_id,
   label: `${formatDate(run.created_at)} · ${summarizeInput(run.input_snapshot)}`,
 })))
+const primaryArrayObjectKey = computed(() => {
+  const formulationsKey = schemaFields.value.find((key) => key === 'formulations' && isArrayObjectField(key))
+  return formulationsKey || schemaFields.value.find((key) => isArrayObjectField(key)) || ''
+})
+const primaryRecords = computed(() => {
+  const key = primaryArrayObjectKey.value
+  return key && Array.isArray(inputs.value[key]) ? inputs.value[key] : []
+})
+const missingRequiredFields = computed(() => (selectedVersion.value?.input_schema?.required || [])
+  .filter((key) => isEmptyValue(inputs.value[key]))
+  .map((key) => fieldLabel(key)))
+const hasBlankPrimaryRecords = computed(() => (
+  Boolean(primaryArrayObjectKey.value)
+  && primaryRecords.value.length > 0
+  && !primaryRecords.value.some(hasEffectiveRecordValue)
+))
+const runBlocker = computed(() => {
+  if (!versionId.value) return '请选择可调用版本。'
+  if (jsonParseError.value) return `输入 JSON 不合法：${jsonParseError.value}`
+  if (missingRequiredFields.value.length) return `补齐标记 * 的字段：${missingRequiredFields.value.join('、')}`
+  if (hasBlankPrimaryRecords.value) return `请先填写至少一条${primaryArrayObjectKey.value === 'formulations' ? '配方' : '记录'}的字段值。`
+  return ''
+})
+const inputGuidance = computed(() => {
+  if (primaryArrayObjectKey.value && !primaryRecords.value.length) return '先新增一条配方，或从历史输入开始。'
+  if (missingRequiredFields.value.length) return '补齐标记 * 的字段。'
+  if (jsonParseError.value) return '修正高级设置中的 JSON 后再运行。'
+  if (hasBlankPrimaryRecords.value) return '填写至少一条配方的字段值，或从历史输入开始。'
+  return '输入已就绪，可以运行预测。'
+})
+const advancedFieldKeys = computed(() => schemaFields.value.filter((key) => isArrayObjectField(key) || isObjectField(key)))
 
 watch(() => props.refreshKey, loadAlgorithms)
 watch(() => props.algorithmId, loadAlgorithms)
 watch(algorithmId, handleAlgorithmChanged)
 watch(versionId, resetInputs)
-watch(inputs, () => {
-  if (inputMode.value === 'form') syncFullJsonDraft()
-}, { deep: true })
+watch(inputs, syncFullJsonDraft, { deep: true })
 
 async function loadAlgorithms() {
   loading.value = true
@@ -151,6 +182,7 @@ function resetInputs() {
 
 function syncFullJsonDraft() {
   fullJsonDraft.value = JSON.stringify(inputs.value, null, 2)
+  jsonParseError.value = ''
 }
 
 function updateFullJson(value) {
@@ -165,14 +197,6 @@ function updateFullJson(value) {
     jsonParseError.value = ''
   } catch (error) {
     jsonParseError.value = error.message || 'JSON 解析失败'
-  }
-}
-
-function handleModeChange(mode) {
-  if (mode === 'json') {
-    syncFullJsonDraft()
-  } else if (!jsonParseError.value) {
-    syncFullJsonDraft()
   }
 }
 
@@ -234,8 +258,11 @@ function canUseStructuredEditor(key) {
 function isArrayObjectField(key) {
   const value = inputs.value[key]
   const hinted = Array.isArray(fieldHint(key).columns) && fieldHint(key).columns.length
-  const templateRows = Array.isArray(templateValueFor(key)) ? templateValueFor(key) : []
+  const templateRows = Array.isArray(historyValueFor(key)) ? historyValueFor(key) : []
+  const type = String(fieldType(key))
   if (hinted || templateRows.some(isPlainObject)) return true
+  if (key === 'formulations' && isListType(type)) return true
+  if (isListType(type) && ['object', 'dict'].some((item) => type.includes(item))) return true
   if (Array.isArray(value) && value.length) return value.every((item) => isPlainObject(item))
   return false
 }
@@ -257,6 +284,11 @@ function ensureObjectValue(key) {
 }
 
 function templateValueFor(key) {
+  const selected = templateRuns.value.find((run) => run.run_id === templateRunId.value)
+  return selected?.input_snapshot?.[key]
+}
+
+function historyValueFor(key) {
   for (const run of templateRuns.value) {
     const value = run.input_snapshot?.[key]
     if (!isEmptyValue(value)) return value
@@ -278,7 +310,22 @@ function arrayColumns(key) {
   ;[...rows, ...templateRows].forEach((row) => {
     if (isPlainObject(row)) Object.keys(row).forEach((column) => keys.add(column))
   })
+  if (!keys.size) defaultArrayColumns(key).forEach((column) => keys.add(column))
   return Array.from(keys)
+}
+
+function defaultArrayColumns(key) {
+  if (key !== 'formulations') return []
+  return [
+    'formula_id',
+    'task_type',
+    'lithium_salt',
+    'lithium_salt_mol_L',
+    'electrolyte_component_1',
+    'electrolyte_component_1_mol_ratio',
+    'electrolyte_component_2',
+    'electrolyte_component_2_mol_ratio',
+  ]
 }
 
 function visibleArrayColumns(key) {
@@ -287,8 +334,43 @@ function visibleArrayColumns(key) {
 }
 
 function collapsedArrayColumns(key) {
-  const collapsed = new Set((fieldHint(key).collapsed_keys || []).map(String))
-  return arrayColumns(key).filter((column) => collapsed.has(column))
+  const core = new Set(coreArrayColumns(key))
+  return arrayColumns(key).filter((column) => !core.has(column))
+}
+
+function coreArrayColumns(key) {
+  const explicit = fieldHint(key).core_columns || fieldHint(key).primary_columns
+  const columns = arrayColumns(key)
+  const visible = Array.isArray(explicit) && explicit.length
+    ? explicit.map(String).filter((column) => columns.includes(column))
+    : visibleArrayColumns(key)
+  if (visible.length <= 6) return visible
+  const priority = [
+    'formula_id',
+    'id',
+    'name',
+    'title',
+    'task_type',
+    'smiles',
+    'psmiles',
+    'polymer_smiles',
+    'material',
+    'component',
+    'composition',
+    'mass_fraction',
+    'weight_fraction',
+    'volume_fraction',
+    'ratio',
+    'solvent',
+    'salt',
+    'additive',
+  ]
+  const ranked = [...visible].sort((a, b) => {
+    const left = priority.includes(a) ? priority.indexOf(a) : priority.length + visible.indexOf(a)
+    const right = priority.includes(b) ? priority.indexOf(b) : priority.length + visible.indexOf(b)
+    return left - right
+  })
+  return ranked.slice(0, 6)
 }
 
 function objectColumns(key) {
@@ -302,7 +384,7 @@ function emptyItemTemplate(key) {
   const templateRows = Array.isArray(templateValueFor(key)) ? templateValueFor(key) : []
   const source = templateRows.find(isPlainObject) || (Array.isArray(inputs.value[key]) ? inputs.value[key].find(isPlainObject) : null)
   const columns = arrayColumns(key)
-  return Object.fromEntries(columns.map((column) => [column, defaultValueFrom(source?.[column])]))
+  return Object.fromEntries(columns.map((column) => [column, defaultValueForColumn(column, source?.[column])]))
 }
 
 function addArrayItem(key) {
@@ -332,21 +414,25 @@ function removeArrayItem(key, index) {
 function addNestedFieldToArray(key) {
   const name = String(newNestedField.value[key] || '').trim()
   if (!name) return
+  const value = parseCustomFieldValue(newNestedValue.value[key])
   ensureArrayValue(key)
   if (!inputs.value[key].length) inputs.value[key].push({})
   inputs.value[key].forEach((item) => {
-    if (isPlainObject(item) && !Object.prototype.hasOwnProperty.call(item, name)) item[name] = ''
+    if (isPlainObject(item) && !Object.prototype.hasOwnProperty.call(item, name)) item[name] = cloneJson(value)
   })
   newNestedField.value[key] = ''
+  newNestedValue.value[key] = ''
   syncFullJsonDraft()
 }
 
 function addNestedFieldToObject(key) {
   const name = String(newNestedField.value[key] || '').trim()
   if (!name) return
+  const value = parseCustomFieldValue(newNestedValue.value[key])
   ensureObjectValue(key)
-  if (!Object.prototype.hasOwnProperty.call(inputs.value[key], name)) inputs.value[key][name] = ''
+  if (!Object.prototype.hasOwnProperty.call(inputs.value[key], name)) inputs.value[key][name] = value
   newNestedField.value[key] = ''
+  newNestedValue.value[key] = ''
   syncFullJsonDraft()
 }
 
@@ -356,9 +442,22 @@ function removeObjectField(key, field) {
   syncFullJsonDraft()
 }
 
+function addAdvancedField(key) {
+  if (isArrayObjectField(key)) addNestedFieldToArray(key)
+  else if (isObjectField(key)) addNestedFieldToObject(key)
+}
+
 function itemTitle(key, item, index) {
   const titleKey = fieldHint(key).item_title_key || ['formula_id', 'id', 'name', 'title'].find((candidate) => item?.[candidate])
   return titleKey && item?.[titleKey] ? String(item[titleKey]) : `${fieldLabel(key)} ${index + 1}`
+}
+
+function firstRecordButtonLabel(key) {
+  return key === 'formulations' ? '新增第一条配方' : '新增第一条记录'
+}
+
+function addRecordButtonLabel(key) {
+  return key === 'formulations' ? '新增配方' : '新增记录'
 }
 
 function valueKind(value) {
@@ -371,6 +470,39 @@ function defaultValueFrom(value) {
   if (typeof value === 'number') return 0
   if (typeof value === 'boolean') return false
   return ''
+}
+
+function defaultValueForColumn(column, sourceValue) {
+  if (sourceValue !== undefined) return defaultValueFrom(sourceValue)
+  const normalized = String(column || '').toLowerCase()
+  if (['is_', 'has_', 'enable_', 'enabled_', 'use_'].some((prefix) => normalized.startsWith(prefix))) return false
+  if ([
+    'amount',
+    'concentration',
+    'count',
+    'density',
+    'fraction',
+    'mol',
+    'mol_l',
+    'molar',
+    'number',
+    'percent',
+    'percentage',
+    'ratio',
+    'temperature',
+    'value',
+    'weight',
+  ].some((token) => normalized.includes(token))) return 0
+  return ''
+}
+
+function parseCustomFieldValue(value) {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  if (text === 'true') return true
+  if (text === 'false') return false
+  if (!Number.isNaN(Number(text)) && text !== '') return Number(text)
+  return text
 }
 
 function cloneJson(value) {
@@ -405,6 +537,16 @@ function isEmptyValue(value) {
   if (Array.isArray(value)) return value.length === 0
   if (isPlainObject(value)) return Object.keys(value).length === 0
   return false
+}
+
+function hasEffectiveRecordValue(record) {
+  if (!isPlainObject(record)) return !isEmptyValue(record)
+  return Object.values(record).some((value) => {
+    if (typeof value === 'string') return value.trim() !== ''
+    if (typeof value === 'number') return value !== 0
+    if (typeof value === 'boolean') return value
+    return !isEmptyValue(value)
+  })
 }
 
 function setScalarValue(key, value) {
@@ -519,40 +661,67 @@ onMounted(loadAlgorithms)
             <h3>预测输入</h3>
             <span>{{ selectedVersion.algorithm_id }} / {{ selectedVersion.version }}</span>
           </div>
-          <el-radio-group v-model="inputMode" size="small" @change="handleModeChange">
-            <el-radio-button value="form">表单</el-radio-button>
-            <el-radio-button value="json">JSON</el-radio-button>
-          </el-radio-group>
         </div>
 
-        <div class="template-toolbar">
-          <el-select
-            v-model="templateRunId"
-            filterable
-            clearable
-            placeholder="历史输入模板"
-            :disabled="!templateOptions.length"
-            @change="applySelectedTemplate"
-          >
-            <el-option v-for="item in templateOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </el-select>
-          <el-button :icon="CopyDocument" :disabled="!templateRuns.length" @click="applyLatestTemplate">载入最近成功输入</el-button>
+        <div class="prediction-steps" aria-label="预测流程">
+          <div class="prediction-step is-done"><span>1</span><strong>选择起点</strong></div>
+          <div class="prediction-step is-active"><span>2</span><strong>填写输入</strong></div>
+          <div class="prediction-step"><span>3</span><strong>查看结果</strong></div>
         </div>
 
-        <el-form v-if="inputMode === 'form'" label-position="top" class="smart-input-form">
-          <el-form-item
-            v-for="key in schemaFields"
-            :key="key"
-            :class="{ 'json-form-item': canUseStructuredEditor(key) }"
-          >
-            <template #label>
-              <span class="field-label">
-                {{ fieldLabel(key) }}
-                <em v-if="isRequiredField(key)">*</em>
-                <small v-if="fieldUnit(key)">{{ fieldUnit(key) }}</small>
-              </span>
-              <span v-if="fieldHelp(key)" class="field-help">{{ fieldHelp(key) }}</span>
+        <el-alert class="input-guidance" :title="inputGuidance" type="info" :closable="false" show-icon />
+
+        <el-collapse v-model="startSections" class="start-collapse">
+          <el-collapse-item name="history">
+            <template #title>
+              <div class="start-collapse-title">
+                <div class="step-section-head">
+                  <span>1</span>
+                  <h4>可选起点</h4>
+                </div>
+                <small>
+                  {{ templateOptions.length ? `${templateOptions.length} 条历史输入，可跳过` : '无历史输入，可跳过' }}
+                </small>
+              </div>
             </template>
+            <div class="history-start">
+              <el-select
+                v-model="templateRunId"
+                filterable
+                clearable
+                placeholder="从历史输入开始"
+                :disabled="!templateOptions.length"
+                @change="applySelectedTemplate"
+              >
+                <el-option v-for="item in templateOptions" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+              <el-button :icon="CopyDocument" :disabled="!templateRuns.length" @click="applyLatestTemplate">载入最近成功输入</el-button>
+              <span class="history-empty">
+                {{ templateOptions.length ? `可选：从 ${templateOptions.length} 条历史输入开始；也可以跳过，直接新增配方。` : '可跳过：当前暂无历史模板，直接新增第一条配方即可。' }}
+              </span>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+
+        <section class="input-step-section">
+          <div class="step-section-head">
+            <span>2</span>
+            <h4>编辑配方</h4>
+          </div>
+          <el-form label-position="top" class="smart-input-form">
+            <el-form-item
+              v-for="key in schemaFields"
+              :key="key"
+              :class="{ 'json-form-item': canUseStructuredEditor(key) }"
+            >
+              <template #label>
+                <span class="field-label">
+                  {{ fieldLabel(key) }}
+                  <em v-if="isRequiredField(key)">*</em>
+                  <small v-if="fieldUnit(key)">{{ fieldUnit(key) }}</small>
+                </span>
+                <span v-if="fieldHelp(key)" class="field-help">{{ fieldHelp(key) }}</span>
+              </template>
 
             <el-select
               v-if="fieldOptions(key).length && isListType(fieldType(key))"
@@ -584,13 +753,9 @@ onMounted(loadAlgorithms)
               @update:model-value="setScalarValue(key, $event)"
             />
             <div v-else-if="isArrayObjectField(key)" class="array-object-editor">
-              <div class="nested-toolbar">
+              <div v-if="arrayRows(key).length" class="nested-toolbar">
                 <div class="nested-count">{{ arrayRows(key).length }} 条记录</div>
-                <div class="nested-actions">
-                  <el-input v-model="newNestedField[key]" placeholder="自定义字段名" clearable @keyup.enter="addNestedFieldToArray(key)" />
-                  <el-button :icon="Plus" @click="addNestedFieldToArray(key)">字段</el-button>
-                  <el-button type="primary" :icon="Plus" @click="addArrayItem(key)">记录</el-button>
-                </div>
+                <el-button type="primary" plain :icon="Plus" @click="addArrayItem(key)">{{ addRecordButtonLabel(key) }}</el-button>
               </div>
               <div v-if="arrayRows(key).length" class="record-list">
                 <article v-for="(item, index) in arrayRows(key)" :key="index" class="record-card">
@@ -602,7 +767,7 @@ onMounted(loadAlgorithms)
                     </div>
                   </header>
                   <div class="record-fields">
-                    <label v-for="column in visibleArrayColumns(key)" :key="column" class="nested-field">
+                    <label v-for="column in coreArrayColumns(key)" :key="column" class="nested-field">
                       <span>{{ nestedFieldLabel(key, column) }}</span>
                       <el-input-number
                         v-if="valueKind(item[column]) === 'number'"
@@ -634,10 +799,11 @@ onMounted(loadAlgorithms)
                       </div>
                     </el-collapse-item>
                   </el-collapse>
+                  <p class="record-ready-hint">填写可见字段即可开始；更多字段和原始 JSON 在高级设置中调整。</p>
                 </article>
               </div>
               <div v-else class="nested-empty">
-                <el-button type="primary" :icon="Plus" @click="addArrayItem(key)">新增第一条记录</el-button>
+                <el-button type="primary" :icon="Plus" @click="addArrayItem(key)">{{ firstRecordButtonLabel(key) }}</el-button>
               </div>
             </div>
             <div v-else-if="isScalarArrayField(key)" class="scalar-array-editor">
@@ -655,10 +821,6 @@ onMounted(loadAlgorithms)
             <div v-else-if="isObjectField(key)" class="object-editor">
               <div class="nested-toolbar">
                 <div class="nested-count">{{ objectColumns(key).length }} 个字段</div>
-                <div class="nested-actions">
-                  <el-input v-model="newNestedField[key]" placeholder="自定义字段名" clearable @keyup.enter="addNestedFieldToObject(key)" />
-                  <el-button :icon="Plus" @click="addNestedFieldToObject(key)">字段</el-button>
-                </div>
               </div>
               <div class="record-fields">
                 <label v-for="column in objectColumns(key)" :key="column" class="nested-field">
@@ -676,18 +838,44 @@ onMounted(loadAlgorithms)
               :placeholder="fieldPlaceholder(key)"
               @update:model-value="setScalarValue(key, $event)"
             />
-          </el-form-item>
-        </el-form>
+            </el-form-item>
+          </el-form>
+        </section>
 
-        <div v-else class="json-editor">
-          <el-input :model-value="fullJsonDraft" type="textarea" :rows="20" class="code-input" @update:model-value="updateFullJson" />
-          <el-alert v-if="jsonParseError" class="json-error" :title="jsonParseError" type="error" :closable="false" show-icon />
-        </div>
+        <el-collapse v-model="advancedSections" class="advanced-settings">
+          <el-collapse-item title="高级设置" name="settings">
+            <div class="advanced-mode-row">
+              <div>
+                <strong>原始输入 JSON</strong>
+                <span>这里和上方表单是同一份输入；粘贴 JSON 后会同步回表单。</span>
+              </div>
+            </div>
+            <div v-if="advancedFieldKeys.length" class="advanced-field-tools">
+              <div v-for="key in advancedFieldKeys" :key="key" class="advanced-field-row">
+                <span>{{ fieldLabel(key) }}</span>
+                <el-input v-model="newNestedField[key]" placeholder="字段名" clearable @keyup.enter="addAdvancedField(key)" />
+                <el-input v-model="newNestedValue[key]" placeholder="默认值（可选）" clearable @keyup.enter="addAdvancedField(key)" />
+                <el-button :icon="Plus" @click="addAdvancedField(key)">新增字段</el-button>
+              </div>
+            </div>
+            <div class="json-editor">
+              <el-input :model-value="fullJsonDraft" type="textarea" :rows="20" class="code-input" @update:model-value="updateFullJson" />
+              <el-alert v-if="jsonParseError" class="json-error" :title="jsonParseError" type="error" :closable="false" show-icon />
+            </div>
+          </el-collapse-item>
+        </el-collapse>
 
-        <div class="input-actions">
-          <el-button type="primary" :icon="VideoPlay" :loading="running" :disabled="!versionId" @click="runPrediction">运行指定版本</el-button>
-          <el-button :icon="Refresh" @click="resetInputs">重置输入</el-button>
-        </div>
+        <section class="input-step-section run-step-section">
+          <div class="step-section-head">
+            <span>3</span>
+            <h4>运行预测</h4>
+          </div>
+          <div class="input-actions">
+            <el-button type="primary" :icon="VideoPlay" :loading="running" :disabled="Boolean(runBlocker)" @click="runPrediction">运行指定版本</el-button>
+            <el-button :icon="Refresh" @click="resetInputs">重置输入</el-button>
+            <span class="run-status" :class="{ 'is-ready': !runBlocker }">{{ runBlocker || '输入已就绪，可以运行预测。' }}</span>
+          </div>
+        </section>
       </section>
 
       <section class="output-pane">
@@ -743,17 +931,116 @@ onMounted(loadAlgorithms)
 .pane-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .pane-heading h3, h4 { margin: 0; font-size: 15px; }
 .pane-heading span { color: var(--app-ink-muted); font-size: 12px; }
-.template-toolbar, .input-actions, .nested-toolbar, .nested-actions, .record-actions, .object-field-row, .scalar-array-row {
+.history-start, .input-actions, .nested-toolbar, .nested-actions, .record-actions, .object-field-row, .scalar-array-row, .advanced-mode-row, .advanced-field-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.template-toolbar {
-  margin-bottom: 14px;
+.prediction-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.prediction-step {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #fff;
+  color: var(--app-ink-muted);
+}
+.prediction-step span,
+.step-section-head span {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 50%;
+  background: #eef4ff;
+  color: var(--app-primary-active);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+.prediction-step strong {
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.prediction-step.is-active {
+  border-color: var(--app-primary-active);
+  color: var(--app-ink);
+}
+.prediction-step.is-done {
+  color: var(--app-ink);
+  background: #f8fbff;
+}
+.input-guidance {
+  margin-bottom: 12px;
+}
+.input-step-section {
+  display: grid;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--app-border-soft);
+}
+.input-step-section:first-of-type {
+  border-top: 0;
+}
+.start-collapse {
+  border-top: 1px solid var(--app-border-soft);
+  border-bottom: 1px solid var(--app-border-soft);
+}
+.start-collapse :deep(.el-collapse-item__header) {
+  height: auto;
+  min-height: 48px;
+  padding: 10px 0;
+  border-bottom: 0;
+}
+.start-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: 0;
+}
+.start-collapse-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  gap: 12px;
+}
+.start-collapse-title small {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.step-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.step-section-head h4 {
+  margin: 0;
+  color: var(--app-ink);
+  font-size: 14px;
+}
+.history-start {
   flex-wrap: wrap;
 }
-.template-toolbar .el-select {
+.history-start .el-select {
   flex: 1 1 240px;
+  min-width: 0;
+}
+.history-empty {
+  flex: 1 1 100%;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 .smart-input-form {
   display: grid;
@@ -864,6 +1151,12 @@ onMounted(loadAlgorithms)
 .record-collapse {
   margin-top: 10px;
 }
+.record-ready-hint {
+  margin: 10px 0 0;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
 .nested-empty {
   min-height: 90px;
   display: grid;
@@ -885,12 +1178,58 @@ onMounted(loadAlgorithms)
   display: grid;
   gap: 10px;
 }
+.advanced-settings {
+  border-top: 1px solid var(--app-border-soft);
+}
+.advanced-mode-row {
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.advanced-mode-row > div {
+  display: grid;
+  gap: 2px;
+}
+.advanced-mode-row strong,
+.advanced-field-row > span {
+  color: var(--app-ink);
+  font-size: 13px;
+}
+.advanced-mode-row span,
+.run-status {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.advanced-field-tools {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.advanced-field-row {
+  flex-wrap: wrap;
+}
+.advanced-field-row > span {
+  flex: 0 0 120px;
+  overflow-wrap: anywhere;
+}
+.advanced-field-row .el-input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
 .json-error {
   margin-top: 2px;
 }
 .input-actions {
-  margin-top: 14px;
   flex-wrap: wrap;
+}
+.run-status {
+  flex: 1 1 220px;
+}
+.run-status.is-ready {
+  color: #047857;
+  font-weight: 700;
 }
 .run-overview {
   display: grid;
@@ -924,13 +1263,25 @@ onMounted(loadAlgorithms)
 .empty-output { min-height: 180px; display: grid; place-items: center; color: var(--app-ink-muted); text-align: center; }
 @media (max-width: 900px) { .test-layout { grid-template-columns: 1fr; } }
 @media (max-width: 620px) {
-  .test-toolbar, .pane-heading, .template-toolbar, .nested-toolbar, .nested-actions, .input-actions {
+  .prediction-steps {
+    grid-template-columns: 1fr;
+  }
+  .start-collapse-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .test-toolbar, .pane-heading, .history-start, .nested-toolbar, .nested-actions, .input-actions, .advanced-mode-row, .advanced-field-row {
     align-items: stretch;
     flex-direction: column;
   }
-  .test-toolbar :deep(.el-select), .template-toolbar .el-select, .nested-actions .el-input, .input-actions .el-button {
+  .test-toolbar :deep(.el-select), .history-start .el-select, .nested-actions .el-input, .input-actions .el-button, .advanced-field-row .el-input, .advanced-field-row .el-button {
     width: 100% !important;
     max-width: none;
+  }
+  .advanced-field-row > span,
+  .run-status {
+    flex-basis: auto;
   }
   .record-fields {
     grid-template-columns: 1fr;
