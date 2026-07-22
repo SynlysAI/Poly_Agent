@@ -49,15 +49,20 @@ const artifactRows = computed(() => {
     id: item.artifact_id || item.id || `${index + 1}`,
     name: item.name || item.filename || item.artifact_id || item.id || `artifact_${index + 1}`,
     type: item.type || item.artifact_type || '-',
+    stepKey: item.step_key || item.stepKey || '-',
+    group: artifactGroup(item),
     description: item.description || '-',
     contentType: item.content_type || item.mime_type || '-',
     contentSummary: item.content === undefined ? '-' : summarizeValue(item.content),
+    downloadUrl: item.download_url || item.downloadUrl || '',
   }))
   if (rows.length || isEmptyValue(props.outputSummary)) return rows
   return [{
     id: 'output_summary',
     name: '运行输出 JSON',
     type: 'json_artifact',
+    stepKey: 'PREDICT',
+    group: '模型输出',
     description: '模型运行输出',
     contentType: 'application/json',
     contentSummary: summarizeValue(props.outputSummary),
@@ -74,6 +79,14 @@ const hasStructuredContent = computed(() => Boolean(
   artifactRows.value.length,
 ))
 const inputHighlights = computed(() => scalarEntries(inputObject.value).slice(0, 4))
+
+function artifactGroup(item) {
+  const stepKey = item.step_key || item.stepKey || ''
+  const type = item.artifact_type || item.type || ''
+  if (stepKey === 'INPUT' || type === 'input_file') return '输入文件'
+  if (stepKey === 'INPUT_PARSE' || ['parsed_input_json', 'table_json', 'series_json'].includes(type)) return '平台解析'
+  return '模型输出'
+}
 
 function buildBatchResultSections(output) {
   return Object.entries(output)
@@ -461,10 +474,18 @@ function stringifyJson(value) {
       </div>
       <el-table :data="artifactRows" border size="small" class="result-table">
         <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="group" label="分组" width="100" show-overflow-tooltip />
         <el-table-column prop="type" label="类型" width="130" show-overflow-tooltip />
+        <el-table-column prop="stepKey" label="步骤" width="120" show-overflow-tooltip />
         <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
         <el-table-column prop="contentType" label="内容类型" width="150" show-overflow-tooltip />
         <el-table-column prop="contentSummary" label="内容摘要" width="120" show-overflow-tooltip />
+        <el-table-column label="下载" width="86">
+          <template #default="{ row }">
+            <el-link v-if="row.downloadUrl" :href="row.downloadUrl" type="primary">下载</el-link>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
       </el-table>
     </section>
 

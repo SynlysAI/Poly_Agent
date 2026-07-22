@@ -26,7 +26,10 @@ class OpenAIResponsesReportProvider:
         schema: dict[str, Any],
         options: dict[str, Any],
     ) -> dict[str, Any]:
-        client = OpenAI(api_key=self.api_key)
+        client = OpenAI(
+            api_key=self.api_key,
+            max_retries=int(options.get("transport_max_retries", settings.report_llm_max_retries)),
+        )
         def generate(attempt_messages: list[dict[str, Any]]) -> str:
             response = client.responses.create(
                 model=self.model,

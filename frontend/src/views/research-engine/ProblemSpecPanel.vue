@@ -13,6 +13,7 @@ import {
   listProblemSpecs,
   updateProblemSpec,
 } from '../../api/polyAgentApi'
+import { formatApiDateTime } from '../../utils/datetime'
 
 const emit = defineEmits(['spec-selected'])
 
@@ -425,10 +426,7 @@ async function handleArchiveSpec(spec) {
 }
 
 function formatDate(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
+  return formatApiDateTime(value)
 }
 
 function statusTag(status) {

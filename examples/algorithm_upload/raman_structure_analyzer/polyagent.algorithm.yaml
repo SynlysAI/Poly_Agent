@@ -1,0 +1,149 @@
+contract_version: "0.2"
+algorithm_id: raman_structure_analyzer
+name: Raman Structure Analyzer
+version: 0.1.0
+algorithm_family: vertical_prediction
+type: predictor
+material_scope:
+  - universal
+task_scope:
+  - COMPUTE_PREDICT
+trigger_modes:
+  - human_workflow
+entrypoint: src.handler:predict
+loader: src.handler:load
+runtime:
+  python: "3.11"
+  resources:
+    cpu: 2
+    memory: 8Gi
+    gpu: true
+  timeout_seconds: 180
+input_schema:
+  fields:
+    spectype: string
+    mode: string
+    x0: number
+    x1: number
+    k: integer
+    transmittance: boolean
+    device: string
+  required:
+    - spectype
+    - mode
+  field_defaults:
+    spectype: raman
+    mode: beam_search
+    k: 3
+    transmittance: false
+  field_options:
+    spectype:
+      - raman
+      - ir
+    mode:
+      - beam_search
+      - retrieval
+      - function_groups
+      - greedy_decode
+    device:
+      - cpu
+      - cuda
+output_schema:
+  fields:
+    candidates: list
+    point_count: integer
+    metadata: object
+    preprocessing: object
+  required:
+    - candidates
+input_assets:
+  - key: spectrum_file
+    label: Spectrum data file
+    required: true
+    asset_role: input
+    data_kind: series
+    parser: series_xy.v1
+    extensions:
+      - .txt
+      - .dat
+      - .csv
+      - .xlsx
+    mime_types:
+      - text/plain
+      - text/csv
+      - application/octet-stream
+      - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+    max_size_bytes: 10485760
+    sample_path: tests/sample_assets/sample_spectrum.dat
+output_assets:
+  - key: normalized_series
+    label: Normalized input series
+    asset_role: output
+    data_kind: series
+    artifact_type: series_json
+    mime_type: application/json
+  - key: structure_candidates
+    label: Structure candidates
+    asset_role: output
+    data_kind: json
+    artifact_type: structure_json
+    mime_type: application/json
+  - key: candidate_table
+    label: Candidate table
+    asset_role: output
+    data_kind: table
+    artifact_type: csv
+    mime_type: text/csv
+  - key: run_report
+    label: Run report
+    asset_role: output
+    data_kind: json
+    artifact_type: report_json
+    mime_type: application/json
+resource_assets:
+  - key: raman_checkpoints
+    label: Raman checkpoints root
+    asset_role: resource
+    data_kind: binary
+    parser: binary.v1
+    required: true
+    resource_type: checkpoints
+    required_files:
+      - baseline_removal.pth
+      - raman_generation.pth
+    binding_required: true
+    env_var: RAMAN_CHECKPOINTS_ROOT
+  - key: raman_database
+    label: Raman database root
+    asset_role: resource
+    data_kind: binary
+    parser: binary.v1
+    required: true
+    resource_type: database
+    required_files:
+      - raman_db.pkl
+    binding_required: true
+    env_var: RAMAN_DATABASE_ROOT
+  - key: raman_tokenizer
+    label: Raman tokenizer root
+    asset_role: resource
+    data_kind: binary
+    parser: binary.v1
+    required: true
+    resource_type: tokenizer
+    required_files:
+      - tokenizer_config.json
+    binding_required: true
+    env_var: RAMAN_TOKENIZER_ROOT
+result_envelope: polyagent_run_result.v1
+sample_input_path: tests/sample_input.json
+description: Raman/IR spectral structure analysis demo packaged with generic file I/O assets.
+developer: Raman Demo Adapter
+developer_organization: Local Raman Reference
+source_url: refer/raman
+method_attributions:
+  - name: Raman/IR structure analysis reference implementation
+    role: implementation_source
+    organization: Local Raman Reference
+    description: Adapted from the local refer/raman reference code.
+implementation_notes: Uses generic file assets and managed resources; no platform Raman-specific code path is required.

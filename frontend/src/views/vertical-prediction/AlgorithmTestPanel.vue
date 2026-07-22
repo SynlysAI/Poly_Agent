@@ -5,7 +5,9 @@ import { CopyDocument, Delete, Plus, Refresh, VideoPlay } from '@element-plus/ic
 
 import {
   createAlgorithmRun,
+  createAlgorithmRunMultipart,
   getApiErrorMessage,
+  listAlgorithmRunArtifacts,
   listAlgorithms,
   listAlgorithmRuns,
   listAlgorithmVersions,
@@ -36,10 +38,14 @@ const templateRunId = ref('')
 const newNestedField = ref({})
 const newNestedValue = ref({})
 const lastRun = ref(null)
+const inputFiles = ref({})
+const runArtifacts = ref([])
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === algorithmId.value) || null)
 const selectedVersion = computed(() => versions.value.find((item) => item.version_id === versionId.value) || null)
 const schemaFields = computed(() => Object.keys(selectedVersion.value?.input_schema?.fields || {}))
+const inputAssets = computed(() => selectedVersion.value?.input_assets || [])
+const requiredInputAssets = computed(() => inputAssets.value.filter((item) => item.required))
 const selectedAttributions = computed(() => algorithmAttributions(selectedAlgorithm.value))
 const templateOptions = computed(() => templateRuns.value.map((run) => ({
   value: run.run_id,
@@ -65,10 +71,13 @@ const runBlocker = computed(() => {
   if (!versionId.value) return '请选择可调用版本。'
   if (jsonParseError.value) return `输入 JSON 不合法：${jsonParseError.value}`
   if (missingRequiredFields.value.length) return `补齐标记 * 的字段：${missingRequiredFields.value.join('、')}`
+  const missingAssets = requiredInputAssets.value.filter((item) => !inputFiles.value[item.key])
+  if (missingAssets.length) return `上传必填文件：${missingAssets.map(assetLabel).join('、')}`
   if (hasBlankPrimaryRecords.value) return `请先填写至少一条${primaryArrayObjectKey.value === 'formulations' ? '配方' : '记录'}的字段值。`
   return ''
 })
 const inputGuidance = computed(() => {
+  if (requiredInputAssets.value.some((item) => !inputFiles.value[item.key])) return '补齐必填文件后再运行。'
   if (primaryArrayObjectKey.value && !primaryRecords.value.length) return '先新增一条配方，或从历史输入开始。'
   if (missingRequiredFields.value.length) return '补齐标记 * 的字段。'
   if (jsonParseError.value) return '修正高级设置中的 JSON 后再运行。'
@@ -174,6 +183,8 @@ function buildDefaultInputs() {
 
 function resetInputs() {
   inputs.value = buildDefaultInputs()
+  inputFiles.value = {}
+  runArtifacts.value = []
   jsonParseError.value = ''
   templateRunId.value = ''
   syncFullJsonDraft()
@@ -589,7 +600,47 @@ function validateInputs() {
   for (const key of schemaFields.value) {
     if (isJsonType(fieldType(key)) && typeof inputs.value[key] === 'string') return `${key} 不是合法 JSON`
   }
+  const missingAssets = requiredInputAssets.value.filter((item) => !inputFiles.value[item.key])
+  if (missingAssets.length) return `请上传必填文件 ${missingAssets.map(assetLabel).join('、')}`
+  for (const asset of inputAssets.value) {
+    const file = inputFiles.value[asset.key]
+    if (!file) continue
+    if (asset.max_size_bytes && file.size > asset.max_size_bytes) return `${assetLabel(asset)} 超过大小限制`
+    const suffix = file.name.includes('.') ? `.${file.name.split('.').pop().toLowerCase()}` : ''
+    const extensions = (asset.extensions || []).map((item) => String(item).toLowerCase())
+    if (extensions.length && !extensions.includes(suffix)) return `${assetLabel(asset)} 文件类型不受支持`
+  }
   return ''
+}
+
+function setInputAssetFile(key, file) {
+  inputFiles.value = { ...inputFiles.value, [key]: file || null }
+}
+
+function assetLabel(asset) {
+  return asset?.label || asset?.key || '文件'
+}
+
+function assetAccept(asset) {
+  const extensions = asset?.extensions || []
+  const mimeTypes = asset?.mime_types || []
+  return [...extensions, ...mimeTypes].join(',')
+}
+
+function assetHint(asset) {
+  const extensions = asset?.extensions || []
+  const parser = asset?.parser || 'auto'
+  const dataKind = asset?.data_kind || asset?.dataKind || 'file'
+  const limit = asset?.max_size_bytes ? `，上限 ${formatBytes(asset.max_size_bytes)}` : ''
+  return `${dataKind} / ${parser}${extensions.length ? `，支持 ${extensions.join('、')}` : ''}${limit}`
+}
+
+function formatBytes(value) {
+  const size = Number(value || 0)
+  if (!size) return '-'
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${size} B`
 }
 
 async function runPrediction() {
@@ -600,19 +651,40 @@ async function runPrediction() {
   }
   running.value = true
   try {
-    lastRun.value = await createAlgorithmRun({
+    const payload = {
       algorithm_id: algorithmId.value,
       algorithm_version_id: versionId.value,
       trigger_source: 'human_workflow',
       input_snapshot: inputs.value,
       reason: '垂类预测模型工作台测试调用',
-    })
+    }
+    lastRun.value = inputAssets.value.length
+      ? await createAlgorithmRunMultipart(payload, inputFiles.value)
+      : await createAlgorithmRun(payload)
+    await loadRunArtifacts(lastRun.value)
     emit('run-created', lastRun.value)
     ElMessage.success('预测运行已完成')
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     running.value = false
+  }
+}
+
+async function loadRunArtifacts(run) {
+  runArtifacts.value = []
+  if (!run?.run_id) return
+  try {
+    const data = await listAlgorithmRunArtifacts(run.run_id)
+    runArtifacts.value = data.items || []
+    if (runArtifacts.value.length) {
+      lastRun.value = {
+        ...run,
+        artifact_refs: runArtifacts.value,
+      }
+    }
+  } catch {
+    runArtifacts.value = []
   }
 }
 
@@ -840,6 +912,22 @@ onMounted(loadAlgorithms)
             />
             </el-form-item>
           </el-form>
+          <div v-if="inputAssets.length" class="asset-input-list">
+            <label v-for="asset in inputAssets" :key="asset.key" class="asset-input-field">
+              <span class="field-label">
+                {{ assetLabel(asset) }}
+                <em v-if="asset.required">*</em>
+              </span>
+              <input
+                class="asset-file-input"
+                type="file"
+                :accept="assetAccept(asset)"
+                @change="setInputAssetFile(asset.key, $event.target.files?.[0] || null)"
+              >
+              <small v-if="inputFiles[asset.key]">{{ inputFiles[asset.key].name }}</small>
+              <small v-else>{{ assetHint(asset) }}</small>
+            </label>
+          </div>
         </section>
 
         <el-collapse v-model="advancedSections" class="advanced-settings">
@@ -1072,6 +1160,29 @@ onMounted(loadAlgorithms)
   color: var(--app-ink-muted);
   font-size: 12px;
   line-height: 1.45;
+}
+.asset-input-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+.asset-input-field {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #fff;
+}
+.asset-input-field small {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.asset-file-input {
+  width: 100%;
+  min-width: 0;
+  color: var(--app-ink);
 }
 .full-control {
   width: 100%;

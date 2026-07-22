@@ -1307,6 +1307,12 @@ class AssistantService:
             actions = self.project_service.build_actions(user_text)
             suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
             llm_route = self._resolve_llm_route(mode=mode, request=request)
+            logger.info(
+                "assistant stream llm route resolved: purpose=%s provider_id=%s model_id=%s",
+                llm_route.get("purpose"),
+                llm_route.get("provider_id"),
+                llm_route.get("model_id"),
+            )
 
             if mode == "model":
                 response_facts = self._build_response_facts(
@@ -1476,12 +1482,19 @@ class AssistantService:
 
     def _resolve_llm_route(self, *, mode: str, request: AssistantChatRequest) -> dict:
         purpose = "deep" if mode == "deep" else "qa"
+        requested_model = (request.context or {}).get("model")
+        requested_provider_id, requested_model_id = self._requested_model_identifiers(requested_model)
+        if (requested_provider_id or requested_model_id) and not (requested_provider_id and requested_model_id):
+            raise ValueError("所选 LLM 模型不可用：providerId 和 modelId 必须同时提供")
         try:
             return self.llm_model_service.resolve_route(
                 purpose=purpose,
-                requested_model=(request.context or {}).get("model"),
+                requested_model=requested_model,
             )
         except Exception as exc:
+            if self._has_requested_model(requested_model):
+                detail = getattr(exc, "detail", None) or str(exc)
+                raise ValueError(f"所选 LLM 模型不可用：{detail}") from exc
             logger.warning("assistant llm route unavailable: %s", exc)
             return {
                 "purpose": purpose,
@@ -1490,6 +1503,17 @@ class AssistantService:
                 "capabilities": [],
                 "reasoning_model_available": False,
             }
+
+    def _has_requested_model(self, requested_model) -> bool:
+        provider_id, model_id = self._requested_model_identifiers(requested_model)
+        return bool(provider_id or model_id)
+
+    def _requested_model_identifiers(self, requested_model) -> tuple[str, str]:
+        if not isinstance(requested_model, dict):
+            return "", ""
+        provider_id = str(requested_model.get("providerId") or requested_model.get("provider_id") or "").strip()
+        model_id = str(requested_model.get("modelId") or requested_model.get("model_id") or "").strip()
+        return provider_id, model_id
 
     def _safe_llm_route(self, route: dict) -> dict:
         return {

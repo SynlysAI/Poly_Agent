@@ -28,20 +28,24 @@ from app.infra.research_engine_repositories import (
 )
 from app.schemas.research_engine import (
     AlgorithmIOSchema,
+    AlgorithmAssetSpec,
     AlgorithmPackage,
     AlgorithmPackageCreate,
     AlgorithmPackageListData,
     AlgorithmRegistryEntry,
+    AlgorithmResourceBinding,
     AlgorithmVersion,
     AlgorithmVersionListData,
 )
 from app.schemas.attribution import AttributionItem
+from app.services.algorithm_resource_service import AlgorithmManagedResourceService
 from app.services.algorithm_runtimes import (
     AlgorithmRuntimeBackend,
     LocalInProcessRuntimeBackend,
     LocalSandboxRuntimeBackend,
     RuntimeExecutionResult,
 )
+from app.services.algorithm_file_adapters import AlgorithmFileAdapterRegistry
 
 
 MAX_PACKAGE_BYTES = 20 * 1024 * 1024
@@ -49,11 +53,18 @@ CONTRACT_FILENAME = "polyagent.algorithm.yaml"
 ALLOWED_SUFFIXES = {
     ".py",
     ".txt",
+    ".dat",
     ".json",
     ".yaml",
     ".yml",
     ".md",
     ".csv",
+    ".xlsx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".log",
     ".pkl",
     ".joblib",
     ".npy",
@@ -66,6 +77,8 @@ FORBIDDEN_PARTS = {"__pycache__", ".git", ".venv", "venv", "node_modules"}
 MAX_UNCOMPRESSED_PACKAGE_BYTES = MAX_PACKAGE_BYTES * 3
 MAX_COMPRESSION_RATIO = 100
 MIN_COMPRESSED_BOMB_BYTES = 1024 * 1024
+MAX_OUTPUT_ARTIFACT_BYTES = 50 * 1024 * 1024
+MAX_TOTAL_OUTPUT_ARTIFACT_BYTES = 200 * 1024 * 1024
 
 
 class AlgorithmPackageService:
@@ -93,6 +106,7 @@ class AlgorithmPackageService:
                 "src/handler.py": self.demo_handler_source().encode("utf-8"),
                 "README.md": self.template_readme().encode("utf-8"),
                 "model/.gitkeep": b"",
+                "tests/sample_assets/.gitkeep": b"",
             },
             requirements=b"scikit-learn\n",
         )
@@ -225,7 +239,12 @@ class AlgorithmPackageService:
             total=total,
         )
 
-    def validate_package(self, package_id: str) -> AlgorithmPackage:
+    def validate_package(
+        self,
+        package_id: str,
+        *,
+        resource_bindings: list[AlgorithmResourceBinding | dict[str, Any]] | None = None,
+    ) -> AlgorithmPackage:
         """校验 ZIP、契约、入口函数和样例输入，创建 AlgorithmVersion。"""
         package = self.get_package(package_id)
         package_path = Path(package.storage_uri)
@@ -241,21 +260,35 @@ class AlgorithmPackageService:
             contract = self._load_contract(extract_dir)
             self._validate_contract(contract)
             sample_input = self._load_sample_input(extract_dir, contract)
+            sample_input_files, parsed_inputs = self._load_sample_input_assets(extract_dir, contract)
+            validation_output_dir = extract_dir / ".polyagent_validation_outputs"
+            if validation_output_dir.exists():
+                shutil.rmtree(validation_output_dir)
+            validation_output_dir.mkdir(parents=True, exist_ok=True)
             runtime_backend = self._runtime_backend()
+            resource_context, resolved_resource_bindings = self._resource_asset_context(
+                contract,
+                resource_bindings=resource_bindings,
+            )
             result = runtime_backend.predict(
                 package_path=extract_dir,
                 entrypoint=contract["entrypoint"],
                 loader=contract.get("loader"),
                 inputs=sample_input,
                 timeout_seconds=int((contract.get("runtime") or {}).get("timeout_seconds", 30)),
+                input_files=sample_input_files,
+                output_dir=validation_output_dir,
+                resource_assets=resource_context,
                 context={
                     "algorithm_id": contract["algorithm_id"],
                     "version": contract["version"],
                     "phase": "validation_dry_run",
+                    "parsed_inputs": parsed_inputs,
                 },
             )
-            output = result.output
+            output, output_artifacts = self._parse_result_envelope(result.output, contract)
             self._validate_output(output, contract.get("output_schema") or {})
+            self._validate_declared_output_artifacts(validation_output_dir, output_artifacts, contract)
             version_id = self._version_id(contract["algorithm_id"], contract["version"], package.package_sha256)
             now = utc_now()
             version_doc = {
@@ -273,6 +306,13 @@ class AlgorithmPackageService:
                 "runtime": contract.get("runtime") or {},
                 "input_schema": contract.get("input_schema") or {},
                 "output_schema": contract.get("output_schema") or {},
+                "input_assets": contract.get("input_assets") or [],
+                "output_assets": contract.get("output_assets") or [],
+                "resource_assets": contract.get("resource_assets") or [],
+                "resource_bindings": [
+                    item.model_dump(mode="python") for item in resolved_resource_bindings
+                ],
+                "result_envelope": contract.get("result_envelope"),
                 "entrypoint": contract["entrypoint"],
                 "loader": contract.get("loader"),
                 "package_path": str(extract_dir),
@@ -481,6 +521,10 @@ class AlgorithmPackageService:
             "task_scope": contract.get("task_scope") or ["COMPUTE_PREDICT"],
             "input_schema": contract.get("input_schema") or {},
             "output_schema": contract.get("output_schema") or {},
+            "input_assets": contract.get("input_assets") or [],
+            "output_assets": contract.get("output_assets") or [],
+            "resource_assets": contract.get("resource_assets") or [],
+            "result_envelope": contract.get("result_envelope"),
             "call_method": str((version.deployment or {}).get("backend") or "LOCAL_PYTHON_ADAPTER").upper(),
             "trigger_modes": contract.get("trigger_modes") or ["human_workflow"],
             "runtime_dependency": "uploaded_python_package",
@@ -601,19 +645,35 @@ class AlgorithmPackageService:
         """运行上传算法版本。"""
         return self.run_version_with_metadata(version, inputs).output
 
-    def run_version_with_metadata(self, version: AlgorithmVersion, inputs: dict) -> RuntimeExecutionResult:
+    def run_version_with_metadata(
+        self,
+        version: AlgorithmVersion,
+        inputs: dict,
+        *,
+        input_files: dict[str, str] | None = None,
+        parsed_inputs: dict[str, Any] | None = None,
+        output_dir: Path | None = None,
+    ) -> RuntimeExecutionResult:
         """运行上传算法版本，并返回 runtime metadata/logs。"""
         runtime_backend = self._runtime_backend(version.deployment.get("backend") if version.deployment else None)
+        resource_context, _ = self._resource_asset_context(
+            version.contract or {},
+            resource_bindings=version.resource_bindings,
+        )
         return runtime_backend.predict(
             package_path=Path(version.package_path),
             entrypoint=version.entrypoint,
             loader=version.loader,
             inputs=inputs,
             timeout_seconds=int((version.runtime or {}).get("timeout_seconds", 30)),
+            input_files=input_files or {},
+            output_dir=output_dir,
+            resource_assets=resource_context,
             context={
                 "algorithm_id": version.algorithm_id,
                 "version_id": version.version_id,
                 "version": version.version,
+                "parsed_inputs": parsed_inputs or {},
             },
         )
 
@@ -770,6 +830,94 @@ class AlgorithmPackageService:
         return data
 
     @staticmethod
+    def _load_sample_input_assets(extract_dir: Path, contract: dict) -> tuple[dict[str, str], dict[str, Any]]:
+        input_files: dict[str, str] = {}
+        parsed_inputs: dict[str, Any] = {}
+        adapter_registry = AlgorithmFileAdapterRegistry()
+        for spec in contract.get("input_assets") or []:
+            if not isinstance(spec, dict):
+                raise ValueError("input_assets 每一项必须是 object")
+            key = str(spec.get("key") or "").strip()
+            if not key:
+                raise ValueError("input_assets 缺少 key")
+            asset_spec = AlgorithmAssetSpec(**spec)
+            sample_rel = str(spec.get("sample_path") or f"tests/sample_assets/{key}").strip()
+            sample_path = (extract_dir / sample_rel).resolve()
+            if bool(spec.get("required")) and not sample_path.is_file():
+                raise ValueError(f"required input asset '{key}' 缺少 sample asset: {sample_rel}")
+            if sample_path.is_file():
+                AlgorithmPackageService._validate_asset_path_within(sample_path, extract_dir, f"input asset '{key}'")
+                input_files[key] = str(sample_path)
+                parsed = adapter_registry.parse(spec=asset_spec, path=sample_path, filename=sample_path.name)
+                if parsed:
+                    parsed_inputs[key] = parsed.payload
+        return input_files, parsed_inputs
+
+    @staticmethod
+    def _resource_asset_context(
+        contract: dict,
+        *,
+        resource_bindings: list[AlgorithmResourceBinding | dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], list[AlgorithmResourceBinding]]:
+        return AlgorithmManagedResourceService().resolve_resource_context(
+            contract,
+            algorithm_id=str(contract.get("algorithm_id") or "").strip() or None,
+            resource_bindings=resource_bindings,
+        )
+
+    @staticmethod
+    def _parse_result_envelope(output: dict, contract: dict) -> tuple[dict, list[dict]]:
+        if contract.get("result_envelope") == "polyagent_run_result.v1":
+            summary = output.get("output_summary") or {}
+            artifacts = output.get("artifacts") or []
+            if not isinstance(summary, dict):
+                raise ValueError("result_envelope output_summary 必须是 object")
+            if not isinstance(artifacts, list) or not all(isinstance(item, dict) for item in artifacts):
+                raise ValueError("result_envelope artifacts 必须是 object 列表")
+            return summary, artifacts
+        return output, []
+
+    @staticmethod
+    def _validate_declared_output_artifacts(output_dir: Path, artifacts: list[dict], contract: dict) -> None:
+        declared = {
+            str(spec.get("key")): spec
+            for spec in contract.get("output_assets") or []
+            if isinstance(spec, dict) and spec.get("key")
+        }
+        total_size = 0
+        for item in artifacts:
+            key = str(item.get("key") or "").strip()
+            rel_path = str(item.get("path") or "").strip()
+            if not key:
+                raise ValueError("输出 artifact 缺少 key")
+            if declared and key not in declared:
+                raise ValueError(f"输出 artifact '{key}' 未在 output_assets 声明")
+            if not rel_path:
+                raise ValueError(f"输出 artifact '{key}' 缺少 path")
+            path = (output_dir / rel_path).resolve()
+            AlgorithmPackageService._validate_asset_path_within(path, output_dir, f"output artifact '{key}'")
+            if not path.is_file():
+                raise ValueError(f"输出 artifact 文件不存在: {rel_path}")
+            size_bytes = path.stat().st_size
+            if size_bytes > MAX_OUTPUT_ARTIFACT_BYTES:
+                raise ValueError(f"输出 artifact '{key}' 超过单文件大小限制")
+            total_size += size_bytes
+            if total_size > MAX_TOTAL_OUTPUT_ARTIFACT_BYTES:
+                raise ValueError("输出 artifacts 总大小超过限制")
+
+    @staticmethod
+    def _validate_asset_path_within(path: Path, root: Path, label: str) -> None:
+        root_resolved = root.resolve()
+        if root_resolved not in path.parents and path != root_resolved:
+            raise ValueError(f"{label} 路径越界")
+
+    @staticmethod
+    def _validate_resource_path(path: Path, key: str) -> None:
+        status, message, _ = AlgorithmManagedResourceService().check_path(str(path), asset_key=key)
+        if status != "active":
+            raise ValueError(message)
+
+    @staticmethod
     def _validate_contract(contract: dict) -> None:
         required = [
             "contract_version",
@@ -790,8 +938,8 @@ class AlgorithmPackageService:
         for field in required:
             if field not in contract:
                 raise ValueError(f"契约缺少字段: {field}")
-        if str(contract["contract_version"]) != "0.1":
-            raise ValueError("P0 仅支持 contract_version=0.1")
+        if str(contract["contract_version"]) not in {"0.1", "0.2"}:
+            raise ValueError("仅支持 contract_version=0.1 或 0.2")
         runtime = contract.get("runtime") or {}
         if str(runtime.get("python")) != "3.11":
             raise ValueError("P0 仅支持 Python 3.11")
@@ -804,6 +952,10 @@ class AlgorithmPackageService:
             task_scope=contract.get("task_scope") or [],
             input_schema=AlgorithmIOSchema(**(contract.get("input_schema") or {})),
             output_schema=AlgorithmIOSchema(**(contract.get("output_schema") or {})),
+            input_assets=contract.get("input_assets") or [],
+            output_assets=contract.get("output_assets") or [],
+            resource_assets=contract.get("resource_assets") or [],
+            result_envelope=contract.get("result_envelope"),
             trigger_modes=contract.get("trigger_modes") or ["human_workflow"],
             runtime_dependency="uploaded_python_package",
             version=contract["version"],
@@ -844,8 +996,9 @@ class AlgorithmPackageService:
     def _contract_from_payload(payload: AlgorithmPackageCreate) -> dict:
         runtime = {"python": "3.11", "resources": {"cpu": 1, "memory": "1Gi", "gpu": False}, "timeout_seconds": 30}
         runtime.update(payload.runtime or {})
+        uses_assets = bool(payload.input_assets or payload.output_assets or payload.resource_assets or payload.result_envelope)
         return {
-            "contract_version": "0.1",
+            "contract_version": "0.2" if uses_assets else "0.1",
             "algorithm_id": payload.algorithm_id,
             "name": payload.name,
             "version": payload.version,
@@ -859,6 +1012,10 @@ class AlgorithmPackageService:
             "runtime": runtime,
             "input_schema": payload.input_schema.model_dump(),
             "output_schema": payload.output_schema.model_dump(),
+            "input_assets": [item.model_dump(mode="python") for item in payload.input_assets],
+            "output_assets": [item.model_dump(mode="python") for item in payload.output_assets],
+            "resource_assets": [item.model_dump(mode="python") for item in payload.resource_assets],
+            "result_envelope": payload.result_envelope,
             "sample_input_path": "tests/sample_input.json",
             "description": payload.description,
             "developer": payload.developer,

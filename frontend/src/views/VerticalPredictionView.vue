@@ -15,6 +15,7 @@ import {
 } from '../api/polyAgentApi'
 import AlgorithmManagementPanel from './vertical-prediction/AlgorithmManagementPanel.vue'
 import AlgorithmHandoffPanel from './vertical-prediction/AlgorithmHandoffPanel.vue'
+import AlgorithmResourcePanel from './vertical-prediction/AlgorithmResourcePanel.vue'
 import AlgorithmRunHistoryPanel from './vertical-prediction/AlgorithmRunHistoryPanel.vue'
 import AlgorithmTestPanel from './vertical-prediction/AlgorithmTestPanel.vue'
 import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue'
@@ -25,7 +26,7 @@ const route = useRoute()
 const router = useRouter()
 
 const detailTabMap = { management: 'api', test: 'experience', runs: 'api' }
-const routeModes = new Set(['center', 'doc', 'upload', 'detail'])
+const routeModes = new Set(['center', 'doc', 'upload', 'resources', 'detail'])
 
 const activeMode = ref(normalizeMode(route.query.tab))
 const detailActiveTab = ref(normalizeDetailTab(route.query.tab))
@@ -128,6 +129,11 @@ function syncRoute() {
     delete query.algorithm_id
     delete query.handoff_id
     delete query.doc_mode
+  } else if (activeMode.value === 'resources') {
+    query.tab = 'resources'
+    delete query.algorithm_id
+    delete query.handoff_id
+    delete query.doc_mode
   } else {
     query.tab = 'detail'
     if (selectedAlgorithmId.value) query.algorithm_id = selectedAlgorithmId.value
@@ -213,6 +219,10 @@ function openCenter() {
   activeMode.value = 'center'
 }
 
+function openResources() {
+  activeMode.value = 'resources'
+}
+
 function openDetail(algorithmId, tab = 'experience') {
   selectedAlgorithmId.value = algorithmId
   detailActiveTab.value = tab
@@ -293,6 +303,10 @@ onMounted(() => {
           <span>更多方式</span>
           <strong>模型文件 / 标准 ZIP</strong>
         </button>
+        <button class="entry-card subtle" type="button" @click="openResources">
+          <span>大文件资源</span>
+          <strong>登记权重 / 数据库路径</strong>
+        </button>
       </section>
 
       <section class="status-band" v-loading="loading" aria-label="垂类预测模型状态摘要">
@@ -316,8 +330,17 @@ onMounted(() => {
       <div class="subnav-row">
         <el-button text @click="openCenter">返回模型中心</el-button>
         <el-button text type="primary" @click="openDoc('upload')">需求文档</el-button>
+        <el-button text type="primary" @click="openResources">资源管理</el-button>
       </div>
       <AlgorithmUploadPanel @changed="handleChanged" @view-detail="openDetail" />
+    </template>
+
+    <template v-if="activeMode === 'resources'">
+      <div class="subnav-row">
+        <el-button text @click="openCenter">返回模型中心</el-button>
+        <el-button text type="primary" @click="openUpload">高级导入</el-button>
+      </div>
+      <AlgorithmResourcePanel @changed="handleChanged" />
     </template>
 
     <template v-else-if="activeMode === 'detail' && selectedAlgorithm">
@@ -443,6 +466,7 @@ onMounted(() => {
             </div>
             <div class="list-actions">
               <el-button :icon="Document" @click="openDoc('upload')">需求文档</el-button>
+              <el-button :icon="Key" @click="openResources">资源管理</el-button>
               <el-button type="primary" :icon="UploadFilled" @click="openUpload">高级导入</el-button>
             </div>
           </div>
@@ -502,7 +526,7 @@ h3 { font-size: 15px; }
 .model-page-hero p:last-child, .list-head p, .detail-main p { margin: 7px 0 0; color: var(--app-ink-muted); font-size: 14px; line-height: 1.6; }
 .hero-actions, .detail-actions, .subnav-row, .list-actions, .empty-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .hero-actions { justify-content: flex-end; }
-.entry-band { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.entry-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .entry-card { min-width: 0; display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: #fff; color: inherit; text-align: left; cursor: pointer; transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease; }
 .entry-card:hover { border-color: #bfdbfe; box-shadow: 0 10px 22px rgba(37, 99, 235, 0.09); transform: translateY(-1px); }
 .entry-card:focus-visible { outline: 3px solid var(--app-primary-light); outline-offset: 2px; }
@@ -560,7 +584,10 @@ h3 { font-size: 15px; }
 .docs-layout section h3, .history-panel h3 { margin-bottom: 10px; }
 .api-note { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; color: var(--app-ink-muted); font-size: 13px; }
 .history-panel { padding-top: 16px; border-top: 1px solid var(--app-border-soft); }
-@media (max-width: 1180px) { .model-card-grid, .info-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1180px) {
+  .entry-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .model-card-grid, .info-grid { grid-template-columns: 1fr; }
+}
 @media (max-width: 900px) {
   .model-page-hero, .list-head, .detail-banner { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
   .hero-actions { justify-content: flex-start; }

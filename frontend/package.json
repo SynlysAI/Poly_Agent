@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test:llm-models": "node src/utils/llmModels.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.common import UtcDatetimeJsonModel
+
 
 ReportSubjectType = Literal["algorithm_run", "research_run", "workflow_run", "computation_run"]
 ReportFormat = Literal["markdown", "latex", "pdf"]
@@ -143,7 +145,7 @@ class ReportArtifactRef(BaseModel):
     sha256: str | None = None
 
 
-class ReportJob(BaseModel):
+class ReportJob(UtcDatetimeJsonModel):
     """Persisted report generation job."""
 
     model_config = ConfigDict(extra="forbid")
@@ -174,7 +176,7 @@ class ReportJob(BaseModel):
     finished_at: datetime | None = None
 
 
-class ReportArtifact(BaseModel):
+class ReportArtifact(UtcDatetimeJsonModel):
     """Persisted report output artifact."""
 
     model_config = ConfigDict(extra="forbid")

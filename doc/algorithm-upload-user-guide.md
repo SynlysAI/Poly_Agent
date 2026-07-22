@@ -29,7 +29,25 @@ def predict(inputs: dict, context: dict, model: object | None = None) -> dict:
     return {"prediction": {}}
 ```
 
+文件型算法仍使用同一个入口。平台会把原始上传文件路径放入 `context["input_files"]`，把通用解析结果放入 `context["parsed_inputs"]`，把可写输出目录放入 `context["output_dir"]`。handler 返回 `polyagent_run_result.v1` 时，平台会按 `output_assets` 登记文件产物。
+
 P0 只支持 Python 3.11。上传包不能包含 Dockerfile、`.env`、shell 脚本、宿主机路径或路径穿越。
+
+## 通用文件 I/O
+
+`contract_version: "0.2"` 可声明文件输入、文件输出和受管资源：
+
+- `input_assets`：声明用户运行时上传的文件。通用字段包括 `key`、`label`、`required`、`data_kind`、`parser`、`extensions`、`mime_types`、`max_size_bytes`、`sample_path`。
+- `output_assets`：声明 handler 写入 `context["output_dir"]` 的产物文件。
+- `resource_assets`：声明权重、数据库、tokenizer 等只读资源；大文件不放入 ZIP，优先通过“资源管理”登记服务器/挂载路径并按 `algorithm_id + asset_key` 自动绑定，`env_var` 保留为兼容兜底。
+
+首批通用解析器：
+
+- `table.v1`：`.csv/.xlsx` 到标准表格 JSON。
+- `series_xy.v1`：`.txt/.dat/.csv/.xlsx` 到标准 x-y 序列 JSON。
+- `json.v1`、`text.v1`、`binary.v1`：基础 JSON、文本和二进制 passthrough。
+
+平台产品代码不区分 Raman 或其他业务模型，只按 `data_kind/parser/artifact_type` 渲染上传控件、预览和下载入口。
 
 ## CLI 示例
 
@@ -53,10 +71,11 @@ python scripts/pack_algorithm.py \
 1. 在“上传部署”选择“上传 Python 脚本”。
 2. 填写算法 ID、名称、版本、开发者、开发机构、联系方式、类型、材料范围、触发方式、入口函数和加载函数。
 3. 在输入/输出契约表格中维护字段名、类型、必填、单位、枚举和范围。
-4. 上传 `.py` 文件和可选的 `requirements.txt`。
-5. 填写样例输入 JSON。格式错误会在提交前提示。
-6. 检查页面生成的 `polyagent.algorithm.yaml` 预览，然后点击“校验、部署并激活”。
-7. 完成后可下载平台生成的标准 ZIP，用于留档或再次上传。
+4. 如果模型需要大权重、数据库或 tokenizer，先在“资源管理”登记后端可访问路径，再在资源契约中声明 `asset_key`、`required_files` 和 `binding_required`。
+5. 上传 `.py` 文件和可选的 `requirements.txt`。
+6. 填写样例输入 JSON。格式错误会在提交前提示。
+7. 检查页面生成的 `polyagent.algorithm.yaml` 预览，然后点击“校验、部署并激活”。
+8. 完成后可下载平台生成的标准 ZIP，用于留档或再次上传。
 
 ## 来源、引用与机构 Logo
 
@@ -93,8 +112,9 @@ polyagent.algorithm.yaml
 requirements.txt
 src/handler.py
 tests/sample_input.json
+tests/sample_assets/
 README.md
 model/
 ```
 
-`polyagent.algorithm.yaml` 由网页打包助手或 CLI 生成。高级用户可以手写，但字段必须与页面展示的契约一致。
+`polyagent.algorithm.yaml` 由网页打包助手或 CLI 生成。高级用户可以手写，但字段必须与页面展示的契约一致。大资源不要放入 ZIP；通过资源管理登记 mounted path，并确保路径位于 `.runtime/algorithm-resources` 或 `POLYAGENT_ALGORITHM_RESOURCE_ROOTS` 允许目录内。

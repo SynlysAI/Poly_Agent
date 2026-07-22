@@ -12,10 +12,12 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from io import BytesIO
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 
@@ -36,6 +38,9 @@ TARGET_RADONPY_COLLECTION = "radonpy_records"
 TARGET_PI1M_COLLECTION = "pi1m_samples"
 TARGET_SMIPOLY_COLLECTION = "smipoly_monomers"
 TARGET_POLYUNIVERSE_COLLECTION = "polyuniverse_monomers"
+TARGET_DATASET_STATS_COLLECTION = "dataset_stats"
+TARGET_IMPORT_JOBS_COLLECTION = "import_jobs"
+TARGET_IMPORT_CHECKPOINTS_COLLECTION = "import_checkpoints"
 RADONPY_OBJECT_KEY = "datasets/radonpy_pi1070/raw/pi1070.xlsx"
 PI1M_OBJECT_KEY = "datasets/pi1m_v2/raw/pi1m_v2.csv"
 SMIPOLY_OBJECT_KEY = "datasets/smipoly/raw/202207_smip_monset.csv"
@@ -47,6 +52,7 @@ POLYUNIVERSE_OBJECT_KEYS = {
 SFTP_DEFAULT_HOST = "10.26.15.53"
 SFTP_DEFAULT_ROOT = "/polymer-multi-modal/open-databases/Processed_data"
 DEFAULT_PI1M_SAMPLE_SIZE = 10000
+DEFAULT_PI1M_CHUNK_SIZE = 50000
 MANIFEST_KEY = "manifests/poly_data_manifest.json"
 LOCAL_MANIFEST_PATH = Path(".runtime/data_catalog/poly_data_manifest.json")
 
@@ -318,7 +324,7 @@ def dataset_record_metadata(dataset_id: str) -> dict[str, Any]:
     if dataset_id == "pi1m_v2":
         return {
             "record_collection_key": "poly_data.pi1m_samples",
-            "record_mode": "sample",
+            "record_mode": "full",
         }
     if dataset_id == "smipoly":
         return {
@@ -479,7 +485,10 @@ def create_indexes(target_db: Any) -> None:
     target_db[TARGET_RADONPY_COLLECTION].create_index([("smiles", 1)], name="smiles")
     target_db[TARGET_PI1M_COLLECTION].create_index([("pi1m_record_id", 1)], name="pi1m_record_id", unique=True)
     target_db[TARGET_PI1M_COLLECTION].create_index([("smiles", 1)], name="smiles")
-    target_db[TARGET_PI1M_COLLECTION].create_index([("sample_index", 1)], name="sample_index")
+    target_db[TARGET_PI1M_COLLECTION].create_index([("smiles_hash", 1)], name="smiles_hash")
+    target_db[TARGET_PI1M_COLLECTION].create_index([("row_index", 1)], name="row_index")
+    target_db[TARGET_PI1M_COLLECTION].create_index([("sa_score", 1), ("row_index", 1)], name="sa_score_row")
+    target_db[TARGET_PI1M_COLLECTION].create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
     target_db[TARGET_SMIPOLY_COLLECTION].create_index([("smipoly_record_id", 1)], name="smipoly_record_id", unique=True)
     target_db[TARGET_SMIPOLY_COLLECTION].create_index([("com_id", 1)], name="com_id")
     target_db[TARGET_SMIPOLY_COLLECTION].create_index([("smiles", 1)], name="smiles")
@@ -490,6 +499,12 @@ def create_indexes(target_db: Any) -> None:
     target_db[TARGET_POLYUNIVERSE_COLLECTION].create_index([("monomer_class", 1)], name="monomer_class")
     target_db[TARGET_POLYUNIVERSE_COLLECTION].create_index([("smiles", 1)], name="smiles")
     target_db["migration_manifests"].create_index([("generated_at", -1)], name="generated_at")
+    target_db[TARGET_DATASET_STATS_COLLECTION].create_index([("dataset_id", 1)], name="dataset_id", unique=True)
+    target_db[TARGET_IMPORT_JOBS_COLLECTION].create_index([("job_id", 1)], name="job_id", unique=True)
+    target_db[TARGET_IMPORT_JOBS_COLLECTION].create_index([("dataset_id", 1), ("started_at", -1)], name="dataset_started")
+    target_db[TARGET_IMPORT_CHECKPOINTS_COLLECTION].create_index(
+        [("job_id", 1), ("chunk_index", 1)], name="job_chunk", unique=True
+    )
 
 
 def normalize_scalar(value: Any) -> Any:
@@ -551,11 +566,38 @@ def build_radonpy_documents(dataframe: Any) -> list[dict[str, Any]]:
     return docs
 
 
-def build_pi1m_documents(dataframe: Any, *, sample_size: int) -> list[dict[str, Any]]:
-    """Build PI1M sample Mongo documents from a pandas DataFrame."""
+def smiles_hash(smiles: Any) -> str | None:
+    """Return stable SHA-256 hash for exact p-SMILES lookup."""
+    if smiles is None:
+        return None
+    normalized = str(smiles).strip()
+    if not normalized:
+        return None
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def as_float(value: Any) -> float | None:
+    """Convert values to finite floats for stats and filtering."""
+    if value is None or value == "":
+        return None
+    try:
+        import math
+
+        number = float(value)
+        if math.isnan(number) or math.isinf(number):
+            return None
+        return number
+    except (TypeError, ValueError):
+        return None
+
+
+def build_pi1m_documents(dataframe: Any, *, start_index: int = 1, sample_size: int | None = None) -> list[dict[str, Any]]:
+    """Build PI1M Mongo documents from one DataFrame chunk."""
     docs: list[dict[str, Any]] = []
-    records = dataframe.head(sample_size).to_dict(orient="records")
-    for index, raw in enumerate(records, start=1):
+    records = dataframe.head(sample_size).to_dict(orient="records") if sample_size else dataframe.to_dict(orient="records")
+    now = datetime.now(timezone.utc)
+    for offset, raw in enumerate(records):
+        index = start_index + offset
         row = normalized_row(raw)
         smiles = first_present(row, ["SMILES", "smiles", "p_smiles", "psmiles"])
         sa_score = first_present(row, ["SA Score", "sa_score", "SAScore", "sa"])
@@ -564,15 +606,52 @@ def build_pi1m_documents(dataframe: Any, *, sample_size: int) -> list[dict[str, 
                 "pi1m_record_id": f"PI1M_V2-{index:06d}",
                 "dataset": {"dataset_id": "pi1m_v2", "dataset_name": "PI1M v2"},
                 "smiles": smiles,
-                "sa_score": sa_score,
+                "smiles_hash": smiles_hash(smiles),
+                "sa_score": as_float(sa_score),
+                "row_index": index,
                 "sample_index": index,
                 "source_file": "pi1m_v2.csv",
-                "raw": row,
-                "created_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc),
+                "created_at": now,
+                "updated_at": now,
             }
         )
     return docs
+
+
+def histogram(values: list[float], *, bins: int = 12) -> list[dict[str, Any]]:
+    """Build compact histogram bins."""
+    if not values:
+        return []
+    lower = min(values)
+    upper = max(values)
+    if lower == upper:
+        return [{"start": lower, "end": upper, "count": len(values)}]
+    width = (upper - lower) / bins
+    counts = [0 for _ in range(bins)]
+    for value in values:
+        bucket = min(int((value - lower) / width), bins - 1)
+        counts[bucket] += 1
+    return [
+        {"start": round(lower + index * width, 4), "end": round(lower + (index + 1) * width, 4), "count": count}
+        for index, count in enumerate(counts)
+    ]
+
+
+def upsert_documents_bulk(collection: Any, key_field: str, documents: list[dict[str, Any]]) -> int:
+    """Bulk upsert documents by key field."""
+    if not documents:
+        return 0
+    try:
+        from pymongo import UpdateOne
+
+        operations = [
+            UpdateOne({key_field: doc[key_field]}, {"$set": doc}, upsert=True)
+            for doc in documents
+        ]
+        collection.bulk_write(operations, ordered=False)
+        return len(documents)
+    except Exception:
+        return upsert_documents(collection, key_field, documents)
 
 
 def build_smipoly_documents(dataframe: Any) -> list[dict[str, Any]]:
@@ -719,14 +798,27 @@ def import_radonpy_records(target_db: Any, *, s3_client: Any, bucket: str, apply
     return summary
 
 
-def import_pi1m_samples(target_db: Any, *, s3_client: Any, bucket: str, sample_size: int, apply: bool) -> dict[str, Any]:
-    """Import PI1M v2 sample rows from MinIO into MongoDB."""
+def import_pi1m_samples(
+    target_db: Any,
+    *,
+    s3_client: Any,
+    bucket: str,
+    sample_size: int | None,
+    chunk_size: int = DEFAULT_PI1M_CHUNK_SIZE,
+    apply: bool,
+) -> dict[str, Any]:
+    """Import PI1M v2 rows from MinIO into MongoDB with chunked bulk upserts."""
+    job_id = f"pi1m_v2-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
     summary = {
         "dataset_id": "pi1m_v2",
         "source_object_key": PI1M_OBJECT_KEY,
         "target_collection": TARGET_PI1M_COLLECTION,
         "sample_size": sample_size,
+        "chunk_size": chunk_size,
+        "job_id": job_id,
         "records_upserted": 0,
+        "failed_count": 0,
+        "checkpoint_count": 0,
         "status": "planned",
         "error": None,
     }
@@ -739,22 +831,155 @@ def import_pi1m_samples(target_db: Any, *, s3_client: Any, bucket: str, sample_s
     try:
         import pandas as pd
 
-        content = s3_client.get_object(bucket, PI1M_OBJECT_KEY)
-        dataframe = pd.read_csv(BytesIO(content), nrows=sample_size)
-        documents = build_pi1m_documents(dataframe, sample_size=sample_size)
         create_indexes(target_db)
-        summary["records_upserted"] = upsert_documents(target_db[TARGET_PI1M_COLLECTION], "pi1m_record_id", documents)
+        source = s3_client.head_object(bucket, PI1M_OBJECT_KEY) if hasattr(s3_client, "head_object") else None
+        started_at = datetime.now(timezone.utc)
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {
+                "$set": {
+                    "job_id": job_id,
+                    "dataset_id": "pi1m_v2",
+                    "source_object_key": PI1M_OBJECT_KEY,
+                    "source": source,
+                    "status": "running",
+                    "sample_size": sample_size,
+                    "chunk_size": chunk_size,
+                    "started_at": started_at,
+                    "updated_at": started_at,
+                }
+            },
+            upsert=True,
+        )
+        start_time = monotonic()
+        content = s3_client.get_object(bucket, PI1M_OBJECT_KEY)
+        read_csv_kwargs: dict[str, Any] = {"chunksize": max(int(chunk_size), 1)}
+        if sample_size is not None:
+            read_csv_kwargs["nrows"] = max(int(sample_size), 0)
+        reader = pd.read_csv(BytesIO(content), **read_csv_kwargs)
+        row_index = 1
+        scores: list[float] = []
+        smiles_seen: set[str] = set()
+        duplicate_smiles_count = 0
+        visual_samples: list[dict[str, Any]] = []
+        for chunk_index, dataframe in enumerate(reader, start=1):
+            chunk_started = monotonic()
+            documents = build_pi1m_documents(dataframe, start_index=row_index)
+            records_in_chunk = len(documents)
+            if not records_in_chunk:
+                continue
+            target_db[TARGET_IMPORT_CHECKPOINTS_COLLECTION].update_one(
+                {"job_id": job_id, "chunk_index": chunk_index},
+                {
+                    "$set": {
+                        "job_id": job_id,
+                        "dataset_id": "pi1m_v2",
+                        "chunk_index": chunk_index,
+                        "row_start": row_index,
+                        "row_end": row_index + records_in_chunk - 1,
+                        "records": records_in_chunk,
+                        "status": "running",
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
+                upsert=True,
+            )
+            summary["records_upserted"] += upsert_documents_bulk(
+                target_db[TARGET_PI1M_COLLECTION], "pi1m_record_id", documents
+            )
+            for doc in documents:
+                score = as_float(doc.get("sa_score"))
+                if score is not None:
+                    scores.append(score)
+                doc_hash = doc.get("smiles_hash")
+                if doc_hash:
+                    if doc_hash in smiles_seen:
+                        duplicate_smiles_count += 1
+                    else:
+                        smiles_seen.add(doc_hash)
+                if len(visual_samples) < 5000 and doc.get("row_index", 0) % max(records_in_chunk // 100, 1) == 0:
+                    visual_samples.append(
+                        {
+                            "record_id": doc["pi1m_record_id"],
+                            "row_index": doc["row_index"],
+                            "smiles": doc.get("smiles"),
+                            "sa_score": doc.get("sa_score"),
+                        }
+                    )
+            chunk_elapsed = max(monotonic() - chunk_started, 0.001)
+            target_db[TARGET_IMPORT_CHECKPOINTS_COLLECTION].update_one(
+                {"job_id": job_id, "chunk_index": chunk_index},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "records_upserted": records_in_chunk,
+                        "duration_seconds": round(chunk_elapsed, 3),
+                        "throughput_rows_per_second": round(records_in_chunk / chunk_elapsed, 2),
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
+                upsert=True,
+            )
+            summary["checkpoint_count"] += 1
+            row_index += records_in_chunk
+        elapsed = max(monotonic() - start_time, 0.001)
         update_dataset_record_count(
             target_db,
             "pi1m_v2",
             count=summary["records_upserted"],
-            record_mode="sample",
+            record_mode="full" if sample_size is None else "sample",
             collection_key="poly_data.pi1m_samples",
+        )
+        target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
+            {"dataset_id": "pi1m_v2"},
+            {
+                "$set": {
+                    "dataset_id": "pi1m_v2",
+                    "record_count": summary["records_upserted"],
+                    "sa_score_histogram": histogram(scores),
+                    "unique_smiles_count": len(smiles_seen),
+                    "duplicate_smiles_count": duplicate_smiles_count,
+                    "visual_samples": visual_samples,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+        finished_at = datetime.now(timezone.utc)
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {
+                "$set": {
+                    "status": "imported",
+                    "imported_count": summary["records_upserted"],
+                    "failed_count": summary["failed_count"],
+                    "checkpoint_count": summary["checkpoint_count"],
+                    "finished_at": finished_at,
+                    "updated_at": finished_at,
+                    "duration_seconds": round(elapsed, 3),
+                    "throughput_rows_per_second": round(summary["records_upserted"] / elapsed, 2),
+                }
+            },
+            upsert=True,
         )
         summary["status"] = "imported"
     except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
         summary["status"] = "failed"
         summary["error"] = f"{exc.__class__.__name__}: {exc}"
+        try:
+            target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+                {"job_id": job_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error": summary["error"],
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
+                upsert=True,
+            )
+        except Exception:
+            pass
     return summary
 
 
@@ -961,7 +1186,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--sftp-root", default=os.getenv("SFTP_ROOT", SFTP_DEFAULT_ROOT))
     parser.add_argument("--sftp-password-env", default="SFTP_PASSWORD")
     parser.add_argument("--import-radonpy-records", action="store_true", help="import all RadonPy PI1070 rows into poly_data.radonpy_records")
-    parser.add_argument("--import-pi1m-samples", action="store_true", help="import PI1M v2 sample rows into poly_data.pi1m_samples")
+    parser.add_argument("--import-pi1m-samples", action="store_true", help="import PI1M v2 rows into poly_data.pi1m_samples")
+    parser.add_argument("--pi1m-full-import", action="store_true", help="stream all PI1M v2 rows instead of limiting to --pi1m-sample-size")
     parser.add_argument("--import-smipoly-records", action="store_true", help="import all SMiPoly rows into poly_data.smipoly_monomers")
     parser.add_argument(
         "--import-polyuniverse-records",
@@ -969,6 +1195,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="import all PolyUniverse rows into poly_data.polyuniverse_monomers",
     )
     parser.add_argument("--pi1m-sample-size", type=int, default=DEFAULT_PI1M_SAMPLE_SIZE)
+    parser.add_argument("--pi1m-chunk-size", type=int, default=DEFAULT_PI1M_CHUNK_SIZE)
     return parser.parse_args(argv)
 
 
@@ -1056,7 +1283,8 @@ def main(argv: list[str] | None = None) -> int:
                 target_db,
                 s3_client=s3_client,
                 bucket=args.bucket,
-                sample_size=args.pi1m_sample_size,
+                sample_size=None if args.pi1m_full_import else args.pi1m_sample_size,
+                chunk_size=args.pi1m_chunk_size,
                 apply=args.apply,
             )
         )

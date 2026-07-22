@@ -143,6 +143,11 @@ def get_algorithm_versions_collection() -> Collection:
     return get_database()["algorithm_versions"]
 
 
+def get_algorithm_resources_collection() -> Collection:
+    """获取 algorithm_resources 集合。"""
+    return get_database()["algorithm_resources"]
+
+
 def get_algorithm_runs_collection() -> Collection:
     """获取 algorithm_runs 集合。"""
     return get_database()["algorithm_runs"]

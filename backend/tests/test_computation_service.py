@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import HTTPException
 
+from app.core.config import settings
 from app.computation_adapters.base import AdapterContext
 from app.computation_adapters.base import AdapterRunResult
 from app.computation_adapters.base import build_steps
@@ -220,6 +221,35 @@ class ComputationServiceTest(ComputationTestCase):
 
         with self.assertRaises(HTTPException) as caught:
             self.service.resolve_artifact_path(artifact)
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_binary_input_file_preview_reports_unsupported(self) -> None:
+        created = self.service.create_run(
+            ComputationCreateRequest(**computation_payload()),
+            actor_user_id="tester",
+            request_id="req-xlsx-preview",
+        )
+        path = settings.outputs_root / "inputs" / "table.xlsx"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"PK\x03\x04binary-xlsx")
+        artifact = ComputationArtifact(
+            artifact_id="art_xlsx_input",
+            run_id=created.run_id,
+            owner_type="computation_run",
+            owner_id=created.run_id,
+            step_key="INPUT",
+            artifact_type="input_file",
+            name="table.xlsx",
+            storage_uri=str(path),
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            size_bytes=path.stat().st_size,
+            checksum_sha256="0" * 64,
+            created_at=self.service.get_run(created.run_id).created_at,
+        )
+        ComputationArtifactRepository.save("artifact_id", artifact.model_dump(mode="python"))
+
+        with self.assertRaises(HTTPException) as caught:
+            self.service.preview_artifact(artifact.artifact_id)
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_user_scoped_run_and_artifact_access_denies_other_owner(self) -> None:

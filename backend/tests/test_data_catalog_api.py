@@ -406,8 +406,27 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
                         "dataset": {"dataset_id": "pi1m_v2", "dataset_name": "PI1M v2"},
                         "smiles": "*CCC[Fe]CCCC(=O)OCCCCOCCCNCC(*)=O",
                         "sa_score": 4.174851129781874,
+                        "row_index": 1,
                         "sample_index": 1,
                         "created_at": "2026-07-21T03:00:00Z",
+                    },
+                    {
+                        "pi1m_record_id": "PI1M_V2-000002",
+                        "dataset": {"dataset_id": "pi1m_v2", "dataset_name": "PI1M v2"},
+                        "smiles": "*CC*",
+                        "sa_score": 2.1,
+                        "row_index": 2,
+                        "sample_index": 2,
+                        "created_at": "2026-07-21T03:01:00Z",
+                    },
+                    {
+                        "pi1m_record_id": "PI1M_V2-000003",
+                        "dataset": {"dataset_id": "pi1m_v2", "dataset_name": "PI1M v2"},
+                        "smiles": "*CCC*",
+                        "sa_score": 6.5,
+                        "row_index": 3,
+                        "sample_index": 3,
+                        "created_at": "2026-07-21T03:02:00Z",
                     }
                 ],
                 "poly_data.smipoly_monomers": [
@@ -620,6 +639,59 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         self.assertEqual(data["primary_key"], {"pi1m_record_id": "PI1M_V2-000001"})
         self.assertEqual(data["title"], "*CCC[Fe]CCCC(=O)OCCCCOCCCNCC(*)=O")
         self.assertEqual(data["document"]["sa_score"], 4.174851129781874)
+
+    def test_pi1m_dataset_profile_reports_partial_mode_and_histogram_before_full_import(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+        with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+            response = self.client.get("/api/v1/data-catalog/datasets/pi1m_v2/profile")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["dataset_id"], "pi1m_v2")
+        self.assertEqual(data["record_mode"], "sample")
+        self.assertEqual(data["record_count"], 3)
+        self.assertGreater(data["coverage_percent"], 0)
+        self.assertGreater(len(data["sa_score_histogram"]), 0)
+        self.assertEqual(data["unique_smiles_count"], 3)
+
+    def test_pi1m_dataset_records_use_cursor_and_sa_filter(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+        with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+            first = self.client.get(
+                "/api/v1/data-catalog/datasets/pi1m_v2/records",
+                params={"page_size": 2, "sort_by": "row_index"},
+            )
+            cursor = first.json()["data"]["next_cursor"]
+            second = self.client.get(
+                "/api/v1/data-catalog/datasets/pi1m_v2/records",
+                params={"page_size": 2, "sort_by": "row_index", "cursor": cursor},
+            )
+            filtered = self.client.get(
+                "/api/v1/data-catalog/datasets/pi1m_v2/records",
+                params={"page_size": 10, "sa_min": 5},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual([item["record_id"] for item in first.json()["data"]["items"]], ["PI1M_V2-000001", "PI1M_V2-000002"])
+        self.assertIsNotNone(cursor)
+        self.assertEqual([item["record_id"] for item in second.json()["data"]["items"]], ["PI1M_V2-000003"])
+        self.assertEqual([item["record_id"] for item in filtered.json()["data"]["items"]], ["PI1M_V2-000003"])
+
+    def test_pi1m_visual_samples_are_bounded_metadata(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+        with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+            response = self.client.get("/api/v1/data-catalog/datasets/pi1m_v2/visual-samples", params={"limit": 100})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["dataset_id"], "pi1m_v2")
+        self.assertEqual(data["sample_count"], 3)
+        self.assertLessEqual(data["sample_count"], 100)
+        self.assertIn("x", data["points"][0])
+        self.assertIn("y", data["points"][0])
 
     def test_smipoly_collection_records_use_monomer_summary(self) -> None:
         self._seed_demo_records()

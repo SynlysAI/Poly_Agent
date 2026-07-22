@@ -27,10 +27,16 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
     entrypoint = request["entrypoint"]
     loader = request.get("loader")
     inputs = request.get("inputs") or {}
+    input_files = dict(request.get("input_files") or {})
+    output_dir = request.get("output_dir")
+    resource_assets = dict(request.get("resource_assets") or {})
     context = dict(request.get("context") or {})
     context.update(
         {
             "package_path": str(package_path),
+            "input_files": input_files,
+            "output_dir": output_dir,
+            "resource_assets": resource_assets,
             "runtime": "local_sandbox_runtime",
             "runtime_backend": "local_sandbox_runtime",
         }

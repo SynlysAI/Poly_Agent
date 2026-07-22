@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import base64
+import json
+import math
 import re
 import urllib.error
 import urllib.parse
@@ -27,7 +30,13 @@ from app.schemas.data_catalog import (
     DataCatalogCollectionSummary,
     DataCatalogDataset,
     DataCatalogDatasetListData,
+    DataCatalogDatasetProfileData,
+    DataCatalogDatasetRecordListData,
+    DataCatalogDatasetVisualSamplesData,
     DataCatalogFieldSummary,
+    DataCatalogHistogramBin,
+    DataCatalogDatasetImportStatus,
+    DataCatalogVisualSamplePoint,
     DataCatalogObjectInfo,
     DataCatalogOverviewData,
     DataCatalogRecordSummary,
@@ -55,7 +64,7 @@ POLYUNIVERSE_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{POLYUNIVERSE_COLLECTION_N
 DATASET_RECORD_COLLECTIONS = {
     "openpoly": (MATERIAL_COLLECTION_KEY, "full"),
     "radonpy_pi1070": (RADONPY_COLLECTION_KEY, "full"),
-    "pi1m_v2": (PI1M_COLLECTION_KEY, "sample"),
+    "pi1m_v2": (PI1M_COLLECTION_KEY, "full"),
     "smipoly": (SMIPOLY_COLLECTION_KEY, "full"),
     "polyuniverse": (POLYUNIVERSE_COLLECTION_KEY, "full"),
 }
@@ -272,12 +281,12 @@ MONGO_COLLECTION_DEFINITIONS = [
         PI1M_COLLECTION_KEY,
         PI1M_COLLECTION_NAME,
         MATERIAL_SOURCE_ID,
-        "PI1M v2 样本",
+        "PI1M v2 记录",
         "材料数据资产",
         "pi1m_samples",
-        "PI1M v2 结构库前 10,000 条样本记录，包含 p-SMILES 和合成可及性评分。",
+        "PI1M v2 结构库全量行级记录，包含 p-SMILES、合成可及性评分和导入行号。",
         ["pi1m_record_id"],
-        ["dataset", "smiles", "sa_score", "sample_index"],
+        ["dataset", "smiles", "sa_score", "row_index", "smiles_hash"],
     ),
     MongoCollectionDefinition(
         SMIPOLY_COLLECTION_KEY,
@@ -618,7 +627,7 @@ class DataCatalogService:
         legacy_objects: list[str] = []
         for dataset_id, definition in definitions.items():
             objects = object_status.get(dataset_id, [])
-            record_info = self._dataset_record_info(dataset_id)
+            record_info = self._dataset_record_info(dataset_id, row_count=int(definition["row_count"]))
             legacy_objects.extend(item.legacy_object_key for item in objects if item.legacy_exists and item.legacy_object_key)
             datasets.append(
                 DataCatalogDataset(
@@ -651,7 +660,417 @@ class DataCatalogService:
             )
         return DataCatalogDatasetListData(items=datasets, legacy_objects=sorted(set(legacy_objects)))
 
-    def _dataset_record_info(self, dataset_id: str) -> dict[str, Any]:
+    def get_dataset_profile(self, dataset_id: str) -> DataCatalogDatasetProfileData:
+        """Return aggregate dataset profile data suitable for dashboard rendering."""
+        dataset = self._dataset_by_id(dataset_id)
+        record_count = int(dataset.record_count or 0)
+        coverage = round((record_count / dataset.row_count) * 100, 4) if dataset.row_count else 0
+        stats = self._load_dataset_stats(dataset_id)
+        import_status = self._load_dataset_import_status(dataset_id)
+        histogram = [
+            DataCatalogHistogramBin(start=float(item["start"]), end=float(item["end"]), count=int(item["count"]))
+            for item in stats.get("sa_score_histogram", [])
+            if isinstance(item, dict) and {"start", "end", "count"} <= set(item)
+        ]
+        return DataCatalogDatasetProfileData(
+            dataset_id=dataset_id,
+            row_count=dataset.row_count,
+            record_count=record_count,
+            coverage_percent=coverage,
+            record_mode=dataset.record_mode,
+            field_completeness=dataset.field_summaries,
+            sa_score_histogram=histogram,
+            duplicate_smiles_count=stats.get("duplicate_smiles_count"),
+            unique_smiles_count=stats.get("unique_smiles_count"),
+            import_status=import_status,
+        )
+
+    def list_dataset_records(
+        self,
+        dataset_id: str,
+        *,
+        cursor: str | None = None,
+        page_size: int = 50,
+        sort_by: str = "row_index",
+        sa_min: float | None = None,
+        sa_max: float | None = None,
+        keyword: str | None = None,
+        row_start: int | None = None,
+        row_end: int | None = None,
+    ) -> DataCatalogDatasetRecordListData:
+        """Return keyset-paginated dataset records."""
+        dataset = self._dataset_by_id(dataset_id)
+        if dataset_id != "pi1m_v2":
+            rows, total = self._load_collection_rows(
+                self._require_collection_definition(dataset.record_collection_key or ""),
+                page=1,
+                page_size=page_size,
+                keyword=keyword,
+            )
+            return DataCatalogDatasetRecordListData(
+                dataset_id=dataset_id,
+                collection_key=dataset.record_collection_key or "",
+                items=[self._record_summary(self._require_collection_definition(dataset.record_collection_key or ""), row) for row in rows],
+                page_size=page_size,
+                next_cursor=None,
+                total=total,
+            )
+
+        definition = self._require_collection_definition(PI1M_COLLECTION_KEY)
+        limit = max(1, min(page_size, 200))
+        if not settings.require_mongodb:
+            rows = self._load_demo_pi1m_dataset_rows(
+                cursor=cursor,
+                page_size=limit,
+                sort_by=sort_by,
+                sa_min=sa_min,
+                sa_max=sa_max,
+                keyword=keyword,
+                row_start=row_start,
+                row_end=row_end,
+            )
+            total = len(demo_store.load().get(PI1M_COLLECTION_KEY, []))
+        else:
+            rows = self._load_mongo_pi1m_dataset_rows(
+                cursor=cursor,
+                page_size=limit,
+                sort_by=sort_by,
+                sa_min=sa_min,
+                sa_max=sa_max,
+                keyword=keyword,
+                row_start=row_start,
+                row_end=row_end,
+            )
+            total = dataset.record_count
+
+        next_cursor = None
+        visible_rows = rows[:limit]
+        if len(rows) > limit and visible_rows:
+            next_cursor = self._encode_cursor(visible_rows[-1], sort_by)
+        return DataCatalogDatasetRecordListData(
+            dataset_id=dataset_id,
+            collection_key=PI1M_COLLECTION_KEY,
+            items=[self._record_summary(definition, row) for row in visible_rows],
+            page_size=limit,
+            next_cursor=next_cursor,
+            total=total,
+        )
+
+    def get_dataset_visual_samples(self, dataset_id: str, *, limit: int = 5000) -> DataCatalogDatasetVisualSamplesData:
+        """Return bounded visual sample points for large dataset exploration."""
+        dataset = self._dataset_by_id(dataset_id)
+        bounded_limit = max(100, min(limit, 20000))
+        if dataset_id != "pi1m_v2":
+            return DataCatalogDatasetVisualSamplesData(dataset_id=dataset_id, sample_count=0, total=dataset.record_count, points=[])
+
+        stats = self._load_dataset_stats(dataset_id)
+        stored_points = stats.get("visual_samples")
+        if isinstance(stored_points, list) and stored_points:
+            points = [self._visual_point_from_row(item) for item in stored_points[:bounded_limit]]
+            return DataCatalogDatasetVisualSamplesData(
+                dataset_id=dataset_id,
+                sample_count=len(points),
+                total=dataset.record_count,
+                points=points,
+            )
+
+        rows = self._load_pi1m_visual_rows(bounded_limit)
+        points = [self._visual_point_from_row(row) for row in rows]
+        return DataCatalogDatasetVisualSamplesData(
+            dataset_id=dataset_id,
+            sample_count=len(points),
+            total=dataset.record_count,
+            points=points,
+        )
+
+    def _dataset_by_id(self, dataset_id: str) -> DataCatalogDataset:
+        for dataset in self.list_datasets().items:
+            if dataset.dataset_id == dataset_id:
+                return dataset
+        raise HTTPException(status_code=404, detail="未知数据集")
+
+    def _load_dataset_stats(self, dataset_id: str) -> dict[str, Any]:
+        if not settings.require_mongodb:
+            return self._demo_dataset_stats(dataset_id)
+        if not settings.data_asset_mongodb_uri:
+            return {}
+        try:
+            doc = get_data_asset_database()["dataset_stats"].find_one({"dataset_id": dataset_id}, {"_id": 0})
+            return dict(doc) if doc else {}
+        except PyMongoError:
+            return {}
+
+    def _load_dataset_import_status(self, dataset_id: str) -> DataCatalogDatasetImportStatus:
+        if not settings.require_mongodb:
+            return DataCatalogDatasetImportStatus(status="demo")
+        if not settings.data_asset_mongodb_uri:
+            return DataCatalogDatasetImportStatus(status="not_configured")
+        try:
+            doc = get_data_asset_database()["import_jobs"].find_one(
+                {"dataset_id": dataset_id},
+                {"_id": 0},
+                sort=[("started_at", -1)],
+            )
+            if not doc:
+                return DataCatalogDatasetImportStatus(status="unknown")
+            return DataCatalogDatasetImportStatus(
+                job_id=doc.get("job_id"),
+                status=str(doc.get("status") or "unknown"),
+                imported_count=doc.get("imported_count"),
+                failed_count=doc.get("failed_count"),
+                started_at=doc.get("started_at"),
+                finished_at=doc.get("finished_at"),
+                throughput_rows_per_second=doc.get("throughput_rows_per_second"),
+                error=doc.get("error"),
+            )
+        except PyMongoError:
+            return DataCatalogDatasetImportStatus(status="degraded")
+
+    def _demo_dataset_stats(self, dataset_id: str) -> dict[str, Any]:
+        if dataset_id != "pi1m_v2":
+            return {}
+        rows = demo_store.load().get(PI1M_COLLECTION_KEY, [])
+        scores = [self._to_float(row.get("sa_score")) for row in rows if self._to_float(row.get("sa_score")) is not None]
+        smiles_values = [str(row.get("smiles")) for row in rows if row.get("smiles")]
+        return {
+            "sa_score_histogram": self._histogram(scores),
+            "unique_smiles_count": len(set(smiles_values)),
+            "duplicate_smiles_count": max(0, len(smiles_values) - len(set(smiles_values))),
+        }
+
+    def _load_mongo_pi1m_dataset_rows(
+        self,
+        *,
+        cursor: str | None,
+        page_size: int,
+        sort_by: str,
+        sa_min: float | None,
+        sa_max: float | None,
+        keyword: str | None,
+        row_start: int | None,
+        row_end: int | None,
+    ) -> list[dict[str, Any]]:
+        if not settings.data_asset_mongodb_uri:
+            return []
+        filters = self._build_pi1m_dataset_filter(
+            cursor=cursor,
+            sort_by=sort_by,
+            sa_min=sa_min,
+            sa_max=sa_max,
+            keyword=keyword,
+            row_start=row_start,
+            row_end=row_end,
+        )
+        sort = [("sa_score", 1), ("row_index", 1)] if sort_by == "sa_score" else [("row_index", 1)]
+        try:
+            cursor_rows = (
+                get_data_asset_database()[PI1M_COLLECTION_NAME]
+                .find(filters, {"_id": 0})
+                .sort(sort)
+                .limit(page_size + 1)
+            )
+            return [dict(item) for item in cursor_rows]
+        except PyMongoError:
+            return []
+
+    def _load_demo_pi1m_dataset_rows(
+        self,
+        *,
+        cursor: str | None,
+        page_size: int,
+        sort_by: str,
+        sa_min: float | None,
+        sa_max: float | None,
+        keyword: str | None,
+        row_start: int | None,
+        row_end: int | None,
+    ) -> list[dict[str, Any]]:
+        rows = [dict(row) for row in demo_store.load().get(PI1M_COLLECTION_KEY, [])]
+        decoded = self._decode_cursor(cursor)
+        normalized_keyword = (keyword or "").strip()
+        if normalized_keyword:
+            keyword_hash = self._smiles_hash(normalized_keyword)
+            rows = [
+                row
+                for row in rows
+                if normalized_keyword in {str(row.get("pi1m_record_id") or ""), str(row.get("smiles") or ""), str(row.get("smiles_hash") or "")}
+                or keyword_hash == row.get("smiles_hash")
+            ]
+        if row_start is not None:
+            rows = [row for row in rows if int(row.get("row_index") or row.get("sample_index") or 0) >= row_start]
+        if row_end is not None:
+            rows = [row for row in rows if int(row.get("row_index") or row.get("sample_index") or 0) <= row_end]
+        if sa_min is not None:
+            rows = [row for row in rows if (self._to_float(row.get("sa_score")) or -math.inf) >= sa_min]
+        if sa_max is not None:
+            rows = [row for row in rows if (self._to_float(row.get("sa_score")) or math.inf) <= sa_max]
+        if sort_by == "sa_score":
+            rows.sort(key=lambda row: (self._to_float(row.get("sa_score")) or math.inf, int(row.get("row_index") or 0)))
+            if decoded:
+                rows = [
+                    row
+                    for row in rows
+                    if (
+                        self._to_float(row.get("sa_score")) or math.inf,
+                        int(row.get("row_index") or 0),
+                    )
+                    > (float(decoded.get("sa_score") or -math.inf), int(decoded.get("row_index") or 0))
+                ]
+        else:
+            rows.sort(key=lambda row: int(row.get("row_index") or row.get("sample_index") or 0))
+            if decoded:
+                rows = [row for row in rows if int(row.get("row_index") or 0) > int(decoded.get("row_index") or 0)]
+        return rows[: page_size + 1]
+
+    def _build_pi1m_dataset_filter(
+        self,
+        *,
+        cursor: str | None,
+        sort_by: str,
+        sa_min: float | None,
+        sa_max: float | None,
+        keyword: str | None,
+        row_start: int | None,
+        row_end: int | None,
+    ) -> dict[str, Any]:
+        filters: dict[str, Any] = {}
+        row_filter: dict[str, Any] = {}
+        if row_start is not None:
+            row_filter["$gte"] = row_start
+        if row_end is not None:
+            row_filter["$lte"] = row_end
+        if row_filter:
+            filters["row_index"] = row_filter
+        sa_filter: dict[str, Any] = {}
+        if sa_min is not None:
+            sa_filter["$gte"] = sa_min
+        if sa_max is not None:
+            sa_filter["$lte"] = sa_max
+        if sa_filter:
+            filters["sa_score"] = sa_filter
+        normalized_keyword = (keyword or "").strip()
+        if normalized_keyword:
+            keyword_filter: list[dict[str, Any]] = [
+                {"pi1m_record_id": normalized_keyword},
+                {"smiles": normalized_keyword},
+                {"smiles_hash": self._smiles_hash(normalized_keyword)},
+            ]
+            if normalized_keyword.isdigit():
+                keyword_filter.extend([
+                    {"row_index": int(normalized_keyword)},
+                    {"sample_index": int(normalized_keyword)},
+                ])
+            filters["$or"] = keyword_filter
+        decoded = self._decode_cursor(cursor)
+        if decoded:
+            if sort_by == "sa_score":
+                cursor_score = float(decoded.get("sa_score") or -math.inf)
+                cursor_row = int(decoded.get("row_index") or 0)
+                filters["$and"] = filters.get("$and", [])
+                filters["$and"].append(
+                    {
+                        "$or": [
+                            {"sa_score": {"$gt": cursor_score}},
+                            {"sa_score": cursor_score, "row_index": {"$gt": cursor_row}},
+                        ]
+                    }
+                )
+            else:
+                cursor_row = int(decoded.get("row_index") or 0)
+                current = filters.get("row_index")
+                if isinstance(current, dict):
+                    current["$gt"] = max(int(current.get("$gt", 0)), cursor_row)
+                else:
+                    filters["row_index"] = {"$gt": cursor_row}
+        return filters
+
+    def _load_pi1m_visual_rows(self, limit: int) -> list[dict[str, Any]]:
+        if not settings.require_mongodb:
+            return demo_store.load().get(PI1M_COLLECTION_KEY, [])[:limit]
+        if not settings.data_asset_mongodb_uri:
+            return []
+        try:
+            collection = get_data_asset_database()[PI1M_COLLECTION_NAME]
+            total = max(int(collection.estimated_document_count()), 1)
+            step = max(total // limit, 1)
+            cursor = (
+                collection.find({"row_index": {"$mod": [step, 0]}}, {"_id": 0, "pi1m_record_id": 1, "row_index": 1, "smiles": 1, "sa_score": 1})
+                .sort([("row_index", 1)])
+                .limit(limit)
+            )
+            return [dict(item) for item in cursor]
+        except PyMongoError:
+            return []
+
+    def _encode_cursor(self, row: dict[str, Any], sort_by: str) -> str:
+        payload = {"row_index": row.get("row_index") or row.get("sample_index") or 0}
+        if sort_by == "sa_score":
+            payload["sa_score"] = row.get("sa_score")
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    def _decode_cursor(self, cursor: str | None) -> dict[str, Any]:
+        if not cursor:
+            return {}
+        try:
+            padded = cursor + "=" * (-len(cursor) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            raise HTTPException(status_code=400, detail="无效游标")
+
+    def _visual_point_from_row(self, row: dict[str, Any]) -> DataCatalogVisualSamplePoint:
+        record_id = str(row.get("record_id") or row.get("pi1m_record_id") or "")
+        row_index = row.get("row_index") or row.get("sample_index")
+        smiles = row.get("smiles")
+        x, y = self._stable_xy(str(smiles or record_id))
+        return DataCatalogVisualSamplePoint(
+            record_id=record_id,
+            row_index=int(row_index) if row_index is not None else None,
+            x=x,
+            y=y,
+            sa_score=self._to_float(row.get("sa_score")),
+            smiles=str(smiles) if smiles else None,
+        )
+
+    def _stable_xy(self, value: str) -> tuple[float, float]:
+        digest = hashlib.sha256(value.encode("utf-8")).digest()
+        x = int.from_bytes(digest[:4], "big") / 0xFFFFFFFF
+        y = int.from_bytes(digest[4:8], "big") / 0xFFFFFFFF
+        return round((x * 2) - 1, 6), round((y * 2) - 1, 6)
+
+    def _smiles_hash(self, value: str) -> str:
+        return hashlib.sha256(value.strip().encode("utf-8")).hexdigest()
+
+    def _to_float(self, value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(number) or math.isinf(number):
+            return None
+        return number
+
+    def _histogram(self, values: list[float], bins: int = 12) -> list[dict[str, Any]]:
+        if not values:
+            return []
+        lower = min(values)
+        upper = max(values)
+        if lower == upper:
+            return [{"start": lower, "end": upper, "count": len(values)}]
+        width = (upper - lower) / bins
+        counts = [0 for _ in range(bins)]
+        for value in values:
+            index = min(int((value - lower) / width), bins - 1)
+            counts[index] += 1
+        return [
+            {"start": round(lower + width * index, 4), "end": round(lower + width * (index + 1), 4), "count": count}
+            for index, count in enumerate(counts)
+        ]
+
+    def _dataset_record_info(self, dataset_id: str, *, row_count: int | None = None) -> dict[str, Any]:
         collection_info = DATASET_RECORD_COLLECTIONS.get(dataset_id)
         if not collection_info:
             return {"record_collection_key": None, "record_count": None, "record_mode": "metadata_only"}
@@ -672,6 +1091,8 @@ class DataCatalogService:
             except PyMongoError:
                 count = None
         mode = configured_mode if count else "metadata_only"
+        if dataset_id == "pi1m_v2" and count is not None and row_count and count < row_count:
+            mode = "sample"
         return {"record_collection_key": collection_key, "record_count": count, "record_mode": mode}
 
     def _load_dataset_definitions(self) -> dict[str, dict[str, Any]]:
@@ -765,28 +1186,10 @@ class DataCatalogService:
                 "report_jobs": data.get("report_jobs", []),
                 "report_artifacts": data.get("report_artifacts", []),
             }
-        else:
-            business = get_database()
-            material_rows = []
-            if settings.data_asset_mongodb_uri:
-                try:
-                    material_rows = list(
-                        get_data_asset_database()[MATERIAL_COLLECTION_NAME].find(
-                            {}, {"_id": 0, "polymer_record_id": 1}
-                        )
-                    )
-                except PyMongoError:
-                    material_rows = []
-            collections = {
-                "materials": material_rows,
-                "computations": list(business["computation_runs"].find({}, {"_id": 0, "run_id": 1, "material_record_id": 1})),
-                "computation_artifacts": list(business["computation_artifacts"].find({}, {"_id": 0, "run_id": 1})),
-                "research_runs": list(business["research_runs"].find({}, {"_id": 0, "run_id": 1})),
-                "algorithm_runs": list(business["algorithm_runs"].find({}, {"_id": 0, "research_run_id": 1})),
-                "report_jobs": list(business["report_jobs"].find({}, {"_id": 0, "report_id": 1})),
-                "report_artifacts": list(business["report_artifacts"].find({}, {"_id": 0, "report_id": 1})),
-            }
+            return self._relationships_from_rows(collections)
+        return self._relationships_from_mongo()
 
+    def _relationships_from_rows(self, collections: dict[str, list[dict[str, Any]]]) -> DataCatalogRelationshipsData:
         material_ids = {str(item.get("polymer_record_id")) for item in collections["materials"] if item.get("polymer_record_id")}
         computation_ids = {str(item.get("run_id")) for item in collections["computations"] if item.get("run_id")}
         research_ids = {str(item.get("run_id")) for item in collections["research_runs"] if item.get("run_id")}
@@ -828,6 +1231,95 @@ class DataCatalogService:
                 edge("computations", "computation_artifacts", computation_artifact_links, "computation_artifacts", "run_id", "run_id"),
                 edge("research_runs", "algorithm_runs", research_algorithm_links, "algorithm_runs", "run_id", "research_run_id"),
                 edge("report_jobs", "report_artifacts", report_artifact_links, "report_artifacts", "report_id", "report_id"),
+            ],
+            generated_at=datetime.now(timezone.utc),
+            notes=["关系数仅来自已持久化外键；未关联历史记录不做推测。"],
+        )
+
+    def _relationships_from_mongo(self) -> DataCatalogRelationshipsData:
+        business = get_database()
+        data_asset_db = get_data_asset_database() if settings.data_asset_mongodb_uri else None
+
+        def count(collection_name: str, *, asset: bool = False) -> int:
+            try:
+                db = data_asset_db if asset else business
+                if db is None:
+                    return 0
+                return int(db[collection_name].estimated_document_count())
+            except PyMongoError:
+                return 0
+
+        material_count = count(MATERIAL_COLLECTION_NAME, asset=True)
+        computation_count = count("computation_runs")
+        artifact_count = count("computation_artifacts")
+        research_count = count("research_runs")
+        algorithm_count = count("algorithm_runs")
+        report_count = count("report_jobs")
+        report_artifact_count = count("report_artifacts")
+
+        def distinct_values(collection_name: str, field: str) -> list[Any]:
+            try:
+                return [value for value in business[collection_name].distinct(field) if value]
+            except PyMongoError:
+                return []
+
+        def linked_by_membership(source_ids: list[Any], collection_name: str, field: str, *, asset: bool = False) -> int:
+            if not source_ids:
+                return 0
+            try:
+                db = data_asset_db if asset else business
+                if db is None:
+                    return 0
+                return int(db[collection_name].count_documents({field: {"$in": source_ids}}))
+            except PyMongoError:
+                return 0
+
+        computation_material_ids = distinct_values("computation_runs", "material_record_id")
+        computation_ids = distinct_values("computation_runs", "run_id")
+        research_ids = distinct_values("research_runs", "run_id")
+        report_ids = distinct_values("report_jobs", "report_id")
+
+        material_links = linked_by_membership(
+            computation_material_ids,
+            MATERIAL_COLLECTION_NAME,
+            "polymer_record_id",
+            asset=True,
+        )
+        computation_artifact_links = linked_by_membership(computation_ids, "computation_artifacts", "run_id")
+        research_algorithm_links = linked_by_membership(research_ids, "algorithm_runs", "research_run_id")
+        report_artifact_links = linked_by_membership(report_ids, "report_artifacts", "report_id")
+
+        node_specs = [
+            ("materials", "高分子材料", material_count),
+            ("computations", "计算任务", computation_count),
+            ("computation_artifacts", "计算产物", artifact_count),
+            ("research_runs", "ResearchRun", research_count),
+            ("algorithm_runs", "AlgorithmRun", algorithm_count),
+            ("report_jobs", "报告任务", report_count),
+            ("report_artifacts", "报告产物", report_artifact_count),
+        ]
+        nodes = [
+            DataCatalogRelationshipNode(node_id=node_id, label=label, record_count=record_count)
+            for node_id, label, record_count in node_specs
+        ]
+
+        def edge(source: str, target: str, linked: int, target_total: int, source_field: str, target_field: str):
+            return DataCatalogRelationshipEdge(
+                source=source,
+                target=target,
+                linked_count=linked,
+                target_coverage=(linked / target_total) if target_total else 0,
+                source_field=source_field,
+                target_field=target_field,
+            )
+
+        return DataCatalogRelationshipsData(
+            nodes=nodes,
+            edges=[
+                edge("materials", "computations", material_links, computation_count, "polymer_record_id", "material_record_id"),
+                edge("computations", "computation_artifacts", computation_artifact_links, artifact_count, "run_id", "run_id"),
+                edge("research_runs", "algorithm_runs", research_algorithm_links, algorithm_count, "run_id", "research_run_id"),
+                edge("report_jobs", "report_artifacts", report_artifact_links, report_artifact_count, "report_id", "report_id"),
             ],
             generated_at=datetime.now(timezone.utc),
             notes=["关系数仅来自已持久化外键；未关联历史记录不做推测。"],
@@ -964,6 +1456,25 @@ class DataCatalogService:
         if definition.source_id == MATERIAL_SOURCE_ID and not settings.data_asset_mongodb_uri:
             return [], 0
 
+        if definition.data_domain == "pi1m_samples":
+            row_start = ((page - 1) * page_size) + 1 if page > 1 and not keyword else None
+            row_end = page * page_size if page > 1 and not keyword else None
+            rows = self._load_mongo_pi1m_dataset_rows(
+                cursor=None,
+                page_size=page_size,
+                sort_by="row_index",
+                sa_min=None,
+                sa_max=None,
+                keyword=keyword,
+                row_start=row_start,
+                row_end=row_end,
+            )
+            try:
+                total = int(self._database_for_definition(definition)[definition.collection_name].estimated_document_count())
+            except PyMongoError:
+                total = len(rows)
+            return rows[:page_size], total
+
         try:
             db = self._database_for_definition(definition)
             collection = db[definition.collection_name]
@@ -1059,8 +1570,17 @@ class DataCatalogService:
             ]
             return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
         if definition.data_domain == "pi1m_samples":
-            field_names = [*definition.primary_keys, "dataset.dataset_id", "smiles", "sa_score"]
-            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+            clauses: list[dict[str, Any]] = [
+                {"pi1m_record_id": normalized},
+                {"smiles": normalized},
+                {"smiles_hash": self._smiles_hash(normalized)},
+            ]
+            if normalized.isdigit():
+                clauses.extend([{"row_index": int(normalized)}, {"sample_index": int(normalized)}])
+            score = self._to_float(normalized)
+            if score is not None:
+                clauses.append({"sa_score": score})
+            return {"$or": clauses}
         if definition.data_domain == "smipoly_monomers":
             field_names = [
                 *definition.primary_keys,
@@ -1112,8 +1632,8 @@ class DataCatalogService:
             updated_at = row.get("updated_at")
         elif definition.data_domain == "pi1m_samples":
             title = str(row.get("smiles") or record_id or definition.display_name)
-            subtitle = f"PI1M v2 sample · {record_id}" if record_id else "PI1M v2 sample"
-            preview_fields = self._dataset_record_preview_fields(row, ["sa_score", "sample_index"])
+            subtitle = f"PI1M v2 · {record_id}" if record_id else "PI1M v2"
+            preview_fields = self._dataset_record_preview_fields(row, ["sa_score", "row_index", "sample_index"])
             created_at = row.get("created_at")
             updated_at = row.get("updated_at")
         elif definition.data_domain == "smipoly_monomers":
@@ -1247,7 +1767,9 @@ class DataCatalogService:
     def _preferred_sort_field(self, definition: MongoCollectionDefinition) -> str:
         if definition.data_domain == "materials":
             return "provenance.created_at"
-        if definition.data_domain in {"radonpy_records", "pi1m_samples", "smipoly_monomers", "polyuniverse_monomers"}:
+        if definition.data_domain == "pi1m_samples":
+            return "row_index"
+        if definition.data_domain in {"radonpy_records", "smipoly_monomers", "polyuniverse_monomers"}:
             return definition.primary_keys[0] if definition.primary_keys else "created_at"
         if definition.collection_name == "optimization_candidates":
             return "candidate_key"

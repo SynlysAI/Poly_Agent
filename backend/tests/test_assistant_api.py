@@ -194,6 +194,93 @@ class AssistantApiTest(ComputationTestCase):
         self.assertEqual(calls[0]["purpose"], "deep")
         self.assertTrue(calls[0].get("model"))
 
+    def test_assistant_stream_uses_requested_dialogue_model(self) -> None:
+        from app.core.config import settings
+
+        calls = []
+        original_llm_model = settings.llm_model
+        original_llm_base_url = settings.llm_base_url
+        original_llm_api_key = settings.llm_api_key
+        original_llm_default_provider = settings.llm_default_provider
+        original_llm_default_model = settings.llm_default_model
+        original_llm_provider_configs_json = settings.llm_provider_configs_json
+        settings.llm_model = "DeepSeek-V4-Flash-w8a8-mtp"
+        settings.llm_base_url = "https://fast.example.test/v1"
+        settings.llm_api_key = "fast-secret-key"
+        settings.llm_default_provider = "default_openai"
+        settings.llm_default_model = "DeepSeek-V4-Flash-w8a8-mtp"
+        settings.llm_provider_configs_json = "[]"
+
+        def fake_stream(messages, **kwargs):  # noqa: ANN001
+            calls.append(kwargs)
+            yield "DeepSeek 回答"
+
+        try:
+            with patch("app.core.llm_client.chat_stream", side_effect=fake_stream, create=True), patch(
+                "app.services.assistant_service.AssistantWebSearchService.search",
+                side_effect=AssertionError("project grounded question should not search web"),
+            ):
+                events = self._assistant_stream_events(
+                    {
+                        "messages": [{"role": "user", "content": "如何查看待审批任务？"}],
+                        "context": {
+                            "mode": "qa",
+                            "model": {
+                                "providerId": "default_openai",
+                                "modelId": "DeepSeek-V4-Flash-w8a8-mtp",
+                            },
+                        },
+                    }
+                )
+        finally:
+            settings.llm_model = original_llm_model
+            settings.llm_base_url = original_llm_base_url
+            settings.llm_api_key = original_llm_api_key
+            settings.llm_default_provider = original_llm_default_provider
+            settings.llm_default_model = original_llm_default_model
+            settings.llm_provider_configs_json = original_llm_provider_configs_json
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(calls[0]["purpose"], "qa")
+        self.assertEqual(calls[0]["provider_id"], "default_openai")
+        self.assertEqual(calls[0]["model"], "DeepSeek-V4-Flash-w8a8-mtp")
+
+    def test_assistant_stream_reports_invalid_requested_model(self) -> None:
+        with patch("app.core.llm_client.chat_stream", side_effect=AssertionError("invalid route should not call llm"), create=True):
+            events = self._assistant_stream_events(
+                {
+                    "messages": [{"role": "user", "content": "如何查看待审批任务？"}],
+                    "context": {
+                        "mode": "qa",
+                        "model": {
+                            "providerId": "missing_provider",
+                            "modelId": "missing-model",
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(events[-1]["type"], "error")
+        self.assertEqual(events[-1]["code"], "ASSISTANT_STREAM_ERROR")
+        self.assertIn("所选 LLM 模型不可用", events[-1]["message"])
+        self.assertIn("未知 LLM provider", events[-1]["message"])
+
+    def test_assistant_stream_rejects_partial_requested_model(self) -> None:
+        with patch("app.core.llm_client.chat_stream", side_effect=AssertionError("partial route should not call llm"), create=True):
+            events = self._assistant_stream_events(
+                {
+                    "messages": [{"role": "user", "content": "如何查看待审批任务？"}],
+                    "context": {
+                        "mode": "qa",
+                        "model": {"providerId": "default_openai"},
+                    },
+                }
+            )
+
+        self.assertEqual(events[-1]["type"], "error")
+        self.assertEqual(events[-1]["code"], "ASSISTANT_STREAM_ERROR")
+        self.assertIn("providerId 和 modelId 必须同时提供", events[-1]["message"])
+
     def test_assistant_stream_emits_evidence_for_hybrid_questions(self) -> None:
         def fake_search(_service, query: str, *, deep: bool):  # noqa: ANN001
             from app.services.assistant_service import SearchOutcome

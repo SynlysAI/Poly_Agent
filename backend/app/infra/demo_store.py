@@ -32,6 +32,7 @@ COLLECTION_NAMES = [
     "algorithm_registry_entries",
     "algorithm_packages",
     "algorithm_versions",
+    "algorithm_resources",
     "algorithm_runs",
     "algorithm_handoffs",
     "research_runs",

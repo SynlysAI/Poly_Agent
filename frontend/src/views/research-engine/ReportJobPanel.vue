@@ -4,6 +4,7 @@ import { Document, Download, Refresh, RefreshRight } from '@element-plus/icons-v
 import { ElMessage } from 'element-plus'
 
 import { getApiErrorMessage, getReportPreview } from '../../api/polyAgentApi'
+import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
 
 const props = defineProps({
   jobs: {
@@ -24,6 +25,7 @@ const previewLoading = ref(false)
 const previewContent = ref('')
 
 function statusType(status) {
+  const normalized = normalizedStatus(status)
   const map = {
     queued: 'info',
     running: 'warning',
@@ -32,14 +34,30 @@ function statusType(status) {
     failed: 'danger',
     cancelled: 'info',
   }
-  return map[status] || 'info'
+  return map[normalized] || 'info'
+}
+
+function normalizedStatus(status) {
+  return String(status || '').trim().toLowerCase()
+}
+
+function isTerminalStatus(status) {
+  return ['completed', 'failed', 'cancelled'].includes(normalizedStatus(status))
 }
 
 function formatDate(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
+  return formatApiDateTime(value)
+}
+
+function elapsedText(job) {
+  const startValue = job.started_at || job.created_at
+  if (!startValue) return '-'
+  const start = apiDateTimeMs(startValue)
+  const end = job.finished_at ? apiDateTimeMs(job.finished_at) : Date.now()
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '-'
+  const seconds = Math.max(1, Math.round((end - start) / 1000))
+  if (seconds < 60) return `${seconds} 秒`
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
 }
 
 function downloadableArtifacts(job) {
@@ -83,9 +101,17 @@ async function togglePreview(job) {
           <div class="job-meta">
             <span>{{ job.report_id }}</span>
             <span>{{ job.stage }} · {{ job.progress }}%</span>
+            <span>耗时 {{ elapsedText(job) }}</span>
             <span>{{ job.provider }} · {{ job.model || '未配置模型' }}</span>
             <span>{{ formatDate(job.created_at) }}</span>
           </div>
+          <el-progress
+            v-if="!isTerminalStatus(job.status)"
+            :percentage="job.progress || 0"
+            :stroke-width="6"
+            :show-text="false"
+            class="job-progress"
+          />
           <div v-if="job.error?.message" class="job-error">{{ job.error.message }}</div>
         </div>
         <div class="job-actions">
@@ -207,6 +233,11 @@ async function togglePreview(job) {
   color: #b91c1c;
   font-size: 12px;
   word-break: break-word;
+}
+
+.job-progress {
+  margin-top: 8px;
+  max-width: 360px;
 }
 
 .job-actions {

@@ -24,6 +24,7 @@ from app.infra.mongo import (
     get_algorithm_packages_collection,
     get_algorithm_registry_entries_collection,
     get_algorithm_handoffs_collection,
+    get_algorithm_resources_collection,
     get_algorithm_runs_collection,
     get_algorithm_versions_collection,
     get_execution_decisions_collection,
@@ -342,6 +343,55 @@ class AlgorithmRegistryRepository(BaseRepository):
             return False
 
         return bool(demo_store.mutate(mutate))
+
+
+class AlgorithmManagedResourceRepository(BaseRepository):
+    """算法大资源登记仓储。"""
+
+    collection_name = "algorithm_resources"
+
+    @classmethod
+    def _collection(cls):
+        return get_algorithm_resources_collection()
+
+    @classmethod
+    def update_fields(cls, resource_id: str, fields: dict[str, Any]) -> bool:
+        """更新算法大资源字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one({"resource_id": resource_id}, {"$set": fields})
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("resource_id") == resource_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def list_resources(
+        cls,
+        *,
+        algorithm_id: str | None = None,
+        asset_key: str | None = None,
+        status: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """分页查询算法大资源。"""
+        filters: dict[str, Any] = {}
+        if algorithm_id:
+            filters["algorithm_id"] = algorithm_id
+        if asset_key:
+            filters["asset_key"] = asset_key
+        if status:
+            filters["status"] = status
+        return cls.list_all(filters, sort_field="updated_at", reverse=True, page=page, page_size=page_size)
 
 
 class AlgorithmPackageRepository(BaseRepository):

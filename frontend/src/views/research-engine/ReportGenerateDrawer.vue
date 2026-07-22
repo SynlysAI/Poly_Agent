@@ -1,5 +1,8 @@
 <script setup>
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+
+import { getApiErrorMessage, getReportReadiness } from '../../api/polyAgentApi'
 
 const props = defineProps({
   modelValue: {
@@ -24,6 +27,8 @@ const visible = computed({
 })
 
 const form = reactive(defaultForm())
+const readiness = ref(null)
+const readinessLoading = ref(false)
 
 const subjectLabel = computed(() => {
   if (!props.subject) return '-'
@@ -35,11 +40,29 @@ const isIncompleteSubject = computed(() => {
   return Boolean(status && !['completed', 'failed'].includes(status))
 })
 
+const readinessWarnings = computed(() => readiness.value?.warnings || [])
+const providerBlocked = computed(() =>
+  Boolean(readiness.value && (
+    !readiness.value.reports_enabled
+    || !readiness.value.output_root_ready
+    || !readiness.value.provider_ready
+    || !readiness.value.skill_pipeline_ready
+  )),
+)
+const pdfBlocked = computed(() =>
+  Boolean(form.formats.includes('pdf') && readiness.value && !readiness.value.pdf_ready),
+)
+const submitDisabled = computed(() =>
+  Boolean(!props.subject || !form.formats.length || props.submitting || providerBlocked.value || pdfBlocked.value),
+)
+
 watch(
   () => props.modelValue,
   (next) => {
     if (next) {
       Object.assign(form, defaultForm())
+      applySubjectDefaults()
+      loadReadiness()
     }
   },
 )
@@ -67,8 +90,27 @@ function defaultForm() {
   }
 }
 
+function applySubjectDefaults() {
+  if (props.subject?.subject_type === 'algorithm_run') {
+    form.template_id = 'algorithm_run_summary_zh'
+  } else {
+    form.template_id = 'research_run_summary_zh'
+  }
+}
+
+async function loadReadiness() {
+  readinessLoading.value = true
+  try {
+    readiness.value = await getReportReadiness()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    readinessLoading.value = false
+  }
+}
+
 function submit() {
-  if (!props.subject || props.submitting) return
+  if (submitDisabled.value) return
   emit('submit', {
     subject_type: props.subject.subject_type,
     subject_id: props.subject.subject_id,
@@ -97,6 +139,21 @@ function submit() {
         :closable="false"
         show-icon
       />
+      <section v-loading="readinessLoading" class="report-readiness-box">
+        <div class="readiness-row">
+          <span>报告服务</span>
+          <el-tag size="small" :type="providerBlocked ? 'danger' : 'success'" effect="plain">
+            {{ providerBlocked ? '未就绪' : '可生成' }}
+          </el-tag>
+        </div>
+        <div v-if="readiness" class="readiness-meta">
+          <span>{{ readiness.provider }} / {{ readiness.skill_pipeline }}</span>
+          <span>PDF：{{ readiness.pdf_ready ? '可用' : '不可用' }}</span>
+        </div>
+        <p v-if="readinessWarnings.length || pdfBlocked" class="readiness-warning">
+          {{ pdfBlocked ? '当前 PDF 输出不可用，请取消 PDF 或检查 Playwright Chromium。' : readinessWarnings[0] }}
+        </p>
+      </section>
 
       <el-form label-position="top" class="report-form">
         <el-form-item label="报告模板">
@@ -174,7 +231,7 @@ function submit() {
     <template #footer>
       <div class="drawer-footer">
         <el-button @click="visible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" :disabled="!subject || !form.formats.length" @click="submit">
+        <el-button type="primary" :loading="submitting" :disabled="submitDisabled" @click="submit">
           开始生成
         </el-button>
       </div>
@@ -193,6 +250,41 @@ function submit() {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.report-readiness-box {
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #fbfdff;
+}
+
+.readiness-row,
+.readiness-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.readiness-row {
+  color: var(--app-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.readiness-meta {
+  flex-wrap: wrap;
+  margin-top: 6px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.readiness-warning {
+  margin: 8px 0 0;
+  color: #b45309;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .form-grid {

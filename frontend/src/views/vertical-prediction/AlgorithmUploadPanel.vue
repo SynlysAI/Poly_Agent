@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Box, Check, Delete, Download, Plus, UploadFilled } from '@element-plus/icons-vue'
 
@@ -63,6 +63,10 @@ const form = reactive({
   logo_asset: '',
   logo_url: '',
   sample_input: JSON.stringify({ smiles: 'C=C(F)F' }, null, 2),
+  input_assets: '[]',
+  output_assets: '[]',
+  resource_assets: '[]',
+  result_envelope: '',
 })
 
 const inputFields = ref([
@@ -71,6 +75,27 @@ const inputFields = ref([
 const outputFields = ref([
   { name: 'prediction', type: 'object', required: true, unit: '', options: '', min: '', max: '' },
 ])
+const inputAssetRows = ref([])
+const outputAssetRows = ref([])
+const resourceAssetRows = ref([])
+
+const dataKindOptions = [
+  { label: '表格', value: 'table' },
+  { label: '序列', value: 'series' },
+  { label: '图片', value: 'image' },
+  { label: 'JSON', value: 'json' },
+  { label: '文本', value: 'text' },
+  { label: '二进制', value: 'binary' },
+]
+const parserOptions = [
+  { label: '自动', value: 'auto' },
+  { label: '表格 table.v1', value: 'table.v1' },
+  { label: 'x-y 序列 series_xy.v1', value: 'series_xy.v1' },
+  { label: 'JSON json.v1', value: 'json.v1' },
+  { label: '文本 text.v1', value: 'text.v1' },
+  { label: '二进制 binary.v1', value: 'binary.v1' },
+]
+const artifactTypeOptions = ['result_json', 'structure_json', 'table_json', 'series_json', 'metrics_json', 'report_json', 'image_png', 'csv', 'binary_file']
 
 const sampleJsonError = computed(() => {
   try {
@@ -81,8 +106,28 @@ const sampleJsonError = computed(() => {
   }
 })
 
+const assetJsonError = computed(() => {
+  for (const [label, value] of [
+    ['输入文件规格', form.input_assets],
+    ['输出文件规格', form.output_assets],
+    ['受管资源需求', form.resource_assets],
+  ]) {
+    try {
+      const parsed = JSON.parse(value || '[]')
+      if (!Array.isArray(parsed)) return `${label} 必须是 JSON array`
+    } catch (error) {
+      return `${label} JSON 格式错误：${error.message}`
+    }
+  }
+  return ''
+})
+
+const parsedInputAssets = computed(() => assetRowsToSpecs(inputAssetRows.value, 'input'))
+const parsedOutputAssets = computed(() => assetRowsToSpecs(outputAssetRows.value, 'output'))
+const parsedResourceAssets = computed(() => assetRowsToSpecs(resourceAssetRows.value, 'resource'))
+
 const contract = computed(() => ({
-  contract_version: '0.1',
+  contract_version: parsedInputAssets.value.length || parsedOutputAssets.value.length || parsedResourceAssets.value.length || form.result_envelope ? '0.2' : '0.1',
   algorithm_id: form.algorithm_id,
   name: form.name,
   version: form.version,
@@ -100,6 +145,10 @@ const contract = computed(() => ({
   },
   input_schema: schemaFromRows(inputFields.value),
   output_schema: schemaFromRows(outputFields.value),
+  input_assets: parsedInputAssets.value,
+  output_assets: parsedOutputAssets.value,
+  resource_assets: parsedResourceAssets.value,
+  result_envelope: form.result_envelope || null,
   sample_input_path: 'tests/sample_input.json',
   description: form.description || null,
   developer: form.developer || null,
@@ -150,6 +199,96 @@ function schemaFromRows(rows) {
   }
   return { fields, required, constraints, field_options: fieldOptions, ui_hints: uiHints }
 }
+
+function parseJsonArray(value) {
+  try {
+    const parsed = JSON.parse(value || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function newAssetRow(kind) {
+  if (kind === 'resource') {
+    return { key: '', label: '', required: true, data_kind: 'binary', parser: 'binary.v1', extensions: '', mime_types: '', max_size_bytes: '', sample_path: '', artifact_type: '', mime_type: '', env_var: '', resource_type: '', required_files: '', binding_required: true, description: '' }
+  }
+  if (kind === 'output') {
+    return { key: '', label: '', required: false, data_kind: 'json', parser: 'json.v1', extensions: '.json', mime_types: 'application/json', max_size_bytes: '', sample_path: '', artifact_type: 'result_json', mime_type: 'application/json', env_var: '', description: '' }
+  }
+  return { key: '', label: '', required: true, data_kind: 'table', parser: 'auto', extensions: '.csv,.xlsx', mime_types: 'text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', max_size_bytes: '10485760', sample_path: '', artifact_type: '', mime_type: '', env_var: '', description: '' }
+}
+
+function addAssetRow(target, kind) {
+  target.push(newAssetRow(kind))
+}
+
+function removeAssetRow(target, index) {
+  target.splice(index, 1)
+}
+
+function assetRowsToSpecs(rows, kind) {
+  return rows.map((row) => {
+    const spec = {
+      key: String(row.key || '').trim(),
+      label: String(row.label || '').trim() || null,
+      required: Boolean(row.required),
+      asset_role: kind,
+      data_kind: row.data_kind || null,
+      parser: row.parser || null,
+      extensions: splitList(row.extensions),
+      mime_types: splitList(row.mime_types),
+      max_size_bytes: row.max_size_bytes === '' ? null : Number(row.max_size_bytes),
+      sample_path: String(row.sample_path || '').trim() || null,
+      artifact_type: String(row.artifact_type || '').trim() || null,
+      mime_type: String(row.mime_type || '').trim() || null,
+      env_var: String(row.env_var || '').trim() || null,
+      resource_type: String(row.resource_type || '').trim() || null,
+      required_files: splitList(row.required_files),
+      binding_required: Boolean(row.binding_required),
+      description: String(row.description || '').trim() || null,
+    }
+    if (kind !== 'resource') {
+      delete spec.resource_type
+      delete spec.required_files
+      delete spec.binding_required
+    }
+    Object.keys(spec).forEach((key) => {
+      if (spec[key] === null || (Array.isArray(spec[key]) && !spec[key].length)) delete spec[key]
+    })
+    return spec
+  }).filter((item) => item.key)
+}
+
+function splitList(value) {
+  return String(value || '').split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function applyAssetJsonDraft(target, key) {
+  const parsed = parseJsonArray(form[key])
+  target.splice(0, target.length, ...parsed.map((item) => ({
+    key: item.key || '',
+    label: item.label || '',
+    required: Boolean(item.required),
+    data_kind: item.data_kind || '',
+    parser: item.parser || '',
+    extensions: (item.extensions || []).join(','),
+    mime_types: (item.mime_types || []).join(','),
+    max_size_bytes: item.max_size_bytes || '',
+    sample_path: item.sample_path || '',
+    artifact_type: item.artifact_type || '',
+    mime_type: item.mime_type || '',
+    env_var: item.env_var || '',
+    resource_type: item.resource_type || '',
+    required_files: (item.required_files || []).join(','),
+    binding_required: Boolean(item.binding_required),
+    description: item.description || '',
+  })))
+}
+
+watch(parsedInputAssets, (value) => { form.input_assets = JSON.stringify(value, null, 2) }, { deep: true })
+watch(parsedOutputAssets, (value) => { form.output_assets = JSON.stringify(value, null, 2) }, { deep: true })
+watch(parsedResourceAssets, (value) => { form.resource_assets = JSON.stringify(value, null, 2) }, { deep: true })
 
 function toYaml(value, depth = 0) {
   const indent = '  '.repeat(depth)
@@ -211,6 +350,7 @@ function validateBeforeSubmit() {
   if (!form.version.trim()) return '请填写版本号'
   if (!sourceFiles.value.length) return '请至少选择一个 Python 源文件'
   if (sampleJsonError.value) return sampleJsonError.value
+  if (assetJsonError.value) return assetJsonError.value
   return ''
 }
 
@@ -288,6 +428,10 @@ async function submit() {
       data.append('trigger_modes', JSON.stringify(form.trigger_modes))
       data.append('input_schema', JSON.stringify(contract.value.input_schema))
       data.append('output_schema', JSON.stringify(contract.value.output_schema))
+      data.append('input_assets', JSON.stringify(contract.value.input_assets))
+      data.append('output_assets', JSON.stringify(contract.value.output_assets))
+      data.append('resource_assets', JSON.stringify(contract.value.resource_assets))
+      if (contract.value.result_envelope) data.append('result_envelope', contract.value.result_envelope)
       data.append('runtime', JSON.stringify(contract.value.runtime))
       data.append('sample_input', form.sample_input)
       sourceFiles.value.forEach((file) => data.append('files', file.raw))
@@ -393,7 +537,7 @@ function viewModelDetail() {
         <div class="source-grid">
           <section>
             <h3>算法文件</h3>
-            <el-upload v-model:file-list="sourceFiles" drag multiple :auto-upload="false" accept=".py,.json,.md,.txt,.pkl,.joblib,.npy,.npz,.csv" @change="currentStep = Math.max(currentStep, 1)">
+            <el-upload v-model:file-list="sourceFiles" drag multiple :auto-upload="false" accept=".py,.json,.md,.txt,.dat,.pkl,.joblib,.npy,.npz,.csv,.xlsx,.png,.jpg,.jpeg,.webp" @change="currentStep = Math.max(currentStep, 1)">
               <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
               <div class="el-upload__text">拖入 Python 源文件，或点击选择</div>
             </el-upload>
@@ -407,6 +551,57 @@ function viewModelDetail() {
             <el-alert v-if="sampleJsonError" :title="sampleJsonError" type="error" :closable="false" show-icon />
           </section>
         </div>
+
+        <section class="schema-section asset-spec-section">
+          <div class="section-heading">
+            <div><h3>输入文件规格</h3><p>声明运行时可上传的通用文件资产。</p></div>
+            <el-button :icon="Plus" @click="addAssetRow(inputAssetRows, 'input')">添加输入文件</el-button>
+          </div>
+          <el-table :data="inputAssetRows" border size="small" empty-text="未声明文件输入，模型按 JSON-only 运行">
+            <el-table-column label="Key" min-width="130"><template #default="{ row }"><el-input v-model="row.key" placeholder="data_file" /></template></el-table-column>
+            <el-table-column label="名称" min-width="130"><template #default="{ row }"><el-input v-model="row.label" placeholder="输入文件" /></template></el-table-column>
+            <el-table-column label="必填" width="72" align="center"><template #default="{ row }"><el-checkbox v-model="row.required" /></template></el-table-column>
+            <el-table-column label="数据类型" width="120"><template #default="{ row }"><el-select v-model="row.data_kind"><el-option v-for="item in dataKindOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
+            <el-table-column label="解析器" width="170"><template #default="{ row }"><el-select v-model="row.parser"><el-option v-for="item in parserOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
+            <el-table-column label="扩展名" min-width="150"><template #default="{ row }"><el-input v-model="row.extensions" placeholder=".csv,.xlsx" /></template></el-table-column>
+            <el-table-column label="样例路径" min-width="180"><template #default="{ row }"><el-input v-model="row.sample_path" placeholder="tests/sample_assets/sample.csv" /></template></el-table-column>
+            <el-table-column width="52"><template #default="{ $index }"><el-button text :icon="Delete" aria-label="删除输入文件规格" @click="removeAssetRow(inputAssetRows, $index)" /></template></el-table-column>
+          </el-table>
+        </section>
+
+        <section class="schema-section asset-spec-section">
+          <div class="section-heading">
+            <div><h3>输出文件规格</h3><p>声明模型会写入 output_dir 的通用文件产物。</p></div>
+            <el-button :icon="Plus" @click="addAssetRow(outputAssetRows, 'output')">添加输出文件</el-button>
+          </div>
+          <el-table :data="outputAssetRows" border size="small" empty-text="未声明文件输出，结果只展示 JSON summary">
+            <el-table-column label="Key" min-width="130"><template #default="{ row }"><el-input v-model="row.key" placeholder="result_file" /></template></el-table-column>
+            <el-table-column label="名称" min-width="130"><template #default="{ row }"><el-input v-model="row.label" placeholder="结果文件" /></template></el-table-column>
+            <el-table-column label="数据类型" width="120"><template #default="{ row }"><el-select v-model="row.data_kind"><el-option v-for="item in dataKindOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
+            <el-table-column label="Artifact" width="150"><template #default="{ row }"><el-select v-model="row.artifact_type" filterable allow-create><el-option v-for="item in artifactTypeOptions" :key="item" :label="item" :value="item" /></el-select></template></el-table-column>
+            <el-table-column label="MIME" min-width="180"><template #default="{ row }"><el-input v-model="row.mime_type" placeholder="application/json" /></template></el-table-column>
+            <el-table-column label="扩展名" min-width="130"><template #default="{ row }"><el-input v-model="row.extensions" placeholder=".json" /></template></el-table-column>
+            <el-table-column width="52"><template #default="{ $index }"><el-button text :icon="Delete" aria-label="删除输出文件规格" @click="removeAssetRow(outputAssetRows, $index)" /></template></el-table-column>
+          </el-table>
+        </section>
+
+        <section class="schema-section asset-spec-section">
+          <div class="section-heading">
+            <div><h3>受管资源需求</h3><p>声明权重、数据库、tokenizer 等只读运行资源。</p></div>
+            <el-button :icon="Plus" @click="addAssetRow(resourceAssetRows, 'resource')">添加资源</el-button>
+          </div>
+          <el-table :data="resourceAssetRows" border size="small" empty-text="未声明受管资源">
+            <el-table-column label="Key" min-width="150"><template #default="{ row }"><el-input v-model="row.key" placeholder="model_weights" /></template></el-table-column>
+            <el-table-column label="名称" min-width="150"><template #default="{ row }"><el-input v-model="row.label" placeholder="模型权重" /></template></el-table-column>
+            <el-table-column label="资源类型" min-width="140"><template #default="{ row }"><el-input v-model="row.resource_type" placeholder="checkpoints" /></template></el-table-column>
+            <el-table-column label="必需文件" min-width="190"><template #default="{ row }"><el-input v-model="row.required_files" placeholder="model.pth, vocab.json" /></template></el-table-column>
+            <el-table-column label="环境变量" min-width="190"><template #default="{ row }"><el-input v-model="row.env_var" placeholder="MODEL_WEIGHTS_ROOT" /></template></el-table-column>
+            <el-table-column label="必填" width="72" align="center"><template #default="{ row }"><el-checkbox v-model="row.required" /></template></el-table-column>
+            <el-table-column label="需绑定" width="84" align="center"><template #default="{ row }"><el-checkbox v-model="row.binding_required" /></template></el-table-column>
+            <el-table-column label="说明" min-width="180"><template #default="{ row }"><el-input v-model="row.description" /></template></el-table-column>
+            <el-table-column width="52"><template #default="{ $index }"><el-button text :icon="Delete" aria-label="删除资源规格" @click="removeAssetRow(resourceAssetRows, $index)" /></template></el-table-column>
+          </el-table>
+        </section>
 
         <el-collapse v-model="expandedAdvanced" class="advanced-collapse">
           <el-collapse-item name="advanced">
@@ -431,6 +626,23 @@ function viewModelDetail() {
                 <el-form-item label="Logo URL"><el-input v-model="form.logo_url" placeholder="仅使用授权或公开可用 Logo" /></el-form-item>
               </div>
               <el-form-item label="推荐引用"><el-input v-model="form.citation" type="textarea" :rows="2" placeholder="可填写模型、论文或方法引用文本" /></el-form-item>
+              <div class="form-grid">
+                <el-form-item label="结果封装">
+                  <el-input v-model="form.result_envelope" placeholder="polyagent_run_result.v1" clearable />
+                </el-form-item>
+              </div>
+              <div class="asset-contract-grid">
+                <el-form-item label="输入文件规格">
+                  <el-input v-model="form.input_assets" type="textarea" :rows="5" class="code-input" @blur="applyAssetJsonDraft(inputAssetRows, 'input_assets')" />
+                </el-form-item>
+                <el-form-item label="输出文件规格">
+                  <el-input v-model="form.output_assets" type="textarea" :rows="5" class="code-input" @blur="applyAssetJsonDraft(outputAssetRows, 'output_assets')" />
+                </el-form-item>
+                <el-form-item label="受管资源需求">
+                  <el-input v-model="form.resource_assets" type="textarea" :rows="5" class="code-input" @blur="applyAssetJsonDraft(resourceAssetRows, 'resource_assets')" />
+                </el-form-item>
+              </div>
+              <el-alert v-if="assetJsonError" :title="assetJsonError" type="error" :closable="false" show-icon />
             </el-form>
 
             <section class="schema-section">
@@ -541,6 +753,7 @@ h3 { font-size: 15px; }
 .metadata-form { margin-top: 12px; }
 .simple-form-grid { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr) 140px; gap: 0 14px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0 14px; }
+.asset-contract-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px; }
 .source-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr); gap: 18px; margin-top: 8px; }
 .source-grid section { min-width: 0; }
 .source-grid h3, .contract-preview h3 { margin-bottom: 10px; }
@@ -576,6 +789,6 @@ h3 { font-size: 15px; }
 @media (max-width: 1100px) { .validation-results { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
   .wizard-head, .section-heading, .submit-row, .success-actions, .wizard-footer { align-items: stretch; flex-direction: column; }
-  .simple-form-grid, .form-grid, .source-grid, .validation-results, .upload-mode-grid { grid-template-columns: 1fr; }
+  .simple-form-grid, .form-grid, .asset-contract-grid, .source-grid, .validation-results, .upload-mode-grid { grid-template-columns: 1fr; }
 }
 </style>

@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Check, ArrowRight, DataAnalysis, MagicStick, Star, SetUp, Document, CircleCheck, CircleClose, Clock, Collection,
+  Check, ArrowRight, DataAnalysis, MagicStick, Star, SetUp, Document, Download, CircleCheck, CircleClose, Clock, Collection,
 } from '@element-plus/icons-vue'
 
 import ProblemSpecPanel from './research-engine/ProblemSpecPanel.vue'
@@ -15,14 +15,17 @@ import GateReviewDialog from './research-engine/GateReviewDialog.vue'
 import ReportGenerateDrawer from './research-engine/ReportGenerateDrawer.vue'
 import ReportJobPanel from './research-engine/ReportJobPanel.vue'
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
+import { formatApiDateTime } from '../utils/datetime'
 import {
   createReport,
   createExecutionDecision,
   downloadReportArtifact,
   getActiveExecutionDecision,
+  getAlgorithmRun,
   getApiErrorMessage,
   getManualWorkflow,
   getProblemSpec,
+  getReportReadiness,
   getResearchEngineReadiness,
   getResearchRun,
   getResearchRunTraceability,
@@ -60,6 +63,8 @@ const reportDrawerVisible = ref(false)
 const reportJobs = ref([])
 const reportJobsLoading = ref(false)
 const reportSubmitting = ref(false)
+const reportReadiness = ref(null)
+const reportReadinessLoading = ref(false)
 const readiness = ref(null)
 const readinessLoading = ref(false)
 const readinessError = ref('')
@@ -106,11 +111,40 @@ const reportSubjectKey = computed(() =>
   reportSubject.value ? `${reportSubject.value.subject_type}:${reportSubject.value.subject_id}` : '',
 )
 
+const normalizedReportStatus = job => String(job?.status || '').trim().toLowerCase()
 const hasActiveReportJobs = computed(() =>
-  reportJobs.value.some(job => !REPORT_TERMINAL_STATUSES.has(job.status)),
+  reportJobs.value.some(job => !REPORT_TERMINAL_STATUSES.has(normalizedReportStatus(job))),
 )
 
-const reportPrimaryButtonText = computed(() => (hasActiveReportJobs.value ? '生成中' : '生成报告'))
+const downloadableReportArtifacts = job =>
+  (job?.artifact_refs || []).filter(item => ['pdf', 'markdown'].includes(item.artifact_type))
+
+const latestCompletedReport = computed(() =>
+  reportJobs.value.find(job => normalizedReportStatus(job) === 'completed' && downloadableReportArtifacts(job).length) || null,
+)
+
+const preferredReportArtifact = computed(() => {
+  const artifacts = downloadableReportArtifacts(latestCompletedReport.value)
+  return artifacts.find(item => item.artifact_type === 'pdf') || artifacts.find(item => item.artifact_type === 'markdown') || null
+})
+
+const hasDownloadableReport = computed(() => Boolean(latestCompletedReport.value && preferredReportArtifact.value))
+
+const reportPrimaryButtonText = computed(() => {
+  if (hasDownloadableReport.value) return '下载报告'
+  if (hasActiveReportJobs.value) return '生成中'
+  return '生成报告'
+})
+
+const reportReadinessWarnings = computed(() => reportReadiness.value?.warnings || [])
+const isReportGenerationReady = computed(() =>
+  Boolean(
+    reportReadiness.value?.reports_enabled
+      && reportReadiness.value?.output_root_ready
+      && reportReadiness.value?.provider_ready
+      && reportReadiness.value?.skill_pipeline_ready,
+  ),
+)
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const isCurrentRunTerminal = computed(() => {
   const status = researchRun.value?.status || workflowRun.value?.status || algorithmRun.value?.status
@@ -125,6 +159,39 @@ const readinessItemsByService = computed(() => {
 const llmReadiness = computed(() => readinessItemsByService.value['research-llm'] || null)
 const ragReadiness = computed(() => readinessItemsByService.value['literature-rag'] || null)
 const autoResearchStageModes = computed(() => readiness.value?.stage_modes || [])
+
+const researchStages = computed(() =>
+  researchTraceability.value?.research_run?.stage_runs || researchRun.value?.stage_runs || [],
+)
+
+const visibleResearchStages = computed(() =>
+  researchStages.value.filter(stage => {
+    if (!stage) return false
+    if (['pending', 'draft'].includes(stage.status)) return false
+    return Boolean(
+      stage.started_at
+        || stage.finished_at
+        || stage.status
+        || stage.output_summary
+        || stage.error
+        || (stage.linked_algorithm_runs || []).length,
+    )
+  }),
+)
+
+const linkedResearchAlgorithmRuns = computed(() => researchTraceability.value?.linked_algorithm_runs || [])
+const linkedResearchComputations = computed(() => researchTraceability.value?.linked_computations || [])
+const linkedResearchObservations = computed(() => researchTraceability.value?.linked_observations || [])
+const researchAuditEvents = computed(() => researchTraceability.value?.audit_events || [])
+const hasResearchTraceContent = computed(() =>
+  Boolean(
+    visibleResearchStages.value.length
+      || linkedResearchAlgorithmRuns.value.length
+      || linkedResearchComputations.value.length
+      || linkedResearchObservations.value.length
+      || researchAuditEvents.value.length,
+  ),
+)
 
 const mainActions = computed(() => [
   {
@@ -147,10 +214,10 @@ const mainActions = computed(() => [
   },
   {
     key: 'runs',
-    title: '查看运行与审批',
+    title: isCurrentRunTerminal.value ? '结果与报告' : '查看运行与审批',
     description: pendingResearchApprovalStage.value ? '有步骤等待审批' : (researchRun.value?.run_id || algorithmRun.value?.run_id || '查看当前运行状态'),
-    step: researchRun.value || algorithmRun.value ? 4 : 3,
-    tag: pendingResearchApprovalStage.value ? '待审批' : (researchRun.value || algorithmRun.value ? '可查看' : '待运行'),
+    step: isCurrentRunTerminal.value ? 5 : (researchRun.value || algorithmRun.value ? 4 : 3),
+    tag: pendingResearchApprovalStage.value ? '待审批' : (isCurrentRunTerminal.value ? '可下载' : (researchRun.value || algorithmRun.value ? '可查看' : '待运行')),
     type: pendingResearchApprovalStage.value ? 'warning' : 'info',
     disabled: !(executionMode.value || researchRun.value || algorithmRun.value),
   },
@@ -164,6 +231,8 @@ const activeMainAction = computed(() => {
 
 if (route.query.run_id) {
   algorithmRun.value = { run_id: String(route.query.run_id) }
+  executionMode.value = 'manual_workbench'
+  currentStep.value = 5
 }
 if (route.query.research_run_id) {
   currentStep.value = 3
@@ -211,9 +280,9 @@ const steps = computed(() => [
   },
   {
     key: 5,
-    title: '追溯/结果汇总',
+    title: '结果与报告',
     icon: Document,
-    description: '查看过程记录与结果摘要',
+    description: '下载报告并查看关键记录',
     status: stepStatus(5),
   },
 ])
@@ -358,8 +427,11 @@ async function loadReportJobs(options = {}) {
     reportJobs.value = []
     return
   }
-  if (reportJobsLoading.value) return
-  reportJobsLoading.value = true
+  if (reportJobsLoading.value && !options.force) return
+  const showLoading = !options.silent
+  if (showLoading) {
+    reportJobsLoading.value = true
+  }
   try {
     const data = await listReports({
       subject_type: reportSubject.value.subject_type,
@@ -373,7 +445,22 @@ async function loadReportJobs(options = {}) {
       ElMessage.error(getApiErrorMessage(error))
     }
   } finally {
-    reportJobsLoading.value = false
+    if (showLoading) {
+      reportJobsLoading.value = false
+    }
+  }
+}
+
+async function loadReportReadiness(options = {}) {
+  reportReadinessLoading.value = true
+  try {
+    reportReadiness.value = await getReportReadiness()
+  } catch (error) {
+    if (!options.silent) {
+      ElMessage.error(getApiErrorMessage(error))
+    }
+  } finally {
+    reportReadinessLoading.value = false
   }
 }
 
@@ -382,7 +469,26 @@ function openReportDrawer() {
     ElMessage.warning('暂无可生成报告的运行对象')
     return
   }
+  if (!reportReadiness.value) {
+    loadReportReadiness({ silent: true })
+  }
   reportDrawerVisible.value = true
+}
+
+async function handleReportPrimaryAction() {
+  if (!reportSubject.value) {
+    ElMessage.warning('暂无可生成报告的运行对象')
+    return
+  }
+  if (hasDownloadableReport.value) {
+    await handleReportDownload(latestCompletedReport.value, preferredReportArtifact.value)
+    return
+  }
+  if (hasActiveReportJobs.value) {
+    await loadReportJobs()
+    return
+  }
+  openReportDrawer()
 }
 
 async function handleReportSubmit(payload) {
@@ -405,7 +511,7 @@ async function handleReportRetry(job) {
   try {
     await retryReport(job.report_id)
     ElMessage.success('报告任务已重试')
-    await loadReportJobs()
+    await loadReportJobs({ force: true })
     syncReportPolling()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -437,11 +543,11 @@ function saveBlob(blob, filename) {
 function startReportPolling() {
   if (reportPollingTimer) return
   reportPollingTimer = window.setInterval(async () => {
-    if (currentStep.value !== 5 || !reportSubject.value) {
+    if (!reportSubject.value) {
       stopReportPolling()
       return
     }
-    await loadReportJobs({ silent: true })
+    await loadReportJobs({ silent: true, force: true })
     if (!hasActiveReportJobs.value) {
       stopReportPolling()
     }
@@ -455,7 +561,7 @@ function stopReportPolling() {
 }
 
 function syncReportPolling() {
-  if (currentStep.value === 5 && reportSubject.value && hasActiveReportJobs.value) {
+  if (reportSubject.value && hasActiveReportJobs.value) {
     startReportPolling()
   } else {
     stopReportPolling()
@@ -530,10 +636,7 @@ function enableAdvancedMode(targetStep = currentStep.value) {
 }
 
 function formatDate(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
+  return formatApiDateTime(value)
 }
 
 function shortJson(value) {
@@ -552,6 +655,7 @@ function workflowStepsFromWorkflow(workflow) {
 }
 
 async function restoreRouteState() {
+  const algorithmRunId = route.query.run_id ? String(route.query.run_id) : ''
   const problemSpecId = route.query.problem_spec_id ? String(route.query.problem_spec_id) : ''
   const workflowId = route.query.workflow_id ? String(route.query.workflow_id) : ''
   const researchRunId = route.query.research_run_id ? String(route.query.research_run_id) : ''
@@ -587,6 +691,24 @@ async function restoreRouteState() {
       selectedAlgorithm.value = null
       pipelineSteps.value = workflowStepsFromWorkflow(workflow)
       currentStep.value = 3
+    }
+
+    if (algorithmRunId && !researchRunId) {
+      const run = await getAlgorithmRun(algorithmRunId)
+      algorithmRun.value = run
+      researchRun.value = null
+      workflowRun.value = null
+      selectedAlgorithm.value = null
+      pipelineSteps.value = []
+      executionMode.value = run.trigger_source === 'autoresearch' ? 'autoresearch' : 'manual_workbench'
+      if (!problemSpec.value && run.problem_spec_id) {
+        problemSpec.value = await getProblemSpec(run.problem_spec_id)
+      }
+      executionDecision.value = executionDecision.value || {
+        decision_id: run.workflow_run_id || run.research_run_id || '',
+        mode: executionMode.value,
+      }
+      currentStep.value = TERMINAL_RUN_STATUSES.has(run.status) ? 5 : 4
     }
 
     if (researchRunId) {
@@ -671,10 +793,15 @@ function stepIconComponent(step) {
   return step.icon
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadReadiness()
+  loadReportReadiness({ silent: true })
   loadExamples()
-  restoreRouteState()
+  await restoreRouteState()
+  if (reportSubject.value) {
+    await loadReportJobs({ silent: true })
+    syncReportPolling()
+  }
 })
 
 onUnmounted(() => {
@@ -682,7 +809,7 @@ onUnmounted(() => {
 })
 
 watch(
-  () => [route.query.problem_spec_id, route.query.workflow_id, route.query.research_run_id, route.query.mode],
+  () => [route.query.run_id, route.query.problem_spec_id, route.query.workflow_id, route.query.research_run_id, route.query.mode],
   () => {
     restoreRouteState()
   },
@@ -698,16 +825,19 @@ watch(
 )
 
 watch(
-  () => [currentStep.value, reportSubjectKey.value],
+  () => reportSubjectKey.value,
   () => {
-    if (currentStep.value === 5 && reportSubject.value) {
+    if (reportSubject.value) {
       loadReportJobs()
+      loadReportReadiness({ silent: true })
+    } else {
+      reportJobs.value = []
     }
   },
 )
 
 watch(
-  () => [currentStep.value, reportSubjectKey.value, hasActiveReportJobs.value],
+  () => [reportSubjectKey.value, hasActiveReportJobs.value],
   () => {
     syncReportPolling()
   },
@@ -759,7 +889,7 @@ watch(
           </button>
         </div>
 
-        <section class="capability-mini-panel" v-loading="readinessLoading">
+        <section v-if="advancedMode" class="capability-mini-panel" v-loading="readinessLoading">
           <div class="capability-mini-row">
             <span>AI 模型</span>
             <el-tag size="small" :type="capabilityTagType(llmReadiness?.level)" effect="plain">
@@ -903,7 +1033,7 @@ watch(
               </div>
               <h5>AutoResearch 自动编排</h5>
               <p>系统按阶段推进，关键节点等待人工审批；每个阶段会标明真实接入能力、AI 模型或演示路径。</p>
-              <div class="mode-capability-line">
+              <div v-if="advancedMode" class="mode-capability-line">
                 <el-tag size="small" :type="capabilityTagType(llmReadiness?.level)" effect="plain">
                   AI：{{ readinessLevelLabel(llmReadiness?.level) }}
                 </el-tag>
@@ -1015,7 +1145,7 @@ watch(
               <h4>步骤 3：AutoResearch 编排</h4>
             </div>
             <p class="step-panel-desc">创建自动研发运行，启动后系统按阶段推进，关键节点会等待人工审批。</p>
-            <section class="autoresearch-readiness-panel" v-loading="readinessLoading">
+            <section v-if="advancedMode" class="autoresearch-readiness-panel" v-loading="readinessLoading">
               <div class="readiness-header">
                 <div>
                   <strong>AutoResearch 能力路径</strong>
@@ -1090,7 +1220,7 @@ watch(
                 size="small"
                 @click="currentStep = 5"
               >
-                查看完整过程记录 <el-icon style="margin-left:4px"><ArrowRight /></el-icon>
+                查看结果与报告 <el-icon style="margin-left:4px"><ArrowRight /></el-icon>
               </el-button>
               <el-button
                 v-if="pendingResearchApprovalStage"
@@ -1121,18 +1251,38 @@ watch(
           <div class="step-panel-header step-panel-header-with-actions">
             <div class="step-panel-title">
               <el-icon :size="20"><Document /></el-icon>
-              <h4>步骤 5：追溯与结果汇总</h4>
+              <h4>步骤 5：结果与报告</h4>
             </div>
             <el-button
               type="primary"
-              :icon="Document"
+              :icon="hasDownloadableReport ? Download : Document"
               :disabled="!reportSubject"
-              @click="hasActiveReportJobs ? loadReportJobs() : openReportDrawer()"
+              @click="handleReportPrimaryAction"
             >
               {{ reportPrimaryButtonText }}
             </el-button>
+            <el-button
+              v-if="reportSubject && hasDownloadableReport"
+              :icon="Document"
+              @click="openReportDrawer"
+            >
+              重新生成
+            </el-button>
           </div>
-          <p class="step-panel-desc">查看完整过程记录，包括阶段事件、关联计算任务和观测记录。</p>
+          <p class="step-panel-desc">优先查看报告下载、关键结果和本次运行实际产生的追溯记录。</p>
+
+          <el-alert
+            v-if="reportSubject && reportReadiness && (!isReportGenerationReady || reportReadinessWarnings.length)"
+            class="report-readiness-alert"
+            :title="isReportGenerationReady ? '报告服务有提示信息' : '报告生成配置未完全就绪'"
+            type="warning"
+            :closable="false"
+            show-icon
+          >
+            <template #default>
+              <span>{{ reportReadinessWarnings[0] || '请检查报告 provider、输出目录或 Skill pipeline 配置。' }}</span>
+            </template>
+          </el-alert>
 
           <ReportJobPanel
             v-if="reportSubject"
@@ -1159,11 +1309,13 @@ watch(
                 </el-tag>
               </div>
 
-              <section class="trace-section">
-                <h5>阶段追溯</h5>
+              <div v-if="!hasResearchTraceContent" class="empty-hint">暂无已产生的追溯记录</div>
+
+              <section v-if="visibleResearchStages.length" class="trace-section">
+                <h5>已执行阶段</h5>
                 <div class="trace-stage-list">
                   <article
-                    v-for="stage in (researchTraceability?.research_run?.stage_runs || researchRun.stage_runs || [])"
+                    v-for="stage in visibleResearchStages"
                     :key="stage.stage_run_id"
                     class="trace-stage-item"
                   >
@@ -1178,62 +1330,76 @@ watch(
                     <div v-if="stage.linked_algorithm_runs?.length" class="trace-tags">
                       <el-tag v-for="id in stage.linked_algorithm_runs" :key="id" size="small" effect="plain">{{ id }}</el-tag>
                     </div>
-                    <details class="trace-json">
-                      <summary>输入 / 输出 / 审批</summary>
-                      <pre>input: {{ shortJson(stage.input_snapshot) }}</pre>
-                      <pre>output: {{ shortJson(stage.output_summary) }}</pre>
-                      <pre v-if="stage.decisions?.length">decisions: {{ shortJson(stage.decisions) }}</pre>
-                      <pre v-if="stage.error">error: {{ shortJson(stage.error) }}</pre>
-                    </details>
                   </article>
                 </div>
               </section>
 
-              <section class="trace-section">
+              <section
+                v-if="linkedResearchAlgorithmRuns.length || linkedResearchComputations.length || linkedResearchObservations.length"
+                class="trace-section"
+              >
                 <h5>关联项</h5>
                 <div class="trace-link-grid">
-                  <div>
+                  <div v-if="linkedResearchAlgorithmRuns.length">
                     <strong>算法运行</strong>
-                    <p v-if="!researchTraceability?.linked_algorithm_runs?.length">暂无</p>
-                    <el-tag v-for="run in researchTraceability?.linked_algorithm_runs || []" :key="run.run_id" size="small" :type="statusTag(run.status)">
+                    <el-tag v-for="run in linkedResearchAlgorithmRuns" :key="run.run_id" size="small" :type="statusTag(run.status)">
                       {{ run.algorithm_id }} · {{ run.run_id }}
                     </el-tag>
                   </div>
-                  <div>
+                  <div v-if="linkedResearchComputations.length">
                     <strong>计算任务</strong>
-                    <p v-if="!researchTraceability?.linked_computations?.length">暂无</p>
-                    <el-tag v-for="run in researchTraceability?.linked_computations || []" :key="run.run_id" size="small" :type="statusTag(run.status)">
+                    <el-tag v-for="run in linkedResearchComputations" :key="run.run_id" size="small" :type="statusTag(run.status)">
                       {{ run.workflow_type || run.engine || 'computation' }} · {{ run.run_id }}
                     </el-tag>
                   </div>
-                  <div>
+                  <div v-if="linkedResearchObservations.length">
                     <strong>观测记录</strong>
-                    <p v-if="!researchTraceability?.linked_observations?.length">暂无</p>
-                    <el-tag v-for="(item, idx) in researchTraceability?.linked_observations || []" :key="idx" size="small" effect="plain">
+                    <el-tag v-for="(item, idx) in linkedResearchObservations" :key="idx" size="small" effect="plain">
                       {{ item.observation_id || item.id || `observation_${idx + 1}` }}
                     </el-tag>
                   </div>
                 </div>
               </section>
 
-              <section class="trace-section">
-                <h5>阶段事件</h5>
-                <el-timeline v-if="researchTraceability?.audit_events?.length">
-                  <el-timeline-item
-                    v-for="event in researchTraceability.audit_events"
-                    :key="event.event_id"
-                    :timestamp="formatDate(event.created_at)"
-                    :type="event.event_type === 'failed' || event.event_type === 'rejected' ? 'danger' : event.event_type === 'completed' || event.event_type === 'approved' ? 'success' : 'primary'"
-                  >
-                    <div class="audit-item">
-                      <strong>{{ event.event_type }}</strong>
-                      <span>{{ event.entity_type }} · {{ event.entity_id }}</span>
-                      <p v-if="event.reason">{{ event.reason }}</p>
+              <el-collapse v-if="researchStages.length || researchAuditEvents.length" class="trace-detail-collapse">
+                <el-collapse-item title="展开完整追溯明细" name="research-trace">
+                  <section v-if="researchStages.length" class="trace-section">
+                    <h5>阶段输入 / 输出 / 审批</h5>
+                    <div class="trace-stage-list">
+                      <article v-for="stage in researchStages" :key="`detail-${stage.stage_run_id}`" class="trace-stage-item">
+                        <div class="trace-stage-header">
+                          <strong>{{ stageLabels[stage.stage_key] || stage.stage_key }}</strong>
+                          <el-tag size="small" :type="statusTag(stage.status)">{{ stage.status }}</el-tag>
+                        </div>
+                        <div class="trace-json">
+                          <pre>input: {{ shortJson(stage.input_snapshot) }}</pre>
+                          <pre>output: {{ shortJson(stage.output_summary) }}</pre>
+                          <pre v-if="stage.decisions?.length">decisions: {{ shortJson(stage.decisions) }}</pre>
+                          <pre v-if="stage.error">error: {{ shortJson(stage.error) }}</pre>
+                        </div>
+                      </article>
                     </div>
-                  </el-timeline-item>
-                </el-timeline>
-                <div v-else class="empty-hint">暂无阶段事件</div>
-              </section>
+                  </section>
+
+                  <section v-if="researchAuditEvents.length" class="trace-section">
+                    <h5>审计事件</h5>
+                    <el-timeline>
+                      <el-timeline-item
+                        v-for="event in researchAuditEvents"
+                        :key="event.event_id"
+                        :timestamp="formatDate(event.created_at)"
+                        :type="event.event_type === 'failed' || event.event_type === 'rejected' ? 'danger' : event.event_type === 'completed' || event.event_type === 'approved' ? 'success' : 'primary'"
+                      >
+                        <div class="audit-item">
+                          <strong>{{ event.event_type }}</strong>
+                          <span>{{ event.entity_type }} · {{ event.entity_id }}</span>
+                          <p v-if="event.reason">{{ event.reason }}</p>
+                        </div>
+                      </el-timeline-item>
+                    </el-timeline>
+                  </section>
+                </el-collapse-item>
+              </el-collapse>
             </div>
           </template>
 
@@ -1282,10 +1448,18 @@ watch(
               v-if="reportSubject"
               type="primary"
               size="small"
+              :icon="hasDownloadableReport ? Download : Document"
               :disabled="reportSubmitting"
-              @click="hasActiveReportJobs ? loadReportJobs() : openReportDrawer()"
+              @click="handleReportPrimaryAction"
             >
               {{ reportPrimaryButtonText }}
+            </el-button>
+            <el-button
+              v-if="reportSubject && hasDownloadableReport"
+              size="small"
+              @click="openReportDrawer"
+            >
+              重新生成
             </el-button>
             <el-button size="small" @click="openExamples">示例流程</el-button>
           </div>
@@ -1316,7 +1490,7 @@ watch(
             </div>
             <div class="context-row">
               <span>过程记录</span>
-              <strong>{{ researchTraceability ? '已加载' : '待加载' }}</strong>
+              <strong>{{ researchRun ? (researchTraceability ? '已加载' : '待加载') : (algorithmRun ? '已加载' : '待加载') }}</strong>
             </div>
           </div>
         </section>
@@ -1835,6 +2009,10 @@ watch(
   line-height: 1.6;
 }
 
+.report-readiness-alert {
+  margin-bottom: 12px;
+}
+
 /* ── 执行路径选择卡片 ── */
 .mode-choice-grid {
   display: grid;
@@ -2107,11 +2285,6 @@ watch(
   color: var(--app-ink-body);
 }
 
-.trace-json summary {
-  cursor: pointer;
-  color: #2563eb;
-}
-
 .trace-json pre {
   overflow-x: auto;
   margin: 8px 0 0;
@@ -2140,6 +2313,10 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+.trace-detail-collapse {
+  margin-top: 4px;
 }
 
 /* ── 算法选择区域 ── */

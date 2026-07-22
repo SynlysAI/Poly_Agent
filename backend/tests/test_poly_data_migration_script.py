@@ -76,6 +76,7 @@ class FakeCollection:
     def __init__(self, rows: list[dict] | None = None) -> None:
         self.rows = list(rows or [])
         self.indexes: list[tuple] = []
+        self.bulk_batches: list[int] = []
         self.dropped = False
 
     def estimated_document_count(self) -> int:
@@ -97,6 +98,18 @@ class FakeCollection:
                 return
         if upsert:
             self.rows.append({**filters, **payload})
+
+    def bulk_write(self, operations, ordered: bool = False):
+        self.bulk_batches.append(len(operations))
+        for operation in operations:
+            self.update_one(operation._filter, operation._doc, upsert=operation._upsert)
+
+        class Result:
+            upserted_count = 0
+            modified_count = len(operations)
+            matched_count = len(operations)
+
+        return Result()
 
     def create_index(self, keys, name: str, unique: bool = False) -> None:
         self.indexes.append((keys, name, unique))
@@ -297,43 +310,48 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(dataset["record_collection_key"], "poly_data.radonpy_records")
         self.assertEqual(dataset["record_mode"], "full")
 
-    def test_pi1m_import_limits_sample_size_and_is_idempotent(self) -> None:
+    def test_pi1m_import_streams_chunks_and_marks_full_import(self) -> None:
         import pandas as pd
 
         target_db = FakeDatabase()
-        dataframe = pd.DataFrame(
-            [
-                {"SMILES": "*CC*", "SA Score": 3.1},
-                {"SMILES": "*CCC*", "SA Score": 4.2},
-                {"SMILES": "*CCCC*", "SA Score": 5.3},
-            ]
-        )
+        chunks = [
+            pd.DataFrame([{"SMILES": "*CC*", "SA Score": 3.1}, {"SMILES": "*CCC*", "SA Score": 4.2}]),
+            pd.DataFrame([{"SMILES": "*CCCC*", "SA Score": 5.3}]),
+        ]
 
-        with patch("pandas.read_csv", return_value=dataframe):
+        with patch("pandas.read_csv", return_value=iter(chunks)):
             first = migration_script.import_pi1m_samples(
                 target_db,
                 s3_client=FakeS3Client(),
                 bucket="polymer-data",
-                sample_size=2,
+                sample_size=None,
+                chunk_size=2,
                 apply=True,
             )
+        with patch("pandas.read_csv", return_value=iter(chunks)):
             second = migration_script.import_pi1m_samples(
                 target_db,
                 s3_client=FakeS3Client(),
                 bucket="polymer-data",
-                sample_size=2,
+                sample_size=None,
+                chunk_size=2,
                 apply=True,
             )
 
         self.assertEqual(first["status"], "imported")
-        self.assertEqual(second["records_upserted"], 2)
-        self.assertEqual(target_db["pi1m_samples"].count_documents({}), 2)
+        self.assertEqual(second["records_upserted"], 3)
+        self.assertEqual(target_db["pi1m_samples"].count_documents({}), 3)
+        self.assertEqual(target_db["pi1m_samples"].bulk_batches, [2, 1, 2, 1])
         self.assertEqual(target_db["pi1m_samples"].rows[0]["pi1m_record_id"], "PI1M_V2-000001")
         self.assertEqual(target_db["pi1m_samples"].rows[0]["sa_score"], 3.1)
+        self.assertEqual(target_db["pi1m_samples"].rows[0]["row_index"], 1)
+        self.assertNotIn("raw", target_db["pi1m_samples"].rows[0])
         dataset = target_db["datasets"].rows[0]
         self.assertEqual(dataset["dataset_id"], "pi1m_v2")
-        self.assertEqual(dataset["record_count"], 2)
-        self.assertEqual(dataset["record_mode"], "sample")
+        self.assertEqual(dataset["record_count"], 3)
+        self.assertEqual(dataset["record_mode"], "full")
+        self.assertEqual(target_db["dataset_stats"].rows[0]["dataset_id"], "pi1m_v2")
+        self.assertEqual(target_db["import_checkpoints"].rows[-1]["status"], "completed")
 
     def test_smipoly_import_maps_csv_rows_and_is_idempotent(self) -> None:
         import pandas as pd

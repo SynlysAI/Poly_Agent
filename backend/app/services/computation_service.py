@@ -236,6 +236,23 @@ class ComputationService:
         self.get_run(run_id, actor_user_id=actor_user_id, is_admin=is_admin)
         return [ComputationArtifact(**item) for item in ComputationArtifactRepository.list_by_run(run_id)]
 
+    def list_owner_artifacts(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> list[ComputationArtifact]:
+        """按统一 owner 查询 artifacts。"""
+        self._ensure_artifact_owner_access(
+            owner_type=owner_type,
+            owner_id=owner_id,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
+        return [ComputationArtifact(**item) for item in ComputationArtifactRepository.list_by_owner(owner_type, owner_id)]
+
     def get_artifact(
         self,
         artifact_id: str,
@@ -247,7 +264,14 @@ class ComputationService:
         artifact = ComputationArtifactRepository.find_one({"artifact_id": artifact_id})
         if not artifact:
             raise HTTPException(status_code=404, detail="artifact 不存在")
-        self.get_run(str(artifact["run_id"]), actor_user_id=actor_user_id, is_admin=is_admin)
+        owner_type = str(artifact.get("owner_type") or "computation_run")
+        owner_id = str(artifact.get("owner_id") or artifact.get("run_id"))
+        self._ensure_artifact_owner_access(
+            owner_type=owner_type,
+            owner_id=owner_id,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
         return ComputationArtifact(**artifact)
 
     def list_audit_events(
@@ -300,7 +324,19 @@ class ComputationService:
         """预览白名单 artifact。"""
         artifact = self.get_artifact(artifact_id, actor_user_id=actor_user_id, is_admin=is_admin)
         path = self.resolve_artifact_path(artifact)
-        if artifact.artifact_type in {"result_json", "structure_json", "input_json", "error_json", "spectrum_json", "metrics_json"}:
+        json_artifact_types = {
+            "result_json",
+            "structure_json",
+            "input_json",
+            "error_json",
+            "spectrum_json",
+            "series_json",
+            "table_json",
+            "parsed_input_json",
+            "metrics_json",
+            "report_json",
+        }
+        if artifact.artifact_type in json_artifact_types:
             size_bytes = path.stat().st_size
             if size_bytes > JSON_PREVIEW_LIMIT_BYTES:
                 preview = {
@@ -312,7 +348,9 @@ class ComputationService:
                 return ArtifactPreviewData(artifact=artifact, preview=preview)
             with path.open("r", encoding="utf-8") as fp:
                 preview = json.load(fp)
-        elif artifact.artifact_type in {"log_text", "xyz", "sdf"}:
+        elif artifact.artifact_type in {"log_text", "xyz", "sdf", "csv"} or (
+            artifact.artifact_type == "input_file" and self._is_text_previewable(artifact, path)
+        ):
             text = path.read_text(encoding="utf-8", errors="replace")
             if len(text) > TEXT_PREVIEW_LIMIT_BYTES:
                 marker = f"\n\n[preview truncated at {TEXT_PREVIEW_LIMIT_BYTES} characters]"
@@ -348,12 +386,21 @@ class ComputationService:
     ) -> ArtifactSpectrumData:
         """读取 result artifact 的光谱/指标数据。"""
         artifact = self.get_artifact(artifact_id, actor_user_id=actor_user_id, is_admin=is_admin)
-        if artifact.artifact_type not in {"result_json", "spectrum_json"}:
+        if artifact.artifact_type not in {"result_json", "spectrum_json", "series_json"}:
             raise HTTPException(status_code=400, detail="该 artifact 不包含光谱数据")
         path = self.resolve_artifact_path(artifact)
         with path.open("r", encoding="utf-8") as fp:
             result = json.load(fp)
-        if artifact.artifact_type == "spectrum_json":
+        if artifact.artifact_type == "series_json" and isinstance(result.get("data"), dict):
+            spectrum = {
+                "schema_version": result.get("schema_version"),
+                "kind": result.get("data", {}).get("series_type", "xy"),
+                "x_label": result.get("metadata", {}).get("x_label", "x"),
+                "y_label": result.get("metadata", {}).get("y_label", "y"),
+                "points": result.get("data", {}).get("points", []),
+                "metadata": result.get("metadata", {}),
+            }
+        elif artifact.artifact_type in {"spectrum_json", "series_json"}:
             spectrum = result
         else:
             spectrum = result.get("spectrum") or result.get("spectra", {}).get("spectrum") or {
@@ -367,6 +414,13 @@ class ComputationService:
                 ],
             }
         return ArtifactSpectrumData(artifact=artifact, spectrum=spectrum)
+
+    @staticmethod
+    def _is_text_previewable(artifact: ComputationArtifact, path: Path) -> bool:
+        mime_type = (artifact.mime_type or "").lower()
+        if mime_type.startswith("text/") or mime_type in {"application/json", "application/x-ndjson"}:
+            return True
+        return path.suffix.lower() in {".txt", ".dat", ".csv", ".md", ".json", ".log"}
 
     def audit_artifact_download(
         self,
@@ -382,7 +436,11 @@ class ComputationService:
             request_id=request_id,
             entity_type="computation_artifact",
             entity_id=artifact.artifact_id,
-            related_ids={"run_id": artifact.run_id},
+            related_ids={
+                "run_id": artifact.run_id,
+                "owner_type": artifact.owner_type,
+                "owner_id": artifact.owner_id or artifact.run_id,
+            },
         )
 
     def resolve_artifact_path(self, artifact: ComputationArtifact) -> Path:
@@ -632,6 +690,8 @@ class ComputationService:
             artifact = ComputationArtifact(
                 artifact_id=self._new_id("art"),
                 run_id=run.run_id,
+                owner_type="computation_run",
+                owner_id=run.run_id,
                 step_key=spec.step_key,
                 artifact_type=spec.artifact_type,
                 name=spec.name,
@@ -657,6 +717,51 @@ class ComputationService:
             )
         return [artifact.artifact_id for artifact in artifacts]
 
+    def register_owner_artifacts(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        legacy_run_id: str,
+        created_by: str,
+        artifact_specs: list[ArtifactSpec],
+        actor_worker_id: str,
+        created_at: datetime,
+    ) -> list[ComputationArtifact]:
+        """登记带统一 owner 的 artifacts。"""
+        artifacts: list[ComputationArtifact] = []
+        for spec in artifact_specs:
+            path = self._resolve_output_file_for_registration(spec.path)
+            artifact = ComputationArtifact(
+                artifact_id=self._new_id("art"),
+                run_id=legacy_run_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                step_key=spec.step_key,
+                artifact_type=spec.artifact_type,
+                name=spec.name,
+                storage_uri=str(path),
+                mime_type=spec.mime_type,
+                size_bytes=path.stat().st_size,
+                checksum_sha256=self._sha256(path),
+                parser_name=spec.parser_name,
+                parser_version=spec.parser_version,
+                metadata=spec.metadata,
+                created_at=created_at,
+            )
+            ComputationArtifactRepository.save("artifact_id", artifact.model_dump(mode="python"))
+            artifacts.append(artifact)
+            self._audit(
+                "artifact.registered",
+                actor_user_id=created_by,
+                request_id=None,
+                entity_type="computation_artifact",
+                entity_id=artifact.artifact_id,
+                related_ids={"owner_type": owner_type, "owner_id": owner_id, "run_id": legacy_run_id},
+                actor_role=actor_worker_id,
+            )
+        return artifacts
+
     def _resolve_output_file_for_registration(self, path: Path) -> Path:
         """Resolve a produced artifact path and ensure it is under outputs_root."""
         resolved = path.resolve()
@@ -680,6 +785,22 @@ class ComputationService:
         if run.get("created_by") != actor_user_id:
             raise HTTPException(status_code=403, detail="无权限访问该计算任务")
 
+    def _ensure_artifact_owner_access(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        actor_user_id: str | None,
+        is_admin: bool,
+    ) -> None:
+        """检查 artifact 归属实体访问权限。"""
+        if owner_type == "algorithm_run":
+            from app.services.research_engine_service import ResearchEngineService
+
+            ResearchEngineService().get_algorithm_run(owner_id, actor_user_id=actor_user_id, is_admin=is_admin)
+            return
+        self.get_run(owner_id, actor_user_id=actor_user_id, is_admin=is_admin)
+
     def _is_audit_event_visible_to_user(self, event: dict, *, actor_user_id: str) -> bool:
         """判断审计事件是否属于当前用户相关实体。"""
         if event.get("actor_user_id") == actor_user_id:
@@ -693,6 +814,11 @@ class ComputationService:
             artifact = ComputationArtifactRepository.find_one({"artifact_id": entity_id})
             if not artifact:
                 return False
+            if artifact.get("owner_type") == "algorithm_run":
+                from app.infra.research_engine_repositories import AlgorithmRunRepository
+
+                run = AlgorithmRunRepository.find_one({"run_id": artifact.get("owner_id")})
+                return bool(run and run.get("created_by") == actor_user_id)
             run = ComputationRunRepository.find_one({"run_id": artifact.get("run_id")})
             return bool(run and run.get("created_by") == actor_user_id)
         related_ids = event.get("related_ids") or {}

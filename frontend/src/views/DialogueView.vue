@@ -123,7 +123,7 @@ async function sendPrompt(prompt) {
   const text = String(prompt || '').trim()
   if (!text || sending.value) return
   messages.value.push({ role: 'user', content: text })
-  const requestMessages = messages.value.map((message) => ({ role: message.role, content: message.content }))
+  const requestMessages = buildRequestMessages()
   const assistantMessage = {
     role: 'assistant',
     content: '',
@@ -137,6 +137,7 @@ async function sendPrompt(prompt) {
     stream_status: '准备回答...',
     stream_stage: 'queued',
     streaming: true,
+    error: false,
   }
   messages.value.push(assistantMessage)
   const assistantIndex = messages.value.length - 1
@@ -152,9 +153,7 @@ async function sendPrompt(prompt) {
           current_route: router.currentRoute.value.fullPath,
           page: 'dialogue',
           mode: chatMode.value,
-          model: selectedModel.value
-            ? { providerId: selectedModel.value.providerId, modelId: selectedModel.value.modelId }
-            : null,
+          model: selectedModelContext(),
         },
       },
       (event) => {
@@ -169,7 +168,9 @@ async function sendPrompt(prompt) {
     Object.assign(messages.value[assistantIndex], {
       content: `对话出错：${message}`,
       stream_status: '',
+      stream_stage: 'error',
       streaming: false,
+      error: true,
     })
     ElMessage.error(`对话失败：${message}`)
   } finally {
@@ -180,6 +181,37 @@ async function sendPrompt(prompt) {
     sending.value = false
     scrollToBottom()
   }
+}
+
+function buildRequestMessages() {
+  return messages.value
+    .filter((message) => {
+      const content = String(message.content || '').trim()
+      if (!content) return false
+      if (!['assistant', 'user'].includes(message.role)) return false
+      if (message.streaming) return false
+      if (isAssistantErrorMessage(message)) return false
+      return true
+    })
+    .map((message) => ({ role: message.role, content: message.content }))
+}
+
+function isAssistantErrorMessage(message) {
+  if (message.role !== 'assistant') return false
+  if (message.error || message.stream_stage === 'error') return true
+  return /^对话出错[:：]/.test(String(message.content || '').trim())
+}
+
+function selectedModelContext() {
+  if (selectedModel.value) {
+    return { providerId: selectedModel.value.providerId, modelId: selectedModel.value.modelId }
+  }
+  const key = String(selectedModelKey.value || '')
+  const separatorIndex = key.indexOf('::')
+  if (separatorIndex <= 0) return null
+  const providerId = key.slice(0, separatorIndex)
+  const modelId = key.slice(separatorIndex + 2)
+  return providerId && modelId ? { providerId, modelId } : null
 }
 
 function applyAssistantStreamEvent(index, event) {
@@ -219,6 +251,7 @@ function applyAssistantStreamEvent(index, event) {
       stream_status: '',
       stream_stage: '',
       streaming: false,
+      error: false,
     })
     return ''
   }
@@ -226,7 +259,9 @@ function applyAssistantStreamEvent(index, event) {
     const message = event.message || '流式对话失败'
     target.content = target.content || `对话出错：${message}`
     target.stream_status = ''
+    target.stream_stage = 'error'
     target.streaming = false
+    target.error = true
     return message
   }
   return ''

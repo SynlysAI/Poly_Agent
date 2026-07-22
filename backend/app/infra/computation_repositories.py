@@ -411,6 +411,17 @@ class ComputationArtifactRepository(BaseRepository):
         items, _ = cls.list_all({"run_id": run_id}, sort_field="created_at", page=1, page_size=200)
         return items
 
+    @classmethod
+    def list_by_owner(cls, owner_type: str, owner_id: str) -> list[dict[str, Any]]:
+        """按统一 owner 查询 artifact。"""
+        items, _ = cls.list_all(
+            {"owner_type": owner_type, "owner_id": owner_id},
+            sort_field="created_at",
+            page=1,
+            page_size=200,
+        )
+        return items
+
 
 class OptimizationCampaignRepository(BaseRepository):
     """优化 campaign 仓储。"""

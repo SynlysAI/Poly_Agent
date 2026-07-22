@@ -111,6 +111,31 @@ class ReportProviderTest(unittest.TestCase):
         self.assertEqual(result["title"], "T")
         self.assertEqual(len(calls), 1)
 
+    def test_openai_compatible_provider_passes_configured_transport_retries(self) -> None:
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=lambda **kwargs: SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                message=SimpleNamespace(
+                                    content='{"title":"T","abstract":"A","key_findings":[],"methods":[],"results":[],"limitations":[],"next_steps":[]}'
+                                )
+                            )
+                        ]
+                    )
+                )
+            )
+        )
+        with patch("app.services.report_providers.openai_compatible.OpenAI", return_value=fake_client) as openai_ctor:
+            OpenAICompatibleReportProvider().complete_json(
+                messages=[{"role": "user", "content": "x"}],
+                schema=REPORT_SCHEMA,
+                options={"transport_max_retries": 5},
+            )
+
+        self.assertEqual(openai_ctor.call_args.kwargs["max_retries"], 5)
+
     def test_openai_compatible_provider_retries_invalid_json_once(self) -> None:
         responses = iter(
             [

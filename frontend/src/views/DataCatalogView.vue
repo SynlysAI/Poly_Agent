@@ -7,17 +7,20 @@ import {
 } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
-import { BarChart, LineChart, PieChart } from 'echarts/charts'
+import { BarChart, LineChart, PieChart, ScatterChart } from 'echarts/charts'
 import {
-  GridComponent, LegendComponent, TitleComponent, TooltipComponent,
+  GridComponent, LegendComponent, TitleComponent, TooltipComponent, VisualMapComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
 import {
   getApiErrorMessage,
+  getDataCatalogDatasetProfile,
+  getDataCatalogDatasetVisualSamples,
   getDataCatalogOverview,
   getDataCatalogRelationships,
   getDataCatalogCollectionRecord,
+  listDataCatalogDatasetRecords,
   listDataCatalogCollectionRecords,
   listDataCatalogDatasets,
   listDataCatalogMongoCollections,
@@ -29,10 +32,12 @@ use([
   BarChart,
   LineChart,
   PieChart,
+  ScatterChart,
   GridComponent,
   LegendComponent,
   TitleComponent,
   TooltipComponent,
+  VisualMapComponent,
   CanvasRenderer,
 ])
 
@@ -59,11 +64,26 @@ const collectionRecords = ref([])
 const collectionTotal = ref(0)
 const selectedRecord = ref(null)
 const recordDrawerVisible = ref(false)
+const pi1mProfile = ref(null)
+const pi1mVisualSamples = ref({ points: [], sample_count: 0, total: 0 })
+const pi1mRecords = ref([])
+const pi1mNextCursor = ref(null)
+const pi1mLoading = ref(false)
 
 const recordFilters = reactive({
   page: Number(route.query.page || 1),
   page_size: 20,
   keyword: String(route.query.keyword || ''),
+})
+
+const pi1mFilters = reactive({
+  keyword: '',
+  sa_min: '',
+  sa_max: '',
+  row_start: '',
+  row_end: '',
+  sort_by: 'row_index',
+  page_size: 50,
 })
 
 const canDrilldownRecords = computed(() => !authState.authEnabled || authState.role === 'admin')
@@ -74,6 +94,7 @@ const polyDataSource = computed(() => (overview.value?.sources || []).find((item
 const materialCollection = computed(() => mongoCollections.value.find((item) => item.data_domain === 'materials') || null)
 const computationRunCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === 'computation_runs') || null)
 const computationArtifactCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === 'computation_artifacts') || null)
+const pi1mDataset = computed(() => datasets.value.find((item) => item.dataset_id === 'pi1m_v2') || null)
 
 const collectionGroups = computed(() => {
   const grouped = {}
@@ -122,6 +143,8 @@ const collectionGroupColors = {
   优化闭环: '#0891b2',
   报告产物: '#64748b',
 }
+
+const PI1M_SA_COLOR_SCALE = ['#15803d', '#84cc16', '#facc15', '#f97316', '#dc2626']
 
 const collectionVolumeRows = computed(() => mongoCollections.value
   .map((item) => {
@@ -269,6 +292,96 @@ const datasetCoverageOption = computed(() => {
   }
 })
 
+const pi1mSaHistogramOption = computed(() => {
+  const bins = pi1mProfile.value?.sa_score_histogram || []
+  return {
+    color: ['#3b82f6'],
+    grid: { left: 46, right: 18, top: 20, bottom: 36 },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (items) => {
+        const bin = bins[items[0].dataIndex]
+        return `${bin.start} - ${bin.end}<br/>${formatNumber(bin.count)} 条`
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: bins.map((bin) => `${bin.start}-${bin.end}`),
+      axisLabel: { color: '#64748b', rotate: 28 },
+    },
+    yAxis: { type: 'value', axisLabel: { color: '#64748b' }, splitLine: { lineStyle: { color: '#e2e8f0' } } },
+    series: [{ type: 'bar', data: bins.map((bin) => bin.count), barWidth: 16, itemStyle: { borderRadius: [4, 4, 0, 0] } }],
+  }
+})
+
+const pi1mMapOption = computed(() => {
+  const points = pi1mVisualSamples.value.points || []
+  const scoreValues = points
+    .map((item) => toFiniteNumber(item.sa_score))
+    .filter((value) => value !== null)
+  const scoreRange = visualRange(scoreValues)
+  return {
+    color: ['#0891b2'],
+    grid: { left: 38, right: 18, top: 34, bottom: 30 },
+    tooltip: {
+      trigger: 'item',
+      formatter: ({ data }) => [
+        data[4],
+        `行号：${formatNumber(data[2])}`,
+        `SA Score：${data[3] === null || data[3] === undefined ? '-' : data[3].toFixed(3)}`,
+        data[5] || '',
+      ].filter(Boolean).join('<br/>'),
+    },
+    xAxis: { type: 'value', min: -1, max: 1, axisLabel: { color: '#64748b' }, splitLine: { lineStyle: { color: '#e2e8f0' } } },
+    yAxis: { type: 'value', min: -1, max: 1, axisLabel: { color: '#64748b' }, splitLine: { lineStyle: { color: '#e2e8f0' } } },
+    ...(scoreRange ? {
+      visualMap: {
+        type: 'continuous',
+        min: scoreRange.min,
+        max: scoreRange.max,
+        dimension: 3,
+        orient: 'horizontal',
+        right: 24,
+        top: 0,
+        itemWidth: 12,
+        itemHeight: 180,
+        precision: 2,
+        calculable: true,
+        text: ['高 SA', '低 SA'],
+        textStyle: { color: '#475569' },
+        formatter: (value) => Number(value).toFixed(2),
+        inRange: { color: PI1M_SA_COLOR_SCALE },
+        outOfRange: { color: '#94a3b8' },
+      },
+    } : {}),
+    series: [{
+      type: 'scatter',
+      symbolSize: 7,
+      data: points.map((item) => [
+        item.x,
+        item.y,
+        item.row_index,
+        toFiniteNumber(item.sa_score),
+        item.record_id,
+        item.smiles,
+      ]),
+      itemStyle: { opacity: 0.82 },
+      emphasis: { focus: 'self', itemStyle: { opacity: 1, borderColor: '#0f172a', borderWidth: 1 } },
+      progressive: 1000,
+      progressiveThreshold: 3000,
+    }],
+  }
+})
+
+const pi1mImportStatusText = computed(() => {
+  const status = pi1mProfile.value?.import_status
+  if (!status) return '未加载'
+  const imported = status.imported_count !== null && status.imported_count !== undefined
+    ? `${formatNumber(status.imported_count)} 条`
+    : '无导入计数'
+  return `${statusLabel(status.status)} · ${imported}`
+})
+
 const recordStatusOption = computed(() => {
   const counts = countBy(collectionRecords.value, 'status')
   return {
@@ -349,6 +462,11 @@ function formatDate(value) {
 function coveragePercent(field) {
   if (!field.total_count) return 0
   return Math.round((Number(field.non_empty_count || 0) / Number(field.total_count)) * 100)
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined || value === '') return '-'
+  return `${Number(value).toFixed(Number(value) < 1 && Number(value) > 0 ? 4 : 2)}%`
 }
 
 function statusTag(status) {
@@ -445,6 +563,20 @@ function pieOption(counts) {
   }
 }
 
+function toFiniteNumber(value) {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? numericValue : null
+}
+
+function visualRange(values) {
+  if (!values.length) return null
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  if (min !== max) return { min, max }
+  const padding = Math.max(Math.abs(min) * 0.05, 0.5)
+  return { min: min - padding, max: max + padding }
+}
+
 function trendOption(items, color) {
   const counts = {}
   for (const item of items) {
@@ -514,12 +646,27 @@ async function loadDataCatalog() {
     legacyObjects.value = datasetData.legacy_objects || overviewData.legacy_objects || []
     mongoCollections.value = mongoData.items || []
     relationships.value = relationshipData
+    await loadPi1mOverview()
     await loadAnalysisSamples()
     if (selectedCollectionName.value) await loadCollectionRecords()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loading.value = false
+  }
+}
+
+async function loadPi1mOverview() {
+  try {
+    const [profile, samples] = await Promise.allSettled([
+      getDataCatalogDatasetProfile('pi1m_v2'),
+      getDataCatalogDatasetVisualSamples('pi1m_v2', { limit: 5000 }),
+    ])
+    pi1mProfile.value = profile.status === 'fulfilled' ? profile.value : null
+    pi1mVisualSamples.value = samples.status === 'fulfilled' ? samples.value : { points: [], sample_count: 0, total: 0 }
+  } catch {
+    pi1mProfile.value = null
+    pi1mVisualSamples.value = { points: [], sample_count: 0, total: 0 }
   }
 }
 
@@ -568,6 +715,15 @@ async function openDatasetRecords(dataset) {
     return
   }
   datasetDrawerVisible.value = false
+  if (dataset.dataset_id === 'pi1m_v2') {
+    activeTab.value = 'mongo'
+    selectedCollectionName.value = dataset.record_collection_key
+    recordFilters.page = 1
+    recordFilters.keyword = ''
+    syncRouteQuery({ tab: 'mongo', collection: selectedCollectionName.value, page: 1, keyword: undefined })
+    await loadPi1mRecords({ reset: true })
+    return
+  }
   activeTab.value = 'mongo'
   selectedCollectionName.value = dataset.record_collection_key
   recordFilters.page = 1
@@ -590,6 +746,10 @@ async function openCollection(collection) {
 
 async function loadCollectionRecords() {
   if (!selectedCollectionName.value || !canDrilldownRecords.value) return
+  if (selectedCollectionName.value === 'poly_data.pi1m_samples') {
+    await loadPi1mRecords({ reset: true })
+    return
+  }
   recordsLoading.value = true
   try {
     const data = await listDataCatalogCollectionRecords(selectedCollectionName.value, {
@@ -606,13 +766,53 @@ async function loadCollectionRecords() {
   }
 }
 
+function pi1mQueryParams(cursor = null) {
+  return {
+    page_size: pi1mFilters.page_size,
+    sort_by: pi1mFilters.sort_by,
+    cursor: cursor || undefined,
+    keyword: pi1mFilters.keyword || undefined,
+    sa_min: pi1mFilters.sa_min !== '' ? Number(pi1mFilters.sa_min) : undefined,
+    sa_max: pi1mFilters.sa_max !== '' ? Number(pi1mFilters.sa_max) : undefined,
+    row_start: pi1mFilters.row_start !== '' ? Number(pi1mFilters.row_start) : undefined,
+    row_end: pi1mFilters.row_end !== '' ? Number(pi1mFilters.row_end) : undefined,
+  }
+}
+
+async function loadPi1mRecords({ reset = false } = {}) {
+  if (!canDrilldownRecords.value) return
+  pi1mLoading.value = true
+  recordsLoading.value = true
+  try {
+    const data = await listDataCatalogDatasetRecords('pi1m_v2', pi1mQueryParams(reset ? null : pi1mNextCursor.value))
+    pi1mRecords.value = reset ? (data.items || []) : [...pi1mRecords.value, ...(data.items || [])]
+    collectionRecords.value = pi1mRecords.value
+    pi1mNextCursor.value = data.next_cursor || null
+    collectionTotal.value = data.total || 0
+    recordFilters.page = 1
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    recordsLoading.value = false
+    pi1mLoading.value = false
+  }
+}
+
 async function handleRecordSearch() {
+  if (selectedCollectionName.value === 'poly_data.pi1m_samples') {
+    pi1mFilters.keyword = recordFilters.keyword
+    pi1mNextCursor.value = null
+    syncRouteQuery({ collection: selectedCollectionName.value, keyword: recordFilters.keyword, page: undefined })
+    await loadPi1mRecords({ reset: true })
+    return
+  }
   recordFilters.page = 1
   syncRouteQuery({ collection: selectedCollectionName.value, keyword: recordFilters.keyword, page: 1 })
   await loadCollectionRecords()
 }
 
 async function handleRecordPageChange(page) {
+  if (selectedCollectionName.value === 'poly_data.pi1m_samples') return
   recordFilters.page = page
   syncRouteQuery({ collection: selectedCollectionName.value, keyword: recordFilters.keyword, page })
   await loadCollectionRecords()
@@ -738,6 +938,41 @@ onMounted(async () => {
             </div>
           </section>
 
+          <section v-if="pi1mDataset" class="catalog-section pi1m-section">
+            <div class="section-heading">
+              <h2>PI1M v2 全量结构库</h2>
+              <span>{{ formatNumber(pi1mProfile?.record_count || pi1mDataset.record_count || 0) }} / {{ formatNumber(pi1mDataset.row_count) }} 条</span>
+            </div>
+            <div class="pi1m-summary-grid">
+              <div class="pi1m-summary-item">
+                <span>入库覆盖率</span>
+                <strong>{{ formatPercent(pi1mProfile?.coverage_percent) }}</strong>
+              </div>
+              <div class="pi1m-summary-item">
+                <span>唯一结构</span>
+                <strong>{{ formatNumber(pi1mProfile?.unique_smiles_count) }}</strong>
+              </div>
+              <div class="pi1m-summary-item">
+                <span>重复结构</span>
+                <strong>{{ formatNumber(pi1mProfile?.duplicate_smiles_count) }}</strong>
+              </div>
+              <div class="pi1m-summary-item">
+                <span>最近导入</span>
+                <strong>{{ pi1mImportStatusText }}</strong>
+              </div>
+            </div>
+            <div class="pi1m-visual-grid">
+              <div class="visual-panel">
+                <h3>SA Score 分布</h3>
+                <v-chart class="pi1m-chart" :option="pi1mSaHistogramOption" autoresize />
+              </div>
+              <div class="visual-panel pi1m-map-panel">
+                <h3>结构空间抽样</h3>
+                <v-chart class="pi1m-chart" :option="pi1mMapOption" autoresize />
+              </div>
+            </div>
+          </section>
+
           <section class="catalog-section analysis-main">
             <div class="section-heading">
               <h2>材料数据分级</h2>
@@ -832,6 +1067,18 @@ onMounted(async () => {
                 <el-button @click="handleRecordSearch">查询</el-button>
               </div>
 
+              <div v-if="canDrilldownRecords && selectedCollectionName === 'poly_data.pi1m_samples'" class="pi1m-filter-panel">
+                <el-input v-model="pi1mFilters.row_start" placeholder="起始行号" clearable />
+                <el-input v-model="pi1mFilters.row_end" placeholder="结束行号" clearable />
+                <el-input v-model="pi1mFilters.sa_min" placeholder="SA 最小值" clearable />
+                <el-input v-model="pi1mFilters.sa_max" placeholder="SA 最大值" clearable />
+                <el-select v-model="pi1mFilters.sort_by" placeholder="排序">
+                  <el-option label="按行号" value="row_index" />
+                  <el-option label="按 SA Score" value="sa_score" />
+                </el-select>
+                <el-button type="primary" :loading="pi1mLoading" @click="loadPi1mRecords({ reset: true })">筛选</el-button>
+              </div>
+
               <el-alert
                 v-else
                 type="info"
@@ -878,7 +1125,7 @@ onMounted(async () => {
               </el-table>
 
               <el-pagination
-                v-if="canDrilldownRecords"
+                v-if="canDrilldownRecords && selectedCollectionName !== 'poly_data.pi1m_samples'"
                 class="record-pagination"
                 background
                 layout="prev, pager, next, total"
@@ -887,6 +1134,10 @@ onMounted(async () => {
                 :total="collectionTotal"
                 @current-change="handleRecordPageChange"
               />
+              <div v-if="canDrilldownRecords && selectedCollectionName === 'poly_data.pi1m_samples'" class="pi1m-cursor-actions">
+                <span>已加载 {{ formatNumber(collectionRecords.length) }} 条，游标分页避免千万级 skip 扫描。</span>
+                <el-button :disabled="!pi1mNextCursor" :loading="pi1mLoading" @click="loadPi1mRecords()">加载下一页</el-button>
+              </div>
             </template>
             <div v-else class="empty-state">
               <el-icon><FolderOpened /></el-icon>
@@ -1182,6 +1433,69 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.pi1m-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pi1m-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pi1m-summary-item {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.pi1m-summary-item span {
+  display: block;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.pi1m-summary-item strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--app-ink);
+  font-size: 17px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.pi1m-visual-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+}
+
+.pi1m-chart {
+  width: 100%;
+  height: 260px;
+}
+
+.pi1m-filter-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(110px, 1fr)) minmax(140px, 0.8fr) auto;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.pi1m-cursor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
 }
 
 .mongo-layout {
@@ -1535,7 +1849,13 @@ code {
 
   .dataset-grid,
   .analysis-grid,
+  .pi1m-summary-grid,
+  .pi1m-visual-grid,
   .record-visual-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pi1m-filter-panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1554,6 +1874,8 @@ code {
   .metric-grid,
   .dataset-grid,
   .analysis-grid,
+  .pi1m-summary-grid,
+  .pi1m-visual-grid,
   .record-visual-grid {
     grid-template-columns: 1fr;
   }
@@ -1564,6 +1886,13 @@ code {
 
   .record-tools .el-input {
     max-width: none;
+  }
+
+  .pi1m-filter-panel,
+  .pi1m-cursor-actions {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .relationship-row {

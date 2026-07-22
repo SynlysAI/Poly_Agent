@@ -22,6 +22,7 @@ from app.schemas.research_engine import (
     AlgorithmPackageCreate,
     AlgorithmPackageExample,
     AlgorithmPackageExampleListData,
+    AlgorithmResourceBinding,
 )
 from app.services.algorithm_runtimes.base import AlgorithmRuntimeError
 from app.services.research_engine_algorithm_package_service import AlgorithmPackageService, MAX_PACKAGE_BYTES
@@ -150,16 +151,7 @@ class AlgorithmHandoffService:
 
     def download_handoff_package(self, handoff_id: str) -> tuple[str, bytes]:
         handoff = self.get_handoff(handoff_id)
-        payload = AlgorithmPackageCreate(
-            algorithm_id=handoff.algorithm_id,
-            name=handoff.name,
-            version=handoff.version,
-            material_scope=handoff.material_scope,
-            input_schema=handoff.input_schema,
-            output_schema=handoff.output_schema,
-            sample_input=handoff.sample_input,
-            description=handoff.description,
-        )
+        payload = self._payload_for_handoff(handoff)
         content = self._build_prefilled_zip(
             payload,
             example_id=handoff.example_id,
@@ -178,6 +170,7 @@ class AlgorithmHandoffService:
         *,
         filename: str,
         content: bytes,
+        resource_bindings: list[AlgorithmResourceBinding | dict[str, Any]] | None = None,
     ) -> AlgorithmHandoffValidationResult:
         self.get_handoff(handoff_id)
         if not filename.endswith(".zip"):
@@ -211,23 +204,43 @@ class AlgorithmHandoffService:
             sample_input = self.package_service._load_sample_input(extract_dir, contract)
             checks.append(self._check("样例输入", True, "tests/sample_input.json 可读取"))
 
+            sample_input_files, parsed_inputs = self.package_service._load_sample_input_assets(extract_dir, contract)
+            validation_output_dir = extract_dir / ".polyagent_handoff_outputs"
+            if validation_output_dir.exists():
+                shutil.rmtree(validation_output_dir)
+            validation_output_dir.mkdir(parents=True, exist_ok=True)
+
             runtime_backend = self.package_service._runtime_backend()
+            resource_context, _ = self.package_service._resource_asset_context(
+                contract,
+                resource_bindings=resource_bindings,
+            )
             result = runtime_backend.predict(
                 package_path=extract_dir,
                 entrypoint=contract["entrypoint"],
                 loader=contract.get("loader"),
                 inputs=sample_input,
                 timeout_seconds=int((contract.get("runtime") or {}).get("timeout_seconds", 30)),
+                input_files=sample_input_files,
+                output_dir=validation_output_dir,
+                resource_assets=resource_context,
                 context={
                     "algorithm_id": contract["algorithm_id"],
                     "version": contract["version"],
                     "phase": "handoff_self_test",
+                    "parsed_inputs": parsed_inputs,
                 },
             )
-            self.package_service._validate_output(result.output, contract.get("output_schema") or {})
+            output, output_artifacts = self.package_service._parse_result_envelope(result.output, contract)
+            self.package_service._validate_output(output, contract.get("output_schema") or {})
+            self.package_service._validate_declared_output_artifacts(
+                validation_output_dir,
+                output_artifacts,
+                contract,
+            )
             checks.append(self._check("样例推理", True, "predict() 返回结构满足 output_schema"))
             logs.append(f"自测通过，runtime={runtime_backend.backend_name}")
-            output_preview = result.output
+            output_preview = output
             ok = True
         except Exception as exc:  # noqa: BLE001 - self-test should return provider-friendly guidance.
             checks.append(self._check("自测失败", False, str(exc)))
@@ -301,6 +314,21 @@ class AlgorithmHandoffService:
                 files["README.md"] = self._handoff_readme("批量配方预测模型").encode("utf-8")
                 return files, requirements
 
+        if example_id == "file_based_predictor":
+            example_dir = settings.project_root / "examples" / "algorithm_upload" / "raman_structure_analyzer"
+            if example_dir.is_dir():
+                files = {}
+                for path in example_dir.rglob("*"):
+                    if path.is_dir() or "__pycache__" in path.parts:
+                        continue
+                    rel = path.relative_to(example_dir).as_posix()
+                    if rel in {"polyagent.algorithm.yaml", "requirements.txt", "tests/sample_input.json"}:
+                        continue
+                    files[rel] = path.read_bytes()
+                requirements = (example_dir / "requirements.txt").read_bytes()
+                files["README.md"] = self._raman_handoff_readme().encode("utf-8")
+                return files, requirements
+
         handler = self.package_service.demo_handler_source().encode("utf-8")
         return (
             {
@@ -309,6 +337,31 @@ class AlgorithmHandoffService:
                 "model/.gitkeep": b"",
             },
             b"scikit-learn\n",
+        )
+
+    def _payload_for_handoff(self, handoff: AlgorithmHandoff) -> AlgorithmPackageCreate:
+        if handoff.example_id == "file_based_predictor":
+            return self._raman_file_based_payload(
+                algorithm_id=handoff.algorithm_id,
+                name=handoff.name,
+                version=handoff.version,
+                material_scope=handoff.material_scope,
+                input_schema=handoff.input_schema,
+                output_schema=handoff.output_schema,
+                sample_input=handoff.sample_input,
+                description=handoff.description,
+                developer=handoff.owner_name,
+                developer_contact=handoff.owner_contact,
+            )
+        return AlgorithmPackageCreate(
+            algorithm_id=handoff.algorithm_id,
+            name=handoff.name,
+            version=handoff.version,
+            material_scope=handoff.material_scope,
+            input_schema=handoff.input_schema,
+            output_schema=handoff.output_schema,
+            sample_input=handoff.sample_input,
+            description=handoff.description,
         )
 
     def _payload_for_example(self, example_id: str) -> AlgorithmPackageCreate:
@@ -322,6 +375,17 @@ class AlgorithmHandoffService:
                 output_schema=AlgorithmIOSchema(fields={"results": "list"}, required=["results"]),
                 sample_input=self._default_sample_input(example_id),
                 description="批量配方输入的多目标性质预测模板。",
+            )
+        if example_id == "file_based_predictor":
+            return self._raman_file_based_payload(
+                algorithm_id="raman_structure_analyzer",
+                name="Raman Structure Analyzer",
+                version="0.1.0",
+                material_scope=["universal"],
+                input_schema=self._raman_input_schema(),
+                output_schema=self._raman_output_schema(),
+                sample_input=self._default_sample_input(example_id),
+                description="Raman/IR 光谱文件输入结构解析模板。",
             )
         return AlgorithmPackageCreate(
             algorithm_id=f"{example_id}_demo",
@@ -350,7 +414,194 @@ class AlgorithmHandoffService:
                     }
                 ]
             }
+        if example_id == "file_based_predictor":
+            return {
+                "spectype": "raman",
+                "mode": "beam_search",
+                "x0": 400,
+                "x1": 1800,
+                "k": 3,
+                "transmittance": False,
+                "device": "cpu",
+            }
         return {"smiles": "C=C(F)F"}
+
+    @staticmethod
+    def _raman_input_schema() -> AlgorithmIOSchema:
+        return AlgorithmIOSchema(
+            fields={
+                "spectype": "string",
+                "mode": "string",
+                "x0": "number",
+                "x1": "number",
+                "k": "integer",
+                "transmittance": "boolean",
+                "device": "string",
+            },
+            required=["spectype", "mode"],
+            field_defaults={
+                "spectype": "raman",
+                "mode": "beam_search",
+                "k": 3,
+                "transmittance": False,
+                "device": "cpu",
+            },
+            field_options={
+                "spectype": ["raman", "ir"],
+                "mode": ["beam_search", "retrieval", "function_groups", "greedy_decode"],
+                "device": ["cpu", "cuda"],
+            },
+        )
+
+    @staticmethod
+    def _raman_output_schema() -> AlgorithmIOSchema:
+        return AlgorithmIOSchema(
+            fields={
+                "candidates": "list",
+                "point_count": "integer",
+                "metadata": "object",
+                "preprocessing": "object",
+            },
+            required=["candidates"],
+        )
+
+    def _raman_file_based_payload(
+        self,
+        *,
+        algorithm_id: str,
+        name: str,
+        version: str,
+        material_scope: list[str],
+        input_schema: AlgorithmIOSchema,
+        output_schema: AlgorithmIOSchema,
+        sample_input: dict[str, Any],
+        description: str | None,
+        developer: str | None = None,
+        developer_contact: str | None = None,
+    ) -> AlgorithmPackageCreate:
+        return AlgorithmPackageCreate(
+            algorithm_id=algorithm_id,
+            name=name,
+            version=version,
+            material_scope=material_scope,
+            trigger_modes=["human_workflow"],
+            loader="src.handler:load",
+            runtime={
+                "python": "3.11",
+                "resources": {"cpu": 2, "memory": "8Gi", "gpu": True},
+                "timeout_seconds": 180,
+            },
+            input_schema=input_schema if input_schema.fields else self._raman_input_schema(),
+            output_schema=output_schema if output_schema.fields else self._raman_output_schema(),
+            input_assets=[
+                {
+                    "key": "spectrum_file",
+                    "label": "Spectrum data file",
+                    "required": True,
+                    "asset_role": "input",
+                    "data_kind": "series",
+                    "parser": "series_xy.v1",
+                    "extensions": [".txt", ".dat", ".csv", ".xlsx"],
+                    "mime_types": [
+                        "text/plain",
+                        "text/csv",
+                        "application/octet-stream",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ],
+                    "max_size_bytes": 10485760,
+                    "sample_path": "tests/sample_assets/sample_spectrum.dat",
+                }
+            ],
+            output_assets=[
+                {
+                    "key": "normalized_series",
+                    "label": "Normalized input series",
+                    "asset_role": "output",
+                    "data_kind": "series",
+                    "artifact_type": "series_json",
+                    "mime_type": "application/json",
+                },
+                {
+                    "key": "structure_candidates",
+                    "label": "Structure candidates",
+                    "asset_role": "output",
+                    "data_kind": "json",
+                    "artifact_type": "structure_json",
+                    "mime_type": "application/json",
+                },
+                {
+                    "key": "candidate_table",
+                    "label": "Candidate table",
+                    "asset_role": "output",
+                    "data_kind": "table",
+                    "artifact_type": "csv",
+                    "mime_type": "text/csv",
+                },
+                {
+                    "key": "run_report",
+                    "label": "Run report",
+                    "asset_role": "output",
+                    "data_kind": "json",
+                    "artifact_type": "report_json",
+                    "mime_type": "application/json",
+                },
+            ],
+            resource_assets=[
+                {
+                    "key": "raman_checkpoints",
+                    "label": "Raman checkpoints root",
+                    "asset_role": "resource",
+                    "data_kind": "binary",
+                    "parser": "binary.v1",
+                    "required": True,
+                    "resource_type": "checkpoints",
+                    "required_files": ["baseline_removal.pth", "raman_generation.pth"],
+                    "binding_required": True,
+                    "env_var": "RAMAN_CHECKPOINTS_ROOT",
+                },
+                {
+                    "key": "raman_database",
+                    "label": "Raman database root",
+                    "asset_role": "resource",
+                    "data_kind": "binary",
+                    "parser": "binary.v1",
+                    "required": True,
+                    "resource_type": "database",
+                    "required_files": ["raman_db.pkl"],
+                    "binding_required": True,
+                    "env_var": "RAMAN_DATABASE_ROOT",
+                },
+                {
+                    "key": "raman_tokenizer",
+                    "label": "Raman tokenizer root",
+                    "asset_role": "resource",
+                    "data_kind": "binary",
+                    "parser": "binary.v1",
+                    "required": True,
+                    "resource_type": "tokenizer",
+                    "required_files": ["tokenizer_config.json"],
+                    "binding_required": True,
+                    "env_var": "RAMAN_TOKENIZER_ROOT",
+                },
+            ],
+            result_envelope="polyagent_run_result.v1",
+            sample_input=sample_input or self._default_sample_input("file_based_predictor"),
+            description=description or "Raman/IR spectral structure analysis demo packaged with generic file I/O assets.",
+            developer=developer or "Raman Demo Adapter",
+            developer_organization="Local Raman Reference",
+            developer_contact=developer_contact,
+            source_url="refer/raman",
+            method_attributions=[
+                {
+                    "name": "Raman/IR structure analysis reference implementation",
+                    "role": "implementation_source",
+                    "organization": "Local Raman Reference",
+                    "description": "Adapted from the local refer/raman reference code.",
+                }
+            ],
+            logo_asset=None,
+            logo_url=None,
+        )
 
     @staticmethod
     def _handoff_readme(template_name: str) -> str:
@@ -363,6 +614,20 @@ class AlgorithmHandoffService:
             "4. `tests/sample_input.json`：放一个能代表真实调用的样例输入。\n\n"
             "通常不要修改 `src/handler.py`，它是 Poly Agent 平台入口适配层。\n"
             "上传前请确认 `predict()` 返回 JSON object，并包含输出契约里的必填字段。\n"
+        )
+
+    @staticmethod
+    def _raman_handoff_readme() -> str:
+        return (
+            "# Raman Structure Analyzer 接入包\n\n"
+            "这个模板用于文件输入型 Raman/IR 光谱结构解析。ZIP 只包含入口适配、轻量源码和样例光谱；"
+            "模型权重、检索数据库和 tokenizer 不放入 ZIP，由平台作为 managed resource 注入。\n\n"
+            "上传前请先在平台资源管理中登记这些 mounted path 资源；环境变量仅作为兼容兜底：\n\n"
+            "- `RAMAN_CHECKPOINTS_ROOT`\n"
+            "- `RAMAN_DATABASE_ROOT`\n"
+            "- `RAMAN_TOKENIZER_ROOT`\n"
+            "- `POLYAGENT_ALGORITHM_RESOURCE_ROOTS`（当资源不在默认资源目录下时）\n\n"
+            "样例文件位于 `tests/sample_assets/sample_spectrum.dat`，契约中的输入文件 key 为 `spectrum_file`。\n"
         )
 
     @staticmethod
@@ -381,6 +646,12 @@ class AlgorithmHandoffService:
             suggestions.append("输出缺少必填字段，请检查 `src/handler.py` 返回值是否包含 output_schema.required 中的字段。")
         if "No module named" in message or "ModuleNotFoundError" in message:
             suggestions.append("当前运行环境可能缺少依赖，请检查 `requirements.txt` 并联系平台管理员补齐环境。")
+        if "resource asset" in message or "managed Raman resources" in message or "RAMAN_" in message:
+            suggestions.append(
+                "缺少 managed resource 绑定，请在资源管理中登记 checkpoints/database/tokenizer 的 mounted path；"
+                "如使用环境变量兜底，请配置 RAMAN_CHECKPOINTS_ROOT、RAMAN_DATABASE_ROOT、"
+                "RAMAN_TOKENIZER_ROOT，并确保路径位于 POLYAGENT_ALGORITHM_RESOURCE_ROOTS 允许目录内。"
+            )
         if "超过 20MB" in message:
             suggestions.append("ZIP 超过当前 20MB 限制，请压缩权重或改用后续远程服务/对象存储方案。")
         if not suggestions:

@@ -21,6 +21,7 @@ import {
   startResearchRun,
 } from '../../api/polyAgentApi'
 import GateReviewDialog from './GateReviewDialog.vue'
+import { formatApiDateTime } from '../../utils/datetime'
 
 const emit = defineEmits(['research-run-updated'])
 const route = useRoute()
@@ -142,10 +143,7 @@ function readinessLabel(status) {
 }
 
 function formatDate(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
+  return formatApiDateTime(value)
 }
 
 const canStart = computed(() => currentRun.value?.status === 'draft')
