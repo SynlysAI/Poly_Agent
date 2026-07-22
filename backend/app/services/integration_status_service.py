@@ -256,11 +256,20 @@ class IntegrationStatusService:
         }
 
     def _speclabos_status(self, checked_at: str) -> dict:
+        configured = bool(settings.speclabos_base_url and settings.speclabos_api_key)
         return {
             "service": "speclabos",
-            "status": "not_configured",
+            "status": "available" if configured else "not_configured",
             "checked_at": checked_at,
-            "details": {"reason": "MVP 不运行真实 workflow"},
+            "details": {
+                "message": (
+                    "已配置外部实验任务下发，等待连通性验证"
+                    if configured
+                    else "未配置 SpecLabOS 外部实验任务下发"
+                ),
+                "endpoint": settings.speclabos_base_url or None,
+                "execution_scope": "仅登记外部实验任务，不触发设备或工作流执行",
+            },
         }
 
     def _docker_status(self, checked_at: str) -> dict:

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getModelStatus, suggestNext, findOptimum } from '../../api/alchemistApi'
+import { dispatchExperimentTask, getModelStatus, suggestNext, findOptimum } from '../../api/alchemistApi'
 
 const props = defineProps({
   sessionId: { type: String, required: true }
@@ -27,6 +27,18 @@ const kappa = ref(1.96)
 /** 最优结果 */
 const optimumResult = ref(null)
 const optimumLoading = ref(false)
+
+/** SpecLabOS 实验任务下发状态 */
+const dispatchDialogVisible = ref(false)
+const dispatchLoading = ref(false)
+const dispatchResult = ref(null)
+const dispatchForm = ref({
+  experimentName: '',
+  objectName: '',
+  objectType: '',
+  objectDescription: '',
+  experimentContent: '',
+})
 
 const batchStrategies = ['qEI', 'qUCB', 'qNIPV']
 const isBatchStrategy = computed(() => batchStrategies.includes(selectedAcquisition.value))
@@ -75,6 +87,61 @@ async function handleFindOptimum() {
     ElMessage.error(`搜索最优值失败: ${e.message}`)
   } finally {
     optimumLoading.value = false
+  }
+}
+
+/** 打开实验任务下发对话框。 */
+function openDispatchDialog() {
+  if (suggestions.value.length === 0) {
+    ElMessage.warning('请先生成实验建议后再下发任务')
+    return
+  }
+  dispatchResult.value = null
+  dispatchDialogVisible.value = true
+}
+
+/** 构建当前建议对应的实验任务下发请求。 */
+function buildDispatchPayload() {
+  const acquisitionParameters = {}
+  if (currentAcqOption.value.needXi) acquisitionParameters.xi = xi.value
+  if (currentAcqOption.value.needKappa) acquisitionParameters.kappa = kappa.value
+
+  return {
+    experiment_name: dispatchForm.value.experimentName.trim(),
+    experiment_object: {
+      name: dispatchForm.value.objectName.trim(),
+      type: dispatchForm.value.objectType.trim() || null,
+      description: dispatchForm.value.objectDescription.trim() || null,
+    },
+    experiment_content: dispatchForm.value.experimentContent.trim() || null,
+    conditions: suggestions.value.map((parameters) => ({
+      parameters,
+      metadata: {},
+    })),
+    strategy: selectedAcquisition.value,
+    goal: goal.value,
+    acquisition_parameters: acquisitionParameters,
+  }
+}
+
+/** 将当前实验建议下发至 SpecLabOS。 */
+async function handleDispatch() {
+  if (!dispatchForm.value.experimentName.trim() || !dispatchForm.value.objectName.trim()) {
+    ElMessage.warning('请填写实验任务名称和实验对象名称')
+    return
+  }
+
+  try {
+    dispatchLoading.value = true
+    dispatchResult.value = await dispatchExperimentTask(
+      props.sessionId,
+      buildDispatchPayload()
+    )
+    ElMessage.success(`实验任务已被 SpecLabOS 接收：${dispatchResult.value.dispatch_id}`)
+  } catch (e) {
+    ElMessage.error(`下发实验任务失败: ${e.message}`)
+  } finally {
+    dispatchLoading.value = false
   }
 }
 
@@ -131,6 +198,7 @@ watch(selectedAcquisition, () => {
         <div style="display:flex;gap:8px">
           <el-button type="primary" @click="handleSuggest" :loading="loading">生成建议</el-button>
           <el-button @click="handleFindOptimum" :loading="optimumLoading">寻找最优点</el-button>
+          <el-button @click="openDispatchDialog" :disabled="suggestions.length === 0">下发至 SpecLabOS</el-button>
         </div>
       </div>
 
@@ -169,5 +237,45 @@ watch(selectedAcquisition, () => {
         </el-alert>
       </div>
     </div>
+
+    <el-dialog v-model="dispatchDialogVisible" title="下发实验任务至 SpecLabOS" width="680px">
+      <div v-if="dispatchResult" style="margin-bottom:16px">
+        <el-alert type="success" :closable="false" show-icon>
+          <template #title>
+            SpecLabOS 已接收任务 {{ dispatchResult.dispatch_id }}（{{ dispatchResult.received_at }}）
+          </template>
+        </el-alert>
+      </div>
+      <el-form label-width="120px">
+        <el-form-item label="实验任务名称" required>
+          <el-input v-model="dispatchForm.experimentName" placeholder="例如：催化条件优化第 3 轮" :disabled="dispatchLoading" />
+        </el-form-item>
+        <el-form-item label="实验对象名称" required>
+          <el-input v-model="dispatchForm.objectName" placeholder="例如：目标反应或样品名称" :disabled="dispatchLoading" />
+        </el-form-item>
+        <el-form-item label="对象类型">
+          <el-input v-model="dispatchForm.objectType" placeholder="例如：reaction、sample" :disabled="dispatchLoading" />
+        </el-form-item>
+        <el-form-item label="对象说明">
+          <el-input v-model="dispatchForm.objectDescription" type="textarea" :rows="2" :disabled="dispatchLoading" />
+        </el-form-item>
+        <el-form-item label="实验说明">
+          <el-input v-model="dispatchForm.experimentContent" type="textarea" :rows="3" placeholder="可选，填写操作备注或验收要求" :disabled="dispatchLoading" />
+        </el-form-item>
+      </el-form>
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px">
+        <template #title>
+          将下发 {{ suggestions.length }} 组推荐实验条件。当前版本仅在 SpecLabOS 登记任务，不会直接启动湿实验设备。
+        </template>
+      </el-alert>
+      <el-table :data="suggestions" border stripe max-height="220">
+        <el-table-column type="index" label="序号" width="60" />
+        <el-table-column v-for="col in getColumnNames()" :key="col" :prop="col" :label="col" min-width="100" />
+      </el-table>
+      <template #footer>
+        <el-button @click="dispatchDialogVisible = false" :disabled="dispatchLoading">关闭</el-button>
+        <el-button type="primary" @click="handleDispatch" :loading="dispatchLoading">确认下发</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

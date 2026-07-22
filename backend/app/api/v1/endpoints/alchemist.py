@@ -29,6 +29,8 @@ from app.schemas.alchemist import (
     AddRealVariableRequest,
     ContourDataRequest,
     CreateSessionRequest,
+    DispatchExperimentRequest,
+    DispatchExperimentResponse,
     FindOptimumRequest,
     InitialDesignRequest,
     OptimalDesignInfoRequest,
@@ -39,6 +41,10 @@ from app.schemas.alchemist import (
     UpdateMetadataRequest,
 )
 from app.services.alchemist_service import service
+from app.services.speclabos_dispatch_service import (
+    SpecLabOSDispatchError,
+    speclabos_dispatch_service,
+)
 
 logger = get_logger("poly_agent.alchemist")
 
@@ -55,6 +61,65 @@ def _access_user_id(current_user: dict[str, str] | None) -> str | None:
 
 def _is_admin(current_user: dict[str, str] | None) -> bool:
     return bool(current_user and current_user.get("role") == "admin")
+
+
+def _validate_dispatch_conditions(
+    session: OptimizationSession,
+    conditions: list[dict[str, float | int | str]],
+) -> None:
+    """校验下发条件符合当前 Session 搜索空间。
+
+    Args:
+        session: 当前 Alchemist 优化会话。
+        conditions: 待下发的实验条件列表。
+
+    Raises:
+        HTTPException: 条件缺少变量、包含未知变量或不满足变量约束时抛出。
+    """
+    variables = session.search_space.variables
+    variables_by_name = {item["name"]: item for item in variables}
+    expected_names = set(variables_by_name)
+
+    for index, parameters in enumerate(conditions, start=1):
+        actual_names = set(parameters)
+        missing_names = expected_names - actual_names
+        unknown_names = actual_names - expected_names
+        if missing_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 组条件缺少变量: {sorted(missing_names)}",
+            )
+        if unknown_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第 {index} 组条件包含未知变量: {sorted(unknown_names)}",
+            )
+
+        for name, variable in variables_by_name.items():
+            value = parameters[name]
+            variable_type = variable.get("type")
+            if variable_type == "real":
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise HTTPException(status_code=400, detail=f"变量 {name} 必须为实数")
+                if not math.isfinite(float(value)) or not variable["min"] <= value <= variable["max"]:
+                    raise HTTPException(status_code=400, detail=f"变量 {name} 超出允许范围")
+            elif variable_type == "integer":
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise HTTPException(status_code=400, detail=f"变量 {name} 必须为整数")
+                if int(value) != value or not variable["min"] <= int(value) <= variable["max"]:
+                    raise HTTPException(status_code=400, detail=f"变量 {name} 不满足整数范围约束")
+            elif variable_type == "categorical":
+                allowed_values = variable.get("values", variable.get("categories", []))
+                if value not in allowed_values:
+                    raise HTTPException(status_code=400, detail=f"变量 {name} 不属于允许分类")
+            elif variable_type == "discrete":
+                allowed_values = variable.get("allowed_values", variable.get("values", []))
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise HTTPException(status_code=400, detail=f"变量 {name} 必须为离散数值")
+                if not any(math.isclose(float(value), float(item)) for item in allowed_values):
+                    raise HTTPException(status_code=400, detail=f"变量 {name} 不属于允许离散值")
+            else:
+                raise HTTPException(status_code=400, detail=f"变量 {name} 的类型不受支持")
 
 
 # ── Session 管理 ──
@@ -803,6 +868,58 @@ def suggest_next_experiments(
     session.last_suggestions = suggestions
     service.save_session(session_id, session)
     return {"suggestions": suggestions, "n_suggestions": len(suggestions)}
+
+
+@router.post(
+    "/sessions/{session_id}/acquisition/dispatch",
+    response_model=DispatchExperimentResponse,
+)
+def dispatch_experiment_task(
+    session_id: str,
+    request: DispatchExperimentRequest,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> DispatchExperimentResponse:
+    """将 Alchemist 推荐实验条件下发至 SpecLabOS。"""
+    session = service.get_session(
+        session_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_is_admin(current_user),
+    )
+    if session.model is None or not session.model.is_trained:
+        raise HTTPException(status_code=400, detail="请先训练模型后再下发实验任务")
+
+    conditions = [item.parameters for item in request.conditions]
+    _validate_dispatch_conditions(session, conditions)
+    payload = {
+        "source_system": "polyagent",
+        "source_module": "alchemist",
+        "source_reference": {"session_id": session_id},
+        "experiment_name": request.experiment_name.strip(),
+        "experiment_object": request.experiment_object.model_dump(),
+        "experiment_content": request.experiment_content,
+        "conditions": [
+            {
+                "condition_id": f"condition-{index}",
+                "parameters": item.parameters,
+                "metadata": item.metadata,
+            }
+            for index, item in enumerate(request.conditions, start=1)
+        ],
+        "optimization_context": {
+            "strategy": request.strategy,
+            "goal": request.goal,
+            "parameters": request.acquisition_parameters,
+        },
+        "extra_metadata": {},
+    }
+
+    try:
+        result = speclabos_dispatch_service.dispatch(payload)
+    except SpecLabOSDispatchError as exc:
+        logger.warning("SpecLabOS 实验任务下发失败: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return DispatchExperimentResponse(**result)
 
 
 @router.post("/sessions/{session_id}/acquisition/find-optimum")
