@@ -441,7 +441,7 @@ sample_input:
                     ["负责人", "Raman Demo Adapter / raman-demo@example.local"],
                     ["算法功能介绍", "输入 Raman/IR 光谱 x-y 序列和 JSON 参数，输出候选结构。"],
                     ["适用体系", "通用"],
-                    ["依赖（附 requirements.txt）", "numpy, pandas, scipy, torch, transformers, rdkit"],
+                    ["依赖（附 requirements.txt）", "numpy, scipy, torch"],
                 ],
                 [
                     ["字段", "填写内容"],
@@ -1500,7 +1500,7 @@ sample_input_path: tests/sample_input.json
                     "transmittance": False,
                     "device": "cpu",
                 },
-                "requirements_hint": ["numpy", "pandas", "scipy", "torch", "transformers", "rdkit"],
+                "requirements_hint": ["numpy", "scipy", "torch"],
                 "description": "输入 Raman/IR 光谱 x-y 序列和 JSON 参数，输出候选结构。",
             },
         )
@@ -1514,7 +1514,15 @@ sample_input_path: tests/sample_input.json
             self.assertIn("src/raman_core/main.py", names)
             self.assertIn("tests/sample_assets/sample_spectrum.dat", names)
             self.assertNotIn("model/.gitkeep", names)
-            self.assertNotIn("scikit-learn", handoff_zip.read("requirements.txt").decode("utf-8"))
+            requirements = handoff_zip.read("requirements.txt").decode("utf-8")
+            self.assertNotIn("scikit-learn", requirements)
+            self.assertNotIn("rdkit", requirements)
+            self.assertNotIn("transformers", requirements)
+            main_source = handoff_zip.read("src/raman_core/main.py").decode("utf-8")
+            greedy_source = handoff_zip.read("src/raman_core/greedy_search.py").decode("utf-8")
+            self.assertNotIn("from rdkit", main_source)
+            self.assertNotIn("from rdkit", "\n".join(greedy_source.splitlines()[:20]))
+            self.assertNotIn("from transformers", "\n".join(greedy_source.splitlines()[:20]))
             contract = handoff_zip.read("polyagent.algorithm.yaml").decode("utf-8")
             contract_data = yaml.safe_load(contract)
             self.assertEqual(contract_data["contract_version"], "0.2")
@@ -1555,7 +1563,7 @@ sample_input_path: tests/sample_input.json
                     "required": ["candidates"],
                 },
                 "sample_input": {"spectype": "raman", "mode": "function_groups"},
-                "requirements_hint": ["numpy", "pandas", "scipy", "torch", "transformers", "rdkit"],
+                "requirements_hint": ["numpy", "scipy", "torch"],
             },
         )
         self.assertEqual(create_resp.status_code, 200, create_resp.text)

@@ -13,11 +13,8 @@ material_scope:
   - universal
 requirements_hint:
   - numpy
-  - pandas
   - scipy
   - torch
-  - transformers
-  - rdkit
 input_schema:
   fields:
     spectype: string
@@ -240,7 +237,7 @@ JSON 示例（一条完整记录）：
 | 字段 | 填写内容 |
 | --- | --- |
 | 语言 / 版本 | Python 3.11 |
-| 依赖（附 requirements.txt） | `numpy`、`pandas`、`scipy`、`torch`、`transformers`、`rdkit` |
+| 依赖（附 requirements.txt） | `numpy`、`scipy`、`torch` |
 | GPU 需求（是/否，显存） | 可选；`device=cpu` 可走 CPU，真实大模型建议 GPU；显存需求按 checkpoint 配置确认 |
 | 入口脚本 + 调用示例 | `src.handler:predict`；平台通过 `AlgorithmRun` 调用，不直接运行脚本 |
 | 模型权重（名称、大小、格式） | 不进入 ZIP；优先在资源管理登记 `asset_key=raman_runtime_resources` 的 Raman 资源父目录，或用 `RAMAN_RESOURCES_ROOT` 指向同一父目录；`RAMAN_CHECKPOINTS_ROOT`、`RAMAN_DATABASE_ROOT`、`RAMAN_TOKENIZER_ROOT` 仅作老包兼容兜底 |

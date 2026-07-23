@@ -7,12 +7,7 @@ from scipy.sparse import csc_matrix, diags, eye
 from scipy.sparse.linalg import spsolve
 import torch
 import torch.nn.functional as F
-from rdkit.Chem import Draw
 from torch.autograd import Variable
-from transformers import AutoTokenizer
-
-from .models.Simple_FCN import FCN
-from .models.Transformer import make_model
 from .resource_config import GLOBAL_CONFIG
 
 
@@ -45,6 +40,8 @@ def get_smiles(label):
 
 
 def mol_to_image(mol):
+    from rdkit.Chem import Draw
+
     try:
         img = Draw.MolToImage(mol)
     except:
@@ -53,6 +50,8 @@ def mol_to_image(mol):
 
 
 def collate_fn(batch):
+    from transformers import AutoTokenizer
+
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_PATH)
     x = [item[0] for item in batch]
     x = torch.nn.utils.rnn.pad_sequence(x, batch_first=True, padding_value=1).unsqueeze(1)
@@ -373,6 +372,8 @@ def greedy_decode(spectrum, spectrum_length, model, device, bos=0, eos=2, pad_id
 
 if __name__ == "__main__":
     spec = torch.randn(1024)  ### input spectrum: 长度1024，波数范围400-4000
+    from .models.Transformer import make_model
+
     vocab_size = 181
     model, spectrum_length = make_model(vocab_size, N=4, d_model=512)
     beam_size = 10
