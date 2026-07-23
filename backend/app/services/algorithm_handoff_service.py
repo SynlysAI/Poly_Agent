@@ -417,7 +417,7 @@ class AlgorithmHandoffService:
         if example_id == "file_based_predictor":
             return {
                 "spectype": "raman",
-                "mode": "beam_search",
+                "mode": "function_groups",
                 "x0": 400,
                 "x1": 1800,
                 "k": 3,
@@ -441,14 +441,14 @@ class AlgorithmHandoffService:
             required=["spectype", "mode"],
             field_defaults={
                 "spectype": "raman",
-                "mode": "beam_search",
+                "mode": "function_groups",
                 "k": 3,
                 "transmittance": False,
                 "device": "cpu",
             },
             field_options={
-                "spectype": ["raman", "ir"],
-                "mode": ["beam_search", "retrieval", "function_groups", "greedy_decode"],
+                "spectype": ["raman"],
+                "mode": ["function_groups"],
                 "device": ["cpu", "cuda"],
             },
         )
@@ -479,6 +479,9 @@ class AlgorithmHandoffService:
         developer: str | None = None,
         developer_contact: str | None = None,
     ) -> AlgorithmPackageCreate:
+        raman_sample_input = dict(sample_input or self._default_sample_input("file_based_predictor"))
+        raman_sample_input["spectype"] = "raman"
+        raman_sample_input["mode"] = "function_groups"
         return AlgorithmPackageCreate(
             algorithm_id=algorithm_id,
             name=name,
@@ -491,7 +494,7 @@ class AlgorithmHandoffService:
                 "resources": {"cpu": 2, "memory": "8Gi", "gpu": True},
                 "timeout_seconds": 180,
             },
-            input_schema=input_schema if input_schema.fields else self._raman_input_schema(),
+            input_schema=self._raman_input_schema(),
             output_schema=output_schema if output_schema.fields else self._raman_output_schema(),
             input_assets=[
                 {
@@ -557,19 +560,19 @@ class AlgorithmHandoffService:
                     "resource_type": "raman_runtime",
                     "required_files": [
                         "checkpoints/baseline_removal.pth",
-                        "checkpoints/raman_generation.pth",
-                        "moltokenizer/vocab.json",
+                        "checkpoints/raman_fg.pth",
                     ],
                     "binding_required": False,
                     "description": (
                         "Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT "
-                        "or the service default Raman resource root."
+                        "or the service default Raman resource root. This function-group-only package "
+                        "does not require raman_generation.pth or tokenizer files."
                     ),
                 },
             ],
             result_envelope="polyagent_run_result.v1",
-            sample_input=sample_input or self._default_sample_input("file_based_predictor"),
-            description=description or "Raman/IR spectral structure analysis demo packaged with generic file I/O assets.",
+            sample_input=raman_sample_input,
+            description=description or "Raman spectral functional group analysis demo packaged with generic file I/O assets.",
             developer=developer or "Raman Demo Adapter",
             developer_organization="Local Raman Reference",
             developer_contact=developer_contact,
@@ -602,9 +605,9 @@ class AlgorithmHandoffService:
     @staticmethod
     def _raman_handoff_readme() -> str:
         return (
-            "# Raman Structure Analyzer 接入包\n\n"
-            "这个模板用于文件输入型 Raman/IR 光谱结构解析。ZIP 只包含入口适配、轻量源码和样例光谱；"
-            "模型权重、检索数据库和 tokenizer 不放入 ZIP，由平台作为 managed resource 注入。\n\n"
+            "# Raman Functional Group Analyzer 接入包\n\n"
+            "这个模板用于文件输入型 Raman 光谱官能团分析。ZIP 只包含入口适配、轻量源码和样例光谱；"
+            "模型权重不放入 ZIP，由平台作为 managed resource 注入。\n\n"
             "上传前请先在平台资源管理中登记一个 mounted path 资源。登记路径应为 Raman 资源父目录，"
             "不是 `checkpoints` 子目录：\n\n"
             "- `algorithm_id`: `raman_structure_analyzer`\n"
@@ -612,10 +615,11 @@ class AlgorithmHandoffService:
             "- `path`: `/home/fangyikai/github_project/Spec_Agent/backend/resources/raman`\n"
             "- `resource_type`: `raman_runtime`\n"
             "- `required_files`: `checkpoints/baseline_removal.pth`, "
-            "`checkpoints/raman_generation.pth`, `moltokenizer/vocab.json`\n\n"
+            "`checkpoints/raman_fg.pth`\n\n"
             "`path` 是运行 PolyAgent 后端服务的机器上的本地路径。当前测试环境请在 `10.26.15.93` "
             "上登记上述路径；生产环境服务运行在 `localhost` 时，在生产机本地登记同样的 Raman 资源父目录。\n\n"
-            "`RAMAN_RESOURCES_ROOT` 可作为环境变量兜底。`retrieval` 模式需要额外提供 `database/raman_db.pkl`。\n\n"
+            "`RAMAN_RESOURCES_ROOT` 可作为环境变量兜底。这个单模式包不需要 "
+            "`raman_generation.pth`、检索数据库或 tokenizer 文件。\n\n"
             "样例文件位于 `tests/sample_assets/sample_spectrum.dat`，契约中的输入文件 key 为 `spectrum_file`。\n"
         )
 
@@ -639,7 +643,7 @@ class AlgorithmHandoffService:
             suggestions.append(
                 "缺少 Raman 服务资源文件，请确认运行 PolyAgent 后端的测试机 10.26.15.93 上存在 "
                 "/home/fangyikai/github_project/Spec_Agent/backend/resources/raman，并包含 "
-                "checkpoints/baseline_removal.pth、checkpoints/raman_generation.pth、moltokenizer/vocab.json；"
+                "checkpoints/baseline_removal.pth、checkpoints/raman_fg.pth；"
                 "如路径不同，请配置 RAMAN_RESOURCES_ROOT 指向 Raman 资源父目录。"
             )
         elif "resource asset" in message or "managed Raman resources" in message or "RAMAN_" in message:

@@ -1,8 +1,8 @@
-# Raman Structure Analyzer
+# Raman Functional Group Analyzer
 
 This is a PolyAgent uploaded-algorithm demo for generic file I/O.
 
-The platform treats the uploaded spectrum as a generic `series` input parsed by `series_xy.v1`. Raman-specific behavior lives only in this package.
+The platform treats the uploaded spectrum as a generic `series` input parsed by `series_xy.v1`. Raman-specific behavior lives only in this package. This handoff package is intentionally limited to Raman functional group analysis.
 
 ## Package Layout
 
@@ -26,7 +26,7 @@ The model resources are not stored in the ZIP. The package first uses an optiona
 - `asset_key`: `raman_runtime_resources`
 - `path`: `/home/fangyikai/github_project/Spec_Agent/backend/resources/raman`
 - `resource_type`: `raman_runtime`
-- `required_files`: `checkpoints/baseline_removal.pth`, `checkpoints/raman_generation.pth`, `moltokenizer/vocab.json`
+- `required_files`: `checkpoints/baseline_removal.pth`, `checkpoints/raman_fg.pth`
 
 `path` is local to the machine running the PolyAgent backend service. In the test environment, register the path on `10.26.15.93`; in production, when the backend runs on `localhost`, register the same Raman resource parent directory on the production host.
 
@@ -36,14 +36,14 @@ When the resources live outside the default `.runtime/algorithm-resources` root,
 export POLYAGENT_ALGORITHM_RESOURCE_ROOTS=/home/fangyikai/github_project/Spec_Agent/backend/resources
 ```
 
-`RAMAN_RESOURCES_ROOT` can be used as an environment-variable fallback. Managed resource binding is optional for this service-mounted package. The package prefers `moltokenizer/vocab.json` and also accepts legacy `tokenizer/vocab.json`. `retrieval` mode also needs `database/raman_db.pkl`. Validation fails if any required service file is missing.
+`RAMAN_RESOURCES_ROOT` can be used as an environment-variable fallback. Managed resource binding is optional for this service-mounted package. This function-group-only package does not need `raman_generation.pth`, retrieval databases, or tokenizer files. Validation fails if any required service file is missing.
 
 ## Inputs
 
 JSON parameters:
 
-- `spectype`: `raman` or `ir`
-- `mode`: `beam_search`, `retrieval`, `function_groups`, or `greedy_decode`
+- `spectype`: `raman`
+- `mode`: `function_groups`
 - `x0`, `x1`: optional spectral x-axis bounds
 - `k`: candidate count
 - `transmittance`: IR transmittance flag

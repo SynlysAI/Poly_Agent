@@ -11,7 +11,7 @@ The package is a business demo, not a platform-specific code path. PolyAgent see
 - Managed model resources declared through `resource_assets`
 - JSON and file outputs declared through `output_assets`
 
-Raman-specific inference stays inside `examples/algorithm_upload/raman_structure_analyzer/src/`.
+Raman-specific inference stays inside `examples/algorithm_upload/raman_structure_analyzer/src/`. This package is intentionally limited to Raman functional group analysis and does not require `raman_generation.pth`.
 
 ## Package
 
@@ -44,7 +44,7 @@ tests/sample_assets/sample_spectrum.dat
 JSON input fields:
 
 - `spectype`: `raman` or `ir`
-- `mode`: `beam_search`, `retrieval`, `function_groups`, or `greedy_decode`
+- `mode`: `function_groups`
 - `x0`, `x1`: optional spectral range
 - `k`: candidate count
 - `transmittance`: IR transmittance flag
@@ -77,13 +77,12 @@ Example registration payloads:
   "resource_type": "raman_runtime",
   "required_files": [
     "checkpoints/baseline_removal.pth",
-    "checkpoints/raman_generation.pth",
-    "moltokenizer/vocab.json"
+    "checkpoints/raman_fg.pth"
   ]
 }
 ```
 
-`RAMAN_RESOURCES_ROOT` may point to the same Raman resource parent directory. `retrieval` mode additionally needs `database/raman_db.pkl`. `RAMAN_CHECKPOINTS_ROOT`, `RAMAN_DATABASE_ROOT`, and `RAMAN_TOKENIZER_ROOT` remain supported as fallback bindings for older packages.
+`RAMAN_RESOURCES_ROOT` may point to the same Raman resource parent directory. This function-group-only package does not need retrieval databases or tokenizer files. `RAMAN_CHECKPOINTS_ROOT`, `RAMAN_DATABASE_ROOT`, and `RAMAN_TOKENIZER_ROOT` remain supported as fallback bindings for older packages.
 
 The runtime must already provide `torch`, `rdkit`, `transformers`, `numpy`, `pandas`, and `scipy`.
 

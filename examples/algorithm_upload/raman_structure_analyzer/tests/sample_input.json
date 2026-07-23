@@ -1,6 +1,6 @@
 {
   "spectype": "raman",
-  "mode": "beam_search",
+  "mode": "function_groups",
   "x0": 400,
   "x1": 1800,
   "k": 3,

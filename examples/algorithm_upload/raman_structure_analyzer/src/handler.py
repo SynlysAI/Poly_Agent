@@ -30,7 +30,9 @@ def predict(inputs: dict, context: dict, model=None) -> dict:
     x1 = float(inputs.get("x1") or points[-1]["x"])
     spectrum = [float(point["y"]) for point in points]
     spectype = str(inputs.get("spectype") or "raman")
-    mode = str(inputs.get("mode") or "beam_search")
+    mode = str(inputs.get("mode") or "function_groups")
+    if spectype != "raman" or mode != "function_groups":
+        raise ValueError("This package only supports Raman functional group analysis.")
     k = int(inputs.get("k") or 3)
     transmittance = bool(inputs.get("transmittance") or False)
     device_name = str(inputs.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -141,6 +143,11 @@ def _series_points(context: dict, key: str) -> list[dict[str, float]]:
 
 
 def _candidate_rows(raw_output) -> list[dict]:
+    if isinstance(raw_output, list):
+        return [
+            {"rank": index + 1, "structure": str(function_group), "score": None}
+            for index, function_group in enumerate(raw_output)
+        ]
     structures = raw_output.get("structure") if isinstance(raw_output, dict) else []
     scores = raw_output.get("score") if isinstance(raw_output, dict) else []
     rows = []
