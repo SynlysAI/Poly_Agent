@@ -188,6 +188,11 @@ export function findOptimum(sessionId, config = {}) {
   return alchemistClient.post(`/sessions/${sessionId}/acquisition/find-optimum`, config).then(r => r.data)
 }
 
+/** 将推荐实验条件下发为 SpecLabOS 外部实验任务 */
+export function dispatchExperimentTask(sessionId, payload) {
+  return alchemistClient.post(`/sessions/${sessionId}/acquisition/dispatch`, payload).then(r => r.data)
+}
+
 // ── 可视化 ──
 
 // ── 可视化 ──

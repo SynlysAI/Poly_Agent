@@ -126,6 +126,13 @@ class Settings:
         )
         self.alchemist_backend_url: str = os.getenv("ALCHEMIST_BACKEND_URL", "http://127.0.0.1:5101")
 
+        # SpecLabOS 外部实验任务下发配置
+        self.speclabos_base_url: str = os.getenv("SPECLABOS_BASE_URL", "").strip().rstrip("/")
+        self.speclabos_api_key: str = os.getenv("SPECLABOS_API_KEY", "").strip()
+        self.speclabos_timeout_seconds: float = float(
+            os.getenv("SPECLABOS_TIMEOUT_SECONDS", "30")
+        )
+
         # Edison Scientific 文献搜索 API Key
         self.edison_api_key: str = os.getenv("EDISON_API_KEY", "")
 

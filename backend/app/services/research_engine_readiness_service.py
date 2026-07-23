@@ -75,6 +75,9 @@ class ResearchEngineReadinessService:
                 computation=computation_item,
                 alchemist=alchemist_item,
                 llm=llm_item,
+                speclabos_configured=bool(
+                    by_service.get("speclabos", {}).get("status") == "available"
+                ),
             ),
         )
 
@@ -232,6 +235,7 @@ class ResearchEngineReadinessService:
         computation: ResearchEngineReadinessItem,
         alchemist: ResearchEngineReadinessItem,
         llm: ResearchEngineReadinessItem,
+        speclabos_configured: bool,
     ) -> list[ResearchEngineStageReadiness]:
         return [
             self._stage("PROBLEM_SPEC", "任务定义审批", "human_gate", "human_approval", "production_ready"),
@@ -240,7 +244,19 @@ class ResearchEngineReadinessService:
             self._stage_from_item("COMPUTE_PREDICT", "计算/预测", computation, capability_id="computation_submit_adapter"),
             self._stage_from_item("RECOMMENDATION_ASK", "候选推荐", alchemist),
             self._stage("HUMAN_REVIEW", "候选人工评审", "human_gate", "human_approval", "production_ready"),
-            self._stage("EXPERIMENT_EXECUTION", "实验执行", "speclabos", "not_configured", "not_configured", reason="真实 SpecLabOS 尚未接入。"),
+            self._stage(
+                "EXPERIMENT_EXECUTION",
+                "实验执行",
+                "speclabos",
+                "external_experiment_dispatch" if speclabos_configured else "not_configured",
+                "configured_pending_verification" if speclabos_configured else "not_configured",
+                reason=(
+                    "已支持将实验批次下发至 SpecLabOS 并接收登记；"
+                    "真实设备执行与结果回填待接入。"
+                    if speclabos_configured
+                    else "未配置 SpecLabOS 外部实验任务下发。"
+                ),
+            ),
             self._stage("RESULT_TELL", "结果回填", "manual_observation", "manual_or_adapter", "configured_pending_verification"),
             self._stage("MODEL_UPDATE", "模型更新", "research-llm", "llm" if llm.configured else "demo_fallback", llm.level, provider=llm.provider, model=llm.model, demo=llm.demo_fallback, reason=llm.fallback_reason),
             self._stage("ARCHIVE_LEARNING", "归档学习", "traceability", "system", "production_ready"),

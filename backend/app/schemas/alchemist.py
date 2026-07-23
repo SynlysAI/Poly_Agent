@@ -313,6 +313,41 @@ class FindOptimumResponse(BaseModel):
     goal: str
 
 
+class DispatchExperimentObjectRequest(BaseModel):
+    """下发实验任务的实验对象信息。"""
+
+    name: str = Field(min_length=1, max_length=200)
+    type: str | None = Field(default=None, max_length=80)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class DispatchExperimentConditionRequest(BaseModel):
+    """下发实验任务的单组条件。"""
+
+    parameters: dict[str, float | int | str] = Field(min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DispatchExperimentRequest(BaseModel):
+    """将 Alchemist 推荐条件下发为外部实验任务的请求。"""
+
+    experiment_name: str = Field(min_length=1, max_length=200)
+    experiment_object: DispatchExperimentObjectRequest
+    experiment_content: str | None = Field(default=None, max_length=10000)
+    conditions: list[DispatchExperimentConditionRequest] = Field(min_length=1, max_length=100)
+    strategy: str = Field(min_length=1, max_length=40)
+    goal: Literal["maximize", "minimize"]
+    acquisition_parameters: dict[str, float | int | str] = Field(default_factory=dict)
+
+
+class DispatchExperimentResponse(BaseModel):
+    """外部实验任务下发响应。"""
+
+    dispatch_id: str
+    status: str
+    received_at: str
+
+
 # ============================================================
 # 可视化
 # ============================================================
