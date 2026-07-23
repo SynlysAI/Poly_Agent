@@ -18,7 +18,7 @@ README.md
 
 ## Runtime Requirements
 
-The runtime environment must already provide `torch`, `rdkit`, `transformers`, `numpy`, `pandas`, and `scipy`.
+The runtime environment must already provide `torch`, `numpy`, and `scipy`.
 
 The model resources are not stored in the ZIP. The package first uses an optional managed resource binding, then `RAMAN_RESOURCES_ROOT`, then the service default path `/home/fangyikai/github_project/Spec_Agent/backend/resources/raman`. If you register a mounted resource in PolyAgent resource management, the registered path must be the Raman resource parent directory, not the `checkpoints` subdirectory:
 

@@ -84,7 +84,7 @@ Example registration payloads:
 
 `RAMAN_RESOURCES_ROOT` may point to the same Raman resource parent directory. This function-group-only package does not need retrieval databases or tokenizer files. `RAMAN_CHECKPOINTS_ROOT`, `RAMAN_DATABASE_ROOT`, and `RAMAN_TOKENIZER_ROOT` remain supported as fallback bindings for older packages.
 
-The runtime must already provide `torch`, `rdkit`, `transformers`, `numpy`, `pandas`, and `scipy`.
+The runtime must already provide `torch`, `numpy`, and `scipy`.
 
 Validation fails if a required resource binding is missing, the path does not exist, the path is outside allowed roots, or a declared required file is missing.
 

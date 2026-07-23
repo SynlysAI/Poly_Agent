@@ -1,6 +1,3 @@
 numpy
-pandas
 scipy
 torch
-transformers
-rdkit

@@ -3,8 +3,6 @@ import json
 
 import numpy as np
 import torch
-from rdkit import Chem
-from rdkit.Chem import rdDistGeom, rdmolops
 
 from .greedy_search import preprocess_spectrum
 from .greedy_search import load_net_state
@@ -62,47 +60,6 @@ def get_metadata(raw_data):
         if key in data:
             metadata[label] = data[key]
     return metadata 
-
-def smiles_to_graph(smiles, node_vec_len=100, max_atoms=89):
-    # Get list of atoms in molecule
-    mol = Chem.AddHs(
-        Chem.MolFromSmiles(smiles))
-    atoms = mol.GetAtoms()
-
-    node_mat = np.zeros((max_atoms, node_vec_len))
-    # Iterate over atoms and add to node matrix
-    for atom in atoms:
-        # Get atom index and atomic number
-        atom_index = atom.GetIdx()
-        atom_no = atom.GetAtomicNum()
-
-        # Assign to node matrix
-        node_mat[atom_index, atom_no] = 1
-
-    # Get adjacency matrix using RDKit
-    adj_mat = rdmolops.GetAdjacencyMatrix(mol)
-    # Get distance matrix using RDKit
-    dist_mat = rdDistGeom.GetMoleculeBoundsMatrix(mol)
-    dist_mat[dist_mat == 0.] = 1
-
-    # Get modified adjacency matrix with inverse bond lengths
-    adj_mat = adj_mat * (1 / dist_mat)
-
-    # Pad the adjacency matrix with 0s
-    dim_add = max_atoms - adj_mat.shape[0]
-    adj_mat = np.pad(
-        adj_mat, pad_width=((0, dim_add), (0, dim_add)), mode="constant"
-    )
-
-    # Add an identity matrix to adjacency matrix
-    # This will make an atom its own neighbor
-    adj_mat = adj_mat + np.eye(max_atoms)
-
-    # Save both matrices
-    node_mat = node_mat
-    adj_mat = adj_mat
-    return {'node_mat': node_mat, 'adj_mat': adj_mat}
-
 
 @torch.no_grad()
 def main(spectrum, x0, x1, device, smiles=None, spectype='raman', mode='function_groups', k=3, transmittance=False):
