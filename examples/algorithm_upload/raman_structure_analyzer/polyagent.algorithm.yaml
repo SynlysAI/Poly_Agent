@@ -33,18 +33,14 @@ input_schema:
     - mode
   field_defaults:
     spectype: raman
-    mode: beam_search
+    mode: function_groups
     k: 3
     transmittance: false
   field_options:
     spectype:
       - raman
-      - ir
     mode:
-      - beam_search
-      - retrieval
       - function_groups
-      - greedy_decode
     device:
       - cpu
       - cuda
@@ -110,13 +106,12 @@ resource_assets:
     resource_type: raman_runtime
     required_files:
       - checkpoints/baseline_removal.pth
-      - checkpoints/raman_generation.pth
-      - moltokenizer/vocab.json
+      - checkpoints/raman_fg.pth
     binding_required: false
-    description: Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT or the service default Raman resource root.
+    description: Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT or the service default Raman resource root. This function-group-only package does not require raman_generation.pth or tokenizer files.
 result_envelope: polyagent_run_result.v1
 sample_input_path: tests/sample_input.json
-description: Raman/IR spectral structure analysis demo packaged with generic file I/O assets.
+description: Raman spectral functional group analysis demo packaged with generic file I/O assets.
 developer: Raman Demo Adapter
 developer_organization: Local Raman Reference
 source_url: refer/raman
@@ -125,4 +120,4 @@ method_attributions:
     role: implementation_source
     organization: Local Raman Reference
     description: Adapted from the local refer/raman reference code.
-implementation_notes: Uses generic file assets and managed resources; no platform Raman-specific code path is required.
+implementation_notes: Function-group-only package; it uses baseline_removal.pth and raman_fg.pth, and does not require raman_generation.pth.

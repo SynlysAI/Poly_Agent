@@ -32,19 +32,15 @@ input_schema:
     - mode
   field_defaults:
     spectype: raman
-    mode: beam_search
+    mode: function_groups
     k: 3
     transmittance: false
     device: cpu
   field_options:
     spectype:
       - raman
-      - ir
     mode:
-      - beam_search
-      - retrieval
       - function_groups
-      - greedy_decode
     device:
       - cpu
       - cuda
@@ -58,7 +54,7 @@ output_schema:
     - candidates
 sample_input:
   spectype: raman
-  mode: beam_search
+  mode: function_groups
   x0: 400
   x1: 1800
   k: 3
@@ -124,10 +120,9 @@ resource_assets:
     resource_type: raman_runtime
     required_files:
       - checkpoints/baseline_removal.pth
-      - checkpoints/raman_generation.pth
-      - moltokenizer/vocab.json
+      - checkpoints/raman_fg.pth
     binding_required: false
-    description: Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT or the service default Raman resource root.
+    description: Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT or the service default Raman resource root. This function-group-only package does not require raman_generation.pth or tokenizer files.
 runtime:
   python: "3.11"
   resources:
@@ -158,7 +153,7 @@ method_attributions:
 | 字段名 | 类型 | 是否必填 | 说明（含义+单位） | 示例值 |
 | --- | --- | --- | --- | --- |
 | spectype | string | 是 | 光谱类型 | raman |
-| mode | string | 是 | 推理模式 | beam_search |
+| mode | string | 是 | 推理模式 | function_groups |
 | x0 | number | 否 | 光谱 x 轴下界 | 400 |
 | x1 | number | 否 | 光谱 x 轴上界 | 1800 |
 | k | integer | 否 | 候选数量 | 3 |
@@ -171,7 +166,7 @@ JSON 示例（一条完整记录）：
 ```json
 {
   "spectype": "raman",
-  "mode": "beam_search",
+  "mode": "function_groups",
   "x0": 400,
   "x1": 1800,
   "k": 3,
@@ -322,8 +317,7 @@ resource_assets:
     resource_type: raman_runtime
     required_files:
       - checkpoints/baseline_removal.pth
-      - checkpoints/raman_generation.pth
-      - moltokenizer/vocab.json
+      - checkpoints/raman_fg.pth
     binding_required: false
     required: false
 ```
@@ -333,7 +327,7 @@ resource_assets:
 ```json
 {
   "spectype": "raman",
-  "mode": "beam_search",
+  "mode": "function_groups",
   "x0": 400,
   "x1": 1800,
   "k": 3,
@@ -356,7 +350,7 @@ resource_assets:
   "point_count": 8,
   "metadata": {
     "spectype": "raman",
-    "mode": "beam_search",
+    "mode": "function_groups",
     "device": "cpu"
   },
   "preprocessing": {

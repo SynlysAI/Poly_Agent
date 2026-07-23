@@ -25,8 +25,8 @@ const form = reactive({
   name: 'Raman runtime resources',
   path: '/home/fangyikai/github_project/Spec_Agent/backend/resources/raman',
   resource_type: 'raman_runtime',
-  required_files: 'checkpoints/baseline_removal.pth\ncheckpoints/raman_generation.pth\nmoltokenizer/vocab.json',
-  description: 'Raman resource parent directory containing checkpoints, database, and tokenizer files.',
+  required_files: 'checkpoints/baseline_removal.pth\ncheckpoints/raman_fg.pth',
+  description: 'Raman resource parent directory containing function-group analysis checkpoints.',
 })
 
 function parseRequiredFiles(value) {

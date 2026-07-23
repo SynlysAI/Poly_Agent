@@ -430,7 +430,7 @@ sample_input:
                 "运行时通过 multipart 上传 spectrum_file，平台按 input_assets 解析为 series_json。",
                 "2.2 算法运行方式",
                 "输入 JSON 示例：",
-                '{\n  "spectype": "raman",\n  "mode": "beam_search",\n  "k": 3\n}',
+                '{\n  "spectype": "raman",\n  "mode": "function_groups",\n  "k": 3\n}',
                 "输出 JSON 示例：",
                 '{\n  "candidates": [],\n  "point_count": 8,\n  "metadata": {},\n  "preprocessing": {}\n}',
             ],
@@ -934,10 +934,8 @@ sample_input_path: tests/sample_input.json
         """Raman 包未显式绑定时可使用服务机器上的默认 mounted resource 根目录。"""
         resource_root = self.runtime_root / "raman-service-resources" / "raman"
         (resource_root / "checkpoints").mkdir(parents=True)
-        (resource_root / "moltokenizer").mkdir(parents=True)
         (resource_root / "checkpoints" / "baseline_removal.pth").write_text("ok", encoding="utf-8")
-        (resource_root / "checkpoints" / "raman_generation.pth").write_text("ok", encoding="utf-8")
-        (resource_root / "moltokenizer" / "vocab.json").write_text("{}", encoding="utf-8")
+        (resource_root / "checkpoints" / "raman_fg.pth").write_text("ok", encoding="utf-8")
 
         contract = {
             "algorithm_id": "raman_structure_analyzer",
@@ -949,8 +947,7 @@ sample_input_path: tests/sample_input.json
                     "env_var": "RAMAN_RESOURCES_ROOT",
                     "required_files": [
                         "checkpoints/baseline_removal.pth",
-                        "checkpoints/raman_generation.pth",
-                        "moltokenizer/vocab.json",
+                        "checkpoints/raman_fg.pth",
                     ],
                 }
             ],
@@ -973,10 +970,8 @@ sample_input_path: tests/sample_input.json
 
         resource_root = self.runtime_root / "env-raman-service-resources" / "raman"
         (resource_root / "checkpoints").mkdir(parents=True)
-        (resource_root / "moltokenizer").mkdir(parents=True)
         (resource_root / "checkpoints" / "baseline_removal.pth").write_text("ok", encoding="utf-8")
-        (resource_root / "checkpoints" / "raman_generation.pth").write_text("ok", encoding="utf-8")
-        (resource_root / "moltokenizer" / "vocab.json").write_text("{}", encoding="utf-8")
+        (resource_root / "checkpoints" / "raman_fg.pth").write_text("ok", encoding="utf-8")
 
         contract = {
             "algorithm_id": "raman_structure_analyzer",
@@ -987,8 +982,7 @@ sample_input_path: tests/sample_input.json
                     "binding_required": False,
                     "required_files": [
                         "checkpoints/baseline_removal.pth",
-                        "checkpoints/raman_generation.pth",
-                        "moltokenizer/vocab.json",
+                        "checkpoints/raman_fg.pth",
                     ],
                 }
             ],
@@ -1499,7 +1493,7 @@ sample_input_path: tests/sample_input.json
                 },
                 "sample_input": {
                     "spectype": "raman",
-                    "mode": "beam_search",
+                    "mode": "function_groups",
                     "x0": 400,
                     "x1": 1800,
                     "k": 3,
@@ -1534,10 +1528,13 @@ sample_input_path: tests/sample_input.json
                 contract_data["resource_assets"][0]["required_files"],
                 [
                     "checkpoints/baseline_removal.pth",
-                    "checkpoints/raman_generation.pth",
-                    "moltokenizer/vocab.json",
+                    "checkpoints/raman_fg.pth",
                 ],
             )
+            sample_input = json.loads(handoff_zip.read("tests/sample_input.json").decode("utf-8"))
+            self.assertEqual(sample_input["spectype"], "raman")
+            self.assertEqual(sample_input["mode"], "function_groups")
+            self.assertEqual(contract_data["input_schema"]["field_options"]["mode"], ["function_groups"])
             self.assertEqual(contract_data["result_envelope"], "polyagent_run_result.v1")
 
     def test_file_based_handoff_self_test_reports_missing_raman_resources(self) -> None:
@@ -1557,7 +1554,7 @@ sample_input_path: tests/sample_input.json
                     "fields": {"candidates": "list"},
                     "required": ["candidates"],
                 },
-                "sample_input": {"spectype": "raman", "mode": "beam_search"},
+                "sample_input": {"spectype": "raman", "mode": "function_groups"},
                 "requirements_hint": ["numpy", "pandas", "scipy", "torch", "transformers", "rdkit"],
             },
         )

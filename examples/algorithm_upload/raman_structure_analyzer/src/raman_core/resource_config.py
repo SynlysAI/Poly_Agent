@@ -62,12 +62,9 @@ def configure_from_context(context: dict) -> dict:
 
     missing = [
         "raman_checkpoints",
-        "raman_tokenizer",
     ]
     if GLOBAL_CONFIG["resources"]["raman_checkpoints_root"]:
         missing.remove("raman_checkpoints")
-    if GLOBAL_CONFIG["resources"]["raman_tokenizer_root"]:
-        missing.remove("raman_tokenizer")
     if missing:
         errors = []
         for default_root in DEFAULT_RAMAN_RESOURCES_ROOTS:
@@ -104,18 +101,9 @@ def _tokenizer_root(root: Path) -> Path:
 def _validate_root(root: Path) -> None:
     required_files = [
         root / "checkpoints" / "baseline_removal.pth",
-        root / "checkpoints" / "raman_generation.pth",
-    ]
-    tokenizer_vocab_candidates = [
-        root / "moltokenizer" / "vocab.json",
-        root / "tokenizer" / "vocab.json",
+        root / "checkpoints" / "raman_fg.pth",
     ]
     missing = [str(path) for path in required_files if not path.is_file()]
-    if not any(path.is_file() for path in tokenizer_vocab_candidates):
-        missing.append(
-            "one of: "
-            + ", ".join(str(path) for path in tokenizer_vocab_candidates)
-        )
     if missing:
         raise RuntimeError(
             "missing Raman service resources. Set RAMAN_RESOURCES_ROOT to the Raman "

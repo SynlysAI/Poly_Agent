@@ -2,16 +2,12 @@ import os
 import json
 
 import numpy as np
-import pandas as pd
 import torch
 from rdkit import Chem
 from rdkit.Chem import rdDistGeom, rdmolops
 
-from .beam_search import beam_search
-from .greedy_search import greedy_decode, preprocess_spectrum, mol_to_image
+from .greedy_search import preprocess_spectrum
 from .greedy_search import load_net_state
-from .models.Transformer import make_model
-from .retrieval import retrieval
 from .resource_config import GLOBAL_CONFIG
 
 
@@ -24,11 +20,6 @@ logger = _Logger()
 
 PARENT_PATH = os.path.dirname(os.path.realpath(__file__))
 RAMAN_RESOURCES = GLOBAL_CONFIG["resources"]
-IR_CHECKPOINT = os.path.join(RAMAN_RESOURCES["raman_checkpoints_root"], "ir_generation.pth")
-RAMAN_CHECKPOINT = os.path.join(RAMAN_RESOURCES["raman_checkpoints_root"], "raman_generation.pth")
-IR_RETRIEVAL_CHECKPOINT = os.path.join(RAMAN_RESOURCES["raman_checkpoints_root"], "ir_retrieval.pth")
-IR_FG_CHECKPOINT = os.path.join(RAMAN_RESOURCES["raman_checkpoints_root"], "ir_fg.pth")
-RAMAN_RETRIEVAL_CHECKPOINT = os.path.join(RAMAN_RESOURCES["raman_checkpoints_root"], "raman_retrieval.pth")
 RAMAN_FG_CHECKPOINT = os.path.join(RAMAN_RESOURCES["raman_checkpoints_root"], "raman_fg.pth")
 
 def seed_everything(seed):
@@ -114,95 +105,36 @@ def smiles_to_graph(smiles, node_vec_len=100, max_atoms=89):
 
 
 @torch.no_grad()
-def main(spectrum, x0, x1, device, smiles=None, spectype='raman', mode='greedy_decode', k=3, transmittance=False):
+def main(spectrum, x0, x1, device, smiles=None, spectype='raman', mode='function_groups', k=3, transmittance=False):
     '''
     **Arguments**
     ``spectrum``: 1024-d array / list
     ``x0 & x1``: start and end of input spectrum
-    ``spectype``: 'ir' or 'raman'
-    ``mode``: 'function_groups', 'greedy_decode' or 'beam_search'
-    ``k``: The number of candidates of beam search or retrieval. Default = 3
-    ``transmittance``: only for ir, set 'True' to convert to absorbance. Default = False
+    ``spectype``: only 'raman'
+    ``mode``: only 'function_groups'
+    ``k``: unused by the function group model; kept for platform schema compatibility.
+    ``transmittance``: unused by the Raman function group model; kept for platform schema compatibility.
 
     '''
+    if spectype != 'raman' or mode != 'function_groups':
+        raise ValueError("This package only supports Raman functional group analysis.")
 
     spectrum = preprocess_spectrum(x0, x1, spectrum, spectype=spectype, transmittance=transmittance)
     if not isinstance(spectrum, torch.Tensor):
         spectrum = torch.tensor(spectrum)
     spectrum = spectrum.to(device)
 
-    if mode == 'greedy_decode':
-        model, src_length = make_model(181, depth=4, d_model=512, mode=mode)
-        if spectype == 'raman':
-            logger.warning("暂不支持 Raman 的 greedy_decode 模式")
-            raise ValueError("暂不支持Raman的greedy_decode模式")
-        if spectype == 'ir':
-            checkpoint = IR_CHECKPOINT
-        model = load_net_state(model, torch.load(checkpoint, map_location=device, weights_only=True)['model_state']).to(device)
-        output = greedy_decode(spectrum, src_length, model, device)
+    from .models.MLPMixer import resnet
+    from .models.fgs import fg_list
 
-    elif mode == 'beam_search':
-        model, src_length = make_model(181, depth=4, d_model=512, mode=mode)
-        if spectype == 'raman':
-            checkpoint = RAMAN_CHECKPOINT
-        if spectype == 'ir':
-            checkpoint = IR_CHECKPOINT
-        model = load_net_state(model, torch.load(checkpoint, map_location=device, weights_only=True)['model_state']).to(device)
-        output = beam_search(model,
-                            spectrum,
-                            beam_size=k,
-                            device=device,
-                            max_len=70,
-                            length_penalty=0,
-                            temperature=1,
-                            stochastic=0)
-    elif mode == 'retrieval':
-        model, src_length = make_model(181, depth=4, d_model=512, mode=mode)
-        if spectype == 'raman':
-            checkpoint = RAMAN_RETRIEVAL_CHECKPOINT
-        if spectype == 'ir':
-            checkpoint = IR_RETRIEVAL_CHECKPOINT
-        model = load_net_state(model, torch.load(checkpoint, map_location=device, weights_only=True)['model_state']).to(device)
-        db_path = os.path.join(RAMAN_RESOURCES["raman_database_root"], f"{spectype}_db.pkl")
-        db = torch.load(db_path, weights_only=0)
-        output = retrieval(spectrum, db, model, device, k)
-
-    elif mode == 'function_groups':
-        from .models.MLPMixer import resnet
-        from .models.fgs import fg_list
-        model_params = {
-            'depth': 1, 'hidden_size': 1024, 'block_size': 1, 'input_dim': 1024, 'in_channels': 256,
-        }
-        model = resnet(**model_params).eval()
-        if spectype == 'ir':
-            checkpoint = IR_FG_CHECKPOINT
-        else:
-            checkpoint = RAMAN_FG_CHECKPOINT
-        model = load_net_state(model, torch.load(checkpoint, map_location=device, weights_only=True)).to(device)
-        output = model(spectrum.float())
-        output = output.greater_equal(0.5).squeeze()
-        output = [fg_list[i] for i in range(len(output)) if output[i]]
-    
-    if mode == 'generate_ir':
-        assert smiles is not None, "SMILES string is required for IR spectrum generation."
-        db = torch.load('database/ir_db_sim.pkl', weights_only=0)
-        result = db[db['structure']==
-                    Chem.MolToSmiles(
-                        Chem.MolFromSmiles(smiles), canonical=True)]
-        del db
-        if len(result) > 0:
-            spectrum = result['spectrum'].values[0]
-            note = 'from database'
-        else:
-            checkpoint = 'checkpoints/mol2ir.pth'
-            from .models.Graphormer import Graphormer
-            model = Graphormer()
-            model = load_net_state(model, torch.load(checkpoint, map_location=device, weights_only=True)['model_state']).to(device)   
-            mol_graph = smiles_to_graph(smiles)
-            mol_graph = {k: torch.tensor(v, dtype=torch.float32).unsqueeze(0).to(device) for k, v in mol_graph.items()}
-            spectrum = model(**mol_graph).cpu().detach().numpy()
-            note = 'generated'
-        output = {'structure': [smiles], 'spectrum':[spectrum], 'score': [note]}
+    model_params = {
+        'depth': 1, 'hidden_size': 1024, 'block_size': 1, 'input_dim': 1024, 'in_channels': 256,
+    }
+    model = resnet(**model_params).eval()
+    model = load_net_state(model, torch.load(RAMAN_FG_CHECKPOINT, map_location=device, weights_only=True)).to(device)
+    output = model(spectrum.float())
+    output = output.greater_equal(0.5).squeeze()
+    output = [fg_list[i] for i in range(len(output)) if output[i]]
     return output
 
 
