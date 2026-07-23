@@ -4,6 +4,7 @@ __pycache__/
 .runtime/
 *.pyc
 .env
+.env_prod
 .vite/
 refer/
 .playwright-cli/
