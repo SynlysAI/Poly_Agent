@@ -21,12 +21,12 @@ const filters = reactive({
 })
 const form = reactive({
   algorithm_id: 'raman_structure_analyzer',
-  asset_key: 'raman_checkpoints',
-  name: 'Raman checkpoints',
-  path: '/home/fangyikai/github_project/Spec_Agent/backend/resources/raman/checkpoints',
-  resource_type: 'checkpoints',
-  required_files: 'baseline_removal.pth\nraman_generation.pth',
-  description: '',
+  asset_key: 'raman_runtime_resources',
+  name: 'Raman runtime resources',
+  path: '/home/fangyikai/github_project/Spec_Agent/backend/resources/raman',
+  resource_type: 'raman_runtime',
+  required_files: 'checkpoints/baseline_removal.pth\ncheckpoints/raman_generation.pth\nmoltokenizer/vocab.json',
+  description: 'Raman resource parent directory containing checkpoints, database, and tokenizer files.',
 })
 
 function parseRequiredFiles(value) {
