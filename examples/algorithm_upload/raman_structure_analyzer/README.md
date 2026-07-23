@@ -20,11 +20,15 @@ README.md
 
 The runtime environment must already provide `torch`, `rdkit`, `transformers`, `numpy`, `pandas`, and `scipy`.
 
-The model resources are not stored in the ZIP. Register the mounted server paths in PolyAgent resource management, or use these environment variables as a compatibility fallback:
+The model resources are not stored in the ZIP. The package first uses an optional managed resource binding, then `RAMAN_RESOURCES_ROOT`, then the service default path `/home/fangyikai/github_project/Spec_Agent/backend/resources/raman`. If you register a mounted resource in PolyAgent resource management, the registered path must be the Raman resource parent directory, not the `checkpoints` subdirectory:
 
-- `RAMAN_CHECKPOINTS_ROOT`
-- `RAMAN_DATABASE_ROOT`
-- `RAMAN_TOKENIZER_ROOT`
+- `algorithm_id`: `raman_structure_analyzer`
+- `asset_key`: `raman_runtime_resources`
+- `path`: `/home/fangyikai/github_project/Spec_Agent/backend/resources/raman`
+- `resource_type`: `raman_runtime`
+- `required_files`: `checkpoints/baseline_removal.pth`, `checkpoints/raman_generation.pth`, `moltokenizer/vocab.json`
+
+`path` is local to the machine running the PolyAgent backend service. In the test environment, register the path on `10.26.15.93`; in production, when the backend runs on `localhost`, register the same Raman resource parent directory on the production host.
 
 When the resources live outside the default `.runtime/algorithm-resources` root, include their parent directory in `POLYAGENT_ALGORITHM_RESOURCE_ROOTS`, for example:
 
@@ -32,7 +36,7 @@ When the resources live outside the default `.runtime/algorithm-resources` root,
 export POLYAGENT_ALGORITHM_RESOURCE_ROOTS=/home/fangyikai/github_project/Spec_Agent/backend/resources
 ```
 
-Validation fails if any required binding, path, or declared resource file is missing.
+`RAMAN_RESOURCES_ROOT` can be used as an environment-variable fallback. Managed resource binding is optional for this service-mounted package. The package prefers `moltokenizer/vocab.json` and also accepts legacy `tokenizer/vocab.json`. `retrieval` mode also needs `database/raman_db.pkl`. Validation fails if any required service file is missing.
 
 ## Inputs
 

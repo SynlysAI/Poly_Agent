@@ -19,6 +19,12 @@ from app.schemas.research_engine import (
     AlgorithmResourceBinding,
 )
 
+RAMAN_STRUCTURE_ANALYZER_ID = "raman_structure_analyzer"
+RAMAN_RUNTIME_RESOURCE_KEY = "raman_runtime_resources"
+RAMAN_RUNTIME_RESOURCE_DEFAULT_PATHS = (
+    Path("/home/fangyikai/github_project/Spec_Agent/backend/resources/raman"),
+)
+
 
 class AlgorithmManagedResourceService:
     """Register and resolve large mounted resources for uploaded algorithms."""
@@ -159,6 +165,17 @@ class AlgorithmManagedResourceService:
                 resolved_resources[key] = resolved
                 continue
 
+            default_path = self._default_resource_path_for_key(
+                algorithm_id=contract_algorithm_id,
+                asset_key=key,
+                required_files=required_files,
+            )
+            if default_path is not None:
+                resolved["path"] = str(default_path)
+                resolved["storage_mode"] = "mounted_path"
+                resolved_resources[key] = resolved
+                continue
+
             if bool(spec.get("required")) or bool(spec.get("binding_required")) or env_var:
                 hint = f" 或环境变量 {env_var}" if env_var else ""
                 raise ValueError(
@@ -204,11 +221,35 @@ class AlgorithmManagedResourceService:
     def allowed_resource_roots() -> list[Path]:
         """Return resolved roots allowed for mounted algorithm resources."""
         roots = [settings.runtime_root / "algorithm-resources"]
+        roots.extend(path.parent for path in RAMAN_RUNTIME_RESOURCE_DEFAULT_PATHS)
         raw_extra_roots = os.getenv("POLYAGENT_ALGORITHM_RESOURCE_ROOTS", "")
         for raw_root in raw_extra_roots.split(os.pathsep):
             if raw_root.strip():
                 roots.append(Path(raw_root).expanduser())
         return [root.resolve() for root in roots]
+
+    def _default_resource_path_for_key(
+        self,
+        *,
+        algorithm_id: str | None,
+        asset_key: str,
+        required_files: list[str],
+    ) -> Path | None:
+        """Return built-in service-mounted resources for known demo packages."""
+        if algorithm_id != RAMAN_STRUCTURE_ANALYZER_ID or asset_key != RAMAN_RUNTIME_RESOURCE_KEY:
+            return None
+
+        for candidate in RAMAN_RUNTIME_RESOURCE_DEFAULT_PATHS:
+            status, message, path = self.check_path(
+                str(candidate),
+                asset_key=asset_key,
+                required_files=required_files,
+            )
+            if status == "active":
+                return path
+            if path is not None and path.exists():
+                raise ValueError(message)
+        return None
 
     def _resource_for_key(
         self,
