@@ -101,40 +101,19 @@ output_assets:
     artifact_type: report_json
     mime_type: application/json
 resource_assets:
-  - key: raman_checkpoints
-    label: Raman checkpoints root
+  - key: raman_runtime_resources
+    label: Raman runtime resources root
     asset_role: resource
     data_kind: binary
     parser: binary.v1
-    required: true
-    resource_type: checkpoints
+    required: false
+    resource_type: raman_runtime
     required_files:
-      - baseline_removal.pth
-      - raman_generation.pth
-    binding_required: true
-    env_var: RAMAN_CHECKPOINTS_ROOT
-  - key: raman_database
-    label: Raman database root
-    asset_role: resource
-    data_kind: binary
-    parser: binary.v1
-    required: true
-    resource_type: database
-    required_files:
-      - raman_db.pkl
-    binding_required: true
-    env_var: RAMAN_DATABASE_ROOT
-  - key: raman_tokenizer
-    label: Raman tokenizer root
-    asset_role: resource
-    data_kind: binary
-    parser: binary.v1
-    required: true
-    resource_type: tokenizer
-    required_files:
-      - tokenizer_config.json
-    binding_required: true
-    env_var: RAMAN_TOKENIZER_ROOT
+      - checkpoints/baseline_removal.pth
+      - checkpoints/raman_generation.pth
+      - moltokenizer/vocab.json
+    binding_required: false
+    description: Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT or the service default Raman resource root.
 result_envelope: polyagent_run_result.v1
 sample_input_path: tests/sample_input.json
 description: Raman/IR spectral structure analysis demo packaged with generic file I/O assets.

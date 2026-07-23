@@ -548,40 +548,23 @@ class AlgorithmHandoffService:
             ],
             resource_assets=[
                 {
-                    "key": "raman_checkpoints",
-                    "label": "Raman checkpoints root",
+                    "key": "raman_runtime_resources",
+                    "label": "Raman runtime resources root",
                     "asset_role": "resource",
                     "data_kind": "binary",
                     "parser": "binary.v1",
-                    "required": True,
-                    "resource_type": "checkpoints",
-                    "required_files": ["baseline_removal.pth", "raman_generation.pth"],
-                    "binding_required": True,
-                    "env_var": "RAMAN_CHECKPOINTS_ROOT",
-                },
-                {
-                    "key": "raman_database",
-                    "label": "Raman database root",
-                    "asset_role": "resource",
-                    "data_kind": "binary",
-                    "parser": "binary.v1",
-                    "required": True,
-                    "resource_type": "database",
-                    "required_files": ["raman_db.pkl"],
-                    "binding_required": True,
-                    "env_var": "RAMAN_DATABASE_ROOT",
-                },
-                {
-                    "key": "raman_tokenizer",
-                    "label": "Raman tokenizer root",
-                    "asset_role": "resource",
-                    "data_kind": "binary",
-                    "parser": "binary.v1",
-                    "required": True,
-                    "resource_type": "tokenizer",
-                    "required_files": ["tokenizer_config.json"],
-                    "binding_required": True,
-                    "env_var": "RAMAN_TOKENIZER_ROOT",
+                    "required": False,
+                    "resource_type": "raman_runtime",
+                    "required_files": [
+                        "checkpoints/baseline_removal.pth",
+                        "checkpoints/raman_generation.pth",
+                        "moltokenizer/vocab.json",
+                    ],
+                    "binding_required": False,
+                    "description": (
+                        "Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT "
+                        "or the service default Raman resource root."
+                    ),
                 },
             ],
             result_envelope="polyagent_run_result.v1",
@@ -622,11 +605,17 @@ class AlgorithmHandoffService:
             "# Raman Structure Analyzer 接入包\n\n"
             "这个模板用于文件输入型 Raman/IR 光谱结构解析。ZIP 只包含入口适配、轻量源码和样例光谱；"
             "模型权重、检索数据库和 tokenizer 不放入 ZIP，由平台作为 managed resource 注入。\n\n"
-            "上传前请先在平台资源管理中登记这些 mounted path 资源；环境变量仅作为兼容兜底：\n\n"
-            "- `RAMAN_CHECKPOINTS_ROOT`\n"
-            "- `RAMAN_DATABASE_ROOT`\n"
-            "- `RAMAN_TOKENIZER_ROOT`\n"
-            "- `POLYAGENT_ALGORITHM_RESOURCE_ROOTS`（当资源不在默认资源目录下时）\n\n"
+            "上传前请先在平台资源管理中登记一个 mounted path 资源。登记路径应为 Raman 资源父目录，"
+            "不是 `checkpoints` 子目录：\n\n"
+            "- `algorithm_id`: `raman_structure_analyzer`\n"
+            "- `asset_key`: `raman_runtime_resources`\n"
+            "- `path`: `/home/fangyikai/github_project/Spec_Agent/backend/resources/raman`\n"
+            "- `resource_type`: `raman_runtime`\n"
+            "- `required_files`: `checkpoints/baseline_removal.pth`, "
+            "`checkpoints/raman_generation.pth`, `moltokenizer/vocab.json`\n\n"
+            "`path` 是运行 PolyAgent 后端服务的机器上的本地路径。当前测试环境请在 `10.26.15.93` "
+            "上登记上述路径；生产环境服务运行在 `localhost` 时，在生产机本地登记同样的 Raman 资源父目录。\n\n"
+            "`RAMAN_RESOURCES_ROOT` 可作为环境变量兜底。`retrieval` 模式需要额外提供 `database/raman_db.pkl`。\n\n"
             "样例文件位于 `tests/sample_assets/sample_spectrum.dat`，契约中的输入文件 key 为 `spectrum_file`。\n"
         )
 
@@ -646,11 +635,20 @@ class AlgorithmHandoffService:
             suggestions.append("输出缺少必填字段，请检查 `src/handler.py` 返回值是否包含 output_schema.required 中的字段。")
         if "No module named" in message or "ModuleNotFoundError" in message:
             suggestions.append("当前运行环境可能缺少依赖，请检查 `requirements.txt` 并联系平台管理员补齐环境。")
-        if "resource asset" in message or "managed Raman resources" in message or "RAMAN_" in message:
+        if "missing Raman service resources" in message:
             suggestions.append(
-                "缺少 managed resource 绑定，请在资源管理中登记 checkpoints/database/tokenizer 的 mounted path；"
-                "如使用环境变量兜底，请配置 RAMAN_CHECKPOINTS_ROOT、RAMAN_DATABASE_ROOT、"
-                "RAMAN_TOKENIZER_ROOT，并确保路径位于 POLYAGENT_ALGORITHM_RESOURCE_ROOTS 允许目录内。"
+                "缺少 Raman 服务资源文件，请确认运行 PolyAgent 后端的测试机 10.26.15.93 上存在 "
+                "/home/fangyikai/github_project/Spec_Agent/backend/resources/raman，并包含 "
+                "checkpoints/baseline_removal.pth、checkpoints/raman_generation.pth、moltokenizer/vocab.json；"
+                "如路径不同，请配置 RAMAN_RESOURCES_ROOT 指向 Raman 资源父目录。"
+            )
+        elif "resource asset" in message or "managed Raman resources" in message or "RAMAN_" in message:
+            suggestions.append(
+                "缺少 managed resource 绑定，请在资源管理中登记 asset_key=raman_runtime_resources 的 "
+                "Raman 资源父目录 mounted path，例如 "
+                "/home/fangyikai/github_project/Spec_Agent/backend/resources/raman；"
+                "如使用环境变量兜底，请配置 RAMAN_RESOURCES_ROOT，并确保资源父目录位于 "
+                "POLYAGENT_ALGORITHM_RESOURCE_ROOTS 允许目录内。"
             )
         if "超过 20MB" in message:
             suggestions.append("ZIP 超过当前 20MB 限制，请压缩权重或改用后续远程服务/对象存储方案。")

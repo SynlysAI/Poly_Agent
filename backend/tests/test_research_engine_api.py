@@ -22,6 +22,7 @@ except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 from app.services.research_engine_service import ResearchEngineService
+from app.services.algorithm_resource_service import AlgorithmManagedResourceService
 from app.core.auth import get_current_user
 from app.core.config import settings
 from app.main import app
@@ -929,6 +930,41 @@ sample_input_path: tests/sample_input.json
         self.assertEqual(list_resp.json()["data"]["total"], 1)
         self.assertEqual(list_resp.json()["data"]["items"][0]["resource_id"], resource["resource_id"])
 
+    def test_raman_runtime_resource_uses_service_default_path(self) -> None:
+        """Raman 包未显式绑定时可使用服务机器上的默认 mounted resource 根目录。"""
+        resource_root = self.runtime_root / "raman-service-resources" / "raman"
+        (resource_root / "checkpoints").mkdir(parents=True)
+        (resource_root / "moltokenizer").mkdir(parents=True)
+        (resource_root / "checkpoints" / "baseline_removal.pth").write_text("ok", encoding="utf-8")
+        (resource_root / "checkpoints" / "raman_generation.pth").write_text("ok", encoding="utf-8")
+        (resource_root / "moltokenizer" / "vocab.json").write_text("{}", encoding="utf-8")
+
+        contract = {
+            "algorithm_id": "raman_structure_analyzer",
+            "resource_assets": [
+                {
+                    "key": "raman_runtime_resources",
+                    "required": True,
+                    "binding_required": True,
+                    "env_var": "RAMAN_RESOURCES_ROOT",
+                    "required_files": [
+                        "checkpoints/baseline_removal.pth",
+                        "checkpoints/raman_generation.pth",
+                        "moltokenizer/vocab.json",
+                    ],
+                }
+            ],
+        }
+        with patch(
+            "app.services.algorithm_resource_service.RAMAN_RUNTIME_RESOURCE_DEFAULT_PATHS",
+            (resource_root,),
+        ), patch.dict("os.environ", {}, clear=True):
+            resource_context, bindings = AlgorithmManagedResourceService().resolve_resource_context(contract)
+
+        self.assertEqual(bindings, [])
+        self.assertEqual(resource_context["raman_runtime_resources"]["path"], str(resource_root.resolve()))
+        self.assertEqual(resource_context["raman_runtime_resources"]["storage_mode"], "mounted_path")
+
     def test_algorithm_resource_rejects_invalid_path_missing_files_and_non_admin_create(self) -> None:
         """路径越界、必需文件缺失和非管理员登记都会被拒绝。"""
         outside = self.runtime_root / "outside-resource-root"
@@ -1444,7 +1480,19 @@ sample_input_path: tests/sample_input.json
             contract_data = yaml.safe_load(contract)
             self.assertEqual(contract_data["contract_version"], "0.2")
             self.assertEqual(contract_data["input_assets"][0]["key"], "spectrum_file")
-            self.assertEqual(contract_data["resource_assets"][0]["env_var"], "RAMAN_CHECKPOINTS_ROOT")
+            self.assertEqual(len(contract_data["resource_assets"]), 1)
+            self.assertEqual(contract_data["resource_assets"][0]["key"], "raman_runtime_resources")
+            self.assertFalse(contract_data["resource_assets"][0]["required"])
+            self.assertFalse(contract_data["resource_assets"][0]["binding_required"])
+            self.assertIsNone(contract_data["resource_assets"][0]["env_var"])
+            self.assertEqual(
+                contract_data["resource_assets"][0]["required_files"],
+                [
+                    "checkpoints/baseline_removal.pth",
+                    "checkpoints/raman_generation.pth",
+                    "moltokenizer/vocab.json",
+                ],
+            )
             self.assertEqual(contract_data["result_envelope"], "polyagent_run_result.v1")
 
     def test_file_based_handoff_self_test_reports_missing_raman_resources(self) -> None:
@@ -1483,8 +1531,9 @@ sample_input_path: tests/sample_input.json
         self.assertFalse(validation["ok"])
         self.assertEqual(validation["status"], "self_test_failed")
         messages = " ".join([item["message"] for item in validation["checks"]] + validation["fixes"])
-        self.assertIn("RAMAN_CHECKPOINTS_ROOT", messages)
-        self.assertIn("managed resource", messages)
+        self.assertIn("missing Raman service resources", messages)
+        self.assertIn("RAMAN_RESOURCES_ROOT", messages)
+        self.assertNotIn("RAMAN_CHECKPOINTS_ROOT", messages)
 
     def test_handoff_self_test_uses_v02_file_and_resource_context(self) -> None:
         """handoff 自测应与正式校验一样注入 sample 文件、解析结果和受管资源。"""
