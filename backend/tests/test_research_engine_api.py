@@ -965,6 +965,51 @@ sample_input_path: tests/sample_input.json
         self.assertEqual(resource_context["raman_runtime_resources"]["path"], str(resource_root.resolve()))
         self.assertEqual(resource_context["raman_runtime_resources"]["storage_mode"], "mounted_path")
 
+    def test_raman_runtime_resource_uses_default_env_without_contract_env_var(self) -> None:
+        """Raman 新契约未写 env_var 时仍可用 RAMAN_RESOURCES_ROOT 覆盖坏默认路径。"""
+        broken_default_root = self.runtime_root / "broken-raman-service-resources" / "raman"
+        (broken_default_root / "checkpoints").mkdir(parents=True)
+        (broken_default_root / "checkpoints" / "baseline_removal.pth").write_text("ok", encoding="utf-8")
+
+        resource_root = self.runtime_root / "env-raman-service-resources" / "raman"
+        (resource_root / "checkpoints").mkdir(parents=True)
+        (resource_root / "moltokenizer").mkdir(parents=True)
+        (resource_root / "checkpoints" / "baseline_removal.pth").write_text("ok", encoding="utf-8")
+        (resource_root / "checkpoints" / "raman_generation.pth").write_text("ok", encoding="utf-8")
+        (resource_root / "moltokenizer" / "vocab.json").write_text("{}", encoding="utf-8")
+
+        contract = {
+            "algorithm_id": "raman_structure_analyzer",
+            "resource_assets": [
+                {
+                    "key": "raman_runtime_resources",
+                    "required": False,
+                    "binding_required": False,
+                    "required_files": [
+                        "checkpoints/baseline_removal.pth",
+                        "checkpoints/raman_generation.pth",
+                        "moltokenizer/vocab.json",
+                    ],
+                }
+            ],
+        }
+        with patch(
+            "app.services.algorithm_resource_service.RAMAN_RUNTIME_RESOURCE_DEFAULT_PATHS",
+            (broken_default_root,),
+        ), patch.dict(
+            "os.environ",
+            {
+                "RAMAN_RESOURCES_ROOT": str(resource_root),
+                "POLYAGENT_ALGORITHM_RESOURCE_ROOTS": str(self.runtime_root),
+            },
+            clear=True,
+        ):
+            resource_context, bindings = AlgorithmManagedResourceService().resolve_resource_context(contract)
+
+        self.assertEqual(bindings, [])
+        self.assertEqual(resource_context["raman_runtime_resources"]["path"], str(resource_root.resolve()))
+        self.assertEqual(resource_context["raman_runtime_resources"]["storage_mode"], "env_var")
+
     def test_algorithm_resource_rejects_invalid_path_missing_files_and_non_admin_create(self) -> None:
         """路径越界、必需文件缺失和非管理员登记都会被拒绝。"""
         outside = self.runtime_root / "outside-resource-root"

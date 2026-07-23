@@ -115,40 +115,19 @@ output_assets:
     artifact_type: report_json
     mime_type: application/json
 resource_assets:
-  - key: raman_checkpoints
-    label: Raman checkpoints root
+  - key: raman_runtime_resources
+    label: Raman runtime resources root
     asset_role: resource
     data_kind: binary
     parser: binary.v1
-    required: true
-    resource_type: checkpoints
+    required: false
+    resource_type: raman_runtime
     required_files:
-      - baseline_removal.pth
-      - raman_generation.pth
-    binding_required: true
-    env_var: RAMAN_CHECKPOINTS_ROOT
-  - key: raman_database
-    label: Raman database root
-    asset_role: resource
-    data_kind: binary
-    parser: binary.v1
-    required: true
-    resource_type: database
-    required_files:
-      - raman_db.pkl
-    binding_required: true
-    env_var: RAMAN_DATABASE_ROOT
-  - key: raman_tokenizer
-    label: Raman tokenizer root
-    asset_role: resource
-    data_kind: binary
-    parser: binary.v1
-    required: true
-    resource_type: tokenizer
-    required_files:
-      - tokenizer_config.json
-    binding_required: true
-    env_var: RAMAN_TOKENIZER_ROOT
+      - checkpoints/baseline_removal.pth
+      - checkpoints/raman_generation.pth
+      - moltokenizer/vocab.json
+    binding_required: false
+    description: Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT or the service default Raman resource root.
 runtime:
   python: "3.11"
   resources:
@@ -269,7 +248,7 @@ JSON 示例（一条完整记录）：
 | 依赖（附 requirements.txt） | `numpy`、`pandas`、`scipy`、`torch`、`transformers`、`rdkit` |
 | GPU 需求（是/否，显存） | 可选；`device=cpu` 可走 CPU，真实大模型建议 GPU；显存需求按 checkpoint 配置确认 |
 | 入口脚本 + 调用示例 | `src.handler:predict`；平台通过 `AlgorithmRun` 调用，不直接运行脚本 |
-| 模型权重（名称、大小、格式） | 不进入 ZIP；优先在资源管理登记 mounted path，按 `algorithm_id + asset_key` 自动绑定；`RAMAN_CHECKPOINTS_ROOT`、`RAMAN_DATABASE_ROOT`、`RAMAN_TOKENIZER_ROOT` 仅作兼容兜底 |
+| 模型权重（名称、大小、格式） | 不进入 ZIP；优先在资源管理登记 `asset_key=raman_runtime_resources` 的 Raman 资源父目录，或用 `RAMAN_RESOURCES_ROOT` 指向同一父目录；`RAMAN_CHECKPOINTS_ROOT`、`RAMAN_DATABASE_ROOT`、`RAMAN_TOKENIZER_ROOT` 仅作老包兼容兜底 |
 | 推理函数签名 | `def predict(inputs: dict, context: dict, model=None) -> dict` |
 | 预处理 / 后处理需求 | 平台先用 `series_xy.v1` 解析输入文件；handler 读取 `context["parsed_inputs"]["spectrum_file"]` 并写出 artifacts |
 
@@ -339,24 +318,14 @@ output_assets:
 
 ```yaml
 resource_assets:
-  - key: raman_checkpoints
-    resource_type: checkpoints
-    required_files: [baseline_removal.pth, raman_generation.pth]
-    binding_required: true
-    env_var: RAMAN_CHECKPOINTS_ROOT
-    required: true
-  - key: raman_database
-    resource_type: database
-    required_files: [raman_db.pkl]
-    binding_required: true
-    env_var: RAMAN_DATABASE_ROOT
-    required: true
-  - key: raman_tokenizer
-    resource_type: tokenizer
-    required_files: [tokenizer_config.json]
-    binding_required: true
-    env_var: RAMAN_TOKENIZER_ROOT
-    required: true
+  - key: raman_runtime_resources
+    resource_type: raman_runtime
+    required_files:
+      - checkpoints/baseline_removal.pth
+      - checkpoints/raman_generation.pth
+      - moltokenizer/vocab.json
+    binding_required: false
+    required: false
 ```
 
 ### 输入 JSON 示例

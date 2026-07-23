@@ -23,7 +23,10 @@ RAMAN_STRUCTURE_ANALYZER_ID = "raman_structure_analyzer"
 RAMAN_RUNTIME_RESOURCE_KEY = "raman_runtime_resources"
 RAMAN_RUNTIME_RESOURCE_DEFAULT_PATHS = (
     Path("/home/fangyikai/github_project/Spec_Agent/backend/resources/raman"),
+    Path("/home/fangyikai/code/Spec_Agent/backend/resources/raman"),
+    Path("/home/fangyikai/code/Poly_Agent/backend/resources/raman"),
 )
+RAMAN_RUNTIME_RESOURCE_DEFAULT_ENV_VAR = "RAMAN_RESOURCES_ROOT"
 
 
 class AlgorithmManagedResourceService:
@@ -155,13 +158,29 @@ class AlgorithmManagedResourceService:
                 continue
 
             env_var = str(spec.get("env_var") or "").strip()
-            raw_path = os.getenv(env_var, "").strip() if env_var else ""
+            env_vars = [env_var] if env_var else []
+            default_env_var = self._default_env_var_for_key(
+                algorithm_id=contract_algorithm_id,
+                asset_key=key,
+            )
+            if default_env_var and default_env_var not in env_vars:
+                env_vars.append(default_env_var)
+
+            raw_path = ""
+            resolved_env_var = ""
+            for candidate_env_var in env_vars:
+                candidate_path = os.getenv(candidate_env_var, "").strip()
+                if candidate_path:
+                    raw_path = candidate_path
+                    resolved_env_var = candidate_env_var
+                    break
             if raw_path:
                 status, message, path = self.check_path(raw_path, asset_key=key, required_files=required_files)
                 if status != "active":
                     raise ValueError(message)
                 resolved["path"] = str(path)
                 resolved["storage_mode"] = "env_var"
+                resolved["env_var"] = resolved_env_var
                 resolved_resources[key] = resolved
                 continue
 
@@ -239,6 +258,7 @@ class AlgorithmManagedResourceService:
         if algorithm_id != RAMAN_STRUCTURE_ANALYZER_ID or asset_key != RAMAN_RUNTIME_RESOURCE_KEY:
             return None
 
+        errors: list[str] = []
         for candidate in RAMAN_RUNTIME_RESOURCE_DEFAULT_PATHS:
             status, message, path = self.check_path(
                 str(candidate),
@@ -248,7 +268,20 @@ class AlgorithmManagedResourceService:
             if status == "active":
                 return path
             if path is not None and path.exists():
-                raise ValueError(message)
+                errors.append(message)
+        if errors:
+            raise ValueError("；".join(errors))
+        return None
+
+    @staticmethod
+    def _default_env_var_for_key(
+        *,
+        algorithm_id: str | None,
+        asset_key: str,
+    ) -> str | None:
+        """Return built-in env var fallbacks for known demo packages."""
+        if algorithm_id == RAMAN_STRUCTURE_ANALYZER_ID and asset_key == RAMAN_RUNTIME_RESOURCE_KEY:
+            return RAMAN_RUNTIME_RESOURCE_DEFAULT_ENV_VAR
         return None
 
     def _resource_for_key(

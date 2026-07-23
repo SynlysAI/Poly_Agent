@@ -71,26 +71,19 @@ Example registration payloads:
 ```json
 {
   "algorithm_id": "raman_structure_analyzer",
-  "asset_key": "raman_checkpoints",
-  "name": "Raman checkpoints",
-  "path": "/home/fangyikai/github_project/Spec_Agent/backend/resources/raman/checkpoints",
-  "resource_type": "checkpoints",
-  "required_files": ["baseline_removal.pth", "raman_generation.pth"]
+  "asset_key": "raman_runtime_resources",
+  "name": "Raman runtime resources",
+  "path": "/home/fangyikai/github_project/Spec_Agent/backend/resources/raman",
+  "resource_type": "raman_runtime",
+  "required_files": [
+    "checkpoints/baseline_removal.pth",
+    "checkpoints/raman_generation.pth",
+    "moltokenizer/vocab.json"
+  ]
 }
 ```
 
-```json
-{
-  "algorithm_id": "raman_structure_analyzer",
-  "asset_key": "raman_database",
-  "name": "Raman database",
-  "path": "/home/fangyikai/github_project/Spec_Agent/backend/resources/raman/database",
-  "resource_type": "database",
-  "required_files": ["raman_db.pkl"]
-}
-```
-
-`RAMAN_CHECKPOINTS_ROOT`, `RAMAN_DATABASE_ROOT`, and `RAMAN_TOKENIZER_ROOT` remain supported as fallback bindings for older packages.
+`RAMAN_RESOURCES_ROOT` may point to the same Raman resource parent directory. `retrieval` mode additionally needs `database/raman_db.pkl`. `RAMAN_CHECKPOINTS_ROOT`, `RAMAN_DATABASE_ROOT`, and `RAMAN_TOKENIZER_ROOT` remain supported as fallback bindings for older packages.
 
 The runtime must already provide `torch`, `rdkit`, `transformers`, `numpy`, `pandas`, and `scipy`.
 
