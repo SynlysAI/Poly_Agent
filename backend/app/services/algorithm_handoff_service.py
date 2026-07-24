@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import io
+import json
 import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import yaml
 from fastapi import HTTPException
 
 from app.core.config import settings
@@ -280,6 +284,68 @@ class AlgorithmHandoffService:
             {"status": "submitted", "updated_at": utc_now()},
         )
         return self.get_handoff(handoff_id)
+
+    def rewrite_package_with_handoff(self, handoff_id: str, content: bytes) -> bytes:
+        """用已确认草案覆盖 ZIP 契约中的登记信息。"""
+        handoff = self.get_handoff(handoff_id)
+        output = io.BytesIO()
+        found_contract = False
+        found_sample_input = False
+        with zipfile.ZipFile(io.BytesIO(content), "r") as source_zip:
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                for member in source_zip.infolist():
+                    member_content = source_zip.read(member.filename)
+                    normalized_path = member.filename.replace("\\", "/").strip("/")
+                    if normalized_path == "polyagent.algorithm.yaml":
+                        contract = yaml.safe_load(member_content.decode("utf-8")) or {}
+                        if not isinstance(contract, dict):
+                            raise HTTPException(status_code=422, detail="polyagent.algorithm.yaml 必须是对象")
+                        contract = self._merge_handoff_contract(contract, handoff)
+                        member_content = yaml.safe_dump(contract, allow_unicode=True, sort_keys=False).encode("utf-8")
+                        found_contract = True
+                    elif normalized_path == "tests/sample_input.json":
+                        member_content = json.dumps(handoff.sample_input, ensure_ascii=False, indent=2).encode("utf-8")
+                        found_sample_input = True
+                    target_zip.writestr(member, member_content)
+
+                if not found_sample_input:
+                    target_zip.writestr(
+                        "tests/sample_input.json",
+                        json.dumps(handoff.sample_input, ensure_ascii=False, indent=2).encode("utf-8"),
+                    )
+        if not found_contract:
+            raise HTTPException(status_code=422, detail="ZIP 缺少 polyagent.algorithm.yaml")
+        return output.getvalue()
+
+    @staticmethod
+    def _merge_handoff_contract(contract: dict[str, Any], handoff: AlgorithmHandoff) -> dict[str, Any]:
+        updated = dict(contract)
+        updated.update(
+            {
+                "algorithm_id": handoff.algorithm_id,
+                "name": handoff.name,
+                "version": handoff.version,
+                "algorithm_family": updated.get("algorithm_family") or "vertical_prediction",
+                "type": updated.get("type") or "predictor",
+                "material_scope": handoff.material_scope,
+                "input_schema": handoff.input_schema.model_dump(mode="python"),
+                "output_schema": handoff.output_schema.model_dump(mode="python"),
+                "sample_input_path": "tests/sample_input.json",
+            }
+        )
+        if handoff.description:
+            updated["description"] = handoff.description
+        else:
+            updated.pop("description", None)
+        if handoff.owner_name:
+            updated["developer"] = handoff.owner_name
+        else:
+            updated.pop("developer", None)
+        if handoff.owner_contact:
+            updated["developer_contact"] = handoff.owner_contact
+        else:
+            updated.pop("developer_contact", None)
+        return updated
 
     def _build_prefilled_zip(
         self,
@@ -572,16 +638,16 @@ class AlgorithmHandoffService:
             ],
             result_envelope="polyagent_run_result.v1",
             sample_input=raman_sample_input,
-            description=description or "Raman spectral functional group analysis demo packaged with generic file I/O assets.",
-            developer=developer or "Raman Demo Adapter",
-            developer_organization="Local Raman Reference",
+            description=description or "Raman spectral functional group analysis packaged with generic file I/O assets.",
+            developer=developer or "Raman Structure Analyzer 模型团队",
+            developer_organization="嘉庚实验室 / 厦门大学",
             developer_contact=developer_contact,
             source_url="refer/raman",
             method_attributions=[
                 {
                     "name": "Raman/IR structure analysis reference implementation",
                     "role": "implementation_source",
-                    "organization": "Local Raman Reference",
+                    "organization": "Raman Reference Implementation",
                     "description": "Adapted from the local refer/raman reference code.",
                 }
             ],

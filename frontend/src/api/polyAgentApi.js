@@ -742,6 +742,10 @@ export function decommissionAlgorithmVersion(algorithmId, versionId) {
   return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:decommission`).then(unwrapResponse)
 }
 
+export function deleteAlgorithmVersion(algorithmId, versionId) {
+  return apiClient.delete(`/research-engine/algorithms/${algorithmId}/versions/${versionId}`).then(unwrapResponse)
+}
+
 // ── ResearchEngine Examples ──
 
 export function listResearchEngineExamples() {

@@ -7,16 +7,22 @@ const props = defineProps({
 })
 
 const publicAttributions = computed(() => {
-  const internalNames = new Set(['polyagent', 'poly agent'])
   return props.attributions.filter((item) => {
-    const name = String(item?.name || '').trim().toLowerCase()
-    const organization = String(item?.organization || '').trim().toLowerCase()
-    return !internalNames.has(name) && !internalNames.has(organization)
+    return Boolean(publicText(item?.name) || publicText(item?.organization))
   })
 })
 
+function publicText(value) {
+  const text = String(value || '').trim()
+  const normalized = text.toLowerCase()
+  const hiddenNames = new Set(['polyagent', 'poly agent', 'anonymous', 'demo_user', 'system', 'raman demo adapter', 'local raman reference'])
+  if (!text || hiddenNames.has(normalized)) return ''
+  if (/^u_[0-9a-z]{8,}$/i.test(text)) return ''
+  return text
+}
+
 function label(item) {
-  return item.organization || item.name || '来源'
+  return publicText(item.organization) || publicText(item.name) || '来源'
 }
 </script>
 

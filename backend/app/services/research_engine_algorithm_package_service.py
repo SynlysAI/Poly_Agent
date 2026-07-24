@@ -299,6 +299,10 @@ class AlgorithmPackageService:
             self._validate_declared_output_artifacts(validation_output_dir, output_artifacts, contract)
             version_id = self._version_id(contract["algorithm_id"], contract["version"], package.package_sha256)
             now = utc_now()
+            developer_attribution = self._developer_attribution_from_contract(
+                contract,
+                created_by=package.created_by,
+            )
             version_doc = {
                 "version_id": version_id,
                 "package_id": package_id,
@@ -328,10 +332,11 @@ class AlgorithmPackageService:
                 "runtime_logs": [self._runtime_log_summary("validation_dry_run", result)],
                 "contract": contract,
                 "visibility": contract["visibility"],
-                "developer_attribution": self._developer_attribution_from_contract(
-                    contract,
-                    created_by=package.created_by,
-                ).model_dump(mode="python"),
+                "developer_attribution": (
+                    developer_attribution.model_dump(mode="python")
+                    if developer_attribution
+                    else None
+                ),
                 "method_attributions": [
                     item.model_dump(mode="python")
                     for item in self._method_attributions_from_contract(contract)
@@ -522,6 +527,10 @@ class AlgorithmPackageService:
                 previous_version.package_id,
                 {"status": "deployed_staging", "updated_at": now},
             )
+        developer_attribution = version.developer_attribution or self._developer_attribution_from_contract(
+            contract,
+            created_by=version.created_by,
+        )
         registry_doc = {
             "algorithm_id": algorithm_id,
             "name": contract.get("name", algorithm_id),
@@ -548,12 +557,9 @@ class AlgorithmPackageService:
             "deployment_status": "active",
             "visibility": self._normalize_visibility(version.visibility or contract.get("visibility") or "private"),
             "developer_attribution": (
-                version.developer_attribution.model_dump(mode="python")
-                if version.developer_attribution
-                else self._developer_attribution_from_contract(
-                    contract,
-                    created_by=version.created_by,
-                ).model_dump(mode="python")
+                developer_attribution.model_dump(mode="python")
+                if developer_attribution
+                else None
             ),
             "framework_attributions": contract.get("framework_attributions") or [],
             "method_attributions": [item.model_dump(mode="python") for item in version.method_attributions],
@@ -575,6 +581,49 @@ class AlgorithmPackageService:
     def decommission_version(self, algorithm_id: str, version_id: str) -> AlgorithmVersion:
         """下线算法版本，保留历史运行追溯信息。"""
         return self._set_unavailable_status(algorithm_id, version_id, "decommissioned")
+
+    def delete_decommissioned_version(self, algorithm_id: str, version_id: str) -> dict[str, Any]:
+        """删除已下线算法版本及其上传包记录，保留历史运行记录。"""
+        version = self.get_version(version_id)
+        if version.algorithm_id != algorithm_id:
+            raise HTTPException(status_code=409, detail="算法 ID 与版本不匹配")
+        if version.status != "decommissioned":
+            raise HTTPException(status_code=409, detail="只能删除已下线算法版本")
+
+        package_doc = AlgorithmPackageRepository.find_one({"package_id": version.package_id})
+        package_root = self._package_root(version.package_id)
+        AlgorithmVersionRepository.delete(version_id)
+        if package_doc:
+            AlgorithmPackageRepository.delete(version.package_id)
+        self._remove_package_root(package_root)
+
+        _remaining_items, remaining_total = AlgorithmVersionRepository.list_versions(
+            algorithm_id=algorithm_id,
+            page=1,
+            page_size=1,
+        )
+        registry_entry = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+        registry_deleted = remaining_total == 0
+        if registry_deleted:
+            AlgorithmRegistryRepository.delete(algorithm_id)
+        elif (registry_entry or {}).get("active_version_id") == version_id:
+            AlgorithmRegistryRepository.update_fields(
+                algorithm_id,
+                {
+                    "active_version_id": None,
+                    "status": "decommissioned",
+                    "deployment_status": "decommissioned",
+                },
+            )
+
+        return {
+            "algorithm_id": algorithm_id,
+            "version_id": version_id,
+            "package_id": version.package_id,
+            "registry_deleted": registry_deleted,
+            "remaining_versions": remaining_total,
+            "deleted": True,
+        }
 
     def get_version(self, version_id: str) -> AlgorithmVersion:
         """获取算法版本。"""
@@ -1066,19 +1115,22 @@ class AlgorithmPackageService:
         return str(visibility).strip().lower() if visibility else None
 
     @staticmethod
-    def _developer_attribution_from_contract(contract: dict, *, created_by: str) -> AttributionItem:
+    def _developer_attribution_from_contract(contract: dict, *, created_by: str) -> AttributionItem | None:
         """从算法包契约构建开发者来源标注。"""
-        developer = str(contract.get("developer") or "").strip() or created_by
+        developer = str(contract.get("developer") or "").strip()
         organization = str(contract.get("developer_organization") or "").strip() or None
         source_url = str(contract.get("source_url") or "").strip() or None
         citation = str(contract.get("citation") or "").strip() or None
         logo_asset = str(contract.get("logo_asset") or contract.get("logo_url") or "").strip() or None
+        if not any((developer, organization, source_url, citation, logo_asset)):
+            return None
+        display_name = developer or organization or "算法开发者"
         if organization:
-            description = f"算法由 {organization} / {developer} 提供。"
+            description = f"算法由 {organization} / {display_name} 提供。"
         else:
-            description = f"算法由 {developer} 提供；未提交机构 Logo 时显示文字来源牌。"
+            description = f"算法由 {display_name} 提供；未提交机构 Logo 时显示文字来源牌。"
         return AttributionItem(
-            name=developer,
+            name=display_name,
             role="developer",
             organization=organization,
             description=description,
@@ -1104,6 +1156,15 @@ class AlgorithmPackageService:
     @staticmethod
     def _package_root(package_id: str) -> Path:
         return settings.runtime_root / "algorithm-packages" / package_id
+
+    @staticmethod
+    def _remove_package_root(package_root: Path) -> None:
+        """删除受控 runtime 算法包目录。"""
+        runtime_packages_root = (settings.runtime_root / "algorithm-packages").resolve()
+        resolved_package_root = package_root.resolve()
+        if runtime_packages_root not in resolved_package_root.parents:
+            raise HTTPException(status_code=409, detail="拒绝删除非算法包运行目录")
+        shutil.rmtree(resolved_package_root, ignore_errors=True)
 
     @staticmethod
     def _normalize_archive_path(raw_path: str) -> str:

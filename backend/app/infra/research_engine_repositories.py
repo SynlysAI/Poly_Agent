@@ -344,6 +344,25 @@ class AlgorithmRegistryRepository(BaseRepository):
 
         return bool(demo_store.mutate(mutate))
 
+    @classmethod
+    def delete(cls, algorithm_id: str) -> bool:
+        """删除算法注册表条目。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().delete_one({"algorithm_id": algorithm_id})
+                return result.deleted_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [
+                item for item in data[cls.collection_name] if item.get("algorithm_id") != algorithm_id
+            ]
+            return len(data[cls.collection_name]) != before
+
+        return bool(demo_store.mutate(mutate))
+
 
 class AlgorithmManagedResourceRepository(BaseRepository):
     """算法大资源登记仓储。"""
@@ -423,6 +442,25 @@ class AlgorithmPackageRepository(BaseRepository):
         return bool(demo_store.mutate(mutate))
 
     @classmethod
+    def delete(cls, package_id: str) -> bool:
+        """删除算法包记录。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().delete_one({"package_id": package_id})
+                return result.deleted_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [
+                item for item in data[cls.collection_name] if item.get("package_id") != package_id
+            ]
+            return len(data[cls.collection_name]) != before
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
     def list_packages(
         cls,
         *,
@@ -468,6 +506,25 @@ class AlgorithmVersionRepository(BaseRepository):
                     _apply_update_fields(item, fields)
                     return True
             return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def delete(cls, version_id: str) -> bool:
+        """删除算法版本记录。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().delete_one({"version_id": version_id})
+                return result.deleted_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [
+                item for item in data[cls.collection_name] if item.get("version_id") != version_id
+            ]
+            return len(data[cls.collection_name]) != before
 
         return bool(demo_store.mutate(mutate))
 

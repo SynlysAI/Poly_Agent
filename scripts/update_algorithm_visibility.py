@@ -1,4 +1,4 @@
-"""Backfill and correct uploaded algorithm visibility flags.
+"""Backfill and correct uploaded algorithm visibility and attribution flags.
 
 Default behavior is dry-run. Use --dry-run to be explicit or --apply to write changes.
 """
@@ -23,6 +23,48 @@ TARGET_VISIBILITY = {
     "electrolyte_formulation_predictor": "private",
     "raman_structure_analyzer": "public",
 }
+TARGET_ATTRIBUTION = {
+    "electrolyte_formulation_predictor": {
+        "name": "含氟电解液配方性能预测模型团队",
+        "role": "developer",
+        "organization": "嘉庚实验室 / 厦门大学",
+        "description": "算法由 嘉庚实验室 / 厦门大学 / 含氟电解液配方性能预测模型团队 提供。",
+        "url": None,
+        "citation_text": None,
+        "license": None,
+        "logo_asset": None,
+        "logo_alt": "嘉庚实验室 / 厦门大学",
+        "visibility": "prominent",
+    },
+    "raman_structure_analyzer": {
+        "name": "Raman Structure Analyzer 模型团队",
+        "role": "developer",
+        "organization": "嘉庚实验室 / 厦门大学",
+        "description": "算法由 嘉庚实验室 / 厦门大学 / Raman Structure Analyzer 模型团队 提供。",
+        "url": "refer/raman",
+        "citation_text": None,
+        "license": None,
+        "logo_asset": None,
+        "logo_alt": "嘉庚实验室 / 厦门大学",
+        "visibility": "prominent",
+    },
+}
+TARGET_METHOD_ATTRIBUTION = {
+    "raman_structure_analyzer": [
+        {
+            "name": "Raman/IR structure analysis reference implementation",
+            "role": "implementation_source",
+            "organization": "Raman Reference Implementation",
+            "description": "Adapted from the local refer/raman reference code.",
+            "url": None,
+            "citation_text": None,
+            "license": None,
+            "logo_asset": None,
+            "logo_alt": "Raman Reference Implementation",
+            "visibility": "detail",
+        }
+    ]
+}
 
 
 def _missing_visibility_filter(collection_name: str) -> dict[str, Any]:
@@ -34,6 +76,10 @@ def _missing_visibility_filter(collection_name: str) -> dict[str, Any]:
 
 def _count_algorithm_visibility(collection: Any, algorithm_id: str, visibility: str) -> int:
     return int(collection.count_documents({"algorithm_id": algorithm_id, "visibility": {"$ne": visibility}}))
+
+
+def _count_field_mismatch(collection: Any, algorithm_id: str, field: str, value: Any) -> int:
+    return int(collection.count_documents({"algorithm_id": algorithm_id, field: {"$ne": value}}))
 
 
 def main() -> None:
@@ -61,6 +107,31 @@ def main() -> None:
             print(f"{collection_name}: {algorithm_id} -> {visibility}: {update_count}")
             if args.apply and update_count:
                 collection.update_many({"algorithm_id": algorithm_id}, {"$set": {"visibility": visibility}})
+
+        if collection_name in {"algorithm_registry_entries", "algorithm_versions"}:
+            for algorithm_id, attribution in TARGET_ATTRIBUTION.items():
+                update_count = _count_field_mismatch(collection, algorithm_id, "developer_attribution", attribution)
+                print(f"{collection_name}: {algorithm_id} developer_attribution: {update_count}")
+                if args.apply and update_count:
+                    set_fields = {"developer_attribution": attribution}
+                    if collection_name == "algorithm_versions":
+                        set_fields.update(
+                            {
+                                "contract.developer": attribution["name"],
+                                "contract.developer_organization": attribution["organization"],
+                                "contract.source_url": attribution["url"],
+                            }
+                        )
+                    collection.update_many({"algorithm_id": algorithm_id}, {"$set": set_fields})
+
+            for algorithm_id, method_attribution in TARGET_METHOD_ATTRIBUTION.items():
+                update_count = _count_field_mismatch(collection, algorithm_id, "method_attributions", method_attribution)
+                print(f"{collection_name}: {algorithm_id} method_attributions: {update_count}")
+                if args.apply and update_count:
+                    set_fields = {"method_attributions": method_attribution}
+                    if collection_name == "algorithm_versions":
+                        set_fields["contract.method_attributions"] = method_attribution
+                    collection.update_many({"algorithm_id": algorithm_id}, {"$set": set_fields})
 
 
 if __name__ == "__main__":

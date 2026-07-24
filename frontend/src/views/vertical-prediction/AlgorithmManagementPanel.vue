@@ -6,6 +6,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import {
   activateAlgorithmVersion,
   decommissionAlgorithmVersion,
+  deleteAlgorithmVersion,
   deployAlgorithmVersion,
   freezeAlgorithmVersion,
   getAlgorithmVersionLogs,
@@ -182,6 +183,7 @@ onMounted(loadAlgorithms)
           <el-button v-if="row.status === 'deployed_staging' && selectedAlgorithm?.active_version_id !== row.version_id" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, rollbackAlgorithmVersion, `确认回滚到 ${row.version}？`)">回滚</el-button>
           <el-button v-if="['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, freezeAlgorithmVersion, `冻结版本 ${row.version} 后，新任务将不能选择它。`)">冻结</el-button>
           <el-button v-if="row.status !== 'decommissioned'" type="danger" plain size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, decommissionAlgorithmVersion, `下线版本 ${row.version}？历史记录仍会保留。`)">下线</el-button>
+          <el-button v-else type="danger" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, deleteAlgorithmVersion, `确认删除已下线版本 ${row.version}？上传包和版本记录会删除，历史运行记录仍会保留。`)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>

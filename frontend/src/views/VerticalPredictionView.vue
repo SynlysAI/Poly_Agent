@@ -268,15 +268,30 @@ function algorithmAttributions(algorithm) {
     algorithm.developer_attribution,
     ...(algorithm.framework_attributions || []),
     ...(algorithm.method_attributions || []),
-  ].filter(Boolean)
+  ].filter(isPublicAttribution)
 }
 
 function authorLabel(algorithm) {
   const attribution = algorithm?.developer_attribution
-  const developer = attribution?.name || algorithm?.owner || ''
-  const organization = attribution?.organization || ''
+  const developer = cleanAuthorValue(attribution?.name) || cleanAuthorValue(algorithm?.owner)
+  const organization = cleanAuthorValue(attribution?.organization)
   if (developer && organization) return `${developer} / ${organization}`
   return developer || organization || '未标注'
+}
+
+function cleanAuthorValue(value) {
+  const text = String(value || '').trim()
+  const normalized = text.toLowerCase()
+  if (!text) return ''
+  if (['anonymous', 'demo_user', 'system', 'raman demo adapter', 'local raman reference'].includes(normalized)) return ''
+  if (/^u_[0-9a-z]{8,}$/i.test(text)) return ''
+  return text
+}
+
+function isPublicAttribution(item) {
+  const name = cleanAuthorValue(item?.name)
+  const organization = cleanAuthorValue(item?.organization)
+  return Boolean(item && (name || organization))
 }
 
 function visibilityLabel(value) {
