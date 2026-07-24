@@ -447,10 +447,13 @@ async def pack_algorithm_package(
 async def upload_algorithm_package(
     file: UploadFile = File(...),
     visibility: str | None = Form(default=None),
+    handoff_id: str | None = Form(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmPackage]:
     """上传标准 ZIP 算法包。"""
     content = await file.read()
+    if handoff_id:
+        content = handoff_service.rewrite_package_with_handoff(handoff_id, content)
     if visibility is not None:
         visibility = package_service._normalize_visibility(visibility)
     data = package_service.upload_package(
@@ -638,6 +641,18 @@ def decommission_algorithm_version(
     """下线指定算法版本。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.decommission_version(algorithm_id, version_id))
+
+
+@router.delete("/algorithms/{algorithm_id}/versions/{version_id}", response_model=ApiResponse[dict])
+def delete_decommissioned_algorithm_version(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[dict]:
+    """删除已下线算法版本及其上传包记录。"""
+    _ensure_version_access(algorithm_id, version_id, current_user)
+    data = package_service.delete_decommissioned_version(algorithm_id, version_id)
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 # =============================================================================

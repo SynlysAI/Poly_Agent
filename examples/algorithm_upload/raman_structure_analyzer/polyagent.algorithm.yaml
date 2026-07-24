@@ -2,6 +2,7 @@ contract_version: "0.2"
 algorithm_id: raman_structure_analyzer
 name: Raman Structure Analyzer
 version: 0.1.0
+visibility: public
 algorithm_family: vertical_prediction
 type: predictor
 material_scope:
@@ -111,13 +112,13 @@ resource_assets:
     description: Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT or the service default Raman resource root. This function-group-only package does not require raman_generation.pth or tokenizer files.
 result_envelope: polyagent_run_result.v1
 sample_input_path: tests/sample_input.json
-description: Raman spectral functional group analysis demo packaged with generic file I/O assets.
-developer: Raman Demo Adapter
-developer_organization: Local Raman Reference
+description: Raman spectral functional group analysis packaged with generic file I/O assets.
+developer: Raman Structure Analyzer 模型团队
+developer_organization: 嘉庚实验室 / 厦门大学
 source_url: refer/raman
 method_attributions:
   - name: Raman/IR structure analysis reference implementation
     role: implementation_source
-    organization: Local Raman Reference
+    organization: Raman Reference Implementation
     description: Adapted from the local refer/raman reference code.
 implementation_notes: Function-group-only package; it uses baseline_removal.pth and raman_fg.pth, and does not require raman_generation.pth.

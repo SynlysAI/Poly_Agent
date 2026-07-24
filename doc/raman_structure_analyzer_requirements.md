@@ -4,7 +4,7 @@ algorithm_id: raman_structure_analyzer
 name: Raman Structure Analyzer
 version: 0.1.0
 example_id: file_based_predictor
-owner_name: Raman Demo Adapter
+owner_name: Raman Structure Analyzer 模型团队
 owner_contact: raman-demo@example.local
 description: >
   输入 Raman/IR 光谱 x-y 序列文件和少量 JSON 参数，调用本地 Raman/IR 结构解析参考实现，
@@ -127,13 +127,13 @@ runtime:
     memory: 8Gi
     gpu: true
   timeout_seconds: 180
-developer: Raman Demo Adapter
-developer_organization: Local Raman Reference
+developer: Raman Structure Analyzer 模型团队
+developer_organization: 嘉庚实验室 / 厦门大学
 source_url: refer/raman
 method_attributions:
   - name: Raman/IR structure analysis reference implementation
     role: implementation_source
-    organization: Local Raman Reference
+    organization: Raman Reference Implementation
     description: Adapted from the local refer/raman reference code.
 ---
 
@@ -194,7 +194,7 @@ JSON 示例（一条完整记录）：
 | 字段 | 填写内容 |
 | --- | --- |
 | 数据名称 / 代号 | Raman/IR spectrum runtime input / `spectrum_file` |
-| 负责人 | Raman Demo Adapter / raman-demo@example.local |
+| 负责人 | Raman Structure Analyzer 模型团队 / raman-demo@example.local |
 | 通俗功能描述（非技术人员能看懂） | 上传一条 Raman 或 IR 光谱，系统根据光谱形状给出可能的分子/结构候选。 |
 | 来源 / 规模 / 更新频率 | 用户运行时上传；demo 内置 `tests/sample_assets/sample_spectrum.dat` 作为校验样例；不做周期更新。 |
 | 关联数据说明 | 原始输入文件、平台解析后的 `series_json`、模型输出结构和报告均登记为运行 artifact。 |
@@ -226,7 +226,7 @@ JSON 示例（一条完整记录）：
 | 字段 | 填写内容 |
 | --- | --- |
 | 算法名称 / 代号 | Raman Structure Analyzer / `raman_structure_analyzer` |
-| 负责人 | Raman Demo Adapter / raman-demo@example.local |
+| 负责人 | Raman Structure Analyzer 模型团队 / raman-demo@example.local |
 | 算法功能介绍 | 输入 Raman/IR 光谱 x-y 序列和 JSON 参数，调用本地 Raman 结构解析参考实现，输出候选结构、score、metadata、预处理信息和结果文件。 |
 | 适用体系 | 通用材料 / 分子结构解析 demo |
 | 分析类型 | 文件型垂类模型推理；结构候选预测 |

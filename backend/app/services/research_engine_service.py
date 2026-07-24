@@ -1084,8 +1084,8 @@ class ResearchEngineService:
         normalized["capability_group"] = capability_group
         if not normalized.get("developer_attribution"):
             source = normalized.get("source")
-            owner = str(normalized.get("owner") or "PolyAgent")
-            if source == "uploaded_package":
+            owner = str(normalized.get("owner") or "")
+            if source == "uploaded_package" and owner and not cls._looks_internal_user_id(owner):
                 normalized["developer_attribution"] = AttributionItem(
                     name=owner,
                     role="developer",
@@ -1094,7 +1094,7 @@ class ResearchEngineService:
                     logo_alt=owner,
                     visibility="prominent",
                 ).model_dump(mode="python")
-            else:
+            elif source != "uploaded_package":
                 normalized["developer_attribution"] = AttributionItem(
                     name="PolyAgent",
                     role="implementation_source",
@@ -1104,6 +1104,15 @@ class ResearchEngineService:
                     visibility="prominent",
                 ).model_dump(mode="python")
         return normalized
+
+    @staticmethod
+    def _looks_internal_user_id(value: str) -> bool:
+        normalized = value.strip().lower()
+        if not normalized:
+            return True
+        if normalized in {"anonymous", "demo_user", "system"}:
+            return True
+        return normalized.startswith("u_") and len(normalized) >= 10
 
     # ------------------------------------------------------------------
     # Examples

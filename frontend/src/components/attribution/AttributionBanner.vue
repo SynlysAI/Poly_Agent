@@ -27,12 +27,9 @@ const logoStripLimit = 3
 const resolvedTitle = computed(() => props.title || moduleData.value?.title || '来源')
 const resolvedSummary = computed(() => props.summary || moduleData.value?.summary || '')
 const publicAttributionItems = computed(() => {
-  const internalNames = new Set(['polyagent', 'poly agent'])
   const sourceItems = props.attributions.length ? props.attributions : (moduleData.value?.attributions || [])
   return sourceItems.filter((item) => {
-    const name = String(item?.name || '').trim().toLowerCase()
-    const organization = String(item?.organization || '').trim().toLowerCase()
-    return !internalNames.has(name) && !internalNames.has(organization)
+    return Boolean(publicText(item?.name) || publicText(item?.organization))
   })
 })
 const resolvedAttributions = computed(() => {
@@ -76,7 +73,16 @@ function itemKey(item) {
 }
 
 function displayName(item) {
-  return item?.organization || item?.name || '来源'
+  return publicText(item?.organization) || publicText(item?.name) || '来源'
+}
+
+function publicText(value) {
+  const text = String(value || '').trim()
+  const normalized = text.toLowerCase()
+  const hiddenNames = new Set(['polyagent', 'poly agent', 'anonymous', 'demo_user', 'system', 'raman demo adapter', 'local raman reference'])
+  if (!text || hiddenNames.has(normalized)) return ''
+  if (/^u_[0-9a-z]{8,}$/i.test(text)) return ''
+  return text
 }
 
 function isPrioritized(item) {

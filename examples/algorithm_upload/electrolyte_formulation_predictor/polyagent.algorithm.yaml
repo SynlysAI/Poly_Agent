@@ -2,6 +2,7 @@ contract_version: "0.1"
 algorithm_id: electrolyte_formulation_predictor
 name: 含氟电解液配方性能预测
 version: 0.1.0
+visibility: private
 algorithm_family: vertical_prediction
 type: predictor
 material_scope:
@@ -32,3 +33,5 @@ output_schema:
     - results
 sample_input_path: tests/sample_input.json
 description: 根据锂盐、溶剂/单体/填料组成及配比，预测第 1、4、20 周期放电比容量和库仑效率。
+developer: 含氟电解液配方性能预测模型团队
+developer_organization: 嘉庚实验室 / 厦门大学

@@ -320,6 +320,7 @@ async function deployValidatedPackage() {
   try {
     const data = new FormData()
     data.append('file', uploadFiles.value[0].raw)
+    data.append('handoff_id', currentHandoff.value.handoff_id)
     let pkg = await uploadAlgorithmPackage(data)
     pkg = await validateAlgorithmPackage(pkg.package_id)
     pkg = await buildAlgorithmPackage(pkg.package_id)

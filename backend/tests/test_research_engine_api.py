@@ -486,7 +486,7 @@ sample_input:
                 [
                     ["字段", "填写内容"],
                     ["算法名称 / 代号", "Raman Structure Analyzer / raman_structure_analyzer"],
-                    ["负责人", "Raman Demo Adapter / raman-demo@example.local"],
+                    ["负责人", "Raman Structure Analyzer 模型团队 / raman-demo@example.local"],
                     ["算法功能介绍", "输入 Raman/IR 光谱 x-y 序列和 JSON 参数，输出候选结构。"],
                     ["适用体系", "通用"],
                     ["依赖（附 requirements.txt）", "numpy, scipy, torch"],
@@ -617,7 +617,7 @@ sample_input:
         self.assertEqual(algorithm_resp.status_code, 200)
         self.assertEqual(algorithm_resp.json()["data"]["active_version_id"], version_id)
         self.assertEqual(algorithm_resp.json()["data"]["source"], "uploaded_package")
-        self.assertEqual(algorithm_resp.json()["data"]["developer_attribution"]["role"], "developer")
+        self.assertIsNone(algorithm_resp.json()["data"]["developer_attribution"])
 
         run_resp = self.client.post(
             f"{self.base_url}/algorithm-runs",
@@ -1512,6 +1512,31 @@ sample_input_path: tests/sample_input.json
         )
         self.assertEqual(decommissioned_run.status_code, 409, decommissioned_run.text)
 
+        delete_resp = self.client.delete(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{first_version_id}"
+        )
+        self.assertEqual(delete_resp.status_code, 200, delete_resp.text)
+        self.assertTrue(delete_resp.json()["data"]["deleted"])
+        self.assertFalse(delete_resp.json()["data"]["registry_deleted"])
+        self.assertEqual(delete_resp.json()["data"]["remaining_versions"], 1)
+
+        after_delete_versions_resp = self.client.get(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions",
+            params={"page_size": 20},
+        )
+        after_delete_versions = {
+            item["version_id"]: item for item in after_delete_versions_resp.json()["data"]["items"]
+        }
+        self.assertNotIn(first_version_id, after_delete_versions)
+        self.assertEqual(after_delete_versions[second_version_id]["status"], "active")
+
+        deleted_package_resp = self.client.get(f"{self.base_url}/algorithm-packages/{first_package_id}")
+        self.assertEqual(deleted_package_resp.status_code, 404, deleted_package_resp.text)
+
+        active_algorithm_resp = self.client.get(f"{self.base_url}/algorithms/vertical_tg_predictor_demo")
+        self.assertEqual(active_algorithm_resp.status_code, 200, active_algorithm_resp.text)
+        self.assertEqual(active_algorithm_resp.json()["data"]["active_version_id"], second_version_id)
+
     def test_algorithm_handoff_generates_prefilled_package_and_self_tests(self) -> None:
         """算法接入任务可生成预填包，并在不正式部署的情况下完成自测。"""
         examples_resp = self.client.get(f"{self.base_url}/algorithm-package-examples")
@@ -1579,6 +1604,87 @@ sample_input_path: tests/sample_input.json
 
         packages_resp = self.client.get(f"{self.base_url}/algorithm-packages")
         self.assertEqual(packages_resp.json()["data"]["total"], 0)
+
+    def test_handoff_form_overrides_uploaded_zip_registration_metadata(self) -> None:
+        """正式部署登记信息使用已确认草案，而不是上传 ZIP 中的旧契约信息。"""
+        create_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs",
+            json={
+                "algorithm_id": "revised_handoff_registration_demo",
+                "name": "修订后的登记名称",
+                "version": "0.3.0",
+                "example_id": "batch_formulation_predictor",
+                "owner_name": "修订负责人",
+                "owner_contact": "revised@example.local",
+                "description": "修订后的登记说明",
+                "material_scope": ["fluoropolymer"],
+                "input_schema": {"fields": {"formulations": "list"}, "required": ["formulations"]},
+                "output_schema": {"fields": {"results": "list"}, "required": ["results"]},
+                "sample_input": {
+                    "formulations": [
+                        {
+                            "formula_id": "REVISED-001",
+                            "task_type": "electrolyte",
+                            "lithium_salt": "LiTFSI",
+                            "lithium_salt_mol_L": 1.0,
+                            "electrolyte_component_1": "FEC",
+                            "electrolyte_component_1_mol_ratio": 1,
+                        }
+                    ]
+                },
+            },
+        )
+        self.assertEqual(create_resp.status_code, 200, create_resp.text)
+        handoff_id = create_resp.json()["data"]["handoff_id"]
+        package_resp = self.client.get(f"{self.base_url}/algorithm-handoffs/{handoff_id}/package")
+        self.assertEqual(package_resp.status_code, 200, package_resp.text)
+
+        stale_buffer = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(package_resp.content)) as source_zip:
+            with zipfile.ZipFile(stale_buffer, "w") as target_zip:
+                for member in source_zip.infolist():
+                    content = source_zip.read(member.filename)
+                    if member.filename == "polyagent.algorithm.yaml":
+                        contract = yaml.safe_load(content.decode("utf-8"))
+                        contract["algorithm_id"] = "document_stale_algorithm_id"
+                        contract["name"] = "文档旧名称"
+                        contract["version"] = "0.1.0"
+                        contract["description"] = "文档旧说明"
+                        contract["developer"] = "文档旧负责人"
+                        content = yaml.safe_dump(contract, allow_unicode=True, sort_keys=False).encode("utf-8")
+                    elif member.filename == "tests/sample_input.json":
+                        content = b'{"formulations":[{"formula_id":"STALE-001","task_type":"electrolyte"}]}'
+                    target_zip.writestr(member, content)
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={"handoff_id": handoff_id},
+            files={"file": ("stale-handoff.zip", stale_buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package_id = upload_resp.json()["data"]["package_id"]
+        validate_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:validate")
+        self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+        self.assertEqual(validate_resp.json()["data"]["algorithm_id"], "revised_handoff_registration_demo")
+        self.assertEqual(validate_resp.json()["data"]["version"], "0.3.0")
+
+        version_id = validate_resp.json()["data"]["version_id"]
+        build_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:build")
+        self.assertEqual(build_resp.status_code, 200, build_resp.text)
+        self.client.post(f"{self.base_url}/algorithms/revised_handoff_registration_demo/versions/{version_id}:deploy")
+        activate_resp = self.client.post(
+            f"{self.base_url}/algorithms/revised_handoff_registration_demo/versions/{version_id}:activate"
+        )
+        self.assertEqual(activate_resp.status_code, 200, activate_resp.text)
+
+        algorithm_resp = self.client.get(f"{self.base_url}/algorithms/revised_handoff_registration_demo")
+        self.assertEqual(algorithm_resp.status_code, 200, algorithm_resp.text)
+        algorithm = algorithm_resp.json()["data"]
+        self.assertEqual(algorithm["name"], "修订后的登记名称")
+        self.assertEqual(algorithm["version"], "0.3.0")
+        self.assertEqual(algorithm["description"], "修订后的登记说明")
+        self.assertEqual(algorithm["developer_attribution"]["name"], "修订负责人")
+        self.assertNotEqual(algorithm["algorithm_id"], "document_stale_algorithm_id")
 
     def test_file_based_handoff_generates_raman_asset_package(self) -> None:
         """文件型 Raman 对接包应使用 v0.2 asset 契约，而不是 SMILES 默认模板。"""
