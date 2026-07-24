@@ -55,6 +55,7 @@ const activeRegistryVersion = computed(() => {
     input_assets: algorithm.input_assets || [],
     output_assets: algorithm.output_assets || [],
     resource_assets: algorithm.resource_assets || [],
+    mentor_team: algorithm.mentor_team || null,
   }
 })
 const versionOptions = computed(() => {
@@ -744,6 +745,10 @@ function authorLabel(algorithm) {
   return developer || organization || '未标注'
 }
 
+function mentorTeamLabel(algorithm, version) {
+  return cleanAuthorValue(version?.mentor_team) || cleanAuthorValue(algorithm?.mentor_team) || '未标注'
+}
+
 function cleanAuthorValue(value) {
   const text = String(value || '').trim()
   const normalized = text.toLowerCase()
@@ -781,6 +786,7 @@ onMounted(loadAlgorithms)
             <h3>预测输入</h3>
             <span>{{ selectedVersion.algorithm_id }} / {{ selectedVersion.version }}</span>
             <small>作者：{{ authorLabel(selectedAlgorithm) }}</small>
+            <small>导师课题组：{{ mentorTeamLabel(selectedAlgorithm, selectedVersion) }}</small>
           </div>
         </div>
 

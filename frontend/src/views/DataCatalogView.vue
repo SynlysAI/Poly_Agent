@@ -47,7 +47,7 @@ const router = useRouter()
 const loading = ref(false)
 const recordsLoading = ref(false)
 const detailLoading = ref(false)
-const activeTab = ref(['analysis', 'mongo', 'relations'].includes(String(route.query.tab)) ? String(route.query.tab) : 'analysis')
+const activeTab = ref(['datasets', 'mongo', 'relations'].includes(String(route.query.tab)) ? String(route.query.tab) : 'datasets')
 const overview = ref(null)
 const relationships = ref({ nodes: [], edges: [], notes: [] })
 const datasets = ref([])
@@ -646,14 +646,16 @@ async function loadDataCatalog() {
     legacyObjects.value = datasetData.legacy_objects || overviewData.legacy_objects || []
     mongoCollections.value = mongoData.items || []
     relationships.value = relationshipData
-    await loadPi1mOverview()
-    await loadAnalysisSamples()
     if (selectedCollectionName.value) await loadCollectionRecords()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loading.value = false
   }
+}
+
+function openAnalysisPage() {
+  router.push('/database/data-analysis')
 }
 
 async function loadPi1mOverview() {
@@ -872,7 +874,10 @@ onMounted(async () => {
         <h1>数据管理</h1>
         <p>材料数据资产、计算结果和 Mongo 结构化索引的统一视图。</p>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="loadDataCatalog">刷新</el-button>
+      <div class="header-actions">
+        <el-button :icon="TrendCharts" @click="openAnalysisPage">数据分析</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="loadDataCatalog">刷新</el-button>
+      </div>
     </header>
 
     <AttributionBanner module-id="data_catalog" label="数据来源" compact />
@@ -900,7 +905,7 @@ onMounted(async () => {
     </el-collapse>
 
     <el-tabs v-model="activeTab" class="catalog-tabs">
-      <el-tab-pane label="数据分析" name="analysis" lazy>
+      <el-tab-pane label="数据目录" name="datasets" lazy>
         <div class="analysis-layout">
           <section class="catalog-section dataset-section">
             <div class="section-heading">
@@ -936,85 +941,6 @@ onMounted(async () => {
                 </div>
               </button>
             </div>
-          </section>
-
-          <section v-if="pi1mDataset" class="catalog-section pi1m-section">
-            <div class="section-heading">
-              <h2>PI1M v2 全量结构库</h2>
-              <span>{{ formatNumber(pi1mProfile?.record_count || pi1mDataset.record_count || 0) }} / {{ formatNumber(pi1mDataset.row_count) }} 条</span>
-            </div>
-            <div class="pi1m-summary-grid">
-              <div class="pi1m-summary-item">
-                <span>入库覆盖率</span>
-                <strong>{{ formatPercent(pi1mProfile?.coverage_percent) }}</strong>
-              </div>
-              <div class="pi1m-summary-item">
-                <span>唯一结构</span>
-                <strong>{{ formatNumber(pi1mProfile?.unique_smiles_count) }}</strong>
-              </div>
-              <div class="pi1m-summary-item">
-                <span>重复结构</span>
-                <strong>{{ formatNumber(pi1mProfile?.duplicate_smiles_count) }}</strong>
-              </div>
-              <div class="pi1m-summary-item">
-                <span>最近导入</span>
-                <strong>{{ pi1mImportStatusText }}</strong>
-              </div>
-            </div>
-            <div class="pi1m-visual-grid">
-              <div class="visual-panel">
-                <h3>SA Score 分布</h3>
-                <v-chart class="pi1m-chart" :option="pi1mSaHistogramOption" autoresize />
-              </div>
-              <div class="visual-panel pi1m-map-panel">
-                <h3>结构空间抽样</h3>
-                <v-chart class="pi1m-chart" :option="pi1mMapOption" autoresize />
-              </div>
-            </div>
-          </section>
-
-          <section class="catalog-section analysis-main">
-            <div class="section-heading">
-              <h2>材料数据分级</h2>
-              <span>近 {{ materialAnalysisRecords.length }} 条样本</span>
-            </div>
-            <div v-if="canDrilldownRecords && materialAnalysisRecords.length" class="analysis-grid">
-              <div class="visual-panel">
-                <h3>数据集来源</h3>
-                <v-chart class="record-chart" :option="materialDatasetOption" autoresize />
-              </div>
-              <div class="visual-panel">
-                <h3>物性类别覆盖</h3>
-                <v-chart class="record-chart" :option="materialPropertyOption" autoresize />
-              </div>
-              <div class="visual-panel">
-                <h3>导入趋势</h3>
-                <v-chart class="record-chart" :option="materialTrendOption" autoresize />
-              </div>
-            </div>
-            <el-empty v-else description="暂无可分析的材料样本或当前账号无下钻权限" />
-          </section>
-
-          <section class="catalog-section analysis-main">
-            <div class="section-heading">
-              <h2>计算数据分析</h2>
-              <span>近 {{ computationAnalysisRecords.length }} 条任务样本</span>
-            </div>
-            <div v-if="canDrilldownRecords && (computationAnalysisRecords.length || artifactAnalysisRecords.length)" class="analysis-grid">
-              <div class="visual-panel">
-                <h3>任务状态</h3>
-                <v-chart class="record-chart" :option="computationStatusOption" autoresize />
-              </div>
-              <div class="visual-panel">
-                <h3>Workflow 分布</h3>
-                <v-chart class="record-chart" :option="computationWorkflowOption" autoresize />
-              </div>
-              <div class="visual-panel">
-                <h3>产物类型</h3>
-                <v-chart class="record-chart" :option="artifactTypeOption" autoresize />
-              </div>
-            </div>
-            <el-empty v-else description="暂无可分析的计算样本或当前账号无下钻权限" />
           </section>
         </div>
       </el-tab-pane>
@@ -1326,6 +1252,13 @@ onMounted(async () => {
   margin: 6px 0 0;
   color: var(--app-ink-muted);
   font-size: 13px;
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .metric-grid {
@@ -1867,6 +1800,7 @@ code {
     flex-direction: column;
   }
 
+  .header-actions,
   .drawer-actions {
     justify-content: flex-start;
   }

@@ -53,6 +53,7 @@ const form = reactive({
   owner_name: '',
   owner_contact: '',
   developer_organization: '',
+  mentor_team: '',
   visibility: 'private',
   description: '根据锂盐、溶剂/单体/填料组成及配比，预测放电比容量和库仑效率。',
   material_scope: ['fluoropolymer'],
@@ -167,6 +168,7 @@ function applyDocumentDraft(draft) {
     form.owner_name = draft.owner_name || ''
     form.owner_contact = draft.owner_contact || ''
     form.developer_organization = draft.developer_organization || ''
+    form.mentor_team = draft.mentor_team || ''
     form.visibility = draft.visibility === 'public' ? 'public' : 'private'
     form.description = draft.description || form.description
     form.material_scope = draft.material_scope?.length ? [...draft.material_scope] : form.material_scope
@@ -190,6 +192,7 @@ function applyHandoffRecord(handoff) {
     form.owner_name = handoff.owner_name || ''
     form.owner_contact = handoff.owner_contact || ''
     form.developer_organization = handoff.developer_organization || ''
+    form.mentor_team = handoff.mentor_team || ''
     form.visibility = handoff.visibility === 'public' ? 'public' : 'private'
     form.description = handoff.description || ''
     form.material_scope = handoff.material_scope?.length ? [...handoff.material_scope] : form.material_scope
@@ -286,6 +289,7 @@ async function createHandoff() {
       owner_name: form.owner_name.trim() || null,
       owner_contact: form.owner_contact.trim() || null,
       developer_organization: form.developer_organization.trim() || null,
+      mentor_team: form.mentor_team.trim() || null,
       description: form.description.trim() || null,
       material_scope: form.material_scope,
       input_schema: parseJsonField(form.input_schema, '输入契约'),
@@ -487,6 +491,7 @@ watch(() => props.initialHandoffId, () => {
             <el-form-item label="负责人"><el-input v-model="form.owner_name" /></el-form-item>
             <el-form-item label="联系方式"><el-input v-model="form.owner_contact" /></el-form-item>
             <el-form-item label="机构"><el-input v-model="form.developer_organization" placeholder="开发机构或单位，可留空" /></el-form-item>
+            <el-form-item label="导师课题组"><el-input v-model="form.mentor_team" placeholder="例如 张三教授课题组" /></el-form-item>
             <el-form-item label="材料范围">
               <el-select v-model="form.material_scope" multiple>
                 <el-option label="通用" value="universal" />
@@ -611,6 +616,7 @@ watch(() => props.initialHandoffId, () => {
         <el-table-column label="状态" width="140"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
         <el-table-column label="发布范围" width="120"><template #default="{ row }">{{ row.visibility === 'public' ? '公开' : '非公开' }}</template></el-table-column>
         <el-table-column prop="developer_organization" label="机构" min-width="150" />
+        <el-table-column prop="mentor_team" label="导师课题组" min-width="160" />
         <el-table-column prop="owner_contact" label="联系方式" min-width="160" />
       </el-table>
     </el-drawer>

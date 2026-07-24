@@ -24,8 +24,8 @@ class TestAttributionApi:
         data = response.json()["data"]
         sources = {item["name"]: item for item in data["attributions"]}
 
-        assert len(sources) == 5
-        for source_name in ["OpenPoly", "RadonPy PI1070", "PI1M v2", "SMiPoly", "PolyUniverse"]:
+        assert len(sources) == 6
+        for source_name in ["OpenPoly", "RadonPy PI1070", "PI1M v2", "SMiPoly", "PolyUniverse", "MD-AllAtom 数据集"]:
             assert source_name in sources
             assert sources[source_name]["visibility"] == "prominent"
 

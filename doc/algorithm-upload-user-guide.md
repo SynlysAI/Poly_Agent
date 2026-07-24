@@ -69,7 +69,7 @@ python scripts/pack_algorithm.py \
 ## 网页打包助手
 
 1. 在“上传部署”选择“上传 Python 脚本”。
-2. 填写算法 ID、名称、版本、开发者、开发机构、联系方式、类型、材料范围、触发方式、入口函数和加载函数。
+2. 填写算法 ID、名称、版本、开发者、开发机构、导师课题组、联系方式、类型、材料范围、触发方式、入口函数和加载函数。
 3. 在输入/输出契约表格中维护字段名、类型、必填、单位、枚举和范围。
 4. 如果模型需要大权重、数据库或 tokenizer，先在“资源管理”登记后端可访问路径，再在资源契约中声明 `asset_key`、`required_files` 和 `binding_required`。
 5. 上传 `.py` 文件和可选的 `requirements.txt`。
@@ -83,6 +83,7 @@ python scripts/pack_algorithm.py \
 
 - `developer`：模型开发者或团队。
 - `developer_organization`：开发机构或单位。
+- `mentor_team`：导师课题组信息，例如“张三教授课题组”。
 - `developer_contact`：联系方式。
 - `source_url`：论文、仓库、模型卡或算法说明链接。
 - `citation`：推荐引用文本。

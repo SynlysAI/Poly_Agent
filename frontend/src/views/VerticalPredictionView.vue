@@ -62,7 +62,7 @@ const statusItems = computed(() => [
 const filteredAlgorithms = computed(() => {
   const keyword = searchText.value.trim().toLowerCase()
   return algorithms.value.filter((item) => {
-    const textMatch = !keyword || [item.name, item.algorithm_id, item.description].some((value) => String(value || '').toLowerCase().includes(keyword))
+    const textMatch = !keyword || [item.name, item.algorithm_id, item.description, item.mentor_team].some((value) => String(value || '').toLowerCase().includes(keyword))
     const statusMatch = !statusFilter.value || item.status === statusFilter.value
     const typeMatch = !typeFilter.value || item.type === typeFilter.value
     const materialMatch = !materialFilter.value || (item.material_scope || []).includes(materialFilter.value)
@@ -148,7 +148,7 @@ watch(
   (query) => {
     activeMode.value = normalizeMode(query.tab)
     detailActiveTab.value = normalizeDetailTab(query.tab)
-    selectedAlgorithmId.value = normalizeQueryString(query.algorithm_id) || selectedAlgorithmId.value
+    selectedAlgorithmId.value = normalizeQueryString(query.algorithm_id)
     selectedHandoffId.value = normalizeQueryString(query.handoff_id)
     docEntryMode.value = normalizeQueryString(query.doc_mode) === 'download' ? 'download' : 'upload'
   },
@@ -172,7 +172,7 @@ async function loadData() {
       recentRuns: uploadedRuns.length,
       failedRuns: uploadedRuns.filter((item) => item.status === 'failed').length,
     }
-    if (!selectedAlgorithmId.value && algorithms.value[0]) selectedAlgorithmId.value = algorithms.value[0].algorithm_id
+    reconcileSelectedAlgorithm()
     await loadVersionsForCards()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -195,9 +195,26 @@ async function loadVersionsForCards() {
   versionMap.value = Object.fromEntries(entries)
 }
 
+function reconcileSelectedAlgorithm() {
+  const currentId = selectedAlgorithmId.value
+  const currentExists = currentId && algorithms.value.some((item) => item.algorithm_id === currentId)
+  if (currentExists) return
+
+  selectedAlgorithmId.value = ''
+  if (activeMode.value === 'detail') {
+    activeMode.value = 'center'
+    if (currentId) ElMessage.info('模型已删除，已返回模型中心')
+  }
+}
+
 function handleChanged(packageInfo) {
   refreshKey.value += 1
-  if (packageInfo?.algorithm_id) selectedAlgorithmId.value = packageInfo.algorithm_id
+  if (packageInfo?.registry_deleted && packageInfo.algorithm_id === selectedAlgorithmId.value) {
+    selectedAlgorithmId.value = ''
+    activeMode.value = 'center'
+  } else if (packageInfo?.algorithm_id && !packageInfo?.deleted) {
+    selectedAlgorithmId.value = packageInfo.algorithm_id
+  }
   loadData()
 }
 
@@ -277,6 +294,10 @@ function authorLabel(algorithm) {
   const organization = cleanAuthorValue(attribution?.organization)
   if (developer && organization) return `${developer} / ${organization}`
   return developer || organization || '未标注'
+}
+
+function mentorTeamLabel(algorithm) {
+  return cleanAuthorValue(algorithm?.mentor_team) || '未标注'
 }
 
 function cleanAuthorValue(value) {
@@ -384,6 +405,7 @@ onMounted(() => {
           </div>
           <p>{{ selectedAlgorithm.description || '该模型已接入垂类预测工作台，可用于测试调用、版本管理和研发流程。' }}</p>
           <div class="author-line">作者：{{ authorLabel(selectedAlgorithm) }}</div>
+          <div class="author-line">导师课题组：{{ mentorTeamLabel(selectedAlgorithm) }}</div>
           <AttributionBadges :attributions="selectedAlgorithmAttributions" />
           <div class="detail-meta">
             <span>{{ selectedAlgorithm.algorithm_id }}</span>
@@ -459,6 +481,19 @@ onMounted(() => {
       </section>
     </template>
 
+    <template v-else-if="activeMode === 'detail'">
+      <div class="empty-models" v-loading="loading">
+        <template v-if="!loading">
+          <el-icon><UploadFilled /></el-icon>
+          <strong>模型不存在或已删除</strong>
+          <span>返回模型中心后可以继续管理其他垂类预测模型。</span>
+          <div class="empty-actions">
+            <el-button type="primary" @click="openCenter">返回模型中心</el-button>
+          </div>
+        </template>
+      </div>
+    </template>
+
     <template v-else-if="activeMode === 'center'">
       <div class="model-center-layout">
         <aside class="filter-panel">
@@ -512,6 +547,7 @@ onMounted(() => {
               </div>
               <p>{{ item.description || '已上传的垂类预测模型，可在详情页进行测试调用、版本治理和运行追溯。' }}</p>
               <div class="author-line compact">作者：{{ authorLabel(item) }}</div>
+              <div class="author-line compact">导师课题组：{{ mentorTeamLabel(item) }}</div>
               <AttributionBadges :attributions="algorithmAttributions(item)" />
               <div class="model-tags">
                 <el-tag size="small" effect="plain">{{ typeLabel(item.type) }}</el-tag>

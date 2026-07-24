@@ -381,6 +381,7 @@ def predict(inputs, context=None, model=None):
         if template_resp.headers["content-type"].startswith("text/markdown"):
             template_text = template_resp.content.decode("utf-8")
             self.assertIn("developer_organization:", template_text)
+            self.assertIn("mentor_team:", template_text)
             self.assertIn("visibility: private", template_text)
         else:
             self.assertEqual(
@@ -389,6 +390,9 @@ def predict(inputs, context=None, model=None):
             )
             self.assertIn("PolyAgent_%E6%A8%A1%E5%9E%8B%E6%95%B0%E6%8D%AE%E9%9B%86%E6%88%90%E9%9C%80%E6%B1%82%E6%94%B6%E9%9B%86_%E5%A1%AB%E5%86%99%E6%A8%A1%E6%9D%BF.docx", template_resp.headers["content-disposition"])
             self.assertTrue(template_resp.content.startswith(b"PK"))
+            with zipfile.ZipFile(io.BytesIO(template_resp.content)) as template_zip:
+                template_xml = template_zip.read("word/document.xml").decode("utf-8")
+            self.assertIn("导师课题组", template_xml)
 
         document = """---
 template_version: "0.1"
@@ -396,6 +400,7 @@ algorithm_id: vertical_tg_predictor
 name: Polymer Tg Predictor
 version: 0.1.0
 developer_organization: Revised Institute
+mentor_team: Revised Mentor Group
 visibility: public
 description: 预测聚合物玻璃化转变温度。
 material_scope:
@@ -433,6 +438,7 @@ sample_input:
         self.assertEqual(data["draft"]["name"], "Polymer Tg Predictor")
         self.assertEqual(data["draft"]["example_id"], "smiles_property_predictor")
         self.assertEqual(data["draft"]["developer_organization"], "Revised Institute")
+        self.assertEqual(data["draft"]["mentor_team"], "Revised Mentor Group")
         self.assertEqual(data["draft"]["visibility"], "public")
         self.assertEqual(data["draft"]["input_schema"]["fields"]["smiles"], "string")
         self.assertEqual(data["draft"]["sample_input"]["smiles"], "C=C(F)F")
@@ -453,6 +459,7 @@ sample_input:
                     ["字段", "填写内容"],
                     ["算法名称 / 代号", "Polymer Tg Predictor / vertical_tg_predictor"],
                     ["负责人", "张三 / zhangsan@example.com"],
+                    ["导师课题组", "李四教授课题组"],
                     ["算法功能介绍", "预测聚合物玻璃化转变温度。"],
                     ["适用体系", "通用"],
                     ["依赖（附 requirements.txt）", "scikit-learn, joblib"],
@@ -475,6 +482,7 @@ sample_input:
         self.assertEqual(data["draft"]["algorithm_id"], "vertical_tg_predictor")
         self.assertEqual(data["draft"]["name"], "Polymer Tg Predictor")
         self.assertEqual(data["draft"]["owner_contact"], "zhangsan@example.com")
+        self.assertEqual(data["draft"]["mentor_team"], "李四教授课题组")
         self.assertEqual(data["draft"]["input_schema"]["fields"]["smiles"], "string")
         self.assertEqual(data["draft"]["input_schema"]["fields"]["temperature"], "integer")
         self.assertEqual(data["draft"]["output_schema"]["fields"]["prediction"], "number")
@@ -736,6 +744,7 @@ def predict(inputs, context=None, model=None):
                 "entrypoint": "src.handler:predict",
                 "developer": "Demo Developer",
                 "developer_organization": "Demo Institute",
+                "mentor_team": "Demo Mentor Group",
                 "source_url": "https://example.org/model",
                 "citation": "Demo Developer, Vertical Source Demo.",
                 "input_schema": '{"fields":{"smiles":"string"},"required":["smiles"]}',
@@ -752,6 +761,7 @@ def predict(inputs, context=None, model=None):
         version = next(item for item in versions_resp.json()["data"]["items"] if item["version_id"] == version_id)
         self.assertEqual(version["developer_attribution"]["name"], "Demo Developer")
         self.assertEqual(version["developer_attribution"]["organization"], "Demo Institute")
+        self.assertEqual(version["mentor_team"], "Demo Mentor Group")
         self.assertEqual(version["developer_attribution"]["url"], "https://example.org/model")
 
     def test_multipart_algorithm_run_registers_input_and_output_artifacts(self) -> None:
@@ -1630,6 +1640,7 @@ sample_input_path: tests/sample_input.json
                 "owner_name": "修订负责人",
                 "owner_contact": "revised@example.local",
                 "developer_organization": "修订机构",
+                "mentor_team": "修订导师课题组",
                 "visibility": "public",
                 "description": "修订后的登记说明",
                 "material_scope": ["fluoropolymer"],
@@ -1667,6 +1678,7 @@ sample_input_path: tests/sample_input.json
                         contract["description"] = "文档旧说明"
                         contract["developer"] = "文档旧负责人"
                         contract["developer_organization"] = "文档旧机构"
+                        contract["mentor_team"] = "文档旧课题组"
                         contract["visibility"] = "private"
                         content = yaml.safe_dump(contract, allow_unicode=True, sort_keys=False).encode("utf-8")
                     elif member.filename == "tests/sample_input.json":
@@ -1712,6 +1724,7 @@ sample_input_path: tests/sample_input.json
         self.assertEqual(algorithm["description"], "修订后的登记说明")
         self.assertEqual(algorithm["developer_attribution"]["name"], "修订负责人")
         self.assertEqual(algorithm["developer_attribution"]["organization"], "修订机构")
+        self.assertEqual(algorithm["mentor_team"], "修订导师课题组")
         self.assertNotEqual(algorithm["algorithm_id"], "document_stale_algorithm_id")
 
     def test_file_based_handoff_generates_raman_asset_package(self) -> None:

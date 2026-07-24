@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -58,6 +59,10 @@ class FakeSftpClient:
             "/remote/04_PolyUniverse/diCOOH.csv": b"Smiles\nCC(O)=O\n",
             "/remote/04_PolyUniverse/epoxy_diE.csv": b"Smiles\nC1OC1\n",
             "/remote/04_PolyUniverse/epoxy_diN.csv": b"Smiles\nCN\n",
+            "/remote-md/C/polymer_1_1_32npt.data": b"LAMMPS data\n",
+            "/remote-md/C/results/250_1_1_32_.out": b"250 K output\n",
+            "/remote-md/F/polymer_2_1_32npt.data": b"F data\n",
+            "/remote-md/Si/polymer_3_1_32npt.data": b"Si data\n",
         }
 
     def stat_file(self, remote_path: str):
@@ -68,6 +73,19 @@ class FakeSftpClient:
 
     def read_file(self, remote_path: str) -> bytes:
         return self.files[remote_path]
+
+    def list_files_recursive(self, remote_root: str):
+        prefix = remote_root.rstrip("/") + "/"
+        return [
+            {
+                "remote_path": path,
+                "relative_path": path.removeprefix(prefix),
+                "size_bytes": len(content),
+                "mtime": "2026-07-21T00:00:00+00:00",
+            }
+            for path, content in sorted(self.files.items())
+            if path.startswith(prefix)
+        ]
 
 
 class FakeCollection:
@@ -141,6 +159,20 @@ class FakeDatabase:
         return self.collections[name]
 
 
+class PyMongoLikeCollection:
+    """Mimic PyMongo's dynamic collection attribute lookup."""
+
+    def __init__(self) -> None:
+        self.find_called = False
+
+    def __getattr__(self, name: str):
+        return PyMongoLikeCollection()
+
+    def find(self, filters: dict, projection: dict | None = None):
+        self.find_called = True
+        return [{"md_allatom_file_id": "MDALLATOM-FILE-C-000001", "family": "C"}]
+
+
 class PolyDataMigrationScriptTest(unittest.TestCase):
     """Test dry-run and apply behavior without network or MongoDB I/O."""
 
@@ -207,7 +239,7 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(mongo_summary["status"], "verified")
         self.assertEqual(mongo_summary["records_upserted"], 1)
         self.assertEqual(target_db["material_records"].count_documents({}), 1)
-        self.assertEqual(target_db["datasets"].count_documents({}), 5)
+        self.assertEqual(target_db["datasets"].count_documents({}), 6)
         self.assertIn(migration_script.MANIFEST_KEY, client.uploads)
 
     def test_sftp_dry_run_does_not_upload_objects(self) -> None:
@@ -432,3 +464,85 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(dataset["dataset_id"], "polyuniverse")
         self.assertEqual(dataset["record_collection_key"], "poly_data.polyuniverse_monomers")
         self.assertEqual(dataset["record_mode"], "full")
+
+    def test_md_allatom_sftp_apply_uploads_recursive_files_and_indexes_mongo(self) -> None:
+        client = FakeS3Client()
+        target_db = FakeDatabase()
+
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            FakeSftpClient(),
+            client,
+            target_db=target_db,
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["C", "F", "Si"],
+            apply=True,
+        )
+
+        self.assertEqual(len(records), 4)
+        self.assertTrue(all(record["status"] == "uploaded" for record in records))
+        self.assertIn("datasets/md_allatom/raw/C/polymer_1_1_32npt.data", client.uploads)
+        self.assertIn("datasets/md_allatom/raw/C/results/250_1_1_32_.out", client.uploads)
+        self.assertIn("datasets/md_allatom/manifests/C.json", client.uploads)
+        self.assertEqual(target_db["md_allatom_files"].count_documents({}), 4)
+        row = target_db["md_allatom_files"].rows[0]
+        self.assertEqual(row["family"], "C")
+        self.assertEqual(row["object_key"], "datasets/md_allatom/raw/C/polymer_1_1_32npt.data")
+
+    def test_md_allatom_structured_import_uploads_csvs_and_preserves_duplicate_natural_keys(self) -> None:
+        target_db = FakeDatabase()
+        client = FakeS3Client()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "二胺.csv").write_text(
+                "\ufeffdiamine_id,diamine_cas,diamine_name,diamine_name_cn,diamine_abbr,diamine_SMILES\n"
+                "1,341-58-2,TFDB,二胺,TFDB,CN\n",
+                encoding="utf-8",
+            )
+            (root / "二酐.csv").write_text(
+                "\ufeffdianhydride_id,dianhydride_cas,dianhydride_name,dianhydride_name_cn,dianhydride_abbr,dianhydride_SMILES\n"
+                "1,1107-00-2,6FDA,六氟二酐,6FDA,O=C1OC(=O)c2ccccc12\n",
+                encoding="utf-8",
+            )
+            (root / "碳基.csv").write_text(
+                "diamine_id,dianhydride_id,dp,temperature,monomer_len,contour_len,e2e_mean,e2e_std,rg_mean,rg_std,persist_len_mean,persist_len_std,data_file,out_file\n"
+                "1,1,32,250,21.452,689.06,369.37,0.9674,143.78,0.3926,114.87,4.7822,polymer_1_1_32npt.data,250_1_1_32_.out\n"
+                "1,1,32,250,21.452,689.06,370.00,0.9000,144.00,0.4000,115.00,4.7000,polymer_1_1_32npt.data,250_1_1_32_.out\n",
+                encoding="utf-8",
+            )
+            doc = root / "requirements.docx"
+            doc.write_bytes(b"docx")
+
+            summary = migration_script.import_md_allatom_structured_records(
+                target_db,
+                s3_client=client,
+                bucket="polymer-data",
+                structured_data_root=root,
+                requirements_doc=doc,
+                apply=True,
+            )
+
+        self.assertEqual(summary["status"], "imported")
+        self.assertEqual(summary["diamine_records_upserted"], 1)
+        self.assertEqual(summary["dianhydride_records_upserted"], 1)
+        self.assertEqual(summary["carbon_records_upserted"], 2)
+        self.assertEqual(target_db["md_allatom_carbon_results"].count_documents({}), 2)
+        self.assertEqual(
+            [row["md_allatom_carbon_result_id"] for row in target_db["md_allatom_carbon_results"].rows],
+            ["MDALLATOM-C-000001", "MDALLATOM-C-000002"],
+        )
+        self.assertIn("datasets/md_allatom/structured/diamine.csv", client.uploads)
+        stats = target_db["dataset_stats"].rows[0]
+        self.assertEqual(stats["dataset_id"], "md_allatom")
+        self.assertEqual(stats["category_counts"]["temperature"]["250"], 2)
+
+    def test_load_md_allatom_file_documents_uses_find_for_pymongo_like_collection(self) -> None:
+        collection = PyMongoLikeCollection()
+        target_db = FakeDatabase({"md_allatom_files": collection})
+
+        rows = migration_script.load_md_allatom_file_documents(target_db)
+
+        self.assertTrue(collection.find_called)
+        self.assertEqual(rows[0]["md_allatom_file_id"], "MDALLATOM-FILE-C-000001")

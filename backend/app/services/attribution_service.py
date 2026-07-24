@@ -224,6 +224,14 @@ class AttributionService:
                         logo_alt="PolyUniverse",
                         visibility="prominent",
                     ),
+                    AttributionItem(
+                        name="MD-AllAtom 数据集",
+                        role="implementation_source",
+                        organization="MD-AllAtom 数据提供方",
+                        description="全原子分子动力学原始文件和结构化碳基分析数据。",
+                        logo_alt="MD-AllAtom 数据集",
+                        visibility="prominent",
+                    ),
                 ],
             ),
         ]

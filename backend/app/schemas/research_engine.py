@@ -699,6 +699,7 @@ class AlgorithmRegistryEntry(BaseModel):
     integration_kind: AlgorithmIntegrationKind = "builtin"
     capability_group: str | None = Field(default=None, max_length=80)
     visibility: AlgorithmVisibility = "private"
+    mentor_team: str | None = Field(default=None, max_length=160)
     developer_attribution: AttributionItem | None = None
     framework_attributions: list[AttributionItem] = Field(default_factory=list)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
@@ -758,6 +759,7 @@ class AlgorithmPackageCreate(BaseModel):
     description: str | None = Field(default=None, max_length=1000)
     developer: str | None = Field(default=None, max_length=160)
     developer_organization: str | None = Field(default=None, max_length=160)
+    mentor_team: str | None = Field(default=None, max_length=160)
     developer_contact: str | None = Field(default=None, max_length=160)
     source_url: str | None = Field(default=None, max_length=600)
     citation: str | None = Field(default=None, max_length=1000)
@@ -835,6 +837,7 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     contract: dict = Field(default_factory=dict)
     visibility: AlgorithmVisibility = "private"
     developer_attribution: AttributionItem | None = None
+    mentor_team: str | None = Field(default=None, max_length=160)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
     implementation_notes: str | None = Field(default=None, max_length=1000)
     created_by: str
@@ -892,6 +895,7 @@ class AlgorithmHandoffCreate(BaseModel):
     owner_name: str | None = Field(default=None, max_length=80)
     owner_contact: str | None = Field(default=None, max_length=120)
     developer_organization: str | None = Field(default=None, max_length=160)
+    mentor_team: str | None = Field(default=None, max_length=160)
     description: str | None = Field(default=None, max_length=1000)
     material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"], min_length=1)
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
@@ -930,6 +934,7 @@ class AlgorithmHandoff(BaseModel):
     owner_name: str | None = None
     owner_contact: str | None = None
     developer_organization: str | None = None
+    mentor_team: str | None = None
     description: str | None = None
     material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"])
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)

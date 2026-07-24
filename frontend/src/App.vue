@@ -69,7 +69,7 @@ const activeMenu = computed(() => {
   const current = route.path
   if (current.startsWith('/computations/submit')) return '/tasks/submit'
   if (current.startsWith('/computations/runs')) return '/tasks/center'
-  if (current === '/data-catalog' || current.startsWith('/database/data-catalog')) return '/database/data-catalog'
+  if (current === '/data-catalog' || current.startsWith('/database/data-catalog') || current.startsWith('/database/data-analysis')) return '/database/data-catalog'
   // 湿实验优化路径不再有独立菜单，归入任务提交
   if (current.startsWith('/optimization')) return '/tasks/submit'
   // 问答对话归入工作台
