@@ -43,6 +43,11 @@ COLLECTION_NAMES = [
     "poly_data.pi1m_samples",
     "poly_data.smipoly_monomers",
     "poly_data.polyuniverse_monomers",
+    "poly_data.md_allatom_files",
+    "poly_data.md_allatom_diamines",
+    "poly_data.md_allatom_dianhydrides",
+    "poly_data.md_allatom_carbon_results",
+    "poly_data.dataset_stats",
 ]
 
 

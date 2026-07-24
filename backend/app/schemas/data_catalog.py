@@ -212,6 +212,10 @@ class DataCatalogDatasetProfileData(BaseModel):
     sa_score_histogram: list[DataCatalogHistogramBin] = Field(default_factory=list)
     duplicate_smiles_count: int | None = None
     unique_smiles_count: int | None = None
+    numeric_histograms: dict[str, list[DataCatalogHistogramBin]] = Field(default_factory=dict)
+    category_counts: dict[str, dict[str, int]] = Field(default_factory=dict)
+    analysis_samples: list[dict[str, Any]] = Field(default_factory=list)
+    asset_coverage: dict[str, Any] = Field(default_factory=dict)
     import_status: DataCatalogDatasetImportStatus = Field(default_factory=DataCatalogDatasetImportStatus)
 
 

@@ -60,6 +60,15 @@ SMIPOLY_COLLECTION_NAME = "smipoly_monomers"
 SMIPOLY_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{SMIPOLY_COLLECTION_NAME}"
 POLYUNIVERSE_COLLECTION_NAME = "polyuniverse_monomers"
 POLYUNIVERSE_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{POLYUNIVERSE_COLLECTION_NAME}"
+MD_ALLATOM_FILES_COLLECTION_NAME = "md_allatom_files"
+MD_ALLATOM_FILES_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{MD_ALLATOM_FILES_COLLECTION_NAME}"
+MD_ALLATOM_DIAMINES_COLLECTION_NAME = "md_allatom_diamines"
+MD_ALLATOM_DIAMINES_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{MD_ALLATOM_DIAMINES_COLLECTION_NAME}"
+MD_ALLATOM_DIANHYDRIDES_COLLECTION_NAME = "md_allatom_dianhydrides"
+MD_ALLATOM_DIANHYDRIDES_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{MD_ALLATOM_DIANHYDRIDES_COLLECTION_NAME}"
+MD_ALLATOM_CARBON_RESULTS_COLLECTION_NAME = "md_allatom_carbon_results"
+MD_ALLATOM_CARBON_RESULTS_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{MD_ALLATOM_CARBON_RESULTS_COLLECTION_NAME}"
+MD_ALLATOM_DEFAULT_FAMILIES = ("C", "F", "Si")
 
 DATASET_RECORD_COLLECTIONS = {
     "openpoly": (MATERIAL_COLLECTION_KEY, "full"),
@@ -67,6 +76,7 @@ DATASET_RECORD_COLLECTIONS = {
     "pi1m_v2": (PI1M_COLLECTION_KEY, "full"),
     "smipoly": (SMIPOLY_COLLECTION_KEY, "full"),
     "polyuniverse": (POLYUNIVERSE_COLLECTION_KEY, "full"),
+    "md_allatom": (MD_ALLATOM_CARBON_RESULTS_COLLECTION_KEY, "full"),
 }
 
 
@@ -153,6 +163,48 @@ MINIO_OBJECT_MAPPINGS = [
         legacy_key=None,
         canonical_key="datasets/polyuniverse/raw/epoxy_diN.csv",
     ),
+    ObjectMapping(
+        dataset_id="md_allatom",
+        role="structured_diamine",
+        legacy_key=None,
+        canonical_key="datasets/md_allatom/structured/diamine.csv",
+    ),
+    ObjectMapping(
+        dataset_id="md_allatom",
+        role="structured_dianhydride",
+        legacy_key=None,
+        canonical_key="datasets/md_allatom/structured/dianhydride.csv",
+    ),
+    ObjectMapping(
+        dataset_id="md_allatom",
+        role="structured_carbon",
+        legacy_key=None,
+        canonical_key="datasets/md_allatom/structured/carbon.csv",
+    ),
+    ObjectMapping(
+        dataset_id="md_allatom",
+        role="requirements_doc",
+        legacy_key=None,
+        canonical_key="datasets/md_allatom/docs/integration_requirements.docx",
+    ),
+    ObjectMapping(
+        dataset_id="md_allatom",
+        role="manifest_C",
+        legacy_key=None,
+        canonical_key="datasets/md_allatom/manifests/C.json",
+    ),
+    ObjectMapping(
+        dataset_id="md_allatom",
+        role="manifest_F",
+        legacy_key=None,
+        canonical_key="datasets/md_allatom/manifests/F.json",
+    ),
+    ObjectMapping(
+        dataset_id="md_allatom",
+        role="manifest_Si",
+        legacy_key=None,
+        canonical_key="datasets/md_allatom/manifests/Si.json",
+    ),
 ]
 
 
@@ -228,6 +280,26 @@ DATASET_DEFINITIONS = {
             ("Smiles", "smiles", "候选单体 SMILES", 51787, 51787, "CC12CC1C(CC2C(O)=O)C(O)=O"),
             ("source_file", "source_file", "来源 CSV 文件", 51787, 51787, "diCOOH.csv"),
             ("monomer_class", "monomer_class", "单体类别", 51787, 51787, "dicarboxylic_acid"),
+        ],
+    },
+    "md_allatom": {
+        "display_name": "MD-AllAtom",
+        "source_category": "全原子分子动力学数据",
+        "confidence_label": "结构化 MD 结果 + 原始模拟文件",
+        "description": "包含 C/F/Si 三类 MD-AllAtom 原始模拟文件索引，以及二胺、二酐字典和碳基全原子 MD 结构统计结果。",
+        "row_count": 10000,
+        "column_count": 26,
+        "storage_prefix": "datasets/md_allatom/",
+        "field_summaries": [
+            ("diamine_id", "diamine_id", "二胺编号", 9944, 9944, "1"),
+            ("dianhydride_id", "dianhydride_id", "二酐编号", 9944, 9944, "1"),
+            ("dp", "dp", "聚合度", 9944, 9944, "32"),
+            ("temperature", "temperature", "温度 K", 9944, 9944, "250"),
+            ("e2e_mean", "e2e_mean", "均方末端距平均值 Å", 9944, 9944, "369.37"),
+            ("rg_mean", "rg_mean", "回转半径平均值 Å", 9944, 9944, "143.78"),
+            ("persist_len_mean", "persist_len_mean", "持久长度平均值 Å", 9944, 9944, "114.87"),
+            ("data_file", "data_file", "模拟输入 data 文件", 9944, 9944, "polymer_1_1_32npt.data"),
+            ("out_file", "out_file", "模拟输出 out 文件", 9944, 9944, "250_1_1_32_.out"),
         ],
     },
 }
@@ -309,6 +381,50 @@ MONGO_COLLECTION_DEFINITIONS = [
         "PolyUniverse 候选单体全量记录，按来源文件区分二羧酸、双环氧和双胺类别。",
         ["polyuniverse_record_id"],
         ["dataset", "monomer_class", "source_file", "smiles", "row_index"],
+    ),
+    MongoCollectionDefinition(
+        MD_ALLATOM_FILES_COLLECTION_KEY,
+        MD_ALLATOM_FILES_COLLECTION_NAME,
+        MATERIAL_SOURCE_ID,
+        "MD-AllAtom 原始文件索引",
+        "材料数据资产",
+        "md_allatom_files",
+        "MD-AllAtom C/F/Si 原始模拟文件在 MinIO 中的对象索引和 SFTP 来源追溯。",
+        ["md_allatom_file_id"],
+        ["dataset", "family", "filename", "extension", "object_key", "sync_status"],
+    ),
+    MongoCollectionDefinition(
+        MD_ALLATOM_DIAMINES_COLLECTION_KEY,
+        MD_ALLATOM_DIAMINES_COLLECTION_NAME,
+        MATERIAL_SOURCE_ID,
+        "MD-AllAtom 二胺字典",
+        "材料数据资产",
+        "md_allatom_diamines",
+        "MD-AllAtom 结构化二胺单体字典，包含 CAS、名称、缩写和 SMILES。",
+        ["md_allatom_diamine_id"],
+        ["dataset", "diamine_id", "cas", "abbr", "smiles"],
+    ),
+    MongoCollectionDefinition(
+        MD_ALLATOM_DIANHYDRIDES_COLLECTION_KEY,
+        MD_ALLATOM_DIANHYDRIDES_COLLECTION_NAME,
+        MATERIAL_SOURCE_ID,
+        "MD-AllAtom 二酐字典",
+        "材料数据资产",
+        "md_allatom_dianhydrides",
+        "MD-AllAtom 结构化二酐单体字典，包含 CAS、名称、缩写和 SMILES。",
+        ["md_allatom_dianhydride_id"],
+        ["dataset", "dianhydride_id", "cas", "abbr", "smiles"],
+    ),
+    MongoCollectionDefinition(
+        MD_ALLATOM_CARBON_RESULTS_COLLECTION_KEY,
+        MD_ALLATOM_CARBON_RESULTS_COLLECTION_NAME,
+        MATERIAL_SOURCE_ID,
+        "MD-AllAtom 碳基结果",
+        "材料数据资产",
+        "md_allatom_carbon_results",
+        "MD-AllAtom 碳基全原子 MD 结构统计结果，按 CSV 行号保留重复自然键记录。",
+        ["md_allatom_carbon_result_id"],
+        ["dataset", "family", "diamine_id", "dianhydride_id", "dp", "temperature", "e2e_mean", "rg_mean"],
     ),
     MongoCollectionDefinition(
         "computation_runs",
@@ -666,6 +782,11 @@ class DataCatalogService:
         record_count = int(dataset.record_count or 0)
         coverage = round((record_count / dataset.row_count) * 100, 4) if dataset.row_count else 0
         stats = self._load_dataset_stats(dataset_id)
+        if dataset_id == "md_allatom" and not stats:
+            stats = self._fallback_md_allatom_dataset_stats(dataset)
+            if stats.get("record_count") is not None:
+                record_count = int(stats.get("record_count") or 0)
+                coverage = round((record_count / dataset.row_count) * 100, 4) if dataset.row_count else 0
         import_status = self._load_dataset_import_status(dataset_id)
         histogram = [
             DataCatalogHistogramBin(start=float(item["start"]), end=float(item["end"]), count=int(item["count"]))
@@ -682,8 +803,55 @@ class DataCatalogService:
             sa_score_histogram=histogram,
             duplicate_smiles_count=stats.get("duplicate_smiles_count"),
             unique_smiles_count=stats.get("unique_smiles_count"),
+            numeric_histograms=self._profile_numeric_histograms(stats),
+            category_counts=self._profile_category_counts(stats),
+            analysis_samples=self._profile_analysis_samples(stats),
+            asset_coverage=stats.get("asset_coverage") if isinstance(stats.get("asset_coverage"), dict) else {},
             import_status=import_status,
         )
+
+    def has_dataset_stats(self, dataset_id: str) -> bool:
+        """Return whether the dataset has profile/statistics data available."""
+        if not settings.require_mongodb:
+            return bool(self._load_dataset_stats(dataset_id))
+        if dataset_id == "md_allatom":
+            stats = self._load_dataset_stats(dataset_id)
+            if stats:
+                return True
+            return bool(self._load_md_allatom_carbon_result_rows())
+        return bool(self._load_dataset_stats(dataset_id))
+
+    def _profile_numeric_histograms(self, stats: dict[str, Any]) -> dict[str, list[DataCatalogHistogramBin]]:
+        raw = stats.get("numeric_histograms")
+        if not isinstance(raw, dict):
+            return {}
+        histograms: dict[str, list[DataCatalogHistogramBin]] = {}
+        for field, bins in raw.items():
+            if not isinstance(bins, list):
+                continue
+            histograms[str(field)] = [
+                DataCatalogHistogramBin(start=float(item["start"]), end=float(item["end"]), count=int(item["count"]))
+                for item in bins
+                if isinstance(item, dict) and {"start", "end", "count"} <= set(item)
+            ]
+        return histograms
+
+    def _profile_category_counts(self, stats: dict[str, Any]) -> dict[str, dict[str, int]]:
+        raw = stats.get("category_counts")
+        if not isinstance(raw, dict):
+            return {}
+        counts: dict[str, dict[str, int]] = {}
+        for field, values in raw.items():
+            if not isinstance(values, dict):
+                continue
+            counts[str(field)] = {str(key): int(value) for key, value in values.items() if isinstance(value, (int, float))}
+        return counts
+
+    def _profile_analysis_samples(self, stats: dict[str, Any]) -> list[dict[str, Any]]:
+        raw = stats.get("analysis_samples")
+        if not isinstance(raw, list):
+            return []
+        return [dict(item) for item in raw[:5000] if isinstance(item, dict)]
 
     def list_dataset_records(
         self,
@@ -800,6 +968,89 @@ class DataCatalogService:
         except PyMongoError:
             return {}
 
+    def _fallback_md_allatom_dataset_stats(self, dataset: DataCatalogDataset) -> dict[str, Any]:
+        """Rebuild MD-AllAtom stats from the live collections when the stats document is missing."""
+        rows = self._load_md_allatom_carbon_result_rows()
+        file_rows = self._load_md_allatom_file_rows()
+        record_count = len(rows)
+        if not rows:
+            return {
+                "record_count": record_count,
+                "asset_coverage": {
+                    "file_count": len(file_rows),
+                    "families": self._md_allatom_family_file_counts(file_rows),
+                    "structured_records": {"carbon_results": len(rows)},
+                },
+                "category_counts": {},
+                "numeric_histograms": {},
+                "analysis_samples": [],
+            }
+
+        category_counts: dict[str, dict[str, int]] = {"temperature": {}, "dp": {}, "family": {}}
+        numeric_fields = {"e2e_mean": [], "rg_mean": [], "persist_len_mean": []}
+        samples: list[dict[str, Any]] = []
+        sample_step = max(len(rows) // 5000, 1)
+        for index, row in enumerate(rows):
+            for field in ["temperature", "dp", "family"]:
+                value = row.get(field)
+                if value is None:
+                    continue
+                key = str(value)
+                category_counts[field][key] = category_counts[field].get(key, 0) + 1
+            for field in numeric_fields:
+                numeric_value = self._to_float(row.get(field))
+                if numeric_value is not None:
+                    numeric_fields[field].append(numeric_value)
+            if index % sample_step == 0:
+                samples.append({
+                    "record_id": str(row.get("md_allatom_carbon_result_id") or ""),
+                    "x": row.get("temperature"),
+                    "y": row.get("e2e_mean"),
+                    "category": f"dp={row.get('dp')}" if row.get("dp") is not None else "dp=-",
+                    "dp": row.get("dp"),
+                    "temperature": row.get("temperature"),
+                    "rg_mean": row.get("rg_mean"),
+                    "persist_len_mean": row.get("persist_len_mean"),
+                })
+
+        return {
+            "record_count": record_count,
+            "asset_coverage": {
+                "file_count": len(file_rows),
+                "families": self._md_allatom_family_file_counts(file_rows),
+                "structured_records": {"carbon_results": len(rows)},
+            },
+            "category_counts": category_counts,
+            "numeric_histograms": {field: self._histogram(values) for field, values in numeric_fields.items()},
+            "analysis_samples": samples,
+        }
+
+    def _load_md_allatom_carbon_result_rows(self) -> list[dict[str, Any]]:
+        if not settings.data_asset_mongodb_uri:
+            return [dict(row) for row in demo_store.load().get(MD_ALLATOM_CARBON_RESULTS_COLLECTION_KEY, [])]
+        try:
+            db = get_data_asset_database()
+            return [dict(row) for row in db[MD_ALLATOM_CARBON_RESULTS_COLLECTION_NAME].find({}, {"_id": 0})]
+        except PyMongoError:
+            return []
+
+    def _load_md_allatom_file_rows(self) -> list[dict[str, Any]]:
+        if not settings.data_asset_mongodb_uri:
+            return [dict(row) for row in demo_store.load().get(MD_ALLATOM_FILES_COLLECTION_KEY, [])]
+        try:
+            db = get_data_asset_database()
+            return [dict(row) for row in db[MD_ALLATOM_FILES_COLLECTION_NAME].find({}, {"_id": 0})]
+        except PyMongoError:
+            return []
+
+    def _md_allatom_family_file_counts(self, file_rows: list[dict[str, Any]]) -> dict[str, int]:
+        counts: dict[str, int] = {family: 0 for family in MD_ALLATOM_DEFAULT_FAMILIES}
+        for row in file_rows:
+            family = str(row.get("family") or "")
+            if family:
+                counts[family] = counts.get(family, 0) + 1
+        return counts
+
     def _load_dataset_import_status(self, dataset_id: str) -> DataCatalogDatasetImportStatus:
         if not settings.require_mongodb:
             return DataCatalogDatasetImportStatus(status="demo")
@@ -828,6 +1079,9 @@ class DataCatalogService:
 
     def _demo_dataset_stats(self, dataset_id: str) -> dict[str, Any]:
         if dataset_id != "pi1m_v2":
+            for row in demo_store.load().get("poly_data.dataset_stats", []):
+                if row.get("dataset_id") == dataset_id:
+                    return dict(row)
             return {}
         rows = demo_store.load().get(PI1M_COLLECTION_KEY, [])
         scores = [self._to_float(row.get("sa_score")) for row in rows if self._to_float(row.get("sa_score")) is not None]
@@ -1603,6 +1857,56 @@ class DataCatalogService:
                 "smiles",
             ]
             return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.data_domain == "md_allatom_files":
+            field_names = [
+                *definition.primary_keys,
+                "dataset.dataset_id",
+                "dataset.dataset_name",
+                "family",
+                "remote_path",
+                "object_key",
+                "filename",
+                "extension",
+                "sync_status",
+            ]
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.data_domain == "md_allatom_diamines":
+            field_names = [
+                *definition.primary_keys,
+                "dataset.dataset_id",
+                "diamine_id",
+                "cas",
+                "name",
+                "name_cn",
+                "abbr",
+                "smiles",
+            ]
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.data_domain == "md_allatom_dianhydrides":
+            field_names = [
+                *definition.primary_keys,
+                "dataset.dataset_id",
+                "dianhydride_id",
+                "cas",
+                "name",
+                "name_cn",
+                "abbr",
+                "smiles",
+            ]
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.data_domain == "md_allatom_carbon_results":
+            field_names = [
+                *definition.primary_keys,
+                "dataset.dataset_id",
+                "family",
+                "diamine_id",
+                "dianhydride_id",
+                "dp",
+                "temperature",
+                "data_file",
+                "out_file",
+            ]
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
         field_names = list(dict.fromkeys([*definition.primary_keys, "status", "created_by", "workflow_type", "engine"]))
         return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
 
@@ -1652,6 +1956,36 @@ class DataCatalogService:
             preview_fields = self._dataset_record_preview_fields(
                 row,
                 ["monomer_class", "source_file", "row_index"],
+            )
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
+        elif definition.data_domain == "md_allatom_files":
+            title = str(row.get("filename") or record_id or definition.display_name)
+            subtitle = f"MD-AllAtom · {row.get('family') or '-'} · {row.get('extension') or ''}".strip(" ·")
+            preview_fields = self._dataset_record_preview_fields(
+                row,
+                ["family", "extension", "size_bytes", "sync_status", "object_key"],
+            )
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
+        elif definition.data_domain == "md_allatom_diamines":
+            title = str(row.get("abbr") or row.get("name") or row.get("smiles") or record_id or definition.display_name)
+            subtitle = f"MD-AllAtom 二胺 · {row.get('diamine_id') or record_id}"
+            preview_fields = self._dataset_record_preview_fields(row, ["diamine_id", "cas", "name_cn", "smiles"])
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
+        elif definition.data_domain == "md_allatom_dianhydrides":
+            title = str(row.get("abbr") or row.get("name") or row.get("smiles") or record_id or definition.display_name)
+            subtitle = f"MD-AllAtom 二酐 · {row.get('dianhydride_id') or record_id}"
+            preview_fields = self._dataset_record_preview_fields(row, ["dianhydride_id", "cas", "name_cn", "smiles"])
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
+        elif definition.data_domain == "md_allatom_carbon_results":
+            title = f"{row.get('family') or 'C'} · diamine {row.get('diamine_id') or '-'} / dianhydride {row.get('dianhydride_id') or '-'}"
+            subtitle = f"dp {row.get('dp') or '-'} · {row.get('temperature') or '-'} K · {record_id}"
+            preview_fields = self._dataset_record_preview_fields(
+                row,
+                ["diamine_id", "dianhydride_id", "dp", "temperature", "e2e_mean", "rg_mean", "persist_len_mean"],
             )
             created_at = row.get("created_at")
             updated_at = row.get("updated_at")
@@ -1769,7 +2103,15 @@ class DataCatalogService:
             return "provenance.created_at"
         if definition.data_domain == "pi1m_samples":
             return "row_index"
-        if definition.data_domain in {"radonpy_records", "smipoly_monomers", "polyuniverse_monomers"}:
+        if definition.data_domain in {
+            "radonpy_records",
+            "smipoly_monomers",
+            "polyuniverse_monomers",
+            "md_allatom_files",
+            "md_allatom_diamines",
+            "md_allatom_dianhydrides",
+            "md_allatom_carbon_results",
+        }:
             return definition.primary_keys[0] if definition.primary_keys else "created_at"
         if definition.collection_name == "optimization_candidates":
             return "candidate_key"

@@ -109,6 +109,7 @@ class AlgorithmHandoffService:
             "owner_name": payload.owner_name,
             "owner_contact": payload.owner_contact,
             "developer_organization": payload.developer_organization,
+            "mentor_team": payload.mentor_team,
             "description": payload.description,
             "material_scope": payload.material_scope,
             "input_schema": payload.input_schema.model_dump(),
@@ -360,6 +361,10 @@ class AlgorithmHandoffService:
             updated["developer_organization"] = handoff.developer_organization
         else:
             updated.pop("developer_organization", None)
+        if handoff.mentor_team:
+            updated["mentor_team"] = handoff.mentor_team
+        else:
+            updated.pop("mentor_team", None)
         return updated
 
     def _sample_input_for_handoff(self, handoff: AlgorithmHandoff) -> dict[str, Any]:
@@ -441,6 +446,7 @@ class AlgorithmHandoffService:
                 description=handoff.description,
                 developer=handoff.owner_name,
                 developer_organization=handoff.developer_organization,
+                mentor_team=handoff.mentor_team,
                 developer_contact=handoff.owner_contact,
                 visibility=handoff.visibility,
             )
@@ -455,6 +461,7 @@ class AlgorithmHandoffService:
             description=handoff.description,
             developer=handoff.owner_name,
             developer_organization=handoff.developer_organization,
+            mentor_team=handoff.mentor_team,
             developer_contact=handoff.owner_contact,
             visibility=handoff.visibility,
         )
@@ -573,6 +580,7 @@ class AlgorithmHandoffService:
         description: str | None,
         developer: str | None = None,
         developer_organization: str | None = None,
+        mentor_team: str | None = None,
         developer_contact: str | None = None,
         visibility: str = "private",
     ) -> AlgorithmPackageCreate:
@@ -672,6 +680,7 @@ class AlgorithmHandoffService:
             description=description or "Raman spectral functional group analysis packaged with generic file I/O assets.",
             developer=developer or "Raman Structure Analyzer 模型团队",
             developer_organization=developer_organization,
+            mentor_team=mentor_team,
             developer_contact=developer_contact,
             source_url="refer/raman",
             method_attributions=[

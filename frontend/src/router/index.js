@@ -28,6 +28,7 @@ const routes = [
   { path: '/admin', component: view('DatabaseManagementView'), meta: { section: '系统管理', title: '系统管理', requiresRole: 'admin' } },
   { path: '/database', redirect: '/database/data-catalog' },
   { path: '/database/data-catalog', component: view('DataCatalogView'), meta: { section: '数据管理', title: '数据管理' } },
+  { path: '/database/data-analysis', component: view('DataAnalysisView'), meta: { section: '数据管理', title: '数据分析' } },
   { path: '/:pathMatch(.*)*', component: view('NotFoundView'), meta: { public: true, title: '页面不存在' } },
 ]
 

@@ -57,6 +57,7 @@ const form = reactive({
   description: '',
   developer: '',
   developer_organization: '',
+  mentor_team: '',
   developer_contact: '',
   source_url: '',
   citation: '',
@@ -154,6 +155,7 @@ const contract = computed(() => ({
   description: form.description || null,
   developer: form.developer || null,
   developer_organization: form.developer_organization || null,
+  mentor_team: form.mentor_team || null,
   developer_contact: form.developer_contact || null,
   source_url: form.source_url || null,
   citation: form.citation || null,
@@ -417,6 +419,7 @@ async function submit() {
         'description',
         'developer',
         'developer_organization',
+        'mentor_team',
         'developer_contact',
         'source_url',
         'citation',
@@ -533,6 +536,7 @@ function viewModelDetail() {
             <el-form-item label="版本"><el-input v-model="form.version" placeholder="0.1.0" /></el-form-item>
             <el-form-item label="开发者"><el-input v-model="form.developer" placeholder="模型开发者或团队" /></el-form-item>
             <el-form-item label="机构"><el-input v-model="form.developer_organization" placeholder="开发机构或单位" /></el-form-item>
+            <el-form-item label="导师课题组"><el-input v-model="form.mentor_team" placeholder="例如 张三教授课题组" /></el-form-item>
             <el-form-item label="联系方式"><el-input v-model="form.developer_contact" placeholder="邮箱或内部联系人" /></el-form-item>
           </div>
           <el-form-item label="发布范围">

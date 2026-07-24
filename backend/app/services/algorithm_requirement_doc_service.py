@@ -21,7 +21,7 @@ from app.schemas.research_engine import (
 
 
 DOCX_TEMPLATE_FILENAME = "PolyAgent_模型数据集成需求收集_填写模板.docx"
-DOCX_TEMPLATE_PATH = Path("refer") / "AlgoRequirement" / DOCX_TEMPLATE_FILENAME
+DOCX_TEMPLATE_PATH = Path("refer") / "requirement" / DOCX_TEMPLATE_FILENAME
 MARKDOWN_TEMPLATE_FILENAME = "polyagent-algorithm-requirement-template.md"
 ALLOWED_EXTENSIONS = {".docx", ".md"}
 WORD_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
@@ -82,6 +82,7 @@ class AlgorithmRequirementDocService:
             "owner_name: \n"
             "owner_contact: \n"
             "developer_organization: \n"
+            "mentor_team: \n"
             "visibility: private\n"
             "description: >\n"
             "  这里填写模型解决的问题、输入是什么、输出是什么。\n"
@@ -185,6 +186,14 @@ class AlgorithmRequirementDocService:
         organization = values.get("机构") or values.get("作者机构") or values.get("开发机构") or values.get("单位")
         if organization:
             metadata["developer_organization"] = organization
+        mentor_team = (
+            values.get("导师课题组")
+            or values.get("导师团队")
+            or values.get("课题组")
+            or values.get("导师组")
+        )
+        if mentor_team:
+            metadata["mentor_team"] = mentor_team
         visibility = values.get("发布范围") or values.get("公开范围")
         if visibility:
             metadata["visibility"] = visibility
@@ -322,6 +331,7 @@ class AlgorithmRequirementDocService:
             owner_name=self._string_value(metadata.get("owner_name")),
             owner_contact=self._string_value(metadata.get("owner_contact")),
             developer_organization=self._string_value(metadata.get("developer_organization")),
+            mentor_team=self._string_value(metadata.get("mentor_team")),
             description=self._string_value(metadata.get("description")) or self._extract_section(body, "目标"),
             material_scope=material_scope,
             input_schema=input_schema,

@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import os
+import stat
 import sys
 import urllib.error
 import urllib.parse
@@ -38,6 +39,10 @@ TARGET_RADONPY_COLLECTION = "radonpy_records"
 TARGET_PI1M_COLLECTION = "pi1m_samples"
 TARGET_SMIPOLY_COLLECTION = "smipoly_monomers"
 TARGET_POLYUNIVERSE_COLLECTION = "polyuniverse_monomers"
+TARGET_MD_ALLATOM_FILES_COLLECTION = "md_allatom_files"
+TARGET_MD_ALLATOM_DIAMINES_COLLECTION = "md_allatom_diamines"
+TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION = "md_allatom_dianhydrides"
+TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION = "md_allatom_carbon_results"
 TARGET_DATASET_STATS_COLLECTION = "dataset_stats"
 TARGET_IMPORT_JOBS_COLLECTION = "import_jobs"
 TARGET_IMPORT_CHECKPOINTS_COLLECTION = "import_checkpoints"
@@ -51,10 +56,18 @@ POLYUNIVERSE_OBJECT_KEYS = {
 }
 SFTP_DEFAULT_HOST = "10.26.15.53"
 SFTP_DEFAULT_ROOT = "/polymer-multi-modal/open-databases/Processed_data"
+MD_ALLATOM_DEFAULT_ROOT = "/polymer-multi-modal/MD-AllAtom"
+MD_ALLATOM_DEFAULT_FAMILIES = ("C", "F", "Si")
 DEFAULT_PI1M_SAMPLE_SIZE = 10000
 DEFAULT_PI1M_CHUNK_SIZE = 50000
 MANIFEST_KEY = "manifests/poly_data_manifest.json"
 LOCAL_MANIFEST_PATH = Path(".runtime/data_catalog/poly_data_manifest.json")
+MD_ALLATOM_STRUCTURED_OBJECT_KEYS = {
+    "diamine": "datasets/md_allatom/structured/diamine.csv",
+    "dianhydride": "datasets/md_allatom/structured/dianhydride.csv",
+    "carbon": "datasets/md_allatom/structured/carbon.csv",
+    "requirements_doc": "datasets/md_allatom/docs/integration_requirements.docx",
+}
 
 
 @dataclass(frozen=True)
@@ -270,6 +283,35 @@ class SftpClient:
         with self._sftp.open(remote_path, "rb") as fp:
             return fp.read()
 
+    def list_files_recursive(self, remote_root: str) -> list[dict[str, Any]]:
+        """Return all files under a remote directory with paths relative to the root."""
+        root = remote_root.rstrip("/")
+        files: list[dict[str, Any]] = []
+
+        def walk(current: str) -> None:
+            for attrs in self._sftp.listdir_attr(current):
+                name = attrs.filename
+                if name in {".", ".."}:
+                    continue
+                child = f"{current.rstrip('/')}/{name}"
+                mode = int(attrs.st_mode or 0)
+                if stat.S_ISDIR(mode):
+                    walk(child)
+                    continue
+                if not stat.S_ISREG(mode):
+                    continue
+                files.append(
+                    {
+                        "remote_path": child,
+                        "relative_path": child.removeprefix(root + "/"),
+                        "size_bytes": int(attrs.st_size or 0),
+                        "mtime": datetime.fromtimestamp(float(attrs.st_mtime or 0), tz=timezone.utc).isoformat(),
+                    }
+                )
+
+        walk(root)
+        return sorted(files, key=lambda item: item["relative_path"])
+
     def close(self) -> None:
         self._sftp.close()
         self._ssh.close()
@@ -334,6 +376,11 @@ def dataset_record_metadata(dataset_id: str) -> dict[str, Any]:
     if dataset_id == "polyuniverse":
         return {
             "record_collection_key": "poly_data.polyuniverse_monomers",
+            "record_mode": "full",
+        }
+    if dataset_id == "md_allatom":
+        return {
+            "record_collection_key": "poly_data.md_allatom_carbon_results",
             "record_mode": "full",
         }
     return {"record_collection_key": None, "record_mode": "metadata_only"}
@@ -472,6 +519,123 @@ def migrate_sftp_open_database_objects(
     return records
 
 
+def migrate_sftp_md_allatom_objects(
+    sftp_client: Any,
+    s3_client: Any,
+    *,
+    target_db: Any | None,
+    bucket: str,
+    sftp_host: str,
+    md_root: str,
+    families: list[str],
+    apply: bool,
+) -> list[dict[str, Any]]:
+    """Upload MD-AllAtom raw SFTP files into MinIO and index them in MongoDB."""
+    records: list[dict[str, Any]] = []
+    normalized_families = [family.strip() for family in families if family.strip()]
+    for family in normalized_families:
+        remote_family_root = f"{md_root.rstrip('/')}/{family}"
+        family_files = sftp_client.list_files_recursive(remote_family_root) if sftp_client else []
+        family_records: list[dict[str, Any]] = []
+        for index, file_info in enumerate(family_files, start=1):
+            relative_path = str(file_info["relative_path"]).lstrip("/")
+            object_key = f"datasets/md_allatom/raw/{family}/{urllib.parse.quote(relative_path, safe='/-_.~')}"
+            remote_path = str(file_info["remote_path"])
+            record = {
+                "dataset_id": "md_allatom",
+                "role": "raw_file",
+                "family": family,
+                "remote_relative_path": relative_path,
+                "object_key": object_key,
+                "bucket": bucket,
+                "sftp_host": sftp_host,
+                "remote_path": remote_path,
+                "remote": {
+                    "size_bytes": file_info.get("size_bytes"),
+                    "mtime": file_info.get("mtime"),
+                },
+                "target": None,
+                "target_exists": False,
+                "status": "planned",
+                "error": None,
+            }
+            try:
+                target = s3_client.head_object(bucket, object_key) if s3_client else None
+                record["target"] = target
+                record["target_exists"] = target is not None
+                if not apply:
+                    family_records.append(record)
+                    continue
+                if sftp_client is None:
+                    record["status"] = "skipped"
+                    record["error"] = "SFTP client is not configured"
+                elif s3_client is None:
+                    record["status"] = "skipped"
+                    record["error"] = "MinIO client is not configured"
+                elif target and target.get("size_bytes") == file_info.get("size_bytes"):
+                    record["status"] = "already_migrated"
+                else:
+                    content = sftp_client.read_file(remote_path)
+                    s3_client.put_object(bucket, object_key, content, "application/octet-stream")
+                    target = s3_client.head_object(bucket, object_key)
+                    record["target"] = target
+                    record["target_exists"] = target is not None
+                    if target and target.get("size_bytes") == file_info.get("size_bytes"):
+                        record["status"] = "uploaded"
+                    else:
+                        record["status"] = "verify_failed"
+                        record["error"] = "size mismatch"
+            except Exception as exc:  # noqa: BLE001 - manifest must preserve per-file failure.
+                record["status"] = "failed"
+                record["error"] = f"{exc.__class__.__name__}: {exc}"
+            family_records.append(record)
+
+        if apply and s3_client is not None:
+            manifest = {
+                "dataset_id": "md_allatom",
+                "family": family,
+                "remote_root": remote_family_root,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "file_count": len(family_records),
+                "records": family_records,
+            }
+            s3_client.put_object(
+                bucket,
+                f"datasets/md_allatom/manifests/{family}.json",
+                json.dumps(manifest, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
+                "application/json; charset=utf-8",
+            )
+
+        records.extend(family_records)
+
+    if apply and target_db is not None:
+        create_indexes(target_db)
+        documents = [
+            build_md_allatom_file_document(record, family=str(record["family"]), index=index)
+            for index, record in enumerate(records, start=1)
+            if record.get("status") in {"uploaded", "already_migrated"}
+        ]
+        upsert_documents(target_db[TARGET_MD_ALLATOM_FILES_COLLECTION], "md_allatom_file_id", documents)
+        target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
+            {"dataset_id": "md_allatom"},
+            {
+                "$set": {
+                    "dataset_id": "md_allatom",
+                    "asset_coverage": {
+                        "file_count": len(documents),
+                        "families": {
+                            family: sum(1 for doc in documents if doc.get("family") == family)
+                            for family in normalized_families
+                        },
+                    },
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+    return records
+
+
 def create_indexes(target_db: Any) -> None:
     """Create Poly Data indexes."""
     target_db["datasets"].create_index([("dataset_id", 1)], name="dataset_id", unique=True)
@@ -498,6 +662,32 @@ def create_indexes(target_db: Any) -> None:
     target_db[TARGET_POLYUNIVERSE_COLLECTION].create_index([("source_file", 1), ("row_index", 1)], name="source_row")
     target_db[TARGET_POLYUNIVERSE_COLLECTION].create_index([("monomer_class", 1)], name="monomer_class")
     target_db[TARGET_POLYUNIVERSE_COLLECTION].create_index([("smiles", 1)], name="smiles")
+    target_db[TARGET_MD_ALLATOM_FILES_COLLECTION].create_index(
+        [("md_allatom_file_id", 1)], name="md_allatom_file_id", unique=True
+    )
+    target_db[TARGET_MD_ALLATOM_FILES_COLLECTION].create_index([("object_key", 1)], name="object_key", unique=True)
+    target_db[TARGET_MD_ALLATOM_FILES_COLLECTION].create_index([("family", 1), ("extension", 1)], name="family_ext")
+    target_db[TARGET_MD_ALLATOM_DIAMINES_COLLECTION].create_index(
+        [("md_allatom_diamine_id", 1)], name="md_allatom_diamine_id", unique=True
+    )
+    target_db[TARGET_MD_ALLATOM_DIAMINES_COLLECTION].create_index([("diamine_id", 1)], name="diamine_id", unique=True)
+    target_db[TARGET_MD_ALLATOM_DIAMINES_COLLECTION].create_index([("smiles", 1)], name="smiles")
+    target_db[TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION].create_index(
+        [("md_allatom_dianhydride_id", 1)], name="md_allatom_dianhydride_id", unique=True
+    )
+    target_db[TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION].create_index(
+        [("dianhydride_id", 1)], name="dianhydride_id", unique=True
+    )
+    target_db[TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION].create_index([("smiles", 1)], name="smiles")
+    target_db[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION].create_index(
+        [("md_allatom_carbon_result_id", 1)], name="md_allatom_carbon_result_id", unique=True
+    )
+    target_db[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION].create_index(
+        [("diamine_id", 1), ("dianhydride_id", 1), ("dp", 1), ("temperature", 1)],
+        name="carbon_natural_fields",
+    )
+    target_db[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION].create_index([("temperature", 1)], name="temperature")
+    target_db[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION].create_index([("dp", 1)], name="dp")
     target_db["migration_manifests"].create_index([("generated_at", -1)], name="generated_at")
     target_db[TARGET_DATASET_STATS_COLLECTION].create_index([("dataset_id", 1)], name="dataset_id", unique=True)
     target_db[TARGET_IMPORT_JOBS_COLLECTION].create_index([("job_id", 1)], name="job_id", unique=True)
@@ -526,7 +716,7 @@ def normalize_scalar(value: Any) -> Any:
 
 def normalized_row(row: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON/Mongo-friendly row payload."""
-    return {str(key): normalize_scalar(value) for key, value in row.items()}
+    return {str(key).lstrip("\ufeff").strip(): normalize_scalar(value) for key, value in row.items()}
 
 
 def first_present(row: dict[str, Any], candidates: list[str]) -> Any:
@@ -706,6 +896,182 @@ def build_polyuniverse_documents(dataframe: Any, *, source_file: str) -> list[di
             }
         )
     return docs
+
+
+def parse_int(value: Any) -> int | None:
+    """Convert a numeric CSV value into int when possible."""
+    number = as_float(value)
+    return int(number) if number is not None else None
+
+
+def build_md_allatom_file_document(record: dict[str, Any], *, family: str, index: int) -> dict[str, Any]:
+    """Build a Mongo file-index document for one MD-AllAtom raw asset."""
+    object_key = str(record["object_key"])
+    filename = Path(object_key).name
+    stable_id = hashlib.sha256(object_key.encode("utf-8")).hexdigest()[:12]
+    return {
+        "md_allatom_file_id": f"MDALLATOM-FILE-{family}-{stable_id}",
+        "dataset": {"dataset_id": "md_allatom", "dataset_name": "MD-AllAtom"},
+        "family": family,
+        "remote_path": record.get("remote_path"),
+        "remote_relative_path": record.get("remote_relative_path"),
+        "object_key": object_key,
+        "filename": filename,
+        "extension": Path(filename).suffix.lower(),
+        "size_bytes": record.get("remote", {}).get("size_bytes") or record.get("target", {}).get("size_bytes"),
+        "mtime": record.get("remote", {}).get("mtime"),
+        "sync_status": record.get("status"),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+
+
+def build_md_allatom_diamine_documents(dataframe: Any) -> list[dict[str, Any]]:
+    """Build MD-AllAtom diamine dictionary documents."""
+    docs: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    for index, raw in enumerate(dataframe.to_dict(orient="records"), start=1):
+        row = normalized_row(raw)
+        diamine_id = parse_int(first_present(row, ["diamine_id"]))
+        if diamine_id is None:
+            continue
+        docs.append(
+            {
+                "md_allatom_diamine_id": f"MDALLATOM-DIAMINE-{diamine_id:06d}",
+                "dataset": {"dataset_id": "md_allatom", "dataset_name": "MD-AllAtom"},
+                "diamine_id": diamine_id,
+                "cas": first_present(row, ["diamine_cas"]),
+                "name": first_present(row, ["diamine_name"]),
+                "name_cn": first_present(row, ["diamine_name_cn"]),
+                "abbr": first_present(row, ["diamine_abbr"]),
+                "smiles": first_present(row, ["diamine_SMILES", "diamine_smiles"]),
+                "source_file": "二胺.csv",
+                "row_index": index,
+                "raw": row,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+    return docs
+
+
+def build_md_allatom_dianhydride_documents(dataframe: Any) -> list[dict[str, Any]]:
+    """Build MD-AllAtom dianhydride dictionary documents."""
+    docs: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    for index, raw in enumerate(dataframe.to_dict(orient="records"), start=1):
+        row = normalized_row(raw)
+        dianhydride_id = parse_int(first_present(row, ["dianhydride_id"]))
+        if dianhydride_id is None:
+            continue
+        docs.append(
+            {
+                "md_allatom_dianhydride_id": f"MDALLATOM-DIANHYDRIDE-{dianhydride_id:06d}",
+                "dataset": {"dataset_id": "md_allatom", "dataset_name": "MD-AllAtom"},
+                "dianhydride_id": dianhydride_id,
+                "cas": first_present(row, ["dianhydride_cas"]),
+                "name": first_present(row, ["dianhydride_name"]),
+                "name_cn": first_present(row, ["dianhydride_name_cn"]),
+                "abbr": first_present(row, ["dianhydride_abbr"]),
+                "smiles": first_present(row, ["dianhydride_SMILES", "dianhydride_smiles"]),
+                "source_file": "二酐.csv",
+                "row_index": index,
+                "raw": row,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+    return docs
+
+
+def build_md_allatom_carbon_documents(dataframe: Any) -> list[dict[str, Any]]:
+    """Build MD-AllAtom carbon MD-result documents from row order."""
+    docs: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    numeric_fields = [
+        "monomer_len",
+        "contour_len",
+        "e2e_mean",
+        "e2e_std",
+        "rg_mean",
+        "rg_std",
+        "persist_len_mean",
+        "persist_len_std",
+    ]
+    for index, raw in enumerate(dataframe.to_dict(orient="records"), start=1):
+        row = normalized_row(raw)
+        doc: dict[str, Any] = {
+            "md_allatom_carbon_result_id": f"MDALLATOM-C-{index:06d}",
+            "dataset": {"dataset_id": "md_allatom", "dataset_name": "MD-AllAtom"},
+            "family": "C",
+            "row_index": index,
+            "diamine_id": parse_int(first_present(row, ["diamine_id"])),
+            "dianhydride_id": parse_int(first_present(row, ["dianhydride_id"])),
+            "dp": parse_int(first_present(row, ["dp"])),
+            "temperature": parse_int(first_present(row, ["temperature"])),
+            "data_file": first_present(row, ["data_file"]),
+            "out_file": first_present(row, ["out_file"]),
+            "raw": row,
+            "created_at": now,
+            "updated_at": now,
+        }
+        for field in numeric_fields:
+            doc[field] = as_float(first_present(row, [field]))
+        docs.append(doc)
+    return docs
+
+
+def md_allatom_stats(
+    carbon_documents: list[dict[str, Any]],
+    *,
+    file_documents: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build compact aggregate stats for the MD-AllAtom analysis page."""
+    category_counts: dict[str, dict[str, int]] = {"temperature": {}, "dp": {}, "family": {}}
+    histograms: dict[str, list[dict[str, Any]]] = {}
+    for doc in carbon_documents:
+        for field in ["temperature", "dp", "family"]:
+            value = doc.get(field)
+            if value is None:
+                continue
+            key = str(value)
+            category_counts[field][key] = category_counts[field].get(key, 0) + 1
+    for field in ["e2e_mean", "rg_mean", "persist_len_mean"]:
+        values = [as_float(doc.get(field)) for doc in carbon_documents]
+        histograms[field] = histogram([value for value in values if value is not None])
+    sample_step = max(len(carbon_documents) // 5000, 1)
+    samples = [
+        {
+            "record_id": doc["md_allatom_carbon_result_id"],
+            "x": doc.get("temperature"),
+            "y": doc.get("e2e_mean"),
+            "category": f"dp={doc.get('dp')}" if doc.get("dp") is not None else "dp=-",
+            "dp": doc.get("dp"),
+            "temperature": doc.get("temperature"),
+            "rg_mean": doc.get("rg_mean"),
+            "persist_len_mean": doc.get("persist_len_mean"),
+        }
+        for index, doc in enumerate(carbon_documents)
+        if index % sample_step == 0
+    ][:5000]
+    file_docs = file_documents or []
+    family_file_counts: dict[str, int] = {family: 0 for family in MD_ALLATOM_DEFAULT_FAMILIES}
+    for doc in file_docs:
+        family = str(doc.get("family") or "")
+        if family:
+            family_file_counts[family] = family_file_counts.get(family, 0) + 1
+    return {
+        "category_counts": category_counts,
+        "numeric_histograms": histograms,
+        "analysis_samples": samples,
+        "asset_coverage": {
+            "file_count": len(file_docs),
+            "families": family_file_counts,
+            "structured_records": {
+                "carbon_results": len(carbon_documents),
+            },
+        },
+    }
 
 
 def upsert_documents(collection: Any, key_field: str, documents: list[dict[str, Any]]) -> int:
@@ -1065,6 +1431,140 @@ def import_polyuniverse_records(target_db: Any, *, s3_client: Any, bucket: str, 
     return summary
 
 
+def upload_md_allatom_structured_assets(
+    *,
+    s3_client: Any,
+    bucket: str,
+    structured_data_root: Path,
+    requirements_doc: Path,
+) -> list[dict[str, Any]]:
+    """Upload local MD-AllAtom structured source files to canonical MinIO keys."""
+    file_specs = [
+        (structured_data_root / "二胺.csv", MD_ALLATOM_STRUCTURED_OBJECT_KEYS["diamine"], "text/csv; charset=utf-8"),
+        (structured_data_root / "二酐.csv", MD_ALLATOM_STRUCTURED_OBJECT_KEYS["dianhydride"], "text/csv; charset=utf-8"),
+        (structured_data_root / "碳基.csv", MD_ALLATOM_STRUCTURED_OBJECT_KEYS["carbon"], "text/csv; charset=utf-8"),
+        (
+            requirements_doc,
+            MD_ALLATOM_STRUCTURED_OBJECT_KEYS["requirements_doc"],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+    ]
+    records: list[dict[str, Any]] = []
+    for source_path, object_key, content_type in file_specs:
+        content = source_path.read_bytes()
+        s3_client.put_object(bucket, object_key, content, content_type)
+        target = s3_client.head_object(bucket, object_key) if hasattr(s3_client, "head_object") else None
+        records.append(
+            {
+                "dataset_id": "md_allatom",
+                "role": "requirements_doc" if source_path == requirements_doc else "structured_table",
+                "source_path": str(source_path),
+                "object_key": object_key,
+                "bucket": bucket,
+                "target": target,
+                "status": "uploaded",
+            }
+        )
+    return records
+
+
+def load_md_allatom_file_documents(target_db: Any) -> list[dict[str, Any]]:
+    """Load existing MD-AllAtom file-index documents from fake or real Mongo collections."""
+    collection = target_db[TARGET_MD_ALLATOM_FILES_COLLECTION]
+    fake_rows = getattr(collection, "rows", None)
+    if isinstance(fake_rows, list):
+        return [dict(row) for row in fake_rows]
+    try:
+        return [dict(row) for row in collection.find({}, {"_id": 0})]
+    except Exception:
+        return []
+
+
+def import_md_allatom_structured_records(
+    target_db: Any,
+    *,
+    s3_client: Any,
+    bucket: str,
+    structured_data_root: Path,
+    requirements_doc: Path,
+    apply: bool,
+) -> dict[str, Any]:
+    """Upload and import MD-AllAtom structured CSV dictionaries and carbon results."""
+    summary = {
+        "dataset_id": "md_allatom",
+        "source_object_keys": MD_ALLATOM_STRUCTURED_OBJECT_KEYS,
+        "target_collections": [
+            TARGET_MD_ALLATOM_DIAMINES_COLLECTION,
+            TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION,
+            TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION,
+        ],
+        "diamine_records_upserted": 0,
+        "dianhydride_records_upserted": 0,
+        "carbon_records_upserted": 0,
+        "uploaded_objects": [],
+        "status": "planned",
+        "error": None,
+    }
+    if not apply:
+        return summary
+    if s3_client is None:
+        summary["status"] = "skipped"
+        summary["error"] = "MinIO client is not configured"
+        return summary
+    try:
+        import pandas as pd
+
+        create_indexes(target_db)
+        summary["uploaded_objects"] = upload_md_allatom_structured_assets(
+            s3_client=s3_client,
+            bucket=bucket,
+            structured_data_root=structured_data_root,
+            requirements_doc=requirements_doc,
+        )
+        diamines = build_md_allatom_diamine_documents(pd.read_csv(structured_data_root / "二胺.csv", encoding="utf-8-sig"))
+        dianhydrides = build_md_allatom_dianhydride_documents(
+            pd.read_csv(structured_data_root / "二酐.csv", encoding="utf-8-sig")
+        )
+        carbon_results = build_md_allatom_carbon_documents(pd.read_csv(structured_data_root / "碳基.csv", encoding="utf-8-sig"))
+        summary["diamine_records_upserted"] = upsert_documents(
+            target_db[TARGET_MD_ALLATOM_DIAMINES_COLLECTION], "md_allatom_diamine_id", diamines
+        )
+        summary["dianhydride_records_upserted"] = upsert_documents(
+            target_db[TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION], "md_allatom_dianhydride_id", dianhydrides
+        )
+        summary["carbon_records_upserted"] = upsert_documents_bulk(
+            target_db[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION],
+            "md_allatom_carbon_result_id",
+            carbon_results,
+        )
+        file_docs = load_md_allatom_file_documents(target_db)
+        stats = md_allatom_stats(carbon_results, file_documents=file_docs)
+        target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
+            {"dataset_id": "md_allatom"},
+            {
+                "$set": {
+                    "dataset_id": "md_allatom",
+                    "record_count": summary["carbon_records_upserted"],
+                    **stats,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+        update_dataset_record_count(
+            target_db,
+            "md_allatom",
+            count=summary["carbon_records_upserted"],
+            record_mode="full",
+            collection_key="poly_data.md_allatom_carbon_results",
+        )
+        summary["status"] = "imported"
+    except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
+        summary["status"] = "failed"
+        summary["error"] = f"{exc.__class__.__name__}: {exc}"
+    return summary
+
+
 def migrate_mongo_assets(
     *,
     source_db: Any,
@@ -1180,11 +1680,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--drop-source-after-verify", action="store_true", help="drop ai4ms.Poly_Agent after count verification")
     parser.add_argument("--skip-legacy-poly-agent", action="store_true", help="skip legacy ai4ms.Poly_Agent and poly_agent/* migration")
     parser.add_argument("--migrate-sftp-open-databases", action="store_true", help="copy SFTP open database files into MinIO")
+    parser.add_argument("--migrate-sftp-md-allatom", action="store_true", help="copy SFTP MD-AllAtom raw files into MinIO")
     parser.add_argument("--sftp-host", default=os.getenv("SFTP_HOST", SFTP_DEFAULT_HOST))
     parser.add_argument("--sftp-port", type=int, default=int(os.getenv("SFTP_PORT", "22")))
     parser.add_argument("--sftp-username", default=os.getenv("SFTP_USERNAME", "fangyikai"))
     parser.add_argument("--sftp-root", default=os.getenv("SFTP_ROOT", SFTP_DEFAULT_ROOT))
     parser.add_argument("--sftp-password-env", default="SFTP_PASSWORD")
+    parser.add_argument("--md-allatom-root", default=os.getenv("MD_ALLATOM_ROOT", MD_ALLATOM_DEFAULT_ROOT))
+    parser.add_argument(
+        "--md-allatom-families",
+        default=os.getenv("MD_ALLATOM_FAMILIES", ",".join(MD_ALLATOM_DEFAULT_FAMILIES)),
+        help="comma-separated MD-AllAtom material-family directories to sync",
+    )
     parser.add_argument("--import-radonpy-records", action="store_true", help="import all RadonPy PI1070 rows into poly_data.radonpy_records")
     parser.add_argument("--import-pi1m-samples", action="store_true", help="import PI1M v2 rows into poly_data.pi1m_samples")
     parser.add_argument("--pi1m-full-import", action="store_true", help="stream all PI1M v2 rows instead of limiting to --pi1m-sample-size")
@@ -1193,6 +1700,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--import-polyuniverse-records",
         action="store_true",
         help="import all PolyUniverse rows into poly_data.polyuniverse_monomers",
+    )
+    parser.add_argument(
+        "--import-md-allatom-structured",
+        action="store_true",
+        help="upload and import MD-AllAtom structured CSV files from refer/data",
+    )
+    parser.add_argument("--structured-data-root", type=Path, default=PROJECT_ROOT / "refer" / "data")
+    parser.add_argument(
+        "--requirements-doc",
+        type=Path,
+        default=PROJECT_ROOT / "refer" / "requirement" / "PolyAgent_模型数据集成需求收集_填写模板.docx",
     )
     parser.add_argument("--pi1m-sample-size", type=int, default=DEFAULT_PI1M_SAMPLE_SIZE)
     parser.add_argument("--pi1m-chunk-size", type=int, default=DEFAULT_PI1M_CHUNK_SIZE)
@@ -1249,6 +1767,32 @@ def main(argv: list[str] | None = None) -> int:
             if sftp_client is not None:
                 sftp_client.close()
 
+    if args.migrate_sftp_md_allatom:
+        sftp_client = None
+        sftp_password = os.getenv(args.sftp_password_env, "")
+        try:
+            if sftp_password:
+                sftp_client = SftpClient(
+                    host=args.sftp_host,
+                    port=args.sftp_port,
+                    username=args.sftp_username,
+                    password=sftp_password,
+                )
+            md_records = migrate_sftp_md_allatom_objects(
+                sftp_client,
+                s3_client,
+                target_db=target_db,
+                bucket=args.bucket,
+                sftp_host=args.sftp_host,
+                md_root=args.md_allatom_root,
+                families=[item.strip() for item in str(args.md_allatom_families).split(",") if item.strip()],
+                apply=args.apply,
+            )
+            sftp_records.extend(md_records)
+        finally:
+            if sftp_client is not None:
+                sftp_client.close()
+
     object_records = [*minio_records, *sftp_records]
     if args.skip_legacy_poly_agent:
         mongo_summary = {
@@ -1295,6 +1839,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.import_polyuniverse_records:
         import_summaries.append(
             import_polyuniverse_records(target_db, s3_client=s3_client, bucket=args.bucket, apply=args.apply)
+        )
+    if args.import_md_allatom_structured:
+        import_summaries.append(
+            import_md_allatom_structured_records(
+                target_db,
+                s3_client=s3_client,
+                bucket=args.bucket,
+                structured_data_root=args.structured_data_root,
+                requirements_doc=args.requirements_doc,
+                apply=args.apply,
+            )
         )
     manifest = build_manifest(
         bucket=args.bucket,

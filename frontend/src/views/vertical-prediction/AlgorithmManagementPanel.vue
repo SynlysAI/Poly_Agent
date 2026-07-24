@@ -80,10 +80,15 @@ async function runAction(version, action, confirmText = '') {
   try {
     if (confirmText) await ElMessageBox.confirm(confirmText, '版本治理确认', { type: 'warning' })
     actionVersionId.value = version.version_id
-    await action(version.algorithm_id, version.version_id)
+    const result = await action(version.algorithm_id, version.version_id)
     await loadAlgorithms()
-    emit('changed')
-    ElMessage.success('版本状态已更新')
+    emit('changed', {
+      ...(result || {}),
+      algorithm_id: version.algorithm_id,
+      version_id: version.version_id,
+      deleted: action === deleteAlgorithmVersion || result?.deleted === true,
+    })
+    ElMessage.success(action === deleteAlgorithmVersion ? '版本已删除' : '版本状态已更新')
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -137,6 +142,11 @@ function rowAttributions(row) {
   ].filter(Boolean)
 }
 
+function mentorTeamLabel(row) {
+  const value = String(row?.mentor_team || selectedAlgorithm.value?.mentor_team || '').trim()
+  return value || '-'
+}
+
 onMounted(loadAlgorithms)
 </script>
 
@@ -158,7 +168,7 @@ onMounted(loadAlgorithms)
 
     <el-alert v-if="selectedAlgorithm" :closable="false" type="info" show-icon>
       <template #title>
-        当前 active：{{ selectedAlgorithm.active_version_id || '无' }} · 注册表状态：{{ statusLabel(selectedAlgorithm.status) }}
+        当前 active：{{ selectedAlgorithm.active_version_id || '无' }} · 注册表状态：{{ statusLabel(selectedAlgorithm.status) }} · 导师课题组：{{ mentorTeamLabel(selectedAlgorithm) }}
       </template>
     </el-alert>
     <AttributionBadges v-if="selectedAlgorithm" :attributions="rowAttributions(selectedAlgorithm)" />
@@ -171,6 +181,7 @@ onMounted(loadAlgorithms)
       <el-table-column label="Package SHA256" min-width="170"><template #default="{ row }"><el-tooltip :content="row.package_sha256"><code>{{ shortDigest(row.package_sha256) }}</code></el-tooltip></template></el-table-column>
       <el-table-column label="Runtime Digest" min-width="170"><template #default="{ row }"><el-tooltip :content="row.runtime_digest || row.image_digest || '-'"><code>{{ shortDigest(row.runtime_digest || row.image_digest) }}</code></el-tooltip></template></el-table-column>
       <el-table-column label="来源" min-width="170"><template #default="{ row }"><AttributionBadges :attributions="rowAttributions(row)" /></template></el-table-column>
+      <el-table-column label="导师课题组" min-width="150"><template #default="{ row }">{{ mentorTeamLabel(row) }}</template></el-table-column>
       <el-table-column label="Environment Digest" min-width="180"><template #default="{ row }"><el-tooltip :content="row.environment_digest || '-'"><code>{{ shortDigest(row.environment_digest) }}</code></el-tooltip></template></el-table-column>
       <el-table-column prop="created_by" label="创建人" width="110" />
       <el-table-column label="创建时间" width="170"><template #default="{ row }">{{ formatDate(row.created_at) }}</template></el-table-column>

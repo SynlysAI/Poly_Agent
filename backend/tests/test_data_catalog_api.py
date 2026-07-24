@@ -79,6 +79,33 @@ class FakeMongoDatabase:
         return FakeMongoCollection(self.collections.get(name, []))
 
 
+class ProfileMongoCollection(FakeMongoCollection):
+    def __init__(self, rows: list[dict], count: int | None = None) -> None:
+        super().__init__(rows)
+        self._count = len(rows) if count is None else count
+
+    def find_one(self, filters: dict, projection: dict | None = None, **kwargs) -> dict | None:
+        rows = self.find(filters, projection)
+        return rows[0] if rows else None
+
+    def count_documents(self, filters: dict) -> int:
+        if not filters:
+            return self._count
+        return super().count_documents(filters)
+
+    def estimated_document_count(self) -> int:
+        return self._count
+
+
+class ProfileMongoDatabase(FakeMongoDatabase):
+    def __init__(self, collections: dict[str, list[dict]], counts: dict[str, int] | None = None) -> None:
+        super().__init__(collections)
+        self.counts = counts or {}
+
+    def __getitem__(self, name: str) -> FakeMongoCollection:
+        return ProfileMongoCollection(self.collections.get(name, []), self.counts.get(name))
+
+
 class DataCatalogServiceTest(unittest.TestCase):
     """覆盖数据目录服务的 MinIO 对象状态逻辑。"""
 
@@ -114,7 +141,7 @@ class DataCatalogServiceTest(unittest.TestCase):
 
         data = service.list_datasets()
 
-        self.assertEqual(len(data.items), 5)
+        self.assertEqual(len(data.items), 6)
         self.assertFalse(any(obj.exists for dataset in data.items for obj in dataset.objects))
 
     def test_dataset_catalog_prefers_poly_data_metadata(self) -> None:
@@ -160,7 +187,7 @@ class DataCatalogServiceTest(unittest.TestCase):
         ):
             data = service.list_datasets()
 
-        self.assertEqual(len(data.items), 5)
+        self.assertEqual(len(data.items), 6)
         openpoly = next(item for item in data.items if item.dataset_id == "openpoly")
         self.assertEqual(openpoly.display_name, "OpenPoly Mongo")
         self.assertEqual(openpoly.description, "从 poly_data.datasets 读取的数据集说明。")
@@ -179,13 +206,17 @@ class DataCatalogServiceTest(unittest.TestCase):
                 "poly_data.pi1m_samples": [{"pi1m_record_id": "PI1M-1"}, {"pi1m_record_id": "PI1M-2"}],
                 "poly_data.smipoly_monomers": [{"smipoly_record_id": "SMIPOLY-1"}],
                 "poly_data.polyuniverse_monomers": [{"polyuniverse_record_id": "POLYUNIVERSE-1"}],
+                "poly_data.md_allatom_files": [{"md_allatom_file_id": "MDALLATOM-FILE-C-000001"}],
+                "poly_data.md_allatom_diamines": [{"md_allatom_diamine_id": "MDALLATOM-DIAMINE-000001"}],
+                "poly_data.md_allatom_dianhydrides": [{"md_allatom_dianhydride_id": "MDALLATOM-DIANHYDRIDE-000001"}],
+                "poly_data.md_allatom_carbon_results": [{"md_allatom_carbon_result_id": "MDALLATOM-C-000001"}],
             })
             with patch("app.services.data_catalog_service.settings.require_mongodb", False):
                 data = DataCatalogService(s3_client=FakeS3Client(configured=False)).get_overview()
         finally:
             demo_store.save(original)
 
-        self.assertEqual(data.material_record_count, 6)
+        self.assertEqual(data.material_record_count, 10)
         self.assertNotEqual(data.material_record_count, data.total_rows)
         self.assertEqual(next(item for item in data.sources if item.source == "mongodb.poly_data").status, "ready")
 
@@ -453,6 +484,84 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
                         "created_at": "2026-07-21T03:00:00Z",
                     }
                 ],
+                "poly_data.md_allatom_files": [
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-000001",
+                        "dataset": {"dataset_id": "md_allatom", "dataset_name": "MD-AllAtom"},
+                        "family": "C",
+                        "remote_path": "/polymer-multi-modal/MD-AllAtom/C/polymer_1_1_32npt.data",
+                        "object_key": "datasets/md_allatom/raw/C/polymer_1_1_32npt.data",
+                        "filename": "polymer_1_1_32npt.data",
+                        "extension": ".data",
+                        "size_bytes": 12,
+                        "sync_status": "uploaded",
+                        "created_at": "2026-07-21T03:00:00Z",
+                    }
+                ],
+                "poly_data.md_allatom_diamines": [
+                    {
+                        "md_allatom_diamine_id": "MDALLATOM-DIAMINE-000001",
+                        "dataset": {"dataset_id": "md_allatom", "dataset_name": "MD-AllAtom"},
+                        "diamine_id": 1,
+                        "cas": "341-58-2",
+                        "name": "TFDB",
+                        "name_cn": "二胺",
+                        "abbr": "TFDB",
+                        "smiles": "CN",
+                        "created_at": "2026-07-21T03:00:00Z",
+                    }
+                ],
+                "poly_data.md_allatom_dianhydrides": [
+                    {
+                        "md_allatom_dianhydride_id": "MDALLATOM-DIANHYDRIDE-000001",
+                        "dataset": {"dataset_id": "md_allatom", "dataset_name": "MD-AllAtom"},
+                        "dianhydride_id": 1,
+                        "cas": "1107-00-2",
+                        "name": "6FDA",
+                        "name_cn": "六氟二酐",
+                        "abbr": "6FDA",
+                        "smiles": "O=C1OC(=O)c2ccccc12",
+                        "created_at": "2026-07-21T03:00:00Z",
+                    }
+                ],
+                "poly_data.md_allatom_carbon_results": [
+                    {
+                        "md_allatom_carbon_result_id": "MDALLATOM-C-000001",
+                        "dataset": {"dataset_id": "md_allatom", "dataset_name": "MD-AllAtom"},
+                        "family": "C",
+                        "diamine_id": 1,
+                        "dianhydride_id": 1,
+                        "dp": 32,
+                        "temperature": 250,
+                        "e2e_mean": 369.37,
+                        "rg_mean": 143.78,
+                        "persist_len_mean": 114.87,
+                        "data_file": "polymer_1_1_32npt.data",
+                        "out_file": "250_1_1_32_.out",
+                        "created_at": "2026-07-21T03:00:00Z",
+                    }
+                ],
+                "poly_data.dataset_stats": [
+                    {
+                        "dataset_id": "md_allatom",
+                        "record_count": 9944,
+                        "asset_coverage": {"families": {"C": 1, "F": 0, "Si": 0}, "file_count": 1},
+                        "category_counts": {"temperature": {"250": 1}, "dp": {"32": 1}},
+                        "numeric_histograms": {
+                            "e2e_mean": [{"start": 360, "end": 380, "count": 1}],
+                            "rg_mean": [{"start": 140, "end": 150, "count": 1}],
+                            "persist_len_mean": [{"start": 110, "end": 120, "count": 1}],
+                        },
+                        "analysis_samples": [
+                            {
+                                "record_id": "MDALLATOM-C-000001",
+                                "x": 250,
+                                "y": 369.37,
+                                "category": "dp=32",
+                            }
+                        ],
+                    }
+                ],
             }
         )
 
@@ -471,6 +580,8 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         self.assertIn("poly_data.pi1m_samples", keys)
         self.assertIn("poly_data.smipoly_monomers", keys)
         self.assertIn("poly_data.polyuniverse_monomers", keys)
+        self.assertIn("poly_data.md_allatom_files", keys)
+        self.assertIn("poly_data.md_allatom_carbon_results", keys)
         self.assertNotIn("audit_events", keys)
         self.assertNotIn("service_integrations", keys)
         material = next(item for item in data["items"] if item["collection_key"] == "poly_data.material_records")
@@ -501,6 +612,11 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         self.assertEqual(polyuniverse["collection_name"], "polyuniverse_monomers")
         self.assertEqual(polyuniverse["data_domain"], "polyuniverse_monomers")
         self.assertEqual(polyuniverse["primary_keys"], ["polyuniverse_record_id"])
+
+        md_files = next(item for item in data["items"] if item["collection_key"] == "poly_data.md_allatom_files")
+        self.assertEqual(md_files["collection_name"], "md_allatom_files")
+        self.assertEqual(md_files["data_domain"], "md_allatom_files")
+        self.assertEqual(md_files["primary_keys"], ["md_allatom_file_id"])
 
     def test_unknown_collection_returns_404(self) -> None:
         self._login_as("admin-user")
@@ -729,3 +845,84 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         self.assertEqual(data["primary_key"], {"polyuniverse_record_id": "POLYUNIVERSE-epoxy_diE-000001"})
         self.assertEqual(data["title"], "C1OC1")
         self.assertEqual(data["document"]["monomer_class"], "diepoxy")
+
+    def test_md_allatom_dataset_profile_returns_generic_analysis_stats(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+        with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+            response = self.client.get("/api/v1/data-catalog/datasets/md_allatom/profile")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["dataset_id"], "md_allatom")
+        self.assertEqual(data["asset_coverage"]["file_count"], 1)
+        self.assertEqual(data["category_counts"]["temperature"]["250"], 1)
+        self.assertEqual(data["numeric_histograms"]["e2e_mean"][0]["count"], 1)
+        self.assertEqual(data["analysis_samples"][0]["record_id"], "MDALLATOM-C-000001")
+
+    def test_md_allatom_dataset_profile_falls_back_when_stats_document_is_missing(self) -> None:
+        service = DataCatalogService()
+        with patch("app.services.data_catalog_service.settings.require_mongodb", True), patch(
+            "app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"
+        ), patch("app.services.data_catalog_service.get_data_asset_database", return_value=ProfileMongoDatabase(
+            {
+                "datasets": [{"dataset_id": "md_allatom", "display_name": "MD-AllAtom", "row_count": 10000, "column_count": 26, "storage_prefix": "datasets/md_allatom/"}],
+                "dataset_fields": [],
+                "dataset_stats": [],
+                "md_allatom_carbon_results": [
+                    {
+                        "md_allatom_carbon_result_id": "MDALLATOM-C-000001",
+                        "family": "C",
+                        "dp": 32,
+                        "temperature": 250,
+                        "e2e_mean": 369.37,
+                        "rg_mean": 143.78,
+                        "persist_len_mean": 114.87,
+                    }
+                ],
+                "md_allatom_files": [
+                    {"md_allatom_file_id": "MDALLATOM-FILE-C-000001", "family": "C"}
+                ],
+            },
+            counts={"md_allatom_carbon_results": 1, "md_allatom_files": 1},
+        )):
+            data = service.get_dataset_profile("md_allatom")
+
+        self.assertEqual(data.record_count, 1)
+        self.assertEqual(data.asset_coverage["file_count"], 1)
+        self.assertEqual(data.category_counts["temperature"]["250"], 1)
+        self.assertEqual(data.numeric_histograms["e2e_mean"][0].count, 1)
+        self.assertEqual(data.analysis_samples[0]["record_id"], "MDALLATOM-C-000001")
+
+    def test_has_dataset_stats_reports_fallback_data_for_md_allatom(self) -> None:
+        service = DataCatalogService()
+        with patch("app.services.data_catalog_service.settings.require_mongodb", True), patch(
+            "app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"
+        ), patch("app.services.data_catalog_service.get_data_asset_database", return_value=ProfileMongoDatabase(
+            {
+                "datasets": [{"dataset_id": "md_allatom", "display_name": "MD-AllAtom", "row_count": 10000, "column_count": 26, "storage_prefix": "datasets/md_allatom/"}],
+                "dataset_fields": [],
+                "dataset_stats": [],
+                "md_allatom_carbon_results": [{"md_allatom_carbon_result_id": "MDALLATOM-C-000001"}],
+            },
+            counts={"md_allatom_carbon_results": 1},
+        )):
+            self.assertTrue(service.has_dataset_stats("md_allatom"))
+
+    def test_md_allatom_collection_records_use_domain_summary(self) -> None:
+        self._seed_demo_records()
+        self._login_as("admin-user")
+
+        response = self.client.get(
+            "/api/v1/data-catalog/mongo-collections/poly_data.md_allatom_carbon_results/records",
+            params={"keyword": "250", "page": 1, "page_size": 10},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["collection_key"], "poly_data.md_allatom_carbon_results")
+        self.assertEqual(data["total"], 1)
+        item = data["items"][0]
+        self.assertEqual(item["record_id"], "MDALLATOM-C-000001")
+        self.assertEqual(item["title"], "C · diamine 1 / dianhydride 1")
+        self.assertEqual(item["preview_fields"]["temperature"], 250)

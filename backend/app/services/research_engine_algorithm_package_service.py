@@ -332,6 +332,7 @@ class AlgorithmPackageService:
                 "runtime_logs": [self._runtime_log_summary("validation_dry_run", result)],
                 "contract": contract,
                 "visibility": contract["visibility"],
+                "mentor_team": contract.get("mentor_team"),
                 "developer_attribution": (
                     developer_attribution.model_dump(mode="python")
                     if developer_attribution
@@ -556,6 +557,7 @@ class AlgorithmPackageService:
             "source": "uploaded_package",
             "deployment_status": "active",
             "visibility": self._normalize_visibility(version.visibility or contract.get("visibility") or "private"),
+            "mentor_team": contract.get("mentor_team") or version.mentor_team,
             "developer_attribution": (
                 developer_attribution.model_dump(mode="python")
                 if developer_attribution
@@ -1021,6 +1023,7 @@ class AlgorithmPackageService:
             version=contract["version"],
             source="uploaded_package",
             visibility=AlgorithmPackageService._normalize_visibility(contract.get("visibility")),
+            mentor_team=contract.get("mentor_team"),
             developer_attribution=AlgorithmPackageService._developer_attribution_from_contract(
                 contract,
                 created_by="package_owner",
@@ -1081,6 +1084,7 @@ class AlgorithmPackageService:
             "description": payload.description,
             "developer": payload.developer,
             "developer_organization": payload.developer_organization,
+            "mentor_team": payload.mentor_team,
             "developer_contact": payload.developer_contact,
             "source_url": payload.source_url,
             "citation": payload.citation,
@@ -1099,6 +1103,7 @@ class AlgorithmPackageService:
             "description",
             "developer",
             "developer_organization",
+            "mentor_team",
             "developer_contact",
             "source_url",
             "citation",
@@ -1135,14 +1140,19 @@ class AlgorithmPackageService:
         """从算法包契约构建开发者来源标注。"""
         developer = str(contract.get("developer") or "").strip()
         organization = str(contract.get("developer_organization") or "").strip() or None
+        mentor_team = str(contract.get("mentor_team") or "").strip() or None
         source_url = str(contract.get("source_url") or "").strip() or None
         citation = str(contract.get("citation") or "").strip() or None
         logo_asset = str(contract.get("logo_asset") or contract.get("logo_url") or "").strip() or None
-        if not any((developer, organization, source_url, citation, logo_asset)):
+        if not any((developer, organization, mentor_team, source_url, citation, logo_asset)):
             return None
         display_name = developer or organization or "算法开发者"
-        if organization:
+        if organization and mentor_team:
+            description = f"算法由 {organization} / {mentor_team} / {display_name} 提供。"
+        elif organization:
             description = f"算法由 {organization} / {display_name} 提供。"
+        elif mentor_team:
+            description = f"算法由 {mentor_team} / {display_name} 提供。"
         else:
             description = f"算法由 {display_name} 提供；未提交机构 Logo 时显示文字来源牌。"
         return AttributionItem(
