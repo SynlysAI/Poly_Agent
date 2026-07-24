@@ -42,6 +42,10 @@ INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
     ],
     "algorithm_versions": [
         ("algorithm_status_created", [("algorithm_id", 1), ("status", 1), ("created_at", -1)]),
+        ("algorithm_visibility_status_created", [("algorithm_id", 1), ("visibility", 1), ("status", 1), ("created_at", -1)]),
+    ],
+    "algorithm_registry_entries": [
+        ("family_source_visibility_owner_status", [("algorithm_family", 1), ("source", 1), ("visibility", 1), ("owner", 1), ("status", 1)]),
     ],
     "report_jobs": [
         ("subject_created", [("subject.subject_type", 1), ("subject.subject_id", 1), ("created_at", -1)]),

@@ -62,6 +62,7 @@ const form = reactive({
   citation: '',
   logo_asset: '',
   logo_url: '',
+  visibility: 'private',
   sample_input: JSON.stringify({ smiles: 'C=C(F)F' }, null, 2),
   input_assets: '[]',
   output_assets: '[]',
@@ -159,6 +160,7 @@ const contract = computed(() => ({
   method_attributions: [],
   logo_asset: form.logo_asset || null,
   logo_url: form.logo_url || null,
+  visibility: form.visibility,
 }))
 
 const contractPreview = computed(() => toYaml(contract.value))
@@ -400,6 +402,7 @@ async function submit() {
     if (uploadMode.value === 'zip') {
       const data = new FormData()
       data.append('file', zipFiles.value[0].raw)
+      data.append('visibility', form.visibility)
       pkg = await uploadAlgorithmPackage(data)
     } else {
       const data = new FormData()
@@ -419,6 +422,7 @@ async function submit() {
         'citation',
         'logo_asset',
         'logo_url',
+        'visibility',
       ]) {
         if (form[key]) data.append(key, form[key])
       }
@@ -531,6 +535,12 @@ function viewModelDetail() {
             <el-form-item label="机构"><el-input v-model="form.developer_organization" placeholder="开发机构或单位" /></el-form-item>
             <el-form-item label="联系方式"><el-input v-model="form.developer_contact" placeholder="邮箱或内部联系人" /></el-form-item>
           </div>
+          <el-form-item label="发布范围">
+            <el-radio-group v-model="form.visibility" class="visibility-options">
+              <el-radio-button value="private">非公开发布</el-radio-button>
+              <el-radio-button value="public">公开发布</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
           <el-form-item label="一句话说明"><el-input v-model="form.description" type="textarea" :rows="2" placeholder="说明这个模型适合预测什么、输入是什么。" /></el-form-item>
         </el-form>
 
@@ -675,6 +685,14 @@ function viewModelDetail() {
       </template>
 
       <section v-else class="zip-upload">
+        <el-form label-position="top" class="metadata-form">
+          <el-form-item label="发布范围">
+            <el-radio-group v-model="form.visibility" class="visibility-options">
+              <el-radio-button value="private">非公开发布</el-radio-button>
+              <el-radio-button value="public">公开发布</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+        </el-form>
         <el-upload v-model:file-list="zipFiles" drag :auto-upload="false" :limit="1" accept=".zip" @change="currentStep = Math.max(currentStep, 1)">
           <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
           <div class="el-upload__text">拖入标准 ZIP，或点击选择</div>
@@ -691,6 +709,7 @@ function viewModelDetail() {
       </div>
       <div class="deploy-summary">
         <span>上传方式：{{ uploadMode === 'zip' ? '标准 ZIP' : 'Python 脚本' }}</span>
+        <span>发布范围：{{ form.visibility === 'public' ? '公开发布' : '非公开发布' }}</span>
         <span v-if="uploadMode === 'script'">模型：{{ form.name }} / {{ form.version }}</span>
         <span v-if="uploadMode === 'zip'">文件：{{ zipFiles[0]?.name || '已选择 ZIP' }}</span>
       </div>
@@ -751,6 +770,7 @@ h3 { font-size: 15px; }
 .wizard-head p:last-child, .section-heading p, .submit-row p { margin: 4px 0 0; color: var(--app-ink-muted); font-size: 13px; line-height: 1.55; }
 .wizard-shell :deep(.el-steps) { margin-top: 16px; }
 .metadata-form { margin-top: 12px; }
+.visibility-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .simple-form-grid { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr) 140px; gap: 0 14px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0 14px; }
 .asset-contract-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px; }

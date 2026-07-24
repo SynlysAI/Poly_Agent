@@ -262,6 +262,54 @@ class AlgorithmPackageApiTest(ComputationTestCase):
         super().setUp()
         self.base_url = "/api/v1/research-engine"
 
+    def tearDown(self) -> None:
+        app.dependency_overrides.pop(get_current_user, None)
+        super().tearDown()
+
+    @staticmethod
+    def _login_as(user_id: str, role: str = "user") -> None:
+        app.dependency_overrides[get_current_user] = lambda: {
+            "user_id": user_id,
+            "username": user_id,
+            "role": role,
+            "status": "active",
+        }
+
+    def _pack_activate_simple_algorithm(self, algorithm_id: str, *, visibility: str | None = None) -> str:
+        handler_source = b"""
+def predict(inputs, context=None, model=None):
+    return {"prediction": {"value": inputs.get("smiles", "")}}
+"""
+        data = {
+            "algorithm_id": algorithm_id,
+            "name": f"{algorithm_id} Demo",
+            "version": "0.1.0",
+            "entrypoint": "src.handler:predict",
+            "developer": "Demo Developer",
+            "developer_organization": "Demo Institute",
+            "input_schema": '{"fields":{"smiles":"string"},"required":["smiles"]}',
+            "output_schema": '{"fields":{"prediction":"object"},"required":["prediction"]}',
+            "sample_input": '{"smiles":"CCO"}',
+        }
+        if visibility is not None:
+            data["visibility"] = visibility
+        pack_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:pack",
+            data=data,
+            files=[("files", ("handler.py", handler_source, "text/x-python"))],
+        )
+        self.assertEqual(pack_resp.status_code, 200, pack_resp.text)
+        package = pack_resp.json()["data"]
+        package_id = package["package_id"]
+        version_id = package["version_id"]
+        build_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:build")
+        self.assertEqual(build_resp.status_code, 200, build_resp.text)
+        deploy_resp = self.client.post(f"{self.base_url}/algorithms/{algorithm_id}/versions/{version_id}:deploy")
+        self.assertEqual(deploy_resp.status_code, 200, deploy_resp.text)
+        activate_resp = self.client.post(f"{self.base_url}/algorithms/{algorithm_id}/versions/{version_id}:activate")
+        self.assertEqual(activate_resp.status_code, 200, activate_resp.text)
+        return version_id
+
     @staticmethod
     def _managed_resource_package_zip(algorithm_id: str = "managed_resource_demo") -> bytes:
         """Build a minimal package that requires a platform-managed resource."""
@@ -591,6 +639,78 @@ sample_input:
         self.assertEqual(run_data["runtime_snapshot"]["backend"], "local_sandbox_runtime")
         self.assertTrue(run_data["runtime_digest"].startswith("sha256:"))
         self.assertIn("worker_pid", run_data["runtime_snapshot"])
+
+    def test_algorithm_package_visibility_defaults_to_private(self) -> None:
+        """未显式选择发布范围时，上传模型默认为非公开。"""
+        version_id = self._pack_activate_simple_algorithm("private_default_demo")
+
+        algorithm_resp = self.client.get(f"{self.base_url}/algorithms/private_default_demo")
+        self.assertEqual(algorithm_resp.status_code, 200, algorithm_resp.text)
+        self.assertEqual(algorithm_resp.json()["data"]["visibility"], "private")
+
+        versions_resp = self.client.get(f"{self.base_url}/algorithms/private_default_demo/versions")
+        version = next(item for item in versions_resp.json()["data"]["items"] if item["version_id"] == version_id)
+        self.assertEqual(version["visibility"], "private")
+
+    def test_private_uploaded_algorithm_is_hidden_and_not_callable_by_other_users(self) -> None:
+        """普通用户不能看到或调用他人的非公开上传模型。"""
+        self._login_as("user-a")
+        self._pack_activate_simple_algorithm("private_access_demo", visibility="private")
+
+        self._login_as("user-b")
+        list_resp = self.client.get(
+            f"{self.base_url}/algorithms",
+            params={"algorithm_family": "vertical_prediction", "page": 1, "page_size": 100},
+        )
+        self.assertEqual(list_resp.status_code, 200, list_resp.text)
+        algorithm_ids = {item["algorithm_id"] for item in list_resp.json()["data"]["items"]}
+        self.assertNotIn("private_access_demo", algorithm_ids)
+
+        detail_resp = self.client.get(f"{self.base_url}/algorithms/private_access_demo")
+        self.assertEqual(detail_resp.status_code, 403, detail_resp.text)
+
+        run_resp = self.client.post(
+            f"{self.base_url}/algorithm-runs",
+            json={
+                "algorithm_id": "private_access_demo",
+                "trigger_source": "human_workflow",
+                "input_snapshot": {"smiles": "CCO"},
+            },
+        )
+        self.assertEqual(run_resp.status_code, 403, run_resp.text)
+
+    def test_public_uploaded_algorithm_is_visible_callable_but_not_governable(self) -> None:
+        """公开上传模型对平台用户可见可调用，但版本治理仍限 owner/admin。"""
+        self._login_as("user-a")
+        version_id = self._pack_activate_simple_algorithm("public_access_demo", visibility="public")
+
+        self._login_as("user-b")
+        list_resp = self.client.get(
+            f"{self.base_url}/algorithms",
+            params={"algorithm_family": "vertical_prediction", "page": 1, "page_size": 100},
+        )
+        self.assertEqual(list_resp.status_code, 200, list_resp.text)
+        algorithm_ids = {item["algorithm_id"] for item in list_resp.json()["data"]["items"]}
+        self.assertIn("public_access_demo", algorithm_ids)
+
+        detail_resp = self.client.get(f"{self.base_url}/algorithms/public_access_demo")
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.text)
+        self.assertEqual(detail_resp.json()["data"]["visibility"], "public")
+
+        run_resp = self.client.post(
+            f"{self.base_url}/algorithm-runs",
+            json={
+                "algorithm_id": "public_access_demo",
+                "trigger_source": "human_workflow",
+                "input_snapshot": {"smiles": "CCO"},
+            },
+        )
+        self.assertEqual(run_resp.status_code, 200, run_resp.text)
+        self.assertEqual(run_resp.json()["data"]["status"], "completed")
+        self.assertEqual(run_resp.json()["data"]["algorithm_version_id"], version_id)
+
+        logs_resp = self.client.get(f"{self.base_url}/algorithms/public_access_demo/versions/{version_id}/logs")
+        self.assertEqual(logs_resp.status_code, 403, logs_resp.text)
 
     def test_pack_algorithm_package_persists_developer_attribution(self) -> None:
         """网页打包入口会把开发者来源写入 AlgorithmVersion。"""

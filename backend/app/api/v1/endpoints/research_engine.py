@@ -385,11 +385,13 @@ async def pack_algorithm_package(
     method_attributions: str = Form(default="[]"),
     logo_asset: str | None = Form(default=None),
     logo_url: str | None = Form(default=None),
+    visibility: str = Form(default="private"),
     files: list[UploadFile] = File(default=[]),
     requirements: UploadFile | None = File(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmPackage]:
     """网页打包助手：原始 Python 文件 + 表单生成标准 ZIP 并保存。"""
+    visibility = package_service._normalize_visibility(visibility)
     payload = AlgorithmPackageCreate(
         algorithm_id=algorithm_id,
         name=name,
@@ -418,6 +420,7 @@ async def pack_algorithm_package(
         method_attributions=_json_form_object(method_attributions, []),
         logo_asset=logo_asset,
         logo_url=logo_url,
+        visibility=visibility,
     )
     source_files: dict[str, bytes] = {}
     for upload in files:
@@ -434,6 +437,7 @@ async def pack_algorithm_package(
         filename=f"{payload.algorithm_id}-{payload.version}.zip",
         content=zip_bytes,
         actor_user_id=_actor_user_id(current_user),
+        visibility=visibility,
     )
     data = package_service.validate_package(data.package_id)
     return ApiResponse(code=0, message="ok", data=data)
@@ -442,14 +446,18 @@ async def pack_algorithm_package(
 @router.post("/algorithm-packages", response_model=ApiResponse[AlgorithmPackage])
 async def upload_algorithm_package(
     file: UploadFile = File(...),
+    visibility: str | None = Form(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmPackage]:
     """上传标准 ZIP 算法包。"""
     content = await file.read()
+    if visibility is not None:
+        visibility = package_service._normalize_visibility(visibility)
     data = package_service.upload_package(
         filename=file.filename or "algorithm-package.zip",
         content=content,
         actor_user_id=_actor_user_id(current_user),
+        visibility=visibility,
     )
     return ApiResponse(code=0, message="ok", data=data)
 
@@ -860,7 +868,7 @@ def list_algorithms(
         items = [
             item
             for item in data.items
-            if item.source != "uploaded_package" or item.owner == user_id
+            if item.source != "uploaded_package" or item.owner == user_id or item.visibility == "public"
         ]
         data = AlgorithmRegistryListData(
             items=items,
@@ -885,6 +893,7 @@ def get_algorithm(
         not _has_full_access(current_user)
         and data.source == "uploaded_package"
         and data.owner != _access_user_id(current_user)
+        and data.visibility != "public"
     ):
         raise HTTPException(status_code=403, detail="无权限访问该算法")
     return ApiResponse(code=0, message="ok", data=data)

@@ -179,6 +179,8 @@ def _load_baseline_model(device: str = "cpu"):
         logger.warning("未找到 Raman 基线消除模型: %s", BASELINE_MODEL_PATH)
         raise FileNotFoundError(f"未找到 Raman 基线消除模型: {BASELINE_MODEL_PATH}")
 
+    from .models.Simple_FCN import FCN
+
     model = FCN()
     model = load_net_state(
         model,
