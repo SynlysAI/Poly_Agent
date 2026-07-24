@@ -30,8 +30,9 @@ def predict(inputs: dict, context: dict, model=None) -> dict:
     x1 = float(inputs.get("x1") or points[-1]["x"])
     spectrum = [float(point["y"]) for point in points]
     spectype = str(inputs.get("spectype") or "raman")
-    mode = str(inputs.get("mode") or "function_groups")
-    if spectype != "raman" or mode != "function_groups":
+    requested_mode = str(inputs.get("mode") or "function_groups")
+    mode = "function_groups"
+    if spectype != "raman":
         raise ValueError("This package only supports Raman functional group analysis.")
     k = int(inputs.get("k") or 3)
     transmittance = bool(inputs.get("transmittance") or False)
@@ -58,7 +59,7 @@ def predict(inputs: dict, context: dict, model=None) -> dict:
         "x_label": "Raman shift",
         "y_label": "Intensity",
         "points": points,
-        "metadata": {"spectype": spectype, "mode": mode, "x0": x0, "x1": x1},
+        "metadata": {"spectype": spectype, "mode": mode, "requested_mode": requested_mode, "x0": x0, "x1": x1},
     }
     (output_dir / "normalized_series.json").write_text(
         json.dumps(normalized_series, ensure_ascii=False, indent=2),
@@ -67,7 +68,7 @@ def predict(inputs: dict, context: dict, model=None) -> dict:
     structure_result = {
         "schema_version": "polyagent_structure_candidates.v1",
         "candidates": candidates,
-        "metadata": {"spectype": spectype, "mode": mode, "k": k},
+        "metadata": {"spectype": spectype, "mode": mode, "requested_mode": requested_mode, "k": k},
     }
     (output_dir / "structure_candidates.json").write_text(
         json.dumps(structure_result, ensure_ascii=False, indent=2),
@@ -80,7 +81,7 @@ def predict(inputs: dict, context: dict, model=None) -> dict:
     report = {
         "schema_version": "polyagent_algorithm_report.v1",
         "preprocessing": {"normalization": "platform parser + model preprocess_spectrum"},
-        "model": {"spectype": spectype, "mode": mode, "device": str(device)},
+        "model": {"spectype": spectype, "mode": mode, "requested_mode": requested_mode, "device": str(device)},
         "resource_status": model,
     }
     (output_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -1058,7 +1058,7 @@ class AlgorithmPackageService:
         runtime = {"python": "3.11", "resources": {"cpu": 1, "memory": "1Gi", "gpu": False}, "timeout_seconds": 30}
         runtime.update(payload.runtime or {})
         uses_assets = bool(payload.input_assets or payload.output_assets or payload.resource_assets or payload.result_envelope)
-        return {
+        contract = {
             "contract_version": "0.2" if uses_assets else "0.1",
             "algorithm_id": payload.algorithm_id,
             "name": payload.name,
@@ -1093,6 +1093,22 @@ class AlgorithmPackageService:
             "visibility": payload.visibility,
             "implementation_notes": payload.description,
         }
+        for key in (
+            "loader",
+            "result_envelope",
+            "description",
+            "developer",
+            "developer_organization",
+            "developer_contact",
+            "source_url",
+            "citation",
+            "logo_asset",
+            "logo_url",
+            "implementation_notes",
+        ):
+            if contract.get(key) in (None, ""):
+                contract.pop(key, None)
+        return contract
 
     @staticmethod
     def _normalize_visibility(value: str | None) -> str:

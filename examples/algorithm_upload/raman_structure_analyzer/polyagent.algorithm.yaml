@@ -114,7 +114,6 @@ result_envelope: polyagent_run_result.v1
 sample_input_path: tests/sample_input.json
 description: Raman spectral functional group analysis packaged with generic file I/O assets.
 developer: Raman Structure Analyzer 模型团队
-developer_organization: 嘉庚实验室 / 厦门大学
 source_url: refer/raman
 method_attributions:
   - name: Raman/IR structure analysis reference implementation

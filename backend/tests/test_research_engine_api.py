@@ -378,18 +378,25 @@ def predict(inputs, context=None, model=None):
     def test_requirement_document_template_download_and_parse(self) -> None:
         template_resp = self.client.get(f"{self.base_url}/algorithm-requirement-docs/template")
         self.assertEqual(template_resp.status_code, 200, template_resp.text)
-        self.assertEqual(
-            template_resp.headers["content-type"],
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-        self.assertIn("PolyAgent_%E6%A8%A1%E5%9E%8B%E6%95%B0%E6%8D%AE%E9%9B%86%E6%88%90%E9%9C%80%E6%B1%82%E6%94%B6%E9%9B%86_%E5%A1%AB%E5%86%99%E6%A8%A1%E6%9D%BF.docx", template_resp.headers["content-disposition"])
-        self.assertTrue(template_resp.content.startswith(b"PK"))
+        if template_resp.headers["content-type"].startswith("text/markdown"):
+            template_text = template_resp.content.decode("utf-8")
+            self.assertIn("developer_organization:", template_text)
+            self.assertIn("visibility: private", template_text)
+        else:
+            self.assertEqual(
+                template_resp.headers["content-type"],
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            self.assertIn("PolyAgent_%E6%A8%A1%E5%9E%8B%E6%95%B0%E6%8D%AE%E9%9B%86%E6%88%90%E9%9C%80%E6%B1%82%E6%94%B6%E9%9B%86_%E5%A1%AB%E5%86%99%E6%A8%A1%E6%9D%BF.docx", template_resp.headers["content-disposition"])
+            self.assertTrue(template_resp.content.startswith(b"PK"))
 
         document = """---
 template_version: "0.1"
 algorithm_id: vertical_tg_predictor
 name: Polymer Tg Predictor
 version: 0.1.0
+developer_organization: Revised Institute
+visibility: public
 description: 预测聚合物玻璃化转变温度。
 material_scope:
   - universal
@@ -425,6 +432,8 @@ sample_input:
         self.assertEqual(data["draft"]["algorithm_id"], "vertical_tg_predictor")
         self.assertEqual(data["draft"]["name"], "Polymer Tg Predictor")
         self.assertEqual(data["draft"]["example_id"], "smiles_property_predictor")
+        self.assertEqual(data["draft"]["developer_organization"], "Revised Institute")
+        self.assertEqual(data["draft"]["visibility"], "public")
         self.assertEqual(data["draft"]["input_schema"]["fields"]["smiles"], "string")
         self.assertEqual(data["draft"]["sample_input"]["smiles"], "C=C(F)F")
         self.assertIn("owner_name", data["missing_fields"])
@@ -1575,6 +1584,8 @@ sample_input_path: tests/sample_input.json
         handoff = create_resp.json()["data"]
         handoff_id = handoff["handoff_id"]
         self.assertEqual(handoff["status"], "draft")
+        self.assertIsNone(handoff["developer_organization"])
+        self.assertEqual(handoff["visibility"], "private")
         self.assertIn(handoff_id, handoff["handoff_url"])
 
         package_resp = self.client.get(f"{self.base_url}/algorithm-handoffs/{handoff_id}/package")
@@ -1586,8 +1597,10 @@ sample_input_path: tests/sample_input.json
             self.assertIn("src/predictor_service.py", names)
             sample_input = handoff_zip.read("tests/sample_input.json").decode("utf-8")
             self.assertIn("TEST-001", sample_input)
-            contract = handoff_zip.read("polyagent.algorithm.yaml").decode("utf-8")
-            self.assertIn("electrolyte_formulation_predictor", contract)
+            contract = yaml.safe_load(handoff_zip.read("polyagent.algorithm.yaml").decode("utf-8"))
+            self.assertEqual(contract["algorithm_id"], "electrolyte_formulation_predictor")
+            self.assertEqual(contract["visibility"], "private")
+            self.assertNotIn("developer_organization", contract)
 
         detail_resp = self.client.get(f"{self.base_url}/algorithm-handoffs/{handoff_id}")
         self.assertEqual(detail_resp.json()["data"]["status"], "package_downloaded")
@@ -1616,6 +1629,8 @@ sample_input_path: tests/sample_input.json
                 "example_id": "batch_formulation_predictor",
                 "owner_name": "修订负责人",
                 "owner_contact": "revised@example.local",
+                "developer_organization": "修订机构",
+                "visibility": "public",
                 "description": "修订后的登记说明",
                 "material_scope": ["fluoropolymer"],
                 "input_schema": {"fields": {"formulations": "list"}, "required": ["formulations"]},
@@ -1651,10 +1666,20 @@ sample_input_path: tests/sample_input.json
                         contract["version"] = "0.1.0"
                         contract["description"] = "文档旧说明"
                         contract["developer"] = "文档旧负责人"
+                        contract["developer_organization"] = "文档旧机构"
+                        contract["visibility"] = "private"
                         content = yaml.safe_dump(contract, allow_unicode=True, sort_keys=False).encode("utf-8")
                     elif member.filename == "tests/sample_input.json":
-                        content = b'{"formulations":[{"formula_id":"STALE-001","task_type":"electrolyte"}]}'
+                        content = b'{"smiles":"STALE"}'
                     target_zip.writestr(member, content)
+
+        self_test_resp = self.client.post(
+            f"{self.base_url}/algorithm-handoffs/{handoff_id}:validate",
+            files={"file": ("stale-handoff.zip", stale_buffer.getvalue(), "application/zip")},
+        )
+        self.assertEqual(self_test_resp.status_code, 200, self_test_resp.text)
+        self.assertTrue(self_test_resp.json()["data"]["ok"])
+        self.assertIn("REVISED-001", json.dumps(self_test_resp.json()["data"]["output_preview"], ensure_ascii=False))
 
         upload_resp = self.client.post(
             f"{self.base_url}/algorithm-packages",
@@ -1662,6 +1687,7 @@ sample_input_path: tests/sample_input.json
             files={"file": ("stale-handoff.zip", stale_buffer.getvalue(), "application/zip")},
         )
         self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        self.assertEqual(upload_resp.json()["data"]["visibility"], "public")
         package_id = upload_resp.json()["data"]["package_id"]
         validate_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:validate")
         self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
@@ -1682,8 +1708,10 @@ sample_input_path: tests/sample_input.json
         algorithm = algorithm_resp.json()["data"]
         self.assertEqual(algorithm["name"], "修订后的登记名称")
         self.assertEqual(algorithm["version"], "0.3.0")
+        self.assertEqual(algorithm["visibility"], "public")
         self.assertEqual(algorithm["description"], "修订后的登记说明")
         self.assertEqual(algorithm["developer_attribution"]["name"], "修订负责人")
+        self.assertEqual(algorithm["developer_attribution"]["organization"], "修订机构")
         self.assertNotEqual(algorithm["algorithm_id"], "document_stale_algorithm_id")
 
     def test_file_based_handoff_generates_raman_asset_package(self) -> None:
@@ -1752,6 +1780,7 @@ sample_input_path: tests/sample_input.json
             contract = handoff_zip.read("polyagent.algorithm.yaml").decode("utf-8")
             contract_data = yaml.safe_load(contract)
             self.assertEqual(contract_data["contract_version"], "0.2")
+            self.assertNotIn("developer_organization", contract_data)
             self.assertEqual(contract_data["input_assets"][0]["key"], "spectrum_file")
             self.assertEqual(len(contract_data["resource_assets"]), 1)
             self.assertEqual(contract_data["resource_assets"][0]["key"], "raman_runtime_resources")
@@ -1940,8 +1969,8 @@ def predict(inputs, context=None, model=None):
         self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
         self.assertEqual(formal_validate_resp.status_code, 200, formal_validate_resp.text)
 
-    def test_algorithm_handoff_validation_reports_missing_sample_input_fix(self) -> None:
-        """对接包缺关键文件时返回面向对接人的修复建议。"""
+    def test_algorithm_handoff_validation_rewrites_missing_sample_input_from_draft(self) -> None:
+        """对接包缺 sample_input 时，自测使用已确认草案补齐。"""
         create_resp = self.client.post(
             f"{self.base_url}/algorithm-handoffs",
             json={
@@ -1970,9 +1999,9 @@ def predict(inputs, context=None, model=None):
         )
         self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
         validation = validate_resp.json()["data"]
-        self.assertFalse(validation["ok"])
-        self.assertEqual(validation["status"], "self_test_failed")
-        self.assertTrue(any("tests/sample_input.json" in item for item in validation["fixes"]))
+        self.assertTrue(validation["ok"], validation)
+        self.assertEqual(validation["status"], "self_test_passed")
+        self.assertIn("prediction", validation["output_preview"])
 
 
 class ResearchEngineAccessControlApiTest(ComputationTestCase):
