@@ -42,7 +42,29 @@ const inputFiles = ref({})
 const runArtifacts = ref([])
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === algorithmId.value) || null)
-const selectedVersion = computed(() => versions.value.find((item) => item.version_id === versionId.value) || null)
+const activeRegistryVersion = computed(() => {
+  const algorithm = selectedAlgorithm.value
+  if (!algorithm?.active_version_id) return null
+  return {
+    version_id: algorithm.active_version_id,
+    algorithm_id: algorithm.algorithm_id,
+    version: algorithm.version,
+    status: algorithm.status === 'active' ? 'active' : algorithm.status,
+    input_schema: algorithm.input_schema || {},
+    output_schema: algorithm.output_schema || {},
+    input_assets: algorithm.input_assets || [],
+    output_assets: algorithm.output_assets || [],
+    resource_assets: algorithm.resource_assets || [],
+  }
+})
+const versionOptions = computed(() => {
+  if (versions.value.length) return versions.value
+  return activeRegistryVersion.value ? [activeRegistryVersion.value] : []
+})
+const selectedVersion = computed(() => (
+  versions.value.find((item) => item.version_id === versionId.value)
+  || (activeRegistryVersion.value && (!versionId.value || activeRegistryVersion.value.version_id === versionId.value) ? activeRegistryVersion.value : null)
+))
 const schemaFields = computed(() => Object.keys(selectedVersion.value?.input_schema?.fields || {}))
 const inputAssets = computed(() => selectedVersion.value?.input_assets || [])
 const requiredInputAssets = computed(() => inputAssets.value.filter((item) => item.required))
@@ -68,7 +90,7 @@ const hasBlankPrimaryRecords = computed(() => (
   && !primaryRecords.value.some(hasEffectiveRecordValue)
 ))
 const runBlocker = computed(() => {
-  if (!versionId.value) return '请选择可调用版本。'
+  if (!selectedVersion.value) return '请选择可调用版本。'
   if (jsonParseError.value) return `输入 JSON 不合法：${jsonParseError.value}`
   if (missingRequiredFields.value.length) return `补齐标记 * 的字段：${missingRequiredFields.value.join('、')}`
   const missingAssets = requiredInputAssets.value.filter((item) => !inputFiles.value[item.key])
@@ -129,8 +151,10 @@ async function loadVersions() {
   try {
     const data = await listAlgorithmVersions(algorithmId.value, { page: 1, page_size: 100 })
     versions.value = (data.items || []).filter((item) => ['active', 'deployed_staging'].includes(item.status))
-    versionId.value = versions.value.find((item) => item.status === 'active')?.version_id || versions.value[0]?.version_id || ''
+    versionId.value = versions.value.find((item) => item.status === 'active')?.version_id || versions.value[0]?.version_id || activeRegistryVersion.value?.version_id || ''
   } catch (error) {
+    versions.value = []
+    versionId.value = activeRegistryVersion.value?.version_id || ''
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     loading.value = false
@@ -651,13 +675,14 @@ async function runPrediction() {
   }
   running.value = true
   try {
+    const explicitVersionId = versions.value.some((item) => item.version_id === versionId.value) ? versionId.value : ''
     const payload = {
       algorithm_id: algorithmId.value,
-      algorithm_version_id: versionId.value,
       trigger_source: 'human_workflow',
       input_snapshot: inputs.value,
       reason: '垂类预测模型工作台测试调用',
     }
+    if (explicitVersionId) payload.algorithm_version_id = explicitVersionId
     lastRun.value = inputAssets.value.length
       ? await createAlgorithmRunMultipart(payload, inputFiles.value)
       : await createAlgorithmRun(payload)
@@ -711,6 +736,14 @@ function algorithmAttributions(algorithm) {
   ].filter(Boolean)
 }
 
+function authorLabel(algorithm) {
+  const attribution = algorithm?.developer_attribution
+  const developer = attribution?.name || algorithm?.owner || ''
+  const organization = attribution?.organization || ''
+  if (developer && organization) return `${developer} / ${organization}`
+  return developer || organization || '未标注'
+}
+
 onMounted(loadAlgorithms)
 </script>
 
@@ -721,7 +754,7 @@ onMounted(loadAlgorithms)
         <el-option v-for="item in algorithms" :key="item.algorithm_id" :label="item.name" :value="item.algorithm_id" />
       </el-select>
       <el-select v-model="versionId" placeholder="选择版本" style="width: 260px">
-        <el-option v-for="item in versions" :key="item.version_id" :label="`${item.version} · ${item.status}`" :value="item.version_id" />
+        <el-option v-for="item in versionOptions" :key="item.version_id" :label="`${item.version} · ${item.status}`" :value="item.version_id" />
       </el-select>
       <el-button :icon="Refresh" @click="loadAlgorithms">刷新</el-button>
     </div>
@@ -732,6 +765,7 @@ onMounted(loadAlgorithms)
           <div>
             <h3>预测输入</h3>
             <span>{{ selectedVersion.algorithm_id }} / {{ selectedVersion.version }}</span>
+            <small>作者：{{ authorLabel(selectedAlgorithm) }}</small>
           </div>
         </div>
 
@@ -1018,7 +1052,8 @@ onMounted(loadAlgorithms)
 .input-pane, .output-pane { min-width: 0; border-top: 1px solid var(--app-border-soft); padding-top: 14px; }
 .pane-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .pane-heading h3, h4 { margin: 0; font-size: 15px; }
-.pane-heading span { color: var(--app-ink-muted); font-size: 12px; }
+.pane-heading span, .pane-heading small { color: var(--app-ink-muted); font-size: 12px; }
+.pane-heading small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
 .history-start, .input-actions, .nested-toolbar, .nested-actions, .record-actions, .object-field-row, .scalar-array-row, .advanced-mode-row, .advanced-field-row {
   display: flex;
   align-items: center;

@@ -8,13 +8,13 @@
 
 | 模块 | 当前入口 | 当前能力 |
 |------|----------|----------|
-| Alchemist | `/optimization`、`/alchemist` | 实验变量、DoE/OED、实验数据、GP 建模、采集优化和诊断可视化 |
-| ComputeEngine | `/computations`、`/computation-runs`、`/campaigns` | 计算任务提交、worker 执行、artifact 管理、campaign 优化和集成状态 |
+| Alchemist | `/optimization`、`/optimization/alchemist`、`/tools/alchemist` | 实验变量、DoE/OED、实验数据、GP 建模、采集优化和诊断可视化 |
+| ComputeEngine | `/computations/submit`、`/computations/runs`、`/optimization/campaigns` | 计算任务提交、worker 执行、artifact 管理、campaign 优化和集成状态 |
 | ResearchEngine | `/research-engine` | ProblemSpec、人工算法 Workflow、Pipeline Run、AutoResearch Gate、追溯和报告生成 |
 | 垂类预测 | `/vertical-prediction` | 算法包上传、治理、在线测试、运行历史、结果查看和 handoff |
-| Knowledge Base | `/knowledge-base` | 文献 RAG 问答、证据清单、知识图谱上下文和 KrF demo corpus |
-| Data Catalog | `/data-catalog` | 材料数据资产浏览、检索和外部数据源只读接入 |
-| 基础工作台 | `/dashboard`、`/tasks`、`/assistant`、`/tool-services` | 统一任务中心、产品内助手、LLM 模型选择和工具服务配置 |
+| Knowledge Base | `/knowledge` | 文献 RAG 问答、证据清单、知识图谱上下文和 KrF demo corpus |
+| Data Catalog | `/database/data-catalog`、`/data-catalog` | 材料数据资产浏览、检索和外部数据源只读接入 |
+| 基础工作台 | `/dashboard`、`/tasks/submit`、`/tasks/center`、`/dialogue`、`/tools`、`/admin` | 统一任务中心、产品内助手、LLM 模型选择和工具服务配置 |
 
 完整文档入口见 [doc/README.md](doc/README.md)。
 
@@ -127,7 +127,7 @@ Poly Agent 在产品页面中维护统一的来源与引用标注。系统模块
 ### 7. 基础功能
 
 - **认证体系**：与 AI4MS 门户共享账户体系，HMAC-SHA256 令牌 + 邀请码注册，支持门户 SSO 免登录
-- **产品内助手**：`/assistant/chat` 基于项目实时事实回答入口、算法清单、计算任务和 AutoResearch 审批问题，并返回结构化跳转动作
+- **产品内助手**：前端入口为 `/dialogue`，后端 `/assistant/chat` 基于项目实时事实回答入口、算法清单、计算任务和 AutoResearch 审批问题，并返回结构化跳转动作
 - **LLM 模型管理**：`/llm/models` 提供 Codex 风格模型选择数据，支持科研问答、深度思考和报告生成的默认模型路由
 - **任务中心**：全局任务视图，跨模块追踪计算任务、优化任务和算法运行状态
 - **工具服务**：集成状态监控，支持外部服务（ComputeEngine、SpecLabOS 等）配置和健康检查
@@ -166,6 +166,7 @@ ResearchEngine/assistant 相关历史测试状态见 [doc/research-engine-progre
 | 实验设计与优化 | [doc/optimization-workflow-user-guide.md](doc/optimization-workflow-user-guide.md) |
 | ResearchEngine / AutoResearch | [doc/autoresearch-user-guide.md](doc/autoresearch-user-guide.md)、[doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md) |
 | 算法包上传与垂类模型 | [doc/algorithm-upload-user-guide.md](doc/algorithm-upload-user-guide.md) |
+| Raman 结构分析算法包 | [doc/raman_algorithm_package_guide.md](doc/raman_algorithm_package_guide.md)、[doc/raman_structure_analyzer_requirements.md](doc/raman_structure_analyzer_requirements.md) |
 | 文献 RAG 和知识图谱 | [services/literature-rag/README.md](services/literature-rag/README.md)、[doc/literature-rag-service-design.md](doc/literature-rag-service-design.md) |
 | 来源与引用标注 | [doc/polyagent-attribution-source-matrix.md](doc/polyagent-attribution-source-matrix.md) |
 
@@ -335,16 +336,22 @@ Poly_Agent/
 │   ├── literature-rag-service-design.md                 # 文献 RAG 服务设计
 │   ├── algorithm-upload-user-guide.md                   # 算法包上传使用指南
 │   ├── algorithm-upload-p0-assessment-and-roadmap.md    # 算法包上传评估与路线图
+│   ├── raman_algorithm_package_guide.md                 # Raman 结构分析算法包指南
+│   ├── raman_structure_analyzer_requirements.md         # Raman 结构分析算法需求
 │   └── poly-agent-toolchain-deployment-pack.md          # 工具链部署包
 ├── services/
 │   └── literature-rag/                  # 独立文献 RAG / GraphRAG 服务
+├── examples/
+│   └── algorithm_upload/                # 垂类算法包示例
 ├── scripts/                             # 部署与运维脚本
 │   ├── setup_poly_agent_env.sh          #   Conda 环境初始化
 │   ├── restart_poly_agent_services.sh   #   重启前后端服务
 │   ├── stop_poly_agent_services.sh      #   停止前后端服务
 │   ├── run_compute_engine.sh            #   启动 ComputeEngine 参考服务/模拟器
 │   ├── pack_algorithm.py                #   算法包打包工具
-│   └── migrate_poly_data_assets.py         # Poly Data MongoDB/MinIO 资产迁移
+│   ├── init_mongo_indexes.py            #   生产查询索引初始化
+│   ├── update_algorithm_visibility.py   #   上传算法 visibility 回填/修正
+│   └── migrate_poly_data_assets.py      #   Poly Data MongoDB/MinIO 资产迁移
 ├── deploy/                              # 部署配置
 │   └── toolchain/                       #   工具链部署
 │       ├── manifest.yml                 #     部署清单
@@ -412,7 +419,9 @@ Poly Agent 后端在本地 `APP_ENV=dev` 时会自动探测 `127.0.0.1:8200`；�
 | `make test-frontend-build` | 运行前端生产构建 |
 | `make check-all` | 顺序运行后端测试、前端构建和当前占位 e2e 目标 |
 | `make init-mongo-indexes` | 初始化 MongoDB 索引 |
+| `npm --prefix frontend run test:llm-models` | 运行前端 LLM 模型配置单测 |
 | `python scripts/pack_algorithm.py --help` | 查看垂类算法包打包工具参数 |
+| `python scripts/update_algorithm_visibility.py --dry-run` | 预览上传算法 visibility 回填/修正计划；加 `--apply` 才写入 MongoDB |
 
 如需单独启动 ComputeEngine 参考服务或模拟器，见：
 

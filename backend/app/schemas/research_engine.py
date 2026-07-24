@@ -99,6 +99,9 @@ GateDecision = Literal["approved", "rejected", "modified"]
 AlgorithmRunStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 """AlgorithmRun 运行状态。"""
 
+AlgorithmVisibility = Literal["private", "public"]
+"""上传算法发布范围：private=仅创建人可见可调用，public=平台用户可见可调用。"""
+
 AlgorithmPackageStatus = Literal[
     "uploaded",
     "validating",
@@ -695,6 +698,7 @@ class AlgorithmRegistryEntry(BaseModel):
     deployment_status: str | None = Field(default=None, max_length=40)
     integration_kind: AlgorithmIntegrationKind = "builtin"
     capability_group: str | None = Field(default=None, max_length=80)
+    visibility: AlgorithmVisibility = "private"
     developer_attribution: AttributionItem | None = None
     framework_attributions: list[AttributionItem] = Field(default_factory=list)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
@@ -760,6 +764,7 @@ class AlgorithmPackageCreate(BaseModel):
     method_attributions: list[AttributionItem] = Field(default_factory=list)
     logo_asset: str | None = Field(default=None, max_length=300)
     logo_url: str | None = Field(default=None, max_length=600)
+    visibility: AlgorithmVisibility = "private"
 
     @field_validator("algorithm_id")
     @classmethod
@@ -792,6 +797,7 @@ class AlgorithmPackage(UtcDatetimeJsonModel):
     package_digest: str | None = None
     environment_digest: str | None = None
     runtime_digest: str | None = None
+    visibility: AlgorithmVisibility = "private"
     created_by: str
     created_at: datetime
     updated_at: datetime
@@ -827,6 +833,7 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     deployment: dict = Field(default_factory=dict)
     runtime_logs: list[dict] = Field(default_factory=list)
     contract: dict = Field(default_factory=dict)
+    visibility: AlgorithmVisibility = "private"
     developer_attribution: AttributionItem | None = None
     method_attributions: list[AttributionItem] = Field(default_factory=list)
     implementation_notes: str | None = Field(default=None, max_length=1000)

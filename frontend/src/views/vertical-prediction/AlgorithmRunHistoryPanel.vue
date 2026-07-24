@@ -7,13 +7,17 @@ import { getApiErrorMessage, listAlgorithmRuns } from '../../api/polyAgentApi'
 import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
 import AlgorithmResultView from './AlgorithmResultView.vue'
 
-const props = defineProps({ refreshKey: { type: Number, default: 0 } })
+const props = defineProps({
+  refreshKey: { type: Number, default: 0 },
+  algorithmId: { type: String, default: '' },
+})
 
 const loading = ref(false)
 const runs = ref([])
 const detail = ref(null)
 const detailVisible = ref(false)
 const filters = reactive({ algorithm_id: '', version_id: '', status: '', date_range: null })
+const lockedAlgorithmId = computed(() => String(props.algorithmId || '').trim())
 
 const filteredRuns = computed(() => runs.value.filter((run) => {
   if (filters.version_id && !String(run.algorithm_version_id || '').includes(filters.version_id.trim())) return false
@@ -27,12 +31,17 @@ const filteredRuns = computed(() => runs.value.filter((run) => {
 }))
 
 watch(() => props.refreshKey, loadRuns)
+watch(lockedAlgorithmId, (value) => {
+  filters.algorithm_id = value
+  loadRuns()
+})
 
 async function loadRuns() {
   loading.value = true
   try {
     const params = { page: 1, page_size: 100 }
-    if (filters.algorithm_id.trim()) params.algorithm_id = filters.algorithm_id.trim()
+    const algorithmId = lockedAlgorithmId.value || filters.algorithm_id.trim()
+    if (algorithmId) params.algorithm_id = algorithmId
     if (filters.status) params.status = filters.status
     const data = await listAlgorithmRuns(params)
     runs.value = (data.items || []).filter((item) => item.algorithm_version_id)
@@ -44,7 +53,7 @@ async function loadRuns() {
 }
 
 function resetFilters() {
-  filters.algorithm_id = ''
+  filters.algorithm_id = lockedAlgorithmId.value
   filters.version_id = ''
   filters.status = ''
   filters.date_range = null
@@ -77,13 +86,16 @@ function runtimeBackend(run) {
   return run.runtime_snapshot?.backend || run.runtime_snapshot?.deployment?.backend || '-'
 }
 
-onMounted(loadRuns)
+onMounted(() => {
+  filters.algorithm_id = lockedAlgorithmId.value
+  loadRuns()
+})
 </script>
 
 <template>
   <div class="history-panel">
     <div class="history-toolbar">
-      <el-input v-model="filters.algorithm_id" clearable placeholder="算法 ID" style="width: 220px" @keyup.enter="loadRuns" />
+      <el-input v-model="filters.algorithm_id" :clearable="!lockedAlgorithmId" :disabled="Boolean(lockedAlgorithmId)" placeholder="算法 ID" style="width: 220px" @keyup.enter="loadRuns" />
       <el-input v-model="filters.version_id" clearable placeholder="版本 ID 包含" style="width: 220px" />
       <el-select v-model="filters.status" clearable placeholder="运行状态" style="width: 140px">
         <el-option label="已完成" value="completed" /><el-option label="失败" value="failed" /><el-option label="运行中" value="running" />

@@ -162,12 +162,16 @@ class AlgorithmPackageService:
         filename: str,
         content: bytes,
         actor_user_id: str,
+        visibility: str | None = None,
     ) -> AlgorithmPackage:
         """保存上传 ZIP，返回包记录。"""
         if not filename.endswith(".zip"):
             raise HTTPException(status_code=422, detail="仅支持 .zip 算法包")
         if len(content) > MAX_PACKAGE_BYTES:
             raise HTTPException(status_code=413, detail="算法包超过 20MB 限制")
+        normalized_visibility = self._normalize_visibility(
+            visibility or self._peek_contract_visibility(content) or "private"
+        )
         package_sha256 = hashlib.sha256(content).hexdigest()
         package_id = f"apkg_{uuid4().hex[:12]}"
         now = utc_now()
@@ -193,6 +197,7 @@ class AlgorithmPackageService:
             "package_digest": f"sha256:{package_sha256}",
             "environment_digest": None,
             "runtime_digest": None,
+            "visibility": normalized_visibility,
             "created_by": actor_user_id,
             "created_at": now,
             "updated_at": now,
@@ -258,6 +263,9 @@ class AlgorithmPackageService:
         try:
             self._safe_extract(package_path, extract_dir)
             contract = self._load_contract(extract_dir)
+            contract["visibility"] = self._normalize_visibility(
+                contract.get("visibility") or package.visibility or "private"
+            )
             self._validate_contract(contract)
             sample_input = self._load_sample_input(extract_dir, contract)
             sample_input_files, parsed_inputs = self._load_sample_input_assets(extract_dir, contract)
@@ -319,6 +327,7 @@ class AlgorithmPackageService:
                 "deployment": {},
                 "runtime_logs": [self._runtime_log_summary("validation_dry_run", result)],
                 "contract": contract,
+                "visibility": contract["visibility"],
                 "developer_attribution": self._developer_attribution_from_contract(
                     contract,
                     created_by=package.created_by,
@@ -343,6 +352,7 @@ class AlgorithmPackageService:
                 "version": contract["version"],
                 "version_id": version_id,
                 "status": "validated",
+                "visibility": contract["visibility"],
                 "validation_errors": [],
                 "validation_logs": logs,
                 "updated_at": now,
@@ -536,6 +546,7 @@ class AlgorithmPackageService:
             "active_version_id": version_id,
             "source": "uploaded_package",
             "deployment_status": "active",
+            "visibility": self._normalize_visibility(version.visibility or contract.get("visibility") or "private"),
             "developer_attribution": (
                 version.developer_attribution.model_dump(mode="python")
                 if version.developer_attribution
@@ -960,6 +971,7 @@ class AlgorithmPackageService:
             runtime_dependency="uploaded_python_package",
             version=contract["version"],
             source="uploaded_package",
+            visibility=AlgorithmPackageService._normalize_visibility(contract.get("visibility")),
             developer_attribution=AlgorithmPackageService._developer_attribution_from_contract(
                 contract,
                 created_by="package_owner",
@@ -1029,8 +1041,29 @@ class AlgorithmPackageService:
             ],
             "logo_asset": payload.logo_asset,
             "logo_url": payload.logo_url,
+            "visibility": payload.visibility,
             "implementation_notes": payload.description,
         }
+
+    @staticmethod
+    def _normalize_visibility(value: str | None) -> str:
+        normalized = str(value or "private").strip().lower()
+        if normalized not in {"private", "public"}:
+            raise HTTPException(status_code=422, detail="visibility 仅支持 private 或 public")
+        return normalized
+
+    @staticmethod
+    def _peek_contract_visibility(content: bytes) -> str | None:
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                with zf.open(CONTRACT_FILENAME) as fp:
+                    contract = yaml.safe_load(fp.read().decode("utf-8"))
+        except Exception:
+            return None
+        if not isinstance(contract, dict):
+            return None
+        visibility = contract.get("visibility")
+        return str(visibility).strip().lower() if visibility else None
 
     @staticmethod
     def _developer_attribution_from_contract(contract: dict, *, created_by: str) -> AttributionItem:

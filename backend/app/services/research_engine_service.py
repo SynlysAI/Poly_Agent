@@ -1336,6 +1336,13 @@ class ResearchEngineService:
                 status_code=404,
                 detail=f"算法 '{payload.algorithm_id}' 不存在",
             )
+        if (
+            not is_admin
+            and algo_doc.get("source") == "uploaded_package"
+            and algo_doc.get("owner") != actor_user_id
+            and str(algo_doc.get("visibility") or "private") != "public"
+        ):
+            raise HTTPException(status_code=403, detail="无权限调用该算法")
         if payload.problem_spec_id and not is_admin:
             self.get_problem_spec(payload.problem_spec_id, actor_user_id=actor_user_id, is_admin=is_admin)
         if payload.workflow_run_id and not is_admin:
@@ -1357,6 +1364,11 @@ class ResearchEngineService:
         )
         if algorithm_version and algorithm_version.algorithm_id != payload.algorithm_id:
             raise HTTPException(status_code=409, detail="算法版本与 algorithm_id 不匹配")
+        if algorithm_version and not is_admin and algorithm_version.created_by != actor_user_id:
+            if algorithm_version.visibility != "public":
+                raise HTTPException(status_code=403, detail="无权限调用该算法版本")
+            if payload.algorithm_version_id and algorithm_version.status != "active":
+                raise HTTPException(status_code=403, detail="无权限调用非 active 公开版本")
 
         # 3. 创建 AlgorithmRun（初始状态 queued）
         now = utc_now()

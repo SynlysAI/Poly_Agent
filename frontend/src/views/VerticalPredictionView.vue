@@ -271,6 +271,18 @@ function algorithmAttributions(algorithm) {
   ].filter(Boolean)
 }
 
+function authorLabel(algorithm) {
+  const attribution = algorithm?.developer_attribution
+  const developer = attribution?.name || algorithm?.owner || ''
+  const organization = attribution?.organization || ''
+  if (developer && organization) return `${developer} / ${organization}`
+  return developer || organization || '未标注'
+}
+
+function visibilityLabel(value) {
+  return value === 'public' ? '公开发布' : '非公开'
+}
+
 onMounted(() => {
   loadData()
 })
@@ -356,10 +368,12 @@ onMounted(() => {
             <el-tag :type="statusType(selectedAlgorithm.status)">{{ statusLabel(selectedAlgorithm.status) }}</el-tag>
           </div>
           <p>{{ selectedAlgorithm.description || '该模型已接入垂类预测工作台，可用于测试调用、版本管理和研发流程。' }}</p>
+          <div class="author-line">作者：{{ authorLabel(selectedAlgorithm) }}</div>
           <AttributionBadges :attributions="selectedAlgorithmAttributions" />
           <div class="detail-meta">
             <span>{{ selectedAlgorithm.algorithm_id }}</span>
             <span>{{ typeLabel(selectedAlgorithm.type) }}</span>
+            <span>{{ visibilityLabel(selectedAlgorithm.visibility) }}</span>
             <span>版本 {{ activeVersion?.version || selectedAlgorithm.version || '-' }}</span>
             <span>更新 {{ formatDate(activeVersion?.updated_at) }}</span>
           </div>
@@ -422,7 +436,7 @@ onMounted(() => {
               <AlgorithmManagementPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-selector="false" @changed="handleChanged" />
               <section class="history-panel">
                 <h3>运行记录</h3>
-                <AlgorithmRunHistoryPanel :refresh-key="refreshKey" />
+                <AlgorithmRunHistoryPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" />
               </section>
             </div>
           </el-tab-pane>
@@ -482,9 +496,11 @@ onMounted(() => {
                 <el-tag :type="statusType(item.status)" size="small">{{ statusLabel(item.status) }}</el-tag>
               </div>
               <p>{{ item.description || '已上传的垂类预测模型，可在详情页进行测试调用、版本治理和运行追溯。' }}</p>
+              <div class="author-line compact">作者：{{ authorLabel(item) }}</div>
               <AttributionBadges :attributions="algorithmAttributions(item)" />
               <div class="model-tags">
                 <el-tag size="small" effect="plain">{{ typeLabel(item.type) }}</el-tag>
+                <el-tag size="small" effect="plain">{{ visibilityLabel(item.visibility) }}</el-tag>
                 <el-tag v-for="scope in item.material_scope" :key="scope" size="small" effect="plain">{{ materialLabel(scope) }}</el-tag>
               </div>
               <div class="model-card-foot">
@@ -560,6 +576,8 @@ h3 { font-size: 15px; }
 .model-card-title strong { overflow: hidden; color: var(--app-ink); font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .model-card-title span, .model-card-foot span, .detail-meta span { color: var(--app-ink-muted); font-size: 12px; overflow-wrap: anywhere; }
 .model-card p { display: -webkit-box; min-height: 44px; margin: 0; overflow: hidden; color: var(--app-ink-body); font-size: 13px; line-height: 1.65; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.author-line { margin-top: 8px; color: var(--app-ink-body); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.author-line.compact { margin-top: -4px; font-size: 12px; }
 .model-tags { display: flex; gap: 6px; flex-wrap: wrap; }
 .model-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--app-border-soft); }
 .empty-models { min-height: 320px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--app-ink-muted); text-align: center; }

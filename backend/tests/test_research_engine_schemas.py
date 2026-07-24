@@ -301,6 +301,7 @@ class AlgorithmRegistrySchemaTest(ComputationTestCase):
         self.assertEqual(entry.status, "active")
         self.assertEqual(entry.version, "1.0.0")
         self.assertEqual(entry.call_method, "REST")
+        self.assertEqual(entry.visibility, "private")
 
 
 # =============================================================================
