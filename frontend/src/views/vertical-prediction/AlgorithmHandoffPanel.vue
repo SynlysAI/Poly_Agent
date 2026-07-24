@@ -52,6 +52,8 @@ const form = reactive({
   example_id: 'batch_formulation_predictor',
   owner_name: '',
   owner_contact: '',
+  developer_organization: '',
+  visibility: 'private',
   description: '根据锂盐、溶剂/单体/填料组成及配比，预测放电比容量和库仑效率。',
   material_scope: ['fluoropolymer'],
   requirements_hint: 'rdkit, scikit-learn, joblib',
@@ -164,12 +166,37 @@ function applyDocumentDraft(draft) {
     form.example_id = draft.example_id || form.example_id
     form.owner_name = draft.owner_name || ''
     form.owner_contact = draft.owner_contact || ''
+    form.developer_organization = draft.developer_organization || ''
+    form.visibility = draft.visibility === 'public' ? 'public' : 'private'
     form.description = draft.description || form.description
     form.material_scope = draft.material_scope?.length ? [...draft.material_scope] : form.material_scope
     form.requirements_hint = (draft.requirements_hint || []).join(', ')
     form.input_schema = JSON.stringify(draft.input_schema || {}, null, 2)
     form.output_schema = JSON.stringify(draft.output_schema || {}, null, 2)
     form.sample_input = JSON.stringify(draft.sample_input || {}, null, 2)
+  } finally {
+    applyingDocumentDraft.value = false
+  }
+}
+
+function applyHandoffRecord(handoff) {
+  if (!handoff) return
+  applyingDocumentDraft.value = true
+  try {
+    form.algorithm_id = handoff.algorithm_id || form.algorithm_id
+    form.name = handoff.name || form.name
+    form.version = handoff.version || form.version
+    form.example_id = handoff.example_id || form.example_id
+    form.owner_name = handoff.owner_name || ''
+    form.owner_contact = handoff.owner_contact || ''
+    form.developer_organization = handoff.developer_organization || ''
+    form.visibility = handoff.visibility === 'public' ? 'public' : 'private'
+    form.description = handoff.description || ''
+    form.material_scope = handoff.material_scope?.length ? [...handoff.material_scope] : form.material_scope
+    form.requirements_hint = (handoff.requirements_hint || []).join(', ')
+    form.input_schema = JSON.stringify(handoff.input_schema || {}, null, 2)
+    form.output_schema = JSON.stringify(handoff.output_schema || {}, null, 2)
+    form.sample_input = JSON.stringify(handoff.sample_input || {}, null, 2)
   } finally {
     applyingDocumentDraft.value = false
   }
@@ -205,6 +232,7 @@ async function loadData() {
     const handoffId = props.initialHandoffId || currentHandoff.value?.handoff_id
     if (handoffId) {
       currentHandoff.value = await getAlgorithmHandoff(handoffId)
+      applyHandoffRecord(currentHandoff.value)
       validation.value = currentHandoff.value.last_validation || null
       handoffStep.value = stepForStatus(currentHandoff.value.status)
       syncHandoffRoute(handoffId)
@@ -257,12 +285,14 @@ async function createHandoff() {
       example_id: form.example_id,
       owner_name: form.owner_name.trim() || null,
       owner_contact: form.owner_contact.trim() || null,
+      developer_organization: form.developer_organization.trim() || null,
       description: form.description.trim() || null,
       material_scope: form.material_scope,
       input_schema: parseJsonField(form.input_schema, '输入契约'),
       output_schema: parseJsonField(form.output_schema, '输出契约'),
       sample_input: parseJsonField(form.sample_input, '样例输入'),
       requirements_hint: requirementsHint(),
+      visibility: form.visibility,
     }
     currentHandoff.value = await createAlgorithmHandoff(payload)
     validation.value = null
@@ -341,6 +371,7 @@ async function deployValidatedPackage() {
 
 function selectHandoff(row) {
   currentHandoff.value = row
+  applyHandoffRecord(row)
   validation.value = row.last_validation || null
   handoffStep.value = stepForStatus(row.status)
   syncHandoffRoute(row.handoff_id)
@@ -455,6 +486,7 @@ watch(() => props.initialHandoffId, () => {
           <div class="form-grid">
             <el-form-item label="负责人"><el-input v-model="form.owner_name" /></el-form-item>
             <el-form-item label="联系方式"><el-input v-model="form.owner_contact" /></el-form-item>
+            <el-form-item label="机构"><el-input v-model="form.developer_organization" placeholder="开发机构或单位，可留空" /></el-form-item>
             <el-form-item label="材料范围">
               <el-select v-model="form.material_scope" multiple>
                 <el-option label="通用" value="universal" />
@@ -465,6 +497,12 @@ watch(() => props.initialHandoffId, () => {
               </el-select>
             </el-form-item>
           </div>
+          <el-form-item label="发布范围">
+            <el-radio-group v-model="form.visibility" class="visibility-options">
+              <el-radio-button label="private">非公开发布</el-radio-button>
+              <el-radio-button label="public">公开发布</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
           <el-form-item label="说明"><el-input v-model="form.description" type="textarea" :rows="2" /></el-form-item>
           <el-form-item label="依赖提示"><el-input v-model="form.requirements_hint" placeholder="rdkit, scikit-learn, joblib" /></el-form-item>
         </el-form>
@@ -571,6 +609,8 @@ watch(() => props.initialHandoffId, () => {
         <el-table-column prop="algorithm_id" label="Algorithm ID" min-width="190" />
         <el-table-column label="模板" min-width="160"><template #default="{ row }">{{ row.example_id }}</template></el-table-column>
         <el-table-column label="状态" width="140"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
+        <el-table-column label="发布范围" width="120"><template #default="{ row }">{{ row.visibility === 'public' ? '公开' : '非公开' }}</template></el-table-column>
+        <el-table-column prop="developer_organization" label="机构" min-width="150" />
         <el-table-column prop="owner_contact" label="联系方式" min-width="160" />
       </el-table>
     </el-drawer>
@@ -604,6 +644,7 @@ h3 { font-size: 14px; }
 .requirement-upload :deep(.el-upload-dragger) { padding: 18px 16px; border-radius: var(--app-radius-sm); }
 .upload-tip { margin-top: 6px; color: var(--app-ink-muted); font-size: 12px; line-height: 1.5; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.visibility-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .advanced-contract { margin-top: 4px; border-top: 1px solid var(--app-border-soft); border-bottom: 0; }
 .contract-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
 .contract-grid .el-form-item:last-child { grid-column: 1 / -1; }

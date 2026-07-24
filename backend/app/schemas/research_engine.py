@@ -891,12 +891,14 @@ class AlgorithmHandoffCreate(BaseModel):
     example_id: AlgorithmPackageExampleId = "generic_python_predictor"
     owner_name: str | None = Field(default=None, max_length=80)
     owner_contact: str | None = Field(default=None, max_length=120)
+    developer_organization: str | None = Field(default=None, max_length=160)
     description: str | None = Field(default=None, max_length=1000)
     material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"], min_length=1)
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     sample_input: dict = Field(default_factory=dict)
     requirements_hint: list[str] = Field(default_factory=list)
+    visibility: AlgorithmVisibility = "private"
 
     @field_validator("algorithm_id")
     @classmethod
@@ -927,12 +929,14 @@ class AlgorithmHandoff(BaseModel):
     example_id: AlgorithmPackageExampleId
     owner_name: str | None = None
     owner_contact: str | None = None
+    developer_organization: str | None = None
     description: str | None = None
     material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"])
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     sample_input: dict = Field(default_factory=dict)
     requirements_hint: list[str] = Field(default_factory=list)
+    visibility: AlgorithmVisibility = "private"
     status: AlgorithmHandoffStatus = "draft"
     handoff_url: str
     last_validation: dict | None = None

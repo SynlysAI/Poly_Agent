@@ -81,6 +81,8 @@ class AlgorithmRequirementDocService:
             "example_id: generic_python_predictor\n"
             "owner_name: \n"
             "owner_contact: \n"
+            "developer_organization: \n"
+            "visibility: private\n"
             "description: >\n"
             "  这里填写模型解决的问题、输入是什么、输出是什么。\n"
             "material_scope:\n"
@@ -180,6 +182,12 @@ class AlgorithmRequirementDocService:
             contact = self._extract_email(owner)
             if contact:
                 metadata["owner_contact"] = contact
+        organization = values.get("机构") or values.get("作者机构") or values.get("开发机构") or values.get("单位")
+        if organization:
+            metadata["developer_organization"] = organization
+        visibility = values.get("发布范围") or values.get("公开范围")
+        if visibility:
+            metadata["visibility"] = visibility
         if values.get("算法功能介绍"):
             metadata["description"] = values["算法功能介绍"]
         if values.get("适用体系"):
@@ -313,12 +321,14 @@ class AlgorithmRequirementDocService:
             example_id=example_id,
             owner_name=self._string_value(metadata.get("owner_name")),
             owner_contact=self._string_value(metadata.get("owner_contact")),
+            developer_organization=self._string_value(metadata.get("developer_organization")),
             description=self._string_value(metadata.get("description")) or self._extract_section(body, "目标"),
             material_scope=material_scope,
             input_schema=input_schema,
             output_schema=output_schema,
             sample_input=sample_input,
             requirements_hint=requirements_hint,
+            visibility=self._normalize_visibility(metadata.get("visibility")),
         )
 
     def _missing_fields(self, metadata: dict[str, Any], draft: AlgorithmHandoffCreate) -> list[str]:
@@ -452,6 +462,13 @@ class AlgorithmRequirementDocService:
         if isinstance(value, dict):
             return value
         return dict(default_value)
+
+    @staticmethod
+    def _normalize_visibility(value: Any) -> str:
+        raw = (AlgorithmRequirementDocService._string_value(value) or "private").lower()
+        if raw in {"public", "公开", "公开发布", "平台公开", "平台用户可见"}:
+            return "public"
+        return "private"
 
     @staticmethod
     def _extract_title(body: str) -> str | None:

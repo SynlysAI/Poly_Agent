@@ -73,7 +73,8 @@ def main(spectrum, x0, x1, device, smiles=None, spectype='raman', mode='function
     ``transmittance``: unused by the Raman function group model; kept for platform schema compatibility.
 
     '''
-    if spectype != 'raman' or mode != 'function_groups':
+    mode = 'function_groups'
+    if spectype != 'raman':
         raise ValueError("This package only supports Raman functional group analysis.")
 
     spectrum = preprocess_spectrum(x0, x1, spectrum, spectype=spectype, transmittance=transmittance)

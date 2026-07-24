@@ -108,12 +108,14 @@ class AlgorithmHandoffService:
             "example_id": payload.example_id,
             "owner_name": payload.owner_name,
             "owner_contact": payload.owner_contact,
+            "developer_organization": payload.developer_organization,
             "description": payload.description,
             "material_scope": payload.material_scope,
             "input_schema": payload.input_schema.model_dump(),
             "output_schema": payload.output_schema.model_dump(),
             "sample_input": payload.sample_input or self._default_sample_input(payload.example_id),
             "requirements_hint": payload.requirements_hint,
+            "visibility": payload.visibility,
             "status": "draft",
             "handoff_url": f"/vertical-prediction?tab=handoff&handoff_id={handoff_id}",
             "last_validation": None,
@@ -189,6 +191,7 @@ class AlgorithmHandoffService:
         ok = False
         temp_root = Path(tempfile.mkdtemp(prefix="handoff-validate-", dir=settings.runtime_root))
         try:
+            content = self.rewrite_package_with_handoff(handoff_id, content)
             zip_path = temp_root / "source.zip"
             extract_dir = temp_root / "extracted"
             zip_path.write_bytes(content)
@@ -304,32 +307,40 @@ class AlgorithmHandoffService:
                         member_content = yaml.safe_dump(contract, allow_unicode=True, sort_keys=False).encode("utf-8")
                         found_contract = True
                     elif normalized_path == "tests/sample_input.json":
-                        member_content = json.dumps(handoff.sample_input, ensure_ascii=False, indent=2).encode("utf-8")
+                        member_content = json.dumps(
+                            self._sample_input_for_handoff(handoff), ensure_ascii=False, indent=2
+                        ).encode("utf-8")
                         found_sample_input = True
                     target_zip.writestr(member, member_content)
 
                 if not found_sample_input:
                     target_zip.writestr(
                         "tests/sample_input.json",
-                        json.dumps(handoff.sample_input, ensure_ascii=False, indent=2).encode("utf-8"),
+                        json.dumps(self._sample_input_for_handoff(handoff), ensure_ascii=False, indent=2).encode("utf-8"),
                     )
         if not found_contract:
             raise HTTPException(status_code=422, detail="ZIP 缺少 polyagent.algorithm.yaml")
         return output.getvalue()
 
-    @staticmethod
-    def _merge_handoff_contract(contract: dict[str, Any], handoff: AlgorithmHandoff) -> dict[str, Any]:
+    def _merge_handoff_contract(self, contract: dict[str, Any], handoff: AlgorithmHandoff) -> dict[str, Any]:
+        input_schema = handoff.input_schema
+        output_schema = handoff.output_schema
+        if handoff.example_id == "file_based_predictor":
+            input_schema = self._raman_input_schema()
+            if not output_schema.fields:
+                output_schema = self._raman_output_schema()
         updated = dict(contract)
         updated.update(
             {
                 "algorithm_id": handoff.algorithm_id,
                 "name": handoff.name,
                 "version": handoff.version,
+                "visibility": handoff.visibility,
                 "algorithm_family": updated.get("algorithm_family") or "vertical_prediction",
                 "type": updated.get("type") or "predictor",
                 "material_scope": handoff.material_scope,
-                "input_schema": handoff.input_schema.model_dump(mode="python"),
-                "output_schema": handoff.output_schema.model_dump(mode="python"),
+                "input_schema": input_schema.model_dump(mode="python"),
+                "output_schema": output_schema.model_dump(mode="python"),
                 "sample_input_path": "tests/sample_input.json",
             }
         )
@@ -345,7 +356,19 @@ class AlgorithmHandoffService:
             updated["developer_contact"] = handoff.owner_contact
         else:
             updated.pop("developer_contact", None)
+        if handoff.developer_organization:
+            updated["developer_organization"] = handoff.developer_organization
+        else:
+            updated.pop("developer_organization", None)
         return updated
+
+    def _sample_input_for_handoff(self, handoff: AlgorithmHandoff) -> dict[str, Any]:
+        if handoff.example_id != "file_based_predictor":
+            return dict(handoff.sample_input or self._default_sample_input(handoff.example_id))
+        sample_input = dict(handoff.sample_input or self._default_sample_input("file_based_predictor"))
+        sample_input["spectype"] = "raman"
+        sample_input["mode"] = "function_groups"
+        return sample_input
 
     def _build_prefilled_zip(
         self,
@@ -417,7 +440,9 @@ class AlgorithmHandoffService:
                 sample_input=handoff.sample_input,
                 description=handoff.description,
                 developer=handoff.owner_name,
+                developer_organization=handoff.developer_organization,
                 developer_contact=handoff.owner_contact,
+                visibility=handoff.visibility,
             )
         return AlgorithmPackageCreate(
             algorithm_id=handoff.algorithm_id,
@@ -428,6 +453,10 @@ class AlgorithmHandoffService:
             output_schema=handoff.output_schema,
             sample_input=handoff.sample_input,
             description=handoff.description,
+            developer=handoff.owner_name,
+            developer_organization=handoff.developer_organization,
+            developer_contact=handoff.owner_contact,
+            visibility=handoff.visibility,
         )
 
     def _payload_for_example(self, example_id: str) -> AlgorithmPackageCreate:
@@ -543,7 +572,9 @@ class AlgorithmHandoffService:
         sample_input: dict[str, Any],
         description: str | None,
         developer: str | None = None,
+        developer_organization: str | None = None,
         developer_contact: str | None = None,
+        visibility: str = "private",
     ) -> AlgorithmPackageCreate:
         raman_sample_input = dict(sample_input or self._default_sample_input("file_based_predictor"))
         raman_sample_input["spectype"] = "raman"
@@ -640,7 +671,7 @@ class AlgorithmHandoffService:
             sample_input=raman_sample_input,
             description=description or "Raman spectral functional group analysis packaged with generic file I/O assets.",
             developer=developer or "Raman Structure Analyzer 模型团队",
-            developer_organization="嘉庚实验室 / 厦门大学",
+            developer_organization=developer_organization,
             developer_contact=developer_contact,
             source_url="refer/raman",
             method_attributions=[
@@ -653,6 +684,7 @@ class AlgorithmHandoffService:
             ],
             logo_asset=None,
             logo_url=None,
+            visibility=visibility,
         )
 
     @staticmethod
