@@ -16,6 +16,8 @@ from app.core.config import settings
 from app.schemas.common import ApiResponse
 from app.schemas.computation import ArtifactListResponseData, ComputationArtifact, ComputationArtifactResponse
 from app.schemas.research_engine import (
+    AlgorithmCreditSummary,
+    AlgorithmCreditUpdateRequest,
     AlgorithmHandoff,
     AlgorithmHandoffCreate,
     AlgorithmHandoffListData,
@@ -383,6 +385,7 @@ async def pack_algorithm_package(
     developer_contact: str | None = Form(default=None),
     source_url: str | None = Form(default=None),
     citation: str | None = Form(default=None),
+    contributors: str = Form(default="[]"),
     method_attributions: str = Form(default="[]"),
     logo_asset: str | None = Form(default=None),
     logo_url: str | None = Form(default=None),
@@ -419,6 +422,7 @@ async def pack_algorithm_package(
         developer_contact=developer_contact,
         source_url=source_url,
         citation=citation,
+        contributors=_json_form_object(contributors, []),
         method_attributions=_json_form_object(method_attributions, []),
         logo_asset=logo_asset,
         logo_url=logo_url,
@@ -450,9 +454,16 @@ async def upload_algorithm_package(
     file: UploadFile = File(...),
     visibility: str | None = Form(default=None),
     handoff_id: str | None = Form(default=None),
+    target_algorithm_id: str | None = Form(default=None),
+    target_version: str | None = Form(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmPackage]:
     """上传标准 ZIP 算法包。"""
+    if target_algorithm_id:
+        active_version = package_service.resolve_active_version(target_algorithm_id)
+        if active_version is None:
+            raise HTTPException(status_code=409, detail="目标算法没有可继承的活动版本")
+        _ensure_version_access(target_algorithm_id, active_version.version_id, current_user)
     content = await file.read()
     if handoff_id:
         content = handoff_service.rewrite_package_with_handoff(handoff_id, content)
@@ -463,8 +474,49 @@ async def upload_algorithm_package(
         content=content,
         actor_user_id=_actor_user_id(current_user),
         visibility=visibility,
+        target_algorithm_id=target_algorithm_id,
+        target_version=target_version,
+        owner_user_id=(
+            package_service.resolve_algorithm_owner(target_algorithm_id)
+            if target_algorithm_id
+            else None
+        ),
     )
     return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/algorithm-packages:pack-version", response_model=ApiResponse[AlgorithmPackage])
+async def pack_algorithm_package_version(
+    target_algorithm_id: str = Form(...),
+    version: str = Form(...),
+    files: list[UploadFile] = File(default=[]),
+    requirements: UploadFile | None = File(default=None),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmPackage]:
+    """基于当前活动包替换脚本并创建新版本包。"""
+    active_version = package_service.resolve_active_version(target_algorithm_id)
+    if active_version is not None:
+        _ensure_version_access(target_algorithm_id, active_version.version_id, current_user)
+    source_files = {
+        upload.filename: await upload.read()
+        for upload in files
+        if upload.filename
+    }
+    requirements_bytes = await requirements.read() if requirements else None
+    zip_bytes = package_service.pack_new_version_from_sources(
+        target_algorithm_id,
+        version,
+        source_files=source_files,
+        requirements=requirements_bytes,
+    )
+    package = package_service.upload_package(
+        filename=f"{target_algorithm_id}-{version}.zip",
+        content=zip_bytes,
+        actor_user_id=_actor_user_id(current_user),
+        target_algorithm_id=target_algorithm_id,
+        owner_user_id=package_service.resolve_algorithm_owner(target_algorithm_id),
+    )
+    return ApiResponse(code=0, message="ok", data=package)
 
 
 @router.get("/algorithm-packages", response_model=ApiResponse[AlgorithmPackageListData])
@@ -533,6 +585,18 @@ def build_algorithm_package(
     """构建算法包。P0 记录本机 adapter build 状态。"""
     _ensure_package_access(package_id, current_user)
     return ApiResponse(code=0, message="ok", data=package_service.build_package(package_id))
+
+
+@router.post("/algorithm-packages/{package_id}:release", response_model=ApiResponse[AlgorithmVersion])
+def release_algorithm_package(
+    package_id: str,
+    resource_bindings: list[AlgorithmResourceBinding] | None = Body(default=None, embed=True),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
+    """校验、构建、部署并自动激活算法包。"""
+    _ensure_package_access(package_id, current_user)
+    data = package_service.release_package(package_id, resource_bindings=resource_bindings)
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.get("/algorithms/{algorithm_id}/versions", response_model=ApiResponse[AlgorithmVersionListData])
@@ -913,6 +977,47 @@ def get_algorithm(
         and data.visibility != "public"
     ):
         raise HTTPException(status_code=403, detail="无权限访问该算法")
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get(
+    "/algorithms/{algorithm_id}/credit-summary",
+    response_model=ApiResponse[AlgorithmCreditSummary],
+)
+def get_algorithm_credit_summary(
+    algorithm_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmCreditSummary]:
+    """查询算法轻量贡献台账。
+
+    仅返回贡献者构成和可复核计数，不返回运行输入、项目内容或原始产物。
+    """
+    data = service.get_algorithm_credit_summary(
+        algorithm_id,
+        actor_user_id=_access_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.patch(
+    "/algorithms/{algorithm_id}/credit-summary",
+    response_model=ApiResponse[AlgorithmCreditSummary],
+)
+def update_algorithm_credit_summary(
+    algorithm_id: str,
+    payload: AlgorithmCreditUpdateRequest,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmCreditSummary]:
+    """管理员修正算法当前贡献者、角色和导师关系。"""
+    _require_full_access(current_user)
+    data = service.update_algorithm_credit_summary(
+        algorithm_id,
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+        request_id=_request_id(request),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 

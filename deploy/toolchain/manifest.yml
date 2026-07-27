@@ -125,12 +125,3 @@ tools:
     port: null
     verify_cmd: "orca 2>&1 | head -5"
     description: "ORCA 量子化学程序（商业软件，仅做路径/许可证探测）"
-
-  - name: atlas
-    category: optional
-    source: git
-    version: null
-    install_method: disabled_by_default
-    port: 65100
-    verify_cmd: null
-    description: "Atlas/ComputeEngine 优化器（参考仓库不完整，默认 disabled）"

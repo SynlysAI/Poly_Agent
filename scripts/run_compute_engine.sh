@@ -15,7 +15,6 @@ STREAMLIT_HOST="${COMPUTE_ENGINE_STREAMLIT_HOST:-0.0.0.0}"
 CHEMSPEED_PORT="${COMPUTE_ENGINE_CHEMSPEED_PORT:-65001}"
 HPLC_PORT="${COMPUTE_ENGINE_HPLC_PORT:-65010}"
 OPTICS_PORT="${COMPUTE_ENGINE_OPTICS_PORT:-65070}"
-ATLAS_PORT="${COMPUTE_ENGINE_ATLAS_PORT:-65100}"
 POSTGRES_CONTAINER="${COMPUTE_ENGINE_POSTGRES_CONTAINER:-compute-engine-postgres}"
 POSTGRES_IMAGE="${COMPUTE_ENGINE_POSTGRES_IMAGE:-postgres:15}"
 POSTGRES_HOST="${COMPUTE_ENGINE_POSTGRES_HOST:-127.0.0.1}"
@@ -125,8 +124,6 @@ Commands:
   postgres    Start PostgreSQL for ComputeEngine demo data. Prefer local Conda binaries, fallback to Docker.
   gui          Start only the ComputeEngine Streamlit GUI.
   base         Start HPLC, Chemspeed, Optics simulators, then Streamlit GUI.
-  with-atlas   Start Atlas too. Requires olympus/atlas optimizer stack.
-  workflow     Run ComputeEngine closed-loop laserworkflow.py. Requires Atlas, RDKit, Olympus, PostgreSQL.
   status       Show status of PostgreSQL and ComputeEngine service processes.
   stop         Stop ComputeEngine services tracked by PID files, then stop local PostgreSQL.
   check        Check installed imports in the compute_engine Conda environment.
@@ -436,13 +433,11 @@ status_services() {
   status_named_service "hplc" "$HPLC_PORT"
   status_named_service "chemspeed" "$CHEMSPEED_PORT"
   status_named_service "optics" "$OPTICS_PORT"
-  status_named_service "atlas" "$ATLAS_PORT"
   status_named_service "streamlit" "$STREAMLIT_PORT"
 }
 
 stop_services() {
   stop_named_service "streamlit" "$STREAMLIT_PORT"
-  stop_named_service "atlas" "$ATLAS_PORT"
   stop_named_service "optics" "$OPTICS_PORT"
   stop_named_service "chemspeed" "$CHEMSPEED_PORT"
   stop_named_service "hplc" "$HPLC_PORT"
@@ -457,10 +452,6 @@ start_base_servers() {
   start_bg "hplc" "$COMPUTE_ENGINE_DIR/sila-hplc" python start_server.py
   start_bg "chemspeed" "$COMPUTE_ENGINE_DIR/sila-chemspeed" python start_server.py
   start_bg "optics" "$COMPUTE_ENGINE_DIR/sila-optics" python start_server.py
-}
-
-start_atlas() {
-  start_bg "atlas" "$COMPUTE_ENGINE_DIR/sila-atlas" python start_server.py
 }
 
 start_postgres() {
@@ -521,32 +512,13 @@ case "$command" in
     ;;
   base)
     trap cleanup EXIT INT TERM
-    echo "Starting ComputeEngine base demo without Atlas."
+    echo "Starting ComputeEngine base demo."
     ensure_postgres
     start_base_servers
     start_gui
     echo "ComputeEngine GUI: http://$STREAMLIT_HOST:$STREAMLIT_PORT"
     echo "Press Ctrl+C to stop."
     wait
-    ;;
-  with-atlas)
-    trap cleanup EXIT INT TERM
-    echo "Starting ComputeEngine demo with Atlas. This requires olympus and atlas imports to be installed."
-    ensure_postgres
-    start_atlas
-    start_base_servers
-    start_gui
-    echo "ComputeEngine GUI: http://$STREAMLIT_HOST:$STREAMLIT_PORT"
-    echo "Press Ctrl+C to stop."
-    wait
-    ;;
-  workflow)
-    echo "Running closed-loop workflow. Requires PostgreSQL plus RDKit/Olympus/Atlas and live SiLA services."
-    ensure_postgres
-    (
-      cd "$COMPUTE_ENGINE_DIR"
-      PYTHONNOUSERSITE=1 conda run -n "$ENV_NAME" python laserworkflow.py
-    )
     ;;
   *)
     usage

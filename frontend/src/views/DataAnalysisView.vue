@@ -19,7 +19,6 @@ import {
   listDataCatalogDatasets,
   listDataCatalogMongoCollections,
 } from '../api/polyAgentApi'
-import { authState } from '../auth/authState'
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 use([
@@ -42,15 +41,28 @@ const mongoCollections = ref([])
 const pi1mProfile = ref(null)
 const pi1mVisualSamples = ref({ points: [], sample_count: 0, total: 0 })
 const mdAllatomProfile = ref(null)
+const extraDatasetProfiles = ref({})
 const materialAnalysisRecords = ref([])
 const computationAnalysisRecords = ref([])
 const artifactAnalysisRecords = ref([])
 
 const PI1M_SA_COLOR_SCALE = ['#15803d', '#84cc16', '#facc15', '#f97316', '#dc2626']
+const EXTRA_DATASET_IDS = [
+  'omg',
+  'omg_physical_properties',
+  'polyone',
+  'toporg',
+  'polysol',
+  'polyomics',
+  'pppdb',
+  'polyid',
+  'tropic',
+  'nanomine',
+]
 
-const canDrilldownRecords = computed(() => !authState.authEnabled || authState.role === 'admin')
 const pi1mDataset = computed(() => datasets.value.find((item) => item.dataset_id === 'pi1m_v2') || null)
 const mdAllatomDataset = computed(() => datasets.value.find((item) => item.dataset_id === 'md_allatom') || null)
+const extraOpenDatasets = computed(() => datasets.value.filter((item) => EXTRA_DATASET_IDS.includes(item.dataset_id)))
 const materialCollection = computed(() => mongoCollections.value.find((item) => item.data_domain === 'materials') || null)
 const mdAllatomHasData = computed(() => Number(mdAllatomProfile.value?.record_count || 0) > 0
   || Number(mdAllatomProfile.value?.asset_coverage?.structured_records?.carbon_results || 0) > 0
@@ -78,18 +90,18 @@ const headlineMetrics = computed(() => [
     icon: FolderOpened,
   },
   {
+    key: 'open-datasets',
+    label: '开放数据集',
+    value: formatNumber(extraOpenDatasets.value.length),
+    meta: `${formatNumber(extraOpenDatasets.value.reduce((sum, item) => sum + Number(item.record_count || 0), 0))} 条 Mongo 记录`,
+    icon: FolderOpened,
+  },
+  {
     key: 'materials',
     label: '材料样本',
     value: formatNumber(materialAnalysisRecords.value.length),
-    meta: canDrilldownRecords.value ? '近 100 条' : '管理员可见',
+    meta: '近 100 条',
     icon: Files,
-  },
-  {
-    key: 'compute',
-    label: '计算样本',
-    value: formatNumber(computationAnalysisRecords.value.length),
-    meta: canDrilldownRecords.value ? '近 100 条' : '管理员可见',
-    icon: Search,
   },
 ])
 
@@ -198,6 +210,45 @@ const mdScatterOption = computed(() => {
       itemStyle: { color: '#0891b2', opacity: 0.78 },
     }],
   }
+})
+
+const extraDatasetRows = computed(() => extraOpenDatasets.value.map((dataset) => {
+  const profile = extraDatasetProfiles.value[dataset.dataset_id] || {}
+  return {
+    dataset_id: dataset.dataset_id,
+    display_name: dataset.display_name,
+    row_count: Number(dataset.row_count || 0),
+    record_count: Number(profile.record_count || dataset.record_count || 0),
+    coverage_percent: profile.coverage_percent,
+    record_mode: dataset.record_mode,
+    source_category: dataset.source_category,
+    field_count: dataset.field_summaries?.length || 0,
+  }
+}))
+
+const extraCoverageOption = computed(() => barOption(
+  extraDatasetRows.value.map((row) => row.display_name),
+  extraDatasetRows.value.map((row) => Number(row.coverage_percent || 0)),
+  '#3b82f6',
+  { rotate: 28 },
+))
+
+const extraRecordOption = computed(() => barOption(
+  extraDatasetRows.value.map((row) => row.display_name),
+  extraDatasetRows.value.map((row) => row.record_count),
+  '#16a34a',
+  { rotate: 28 },
+))
+
+const extraSourceFileOption = computed(() => {
+  const counts = {}
+  for (const profile of Object.values(extraDatasetProfiles.value)) {
+    const sourceCounts = profile?.category_counts?.source_file || {}
+    for (const [name, count] of Object.entries(sourceCounts)) {
+      counts[name] = (counts[name] || 0) + Number(count || 0)
+    }
+  }
+  return categoryBarOption(counts, '#d97706')
 })
 
 const materialDatasetOption = computed(() => categoryBarOption(countBy(
@@ -344,6 +395,7 @@ async function loadAnalysisData() {
     pi1mProfile.value = pi1mProfileResult.status === 'fulfilled' ? pi1mProfileResult.value : null
     pi1mVisualSamples.value = pi1mSamplesResult.status === 'fulfilled' ? pi1mSamplesResult.value : { points: [], sample_count: 0, total: 0 }
     mdAllatomProfile.value = mdProfileResult.status === 'fulfilled' ? mdProfileResult.value : null
+    await loadExtraDatasetProfiles()
     await loadRecordSamples()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -352,13 +404,23 @@ async function loadAnalysisData() {
   }
 }
 
-async function loadRecordSamples() {
-  if (!canDrilldownRecords.value) {
-    materialAnalysisRecords.value = []
-    computationAnalysisRecords.value = []
-    artifactAnalysisRecords.value = []
+async function loadExtraDatasetProfiles() {
+  const ids = extraOpenDatasets.value.map((item) => item.dataset_id)
+  if (!ids.length) {
+    extraDatasetProfiles.value = {}
     return
   }
+  const results = await Promise.allSettled(ids.map((datasetId) => getDataCatalogDatasetProfile(datasetId)))
+  const profiles = {}
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      profiles[ids[index]] = result.value
+    }
+  })
+  extraDatasetProfiles.value = profiles
+}
+
+async function loadRecordSamples() {
   const materialCollectionName = materialCollection.value?.collection_key || materialCollection.value?.collection_name || ''
   const requests = [
     materialCollectionName
@@ -483,13 +545,77 @@ onMounted(loadAnalysisData)
         </section>
       </el-tab-pane>
 
+      <el-tab-pane label="开放数据集 05–16" name="open-datasets" lazy>
+        <section class="analysis-section">
+          <div class="section-heading">
+            <h2>开放数据集 05–16</h2>
+            <span>{{ formatNumber(extraDatasetRows.length) }} 个数据集</span>
+          </div>
+          <template v-if="extraDatasetRows.length">
+            <div class="summary-grid">
+              <div class="summary-item">
+                <span>登记原始行数</span>
+                <strong>{{ formatNumber(extraDatasetRows.reduce((sum, row) => sum + row.row_count, 0)) }}</strong>
+              </div>
+              <div class="summary-item">
+                <span>Mongo 入库记录</span>
+                <strong>{{ formatNumber(extraDatasetRows.reduce((sum, row) => sum + row.record_count, 0)) }}</strong>
+              </div>
+              <div class="summary-item">
+                <span>已接入文件</span>
+                <strong>{{ formatNumber(extraOpenDatasets.reduce((sum, item) => sum + (item.objects?.length || 0), 0)) }}</strong>
+              </div>
+              <div class="summary-item">
+                <span>分析 Profile</span>
+                <strong>{{ formatNumber(Object.keys(extraDatasetProfiles).length) }}</strong>
+              </div>
+            </div>
+
+            <div class="visual-grid three-column">
+              <div class="visual-panel">
+                <h3>Mongo 覆盖率</h3>
+                <v-chart class="chart-medium" :option="extraCoverageOption" autoresize />
+              </div>
+              <div class="visual-panel">
+                <h3>入库记录数</h3>
+                <v-chart class="chart-medium" :option="extraRecordOption" autoresize />
+              </div>
+              <div class="visual-panel">
+                <h3>来源文件记录分布</h3>
+                <v-chart class="chart-medium" :option="extraSourceFileOption" autoresize />
+              </div>
+            </div>
+
+            <el-table :data="extraDatasetRows" stripe class="extra-dataset-table">
+              <el-table-column prop="display_name" label="数据集" min-width="190" />
+              <el-table-column prop="source_category" label="类别" min-width="180" />
+              <el-table-column label="原始行数" width="130" align="right">
+                <template #default="{ row }">{{ formatNumber(row.row_count) }}</template>
+              </el-table-column>
+              <el-table-column label="Mongo 记录" width="130" align="right">
+                <template #default="{ row }">{{ formatNumber(row.record_count) }}</template>
+              </el-table-column>
+              <el-table-column label="覆盖率" width="120" align="right">
+                <template #default="{ row }">{{ formatPercent(row.coverage_percent) }}</template>
+              </el-table-column>
+              <el-table-column label="模式" width="110">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.record_mode === 'sample' ? 'warning' : 'success'">{{ row.record_mode || '-' }}</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </template>
+          <el-empty v-else description="05–16 开放数据集尚未登记到数据目录。" />
+        </section>
+      </el-tab-pane>
+
       <el-tab-pane label="材料数据" name="materials" lazy>
         <section class="analysis-section">
           <div class="section-heading">
             <h2>材料数据分级</h2>
             <span>近 {{ materialAnalysisRecords.length }} 条样本</span>
           </div>
-          <div v-if="canDrilldownRecords && materialAnalysisRecords.length" class="visual-grid three-column">
+          <div v-if="materialAnalysisRecords.length" class="visual-grid three-column">
             <div class="visual-panel">
               <h3>数据集来源</h3>
               <v-chart class="chart-medium" :option="materialDatasetOption" autoresize />
@@ -503,7 +629,7 @@ onMounted(loadAnalysisData)
               <v-chart class="chart-medium" :option="materialTrendOption" autoresize />
             </div>
           </div>
-          <el-empty v-else description="暂无可分析的材料样本或当前账号无下钻权限" />
+          <el-empty v-else description="暂无可分析的材料样本" />
         </section>
       </el-tab-pane>
 
@@ -513,7 +639,7 @@ onMounted(loadAnalysisData)
             <h2>计算数据分析</h2>
             <span>近 {{ computationAnalysisRecords.length }} 条任务样本</span>
           </div>
-          <div v-if="canDrilldownRecords && (computationAnalysisRecords.length || artifactAnalysisRecords.length)" class="visual-grid three-column">
+          <div v-if="computationAnalysisRecords.length || artifactAnalysisRecords.length" class="visual-grid three-column">
             <div class="visual-panel">
               <h3>任务状态</h3>
               <v-chart class="chart-medium" :option="computationStatusOption" autoresize />
@@ -527,7 +653,7 @@ onMounted(loadAnalysisData)
               <v-chart class="chart-medium" :option="artifactTypeOption" autoresize />
             </div>
           </div>
-          <el-empty v-else description="暂无可分析的计算样本或当前账号无下钻权限" />
+          <el-empty v-else description="暂无可分析的计算样本" />
         </section>
       </el-tab-pane>
     </el-tabs>

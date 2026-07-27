@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.core.time import utc_now
 from app.infra.computation_repositories import AuditEventRepository
 from app.infra.computation_repositories import ServiceIntegrationRepository
 from app.schemas.integrations import ServiceIntegrationUpsertRequest
@@ -35,6 +37,32 @@ class IntegrationConfigServiceTest(ComputationTestCase):
                 endpoint="https://speclabos.example/api",
                 config_summary={"api_key": "plain-text-secret"},
             )
+
+    def test_atlas_is_not_a_supported_or_visible_integration(self) -> None:
+        now = utc_now()
+        ServiceIntegrationRepository.save(
+            "service_key",
+            {
+                "service_key": "atlas",
+                "display_name": "Historical Atlas optimizer",
+                "service_type": "optimizer",
+                "enabled": True,
+                "endpoint": "http://127.0.0.1:65100",
+                "config_summary": {},
+                "secret_refs": {},
+                "last_status": "down",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        configs = self.service.list_configs()
+        status_items = IntegrationStatusService().get_status()["items"]
+
+        self.assertNotIn("atlas", {item.service_key for item in configs.items})
+        self.assertNotIn("atlas", {item["service"] for item in status_items})
+        with self.assertRaisesRegex(HTTPException, "未知集成服务"):
+            self.service.get_config("atlas")
 
     def test_upsert_persists_summary_without_plaintext_secrets_and_audits(self) -> None:
         config = self.service.upsert_config(

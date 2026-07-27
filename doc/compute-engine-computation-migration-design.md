@@ -34,7 +34,6 @@ ComputeEngine 中最有价值的能力不是原样迁移 UI 或 SiLA 服务，�
 - AiiDA WorkChain 真实提交和状态同步。
 - ORCA/HPC external executor。
 - CREST/ORCA 多步骤真实 raw output 解析。
-- Atlas/Olympus 独立 optimizer service。
 - SpecLabOS 实验 workflow 提交和结果回写。
 
 ## 3. ComputeEngine 能力迁移映射
@@ -48,9 +47,9 @@ ComputeEngine 中最有价值的能力不是原样迁移 UI 或 SiLA 服务，�
 | xTB 轻量计算 | xTB/CREST 前处理思路 | `LocalXtbAdapter` | 已落地 MVP |
 | ORCA laser workflow | `laser_workchain.py` | `OrcaComputeEngineLaserAdapter` fixture/parser | 部分落地 |
 | spectra/gain parser | ComputeEngine spectra 后处理 | `compute_engine_laser_parser.py` | 部分落地，需真实样本 |
-| optimizer campaign | Atlas/Olympus 闭环 | OptimizationService | 已落地 MVP |
+| optimizer campaign | 内置优化闭环 | OptimizationService | 已落地 MVP |
 | fallback planner | 本地规则策略 | `planner_adapters.py` | 已落地 |
-| Tanimoto planner | Atlas Tanimoto 思路 | 轻量 `tanimoto` planner | 已落地轻量版 |
+| Tanimoto planner | 相似度规划思路 | 轻量 `tanimoto` planner | 已落地轻量版 |
 | AiiDA provenance | AiiDA process UUID | `external_refs.aiida_process_uuid` 占位 | 未接真实同步 |
 | SpecLabOS 实验验证 | 用户现有平台 | integration config + suggestion 字段占位 | 未接真实提交 |
 | ComputeEngine SiLA 仪器层 | SiLA servers | 不迁移，由 SpecLabOS 承担 | 明确不迁移 |
@@ -133,7 +132,7 @@ Poly_Agent Vue
           -> AiiDA adapter later
       -> OptimizationService
           -> fallback/tanimoto planner
-          -> Atlas/Olympus adapter later
+          -> custom planner adapter later
       -> IntegrationConfigService
           -> endpoint/config summary
           -> secret refs only
@@ -145,14 +144,14 @@ External systems
   -> RDKit/OpenBabel/xTB optional local dependencies
   -> ORCA/HPC/AiiDA external computation environment later
   -> SpecLabOS experiment workflow later
-  -> Atlas/Olympus optional optimizer service later
+  -> custom optional optimizer service later
 ```
 
 设计边界：
 - Poly_Agent 业务库保存可查询业务状态、摘要、checksum 和外部引用。
 - AiiDA 保留完整 provenance，不复制到 MongoDB。
 - SpecLabOS 保留设备和实验 workflow 细节，Poly_Agent 保存 workflow_run_id 和 observation 摘要。
-- Atlas/Olympus 如果接入，应在独立 optimizer 环境，不进入主 FastAPI 依赖。
+- 外部优化器如果接入，应在独立 optimizer 环境，不进入主 FastAPI 依赖。
 
 ## 6. 迁移后的数据模型
 
@@ -289,13 +288,13 @@ Automation：
 
 ### 9.2 未完成
 
-Atlas/Olympus：
+外部优化器：
 - 不进入主依赖。
 - 后续可作为独立 optimizer adapter。
 - 输入仍应使用 `PlannerRequest`，输出仍应使用 `PlannerResponse`。
 
 BoTorch/native optimization：
-- 中长期可替代 Atlas 封装。
+- 中长期可扩展为独立 planner 封装。
 - 当前不属于 MVP/P1。
 
 ## 10. 前端迁移状态
@@ -413,9 +412,9 @@ AiiDA 依赖 PostgreSQL、RabbitMQ、daemon、HPC/code 配置。Poly_Agent 只�
 
 Adapter 返回 `AdapterRunResult` 和 `ArtifactSpec`。ComputationService 统一登记 artifact、更新 run 和写审计。
 
-### Decision 5: Atlas/Olympus 不进入主后端依赖
+### Decision 5: 外部优化器不进入主后端依赖
 
-当前以 fallback/tanimoto 保底。未来 Atlas/Olympus 作为可选 optimizer adapter 或独立服务。
+当前以 fallback/tanimoto 保底。未来自研 planner 可作为可选 optimizer adapter 或独立服务。
 
 ## 16. 风险和缓解
 

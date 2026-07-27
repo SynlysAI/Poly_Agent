@@ -25,3 +25,9 @@ pyDOE==1.3.0
 joblib==1.5.3
 mplcursors==0.7.1
 tabulate
+
+# 分子图与垂类模型运行依赖
+rdkit
+torch==2.11.0
+torch_geometric==2.7.0
+mendeleev

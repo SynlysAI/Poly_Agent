@@ -130,6 +130,7 @@ onMounted(() => {
           :artifact-refs="run.artifact_refs"
           :status="run.status"
           :error="run.error"
+          :run-id="run.run_id"
         />
       </section>
 

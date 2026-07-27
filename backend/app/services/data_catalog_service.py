@@ -11,7 +11,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from time import monotonic
@@ -46,6 +46,7 @@ from app.schemas.data_catalog import (
     DataCatalogRelationshipNode,
     DataCatalogRelationshipsData,
 )
+from app.services.poly_data_extra_datasets import EXTRA_DATASET_SPECS, extra_dataset_definition_map
 
 
 CANONICAL_ROOT = "datasets/"
@@ -77,6 +78,10 @@ DATASET_RECORD_COLLECTIONS = {
     "smipoly": (SMIPOLY_COLLECTION_KEY, "full"),
     "polyuniverse": (POLYUNIVERSE_COLLECTION_KEY, "full"),
     "md_allatom": (MD_ALLATOM_CARBON_RESULTS_COLLECTION_KEY, "full"),
+    **{
+        spec.dataset_id: (f"{POLY_DATA_SOURCE_ID}.{spec.collection_name}", "full")
+        for spec in EXTRA_DATASET_SPECS
+    },
 }
 
 
@@ -205,6 +210,16 @@ MINIO_OBJECT_MAPPINGS = [
         legacy_key=None,
         canonical_key="datasets/md_allatom/manifests/Si.json",
     ),
+    *[
+        ObjectMapping(
+            dataset_id=spec.dataset_id,
+            role=file_spec.role,
+            legacy_key=None,
+            canonical_key=file_spec.object_key,
+        )
+        for spec in EXTRA_DATASET_SPECS
+        for file_spec in spec.files
+    ],
 ]
 
 
@@ -302,6 +317,7 @@ DATASET_DEFINITIONS = {
             ("out_file", "out_file", "模拟输出 out 文件", 9944, 9944, "250_1_1_32_.out"),
         ],
     },
+    **extra_dataset_definition_map(),
 }
 
 
@@ -324,6 +340,7 @@ class MongoCollectionDefinition:
     description: str
     primary_keys: list[str]
     analysis_facets: list[str]
+    search_fields: list[str] = field(default_factory=list)
 
 
 MONGO_COLLECTION_DEFINITIONS = [
@@ -426,6 +443,21 @@ MONGO_COLLECTION_DEFINITIONS = [
         ["md_allatom_carbon_result_id"],
         ["dataset", "family", "diamine_id", "dianhydride_id", "dp", "temperature", "e2e_mean", "rg_mean"],
     ),
+    *[
+        MongoCollectionDefinition(
+            f"{POLY_DATA_SOURCE_ID}.{spec.collection_name}",
+            spec.collection_name,
+            MATERIAL_SOURCE_ID,
+            f"{spec.display_name} 记录",
+            "材料数据资产",
+            spec.data_domain,
+            spec.description,
+            list(spec.primary_keys),
+            list(spec.analysis_facets),
+            list(spec.search_fields),
+        )
+        for spec in EXTRA_DATASET_SPECS
+    ],
     MongoCollectionDefinition(
         "computation_runs",
         "computation_runs",
@@ -1907,6 +1939,18 @@ class DataCatalogService:
                 "out_file",
             ]
             return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
+        if definition.search_fields:
+            field_names = list(
+                dict.fromkeys(
+                    [
+                        *definition.primary_keys,
+                        "dataset.dataset_id",
+                        "dataset.dataset_name",
+                        *definition.search_fields,
+                    ]
+                )
+            )
+            return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
         field_names = list(dict.fromkeys([*definition.primary_keys, "status", "created_by", "workflow_type", "engine"]))
         return {"$or": [{field: {"$regex": escaped, "$options": "i"}} for field in field_names]}
 
@@ -1987,6 +2031,13 @@ class DataCatalogService:
                 row,
                 ["diamine_id", "dianhydride_id", "dp", "temperature", "e2e_mean", "rg_mean", "persist_len_mean"],
             )
+            created_at = row.get("created_at")
+            updated_at = row.get("updated_at")
+        elif row.get("dataset") and definition.source_id == MATERIAL_SOURCE_ID:
+            title = str(row.get("title") or record_id or definition.display_name)
+            dataset = row.get("dataset") if isinstance(row.get("dataset"), dict) else {}
+            subtitle = f"{dataset.get('dataset_name') or definition.display_name} · {row.get('source_file') or ''}".strip(" ·")
+            preview_fields = self._preview_fields(row, definition.primary_keys)
             created_at = row.get("created_at")
             updated_at = row.get("updated_at")
         else:
@@ -2111,6 +2162,7 @@ class DataCatalogService:
             "md_allatom_diamines",
             "md_allatom_dianhydrides",
             "md_allatom_carbon_results",
+            *[spec.data_domain for spec in EXTRA_DATASET_SPECS],
         }:
             return definition.primary_keys[0] if definition.primary_keys else "created_at"
         if definition.collection_name == "optimization_candidates":

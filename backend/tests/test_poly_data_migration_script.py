@@ -5,8 +5,12 @@ from __future__ import annotations
 import importlib.util
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from contextlib import redirect_stdout
 from io import BytesIO
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -47,6 +51,13 @@ class FakeS3Client:
     def get_object(self, bucket: str, object_key: str) -> bytes:
         return self.uploads.get(object_key, b"fake-object")
 
+    def list_objects(self, bucket: str, prefix: str):
+        return {
+            key: dict(metadata)
+            for key, metadata in self.objects.items()
+            if key.startswith(prefix)
+        }
+
 
 class FakeSftpClient:
     """In-memory SFTP source client for migration tests."""
@@ -74,6 +85,14 @@ class FakeSftpClient:
     def read_file(self, remote_path: str) -> bytes:
         return self.files[remote_path]
 
+    def read_file_chunks(self, remote_path: str, *, chunk_size: int = 8 * 1024 * 1024):
+        content = self.files[remote_path]
+        for start in range(0, len(content), chunk_size):
+            yield content[start : start + chunk_size]
+
+    def close(self) -> None:
+        pass
+
     def list_files_recursive(self, remote_root: str):
         prefix = remote_root.rstrip("/") + "/"
         return [
@@ -86,6 +105,117 @@ class FakeSftpClient:
             for path, content in sorted(self.files.items())
             if path.startswith(prefix)
         ]
+
+
+class MissingAndEmptySftpClient(FakeSftpClient):
+    def list_files_recursive(self, remote_root: str):
+        if remote_root.endswith("/F"):
+            return []
+        if remote_root.endswith("/Si"):
+            raise FileNotFoundError(remote_root)
+        return super().list_files_recursive(remote_root)
+
+
+class PartiallyFailingS3Client(FakeS3Client):
+    def put_object(self, bucket: str, object_key: str, content: bytes, content_type: str) -> None:
+        if object_key.endswith("polymer_2_1_32npt.data"):
+            raise OSError("simulated upload failure")
+        super().put_object(bucket, object_key, content, content_type)
+
+
+class SelectivelyFailingS3Client(FakeS3Client):
+    def put_object(self, bucket: str, object_key: str, content: bytes, content_type: str) -> None:
+        if object_key.endswith("polymer_1_1_32npt.data"):
+            raise OSError("permanent upload failure")
+        super().put_object(bucket, object_key, content, content_type)
+
+
+class ConcurrentReadState:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+        self.created = 0
+        self.closed = 0
+
+
+class ConcurrentSftpClient(FakeSftpClient):
+    def __init__(self, state: ConcurrentReadState) -> None:
+        super().__init__()
+        self.state = state
+        with self.state.lock:
+            self.state.created += 1
+
+    def read_file(self, remote_path: str) -> bytes:
+        with self.state.lock:
+            self.state.active += 1
+            self.state.max_active = max(self.state.max_active, self.state.active)
+        try:
+            time.sleep(0.03)
+            return super().read_file(remote_path)
+        finally:
+            with self.state.lock:
+                self.state.active -= 1
+
+    def close(self) -> None:
+        with self.state.lock:
+            self.state.closed += 1
+
+
+class TransientS3Client(FakeS3Client):
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+        self.attempts = 0
+
+    def put_object(self, bucket: str, object_key: str, content: bytes, content_type: str) -> None:
+        if object_key.startswith("datasets/md_allatom/raw/"):
+            self.attempts += 1
+        if object_key.startswith("datasets/md_allatom/raw/") and self.attempts <= self.failures:
+            raise OSError(f"transient failure {self.attempts}")
+        super().put_object(bucket, object_key, content, content_type)
+
+
+class InventoryOnlyS3Client(FakeS3Client):
+    def __init__(self, object_key: str, size_bytes: int) -> None:
+        super().__init__()
+        self.objects[object_key] = {"size_bytes": size_bytes, "etag": "existing"}
+        self.head_calls = 0
+
+    def head_object(self, bucket: str, object_key: str):
+        self.head_calls += 1
+        return super().head_object(bucket, object_key)
+
+
+class BlockingSecondUploadS3Client(FakeS3Client):
+    def __init__(self) -> None:
+        super().__init__()
+        self.second_started = threading.Event()
+        self.release_second = threading.Event()
+
+    def put_object(self, bucket: str, object_key: str, content: bytes, content_type: str) -> None:
+        if object_key.endswith("250_1_1_32_.out"):
+            self.second_started.set()
+            self.release_second.wait(timeout=5)
+        super().put_object(bucket, object_key, content, content_type)
+
+
+class MultipartProbeClient(migration_script.S3Client):
+    def __init__(self) -> None:
+        super().__init__(endpoint="http://minio.test", access_key="access", secret_key="secret", secure=False)
+        self.aborted = False
+
+    def _create_multipart_upload(self, bucket: str, object_key: str, *, content_type: str) -> str:
+        return "upload-1"
+
+    def _upload_part(self, bucket: str, object_key: str, upload_id: str, part_number: int, payload: bytes) -> str:
+        return f"etag-{part_number}"
+
+    def _complete_multipart_upload(self, bucket: str, object_key: str, upload_id: str, parts: list[dict]) -> None:
+        raise AssertionError("cancelled upload must not complete")
+
+    def _abort_multipart_upload(self, bucket: str, object_key: str, upload_id: str) -> None:
+        self.aborted = True
 
 
 class FakeCollection:
@@ -113,9 +243,14 @@ class FakeCollection:
         for row in self.rows:
             if all(row.get(key) == value for key, value in filters.items()):
                 row.update(payload)
+                for key, value in update.get("$inc", {}).items():
+                    row[key] = row.get(key, 0) + value
                 return
         if upsert:
-            self.rows.append({**filters, **payload})
+            row = {**filters, **payload}
+            for key, value in update.get("$inc", {}).items():
+                row[key] = row.get(key, 0) + value
+            self.rows.append(row)
 
     def bulk_write(self, operations, ordered: bool = False):
         self.bulk_batches.append(len(operations))
@@ -239,7 +374,7 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(mongo_summary["status"], "verified")
         self.assertEqual(mongo_summary["records_upserted"], 1)
         self.assertEqual(target_db["material_records"].count_documents({}), 1)
-        self.assertEqual(target_db["datasets"].count_documents({}), 6)
+        self.assertEqual(target_db["datasets"].count_documents({}), 16)
         self.assertIn(migration_script.MANIFEST_KEY, client.uploads)
 
     def test_sftp_dry_run_does_not_upload_objects(self) -> None:
@@ -254,7 +389,7 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
             apply=False,
         )
 
-        self.assertEqual(len(records), 6)
+        self.assertEqual(len(records), 32)
         self.assertTrue(all(record["status"] == "planned" for record in records))
         self.assertNotIn("datasets/smipoly/raw/202207_smip_monset.csv", client.uploads)
 
@@ -278,11 +413,271 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
             import_summaries=[],
         )
 
-        self.assertEqual(len(records), 6)
-        self.assertTrue(all(record["status"] == "uploaded" for record in records))
+        self.assertEqual(len(records), 32)
+        self.assertEqual(
+            sum(1 for record in records if record["status"] == "uploaded"),
+            6,
+        )
+        self.assertEqual(
+            sum(1 for record in records if record["status"] == "missing_source"),
+            26,
+        )
         self.assertIn("datasets/smipoly/raw/202207_smip_monset.csv", client.uploads)
         self.assertIn("datasets/polyuniverse/raw/epoxy_diE.csv", client.uploads)
-        self.assertEqual(manifest["sftp"]["failed_count"], 0)
+        self.assertEqual(manifest["sftp"]["failed_count"], 26)
+
+    def test_open_database_uploads_run_concurrently(self) -> None:
+        state = ConcurrentReadState()
+        records = migration_script.migrate_sftp_open_database_objects(
+            FakeSftpClient(),
+            FakeS3Client(),
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            sftp_root="/remote",
+            dataset_ids=["smipoly", "polyuniverse"],
+            apply=True,
+            target_db=FakeDatabase(),
+            upload_workers=4,
+            upload_retries=0,
+            sftp_client_factory=lambda: ConcurrentSftpClient(state),
+        )
+
+        self.assertEqual(len(records), 6)
+        self.assertTrue(all(record["status"] == "uploaded" for record in records))
+        self.assertGreater(state.max_active, 1)
+        self.assertLessEqual(state.max_active, 4)
+
+    def test_permanent_file_failure_does_not_block_other_uploads(self) -> None:
+        target_db = FakeDatabase()
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            FakeSftpClient(),
+            SelectivelyFailingS3Client(),
+            target_db=target_db,
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["C"],
+            apply=True,
+            upload_workers=2,
+            upload_retries=0,
+            sftp_client_factory=FakeSftpClient,
+        )
+
+        self.assertEqual({record["status"] for record in records}, {"failed", "uploaded"})
+        self.assertEqual(target_db["md_allatom_files"].count_documents({}), 1)
+        self.assertEqual(target_db["upload_checkpoints"].count_documents({"status": "failed"}), 1)
+        job = target_db["upload_jobs"].rows[0]
+        self.assertEqual(job["failed_files"], 1)
+        self.assertEqual(job["completed_files"], 1)
+
+    def test_worker_connection_failure_isolated_and_job_finishes(self) -> None:
+        target_db = FakeDatabase()
+        state = {"calls": 0}
+        lock = threading.Lock()
+
+        def factory():
+            with lock:
+                state["calls"] += 1
+                if state["calls"] == 1:
+                    raise OSError("simulated SFTP connection failure")
+            return FakeSftpClient()
+
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            FakeSftpClient(),
+            FakeS3Client(),
+            target_db=target_db,
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["C"],
+            apply=True,
+            upload_workers=2,
+            upload_retries=0,
+            sftp_client_factory=factory,
+        )
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(sum(record["status"] == "failed" for record in records), 1)
+        self.assertEqual(sum(record["status"] == "uploaded" for record in records), 1)
+        self.assertEqual(target_db["upload_jobs"].rows[0]["status"], "failed")
+        self.assertIn(
+            ([('job_id', 1)], "job_id", True),
+            target_db["upload_jobs"].indexes,
+        )
+        self.assertIn(
+            ([('bucket', 1), ('object_key', 1)], "bucket_object_key", True),
+            target_db["upload_checkpoints"].indexes,
+        )
+
+    def test_upload_failure_is_logged_immediately(self) -> None:
+        output = StringIO()
+
+        with redirect_stdout(output):
+            migration_script.migrate_sftp_md_allatom_objects(
+                FakeSftpClient(),
+                SelectivelyFailingS3Client(),
+                target_db=FakeDatabase(),
+                bucket="polymer-data",
+                sftp_host="10.26.15.53",
+                md_root="/remote-md",
+                families=["C"],
+                apply=True,
+                upload_workers=1,
+                upload_retries=0,
+            )
+
+        self.assertIn("failed=1", output.getvalue())
+        self.assertIn("polymer_1_1_32npt.data", output.getvalue())
+
+    def test_md_allatom_upload_uses_bounded_parallel_workers_with_independent_sftp_clients(self) -> None:
+        state = ConcurrentReadState()
+        client = FakeS3Client()
+        target_db = FakeDatabase()
+
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            FakeSftpClient(),
+            client,
+            target_db=target_db,
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["C", "F", "Si"],
+            apply=True,
+            upload_workers=4,
+            upload_retries=0,
+            sftp_client_factory=lambda: ConcurrentSftpClient(state),
+        )
+
+        self.assertTrue(all(record["status"] == "uploaded" for record in records))
+        self.assertGreater(state.max_active, 1)
+        self.assertLessEqual(state.max_active, 4)
+        self.assertLessEqual(state.created, 4)
+        self.assertEqual(state.closed, state.created)
+
+    def test_upload_retries_three_times_and_persists_checkpoint(self) -> None:
+        client = TransientS3Client(failures=3)
+        target_db = FakeDatabase()
+
+        with patch.object(migration_script.time, "sleep", return_value=None):
+            records = migration_script.migrate_sftp_md_allatom_objects(
+                FakeSftpClient(),
+                client,
+                target_db=target_db,
+                bucket="polymer-data",
+                sftp_host="10.26.15.53",
+                md_root="/remote-md",
+                families=["F"],
+                apply=True,
+                upload_workers=1,
+                upload_retries=3,
+            )
+
+        self.assertEqual(records[0]["status"], "uploaded")
+        self.assertEqual(records[0]["attempts"], 4)
+        self.assertEqual(client.attempts, 4)
+        checkpoint = target_db["upload_checkpoints"].rows[0]
+        self.assertEqual(checkpoint["status"], "uploaded")
+        self.assertEqual(checkpoint["attempts"], 4)
+
+    def test_existing_inventory_skips_upload_without_per_object_head(self) -> None:
+        source = FakeSftpClient()
+        key = "datasets/md_allatom/raw/F/polymer_2_1_32npt.data"
+        client = InventoryOnlyS3Client(key, len(source.files["/remote-md/F/polymer_2_1_32npt.data"]))
+
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            source,
+            client,
+            target_db=FakeDatabase(),
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["F"],
+            apply=True,
+            upload_workers=1,
+            upload_retries=0,
+        )
+
+        self.assertEqual(records[0]["status"], "already_migrated")
+        self.assertEqual(client.head_calls, 0)
+        self.assertNotIn(key, client.uploads)
+
+    def test_inventory_size_mismatch_is_reuploaded_and_verified(self) -> None:
+        source = FakeSftpClient()
+        key = "datasets/md_allatom/raw/F/polymer_2_1_32npt.data"
+        client = InventoryOnlyS3Client(key, size_bytes=1)
+
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            source,
+            client,
+            target_db=FakeDatabase(),
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["F"],
+            apply=True,
+            upload_workers=1,
+            upload_retries=0,
+        )
+
+        self.assertEqual(records[0]["status"], "uploaded")
+        self.assertEqual(client.head_calls, 1)
+        self.assertIn(key, client.uploads)
+
+    def test_md_allatom_indexes_each_file_before_the_batch_finishes(self) -> None:
+        client = BlockingSecondUploadS3Client()
+        target_db = FakeDatabase()
+        outcome: list[dict] = []
+
+        def run() -> None:
+            outcome.extend(
+                migration_script.migrate_sftp_md_allatom_objects(
+                    FakeSftpClient(),
+                    client,
+                    target_db=target_db,
+                    bucket="polymer-data",
+                    sftp_host="10.26.15.53",
+                    md_root="/remote-md",
+                    families=["C"],
+                    apply=True,
+                    upload_workers=1,
+                    upload_retries=0,
+                )
+            )
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        self.assertTrue(client.second_started.wait(timeout=2))
+        self.assertEqual(target_db["md_allatom_files"].count_documents({}), 1)
+        client.release_second.set()
+        thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(outcome), 2)
+        self.assertEqual(target_db["md_allatom_files"].count_documents({}), 2)
+
+    def test_multipart_upload_aborts_when_chunk_stream_is_cancelled(self) -> None:
+        client = MultipartProbeClient()
+
+        def chunks():
+            yield b"first"
+            raise migration_script.MigrationCancelled("cancelled")
+
+        with self.assertRaises(migration_script.MigrationCancelled):
+            client.put_object_multipart(
+                "polymer-data",
+                "datasets/md_allatom/raw/C/large.data",
+                chunks(),
+                content_type="application/octet-stream",
+                part_size=4,
+            )
+
+        self.assertTrue(client.aborted)
+
+    def test_apply_sftp_migration_requires_credentials_before_connecting(self) -> None:
+        args = migration_script.parse_args(["--apply", "--migrate-sftp-md-allatom"])
+
+        with self.assertRaises(migration_script.MigrationConfigurationError):
+            migration_script.validate_runtime_configuration(args, sftp_password="")
 
     def test_apply_can_drop_source_after_count_verification(self) -> None:
         source_collection = FakeCollection([{"polymer_record_id": "OPENPOLY-1"}])
@@ -465,6 +860,40 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(dataset["record_collection_key"], "poly_data.polyuniverse_monomers")
         self.assertEqual(dataset["record_mode"], "full")
 
+    def test_extra_open_database_import_maps_generic_table_rows_and_stats(self) -> None:
+        client = FakeS3Client()
+        client.put_object(
+            "polymer-data",
+            "datasets/nanomine/raw/data.tsv",
+            b"date\tNew York\tSan Francisco\tAustin\n2026-01-01\t1\t2\t3\n2026-01-02\t4\t5\t6\n",
+            "text/tab-separated-values; charset=utf-8",
+        )
+        target_db = FakeDatabase()
+
+        summaries = migration_script.import_extra_open_database_records(
+            target_db,
+            s3_client=client,
+            bucket="polymer-data",
+            dataset_ids=["nanomine"],
+            sample_size=None,
+            apply=True,
+        )
+
+        self.assertEqual(summaries[0]["status"], "imported")
+        self.assertEqual(summaries[0]["records_upserted"], 2)
+        self.assertEqual(target_db["nanomine_records"].count_documents({}), 2)
+        row = target_db["nanomine_records"].rows[0]
+        self.assertEqual(row["record_id"], "NANOMINE-00000001")
+        self.assertEqual(row["title"], "2026-01-01")
+        self.assertEqual(row["source_file"], "data.tsv")
+        dataset = target_db["datasets"].rows[0]
+        self.assertEqual(dataset["dataset_id"], "nanomine")
+        self.assertEqual(dataset["record_collection_key"], "poly_data.nanomine_records")
+        stats = target_db["dataset_stats"].rows[0]
+        self.assertEqual(stats["dataset_id"], "nanomine")
+        self.assertEqual(stats["record_count"], 2)
+        self.assertEqual(stats["category_counts"]["source_file"]["data.tsv"], 2)
+
     def test_md_allatom_sftp_apply_uploads_recursive_files_and_indexes_mongo(self) -> None:
         client = FakeS3Client()
         target_db = FakeDatabase()
@@ -489,6 +918,105 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         row = target_db["md_allatom_files"].rows[0]
         self.assertEqual(row["family"], "C")
         self.assertEqual(row["object_key"], "datasets/md_allatom/raw/C/polymer_1_1_32npt.data")
+        manifest = migration_script.json.loads(
+            client.uploads["datasets/md_allatom/manifests/C.json"].decode("utf-8")
+        )
+        self.assertEqual(manifest["sync_status"], "verified")
+        self.assertTrue(manifest["counts_consistent"])
+        self.assertEqual(manifest["file_count"], 2)
+        self.assertEqual(manifest["remote_file_count"], 2)
+        self.assertEqual(manifest["minio_object_count"], 2)
+        self.assertEqual(manifest["mongo_index_count"], 2)
+
+        repeated = migration_script.migrate_sftp_md_allatom_objects(
+            FakeSftpClient(),
+            client,
+            target_db=target_db,
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["C", "F", "Si"],
+            apply=True,
+        )
+        self.assertTrue(all(record["status"] == "already_migrated" for record in repeated))
+        self.assertEqual(target_db["md_allatom_files"].count_documents({}), 4)
+
+    def test_md_allatom_missing_and_empty_families_do_not_create_success_manifests(self) -> None:
+        client = FakeS3Client()
+
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            MissingAndEmptySftpClient(),
+            client,
+            target_db=FakeDatabase(),
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["F", "Si"],
+            apply=True,
+        )
+
+        by_family = {record["family"]: record for record in records}
+        self.assertEqual(by_family["F"]["status"], "empty_source")
+        self.assertEqual(by_family["Si"]["status"], "missing_source")
+        self.assertNotIn("datasets/md_allatom/manifests/F.json", client.uploads)
+        self.assertNotIn("datasets/md_allatom/manifests/Si.json", client.uploads)
+
+    def test_md_allatom_partial_failure_is_recorded_in_family_manifest(self) -> None:
+        client = PartiallyFailingS3Client()
+        target_db = FakeDatabase()
+
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            FakeSftpClient(),
+            client,
+            target_db=target_db,
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["F"],
+            apply=True,
+            upload_retries=0,
+        )
+
+        self.assertEqual(records[0]["status"], "failed")
+        manifest = migration_script.json.loads(
+            client.uploads["datasets/md_allatom/manifests/F.json"].decode("utf-8")
+        )
+        self.assertEqual(manifest["sync_status"], "partial_failure")
+        self.assertEqual(manifest["remote_file_count"], 1)
+        self.assertEqual(manifest["minio_object_count"], 0)
+        self.assertEqual(manifest["mongo_index_count"], 0)
+        self.assertFalse(manifest["counts_consistent"])
+
+    def test_md_allatom_stale_mongo_index_prevents_verified_manifest(self) -> None:
+        client = FakeS3Client()
+        target_db = FakeDatabase(
+            {
+                "md_allatom_files": FakeCollection(
+                    [{"md_allatom_file_id": "stale", "family": "F"}]
+                )
+            }
+        )
+
+        records = migration_script.migrate_sftp_md_allatom_objects(
+            FakeSftpClient(),
+            client,
+            target_db=target_db,
+            bucket="polymer-data",
+            sftp_host="10.26.15.53",
+            md_root="/remote-md",
+            families=["F"],
+            apply=True,
+        )
+
+        self.assertEqual(records[0]["status"], "uploaded")
+        manifest = migration_script.json.loads(
+            client.uploads["datasets/md_allatom/manifests/F.json"].decode("utf-8")
+        )
+        self.assertEqual(manifest["sync_status"], "partial_failure")
+        self.assertFalse(manifest["counts_consistent"])
+        self.assertEqual(manifest["remote_file_count"], 1)
+        self.assertEqual(manifest["minio_object_count"], 1)
+        self.assertEqual(manifest["mongo_index_count"], 2)
 
     def test_md_allatom_structured_import_uploads_csvs_and_preserves_duplicate_natural_keys(self) -> None:
         target_db = FakeDatabase()

@@ -67,6 +67,8 @@ echo "[core_conda] 安装后端 Python 依赖..."
 REQUIREMENTS_FILE="$ROOT/backend/requirements.txt"
 if [[ -f "$REQUIREMENTS_FILE" ]]; then
   PYTHONNOUSERSITE=1 "$CONDA_CMD" run -n "$ENV_NAME" pip install -r "$REQUIREMENTS_FILE"
+  echo "[core_conda] 安装 Playwright Chromium 及系统依赖..."
+  PYTHONNOUSERSITE=1 "$CONDA_CMD" run -n "$ENV_NAME" python -m playwright install --with-deps chromium
 else
   echo "[core_conda] 警告：未找到 $REQUIREMENTS_FILE，跳过 pip 安装"
 fi
@@ -107,6 +109,7 @@ verify_cmd "openbabel" "obabel -V" || ((FAILURES++))
 verify_cmd "xtb" "xtb --version" || ((FAILURES++))
 verify_cmd "crest" "crest --version" || ((FAILURES++))
 verify_cmd "fastapi" "python -c 'import fastapi; print(fastapi.__version__)'" || ((FAILURES++))
+verify_cmd "playwright chromium" "python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); assert __import__(\"pathlib\").Path(p.chromium.executable_path).exists(); p.stop()'" || ((FAILURES++))
 
 echo ""
 if [[ $FAILURES -eq 0 ]]; then

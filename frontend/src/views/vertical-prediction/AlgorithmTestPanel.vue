@@ -13,6 +13,7 @@ import {
   listAlgorithmVersions,
 } from '../../api/polyAgentApi'
 import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
+import { predictionStepState } from '../../utils/verticalPredictionState.mjs'
 import AlgorithmResultView from './AlgorithmResultView.vue'
 
 const props = defineProps({
@@ -108,6 +109,7 @@ const inputGuidance = computed(() => {
   return '输入已就绪，可以运行预测。'
 })
 const advancedFieldKeys = computed(() => schemaFields.value.filter((key) => isArrayObjectField(key) || isObjectField(key)))
+const workflowStep = computed(() => predictionStepState({ running: running.value, lastRun: lastRun.value }))
 
 watch(() => props.refreshKey, loadAlgorithms)
 watch(() => props.algorithmId, loadAlgorithms)
@@ -674,6 +676,8 @@ async function runPrediction() {
     ElMessage.warning(errorMessage)
     return
   }
+  lastRun.value = null
+  runArtifacts.value = []
   running.value = true
   try {
     const explicitVersionId = versions.value.some((item) => item.version_id === versionId.value) ? versionId.value : ''
@@ -691,7 +695,15 @@ async function runPrediction() {
     emit('run-created', lastRun.value)
     ElMessage.success('预测运行已完成')
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    const message = getApiErrorMessage(error)
+    lastRun.value = {
+      status: 'failed',
+      input_snapshot: cloneJson(inputs.value),
+      output_summary: {},
+      artifact_refs: [],
+      error: { message },
+    }
+    ElMessage.error(message)
   } finally {
     running.value = false
   }
@@ -792,8 +804,15 @@ onMounted(loadAlgorithms)
 
         <div class="prediction-steps" aria-label="预测流程">
           <div class="prediction-step is-done"><span>1</span><strong>选择起点</strong></div>
-          <div class="prediction-step is-active"><span>2</span><strong>填写输入</strong></div>
-          <div class="prediction-step"><span>3</span><strong>查看结果</strong></div>
+          <div
+            class="prediction-step"
+            :class="{ 'is-active': workflowStep.activeStep === 2, 'is-done': workflowStep.hasResult }"
+          >
+            <span>2</span><strong>{{ workflowStep.inputLabel }}</strong>
+          </div>
+          <div class="prediction-step" :class="{ 'is-active': workflowStep.activeStep === 3 }">
+            <span>3</span><strong>查看结果</strong>
+          </div>
         </div>
 
         <el-alert class="input-guidance" :title="inputGuidance" type="info" :closable="false" show-icon />
@@ -1046,6 +1065,8 @@ onMounted(loadAlgorithms)
             :status="lastRun.status"
             :error="lastRun.error"
             :attributions="selectedAttributions"
+            :algorithm-id="algorithmId"
+            :run-id="lastRun.run_id"
           />
           <el-collapse class="run-metadata">
             <el-collapse-item title="运行元数据" name="metadata">

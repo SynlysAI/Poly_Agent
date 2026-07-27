@@ -304,6 +304,7 @@ class AlgorithmRegistryRepository(BaseRepository):
                         "deployment_status",
                         "integration_kind",
                         "capability_group",
+                        "contributors",
                         "developer_attribution",
                         "framework_attributions",
                         "method_attributions",

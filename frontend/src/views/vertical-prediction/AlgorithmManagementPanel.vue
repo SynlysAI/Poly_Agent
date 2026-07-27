@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Medal, Refresh } from '@element-plus/icons-vue'
 
 import {
   activateAlgorithmVersion,
@@ -16,8 +16,11 @@ import {
   redeployAlgorithmVersion,
   rollbackAlgorithmVersion,
 } from '../../api/polyAgentApi'
+import AlgorithmCreditDrawer from '../../components/algorithm/AlgorithmCreditDrawer.vue'
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
 import { formatApiDateTime } from '../../utils/datetime'
+import { authState } from '../../auth/authState'
+import { canManageUploadedAlgorithm, versionLifecycleLabel } from '../../utils/verticalPredictionState.mjs'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -32,9 +35,11 @@ const algorithms = ref([])
 const selectedAlgorithmId = ref('')
 const versions = ref([])
 const logsVisible = ref(false)
+const creditVisible = ref(false)
 const versionLogs = ref(null)
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === selectedAlgorithmId.value) || null)
+const canManage = computed(() => canManageUploadedAlgorithm(selectedAlgorithm.value, authState))
 
 watch(() => props.refreshKey, loadAlgorithms)
 watch(() => props.algorithmId, loadAlgorithms)
@@ -108,14 +113,18 @@ async function openLogs(version) {
   }
 }
 
+function openCredit() {
+  if (!selectedAlgorithmId.value) return
+  creditVisible.value = true
+}
+
 function statusType(status) {
   const map = { active: 'success', deployed_staging: 'warning', built: 'info', validated: 'info', frozen: 'info', decommissioned: 'danger' }
   return map[status] || 'info'
 }
 
 function statusLabel(status) {
-  const map = { active: '已激活', deployed_staging: '待激活', built: '已构建', validated: '已校验', frozen: '已冻结', decommissioned: '已下线' }
-  return map[status] || status
+  return versionLifecycleLabel(typeof status === 'string' ? { status } : status)
 }
 
 function shortDigest(value) {
@@ -163,7 +172,10 @@ onMounted(loadAlgorithms)
         <label>当前算法</label>
         <strong class="selected-algorithm-title">{{ selectedAlgorithm?.name || selectedAlgorithmId || '未选择' }}</strong>
       </div>
-      <el-button :icon="Refresh" :loading="loading" @click="loadAlgorithms">刷新</el-button>
+      <div class="management-actions">
+        <el-button :icon="Medal" :disabled="!selectedAlgorithmId" @click="openCredit">贡献分析</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="loadAlgorithms">刷新</el-button>
+      </div>
     </div>
 
     <el-alert v-if="selectedAlgorithm" :closable="false" type="info" show-icon>
@@ -171,11 +183,12 @@ onMounted(loadAlgorithms)
         当前 active：{{ selectedAlgorithm.active_version_id || '无' }} · 注册表状态：{{ statusLabel(selectedAlgorithm.status) }} · 导师课题组：{{ mentorTeamLabel(selectedAlgorithm) }}
       </template>
     </el-alert>
+    <el-alert v-if="selectedAlgorithm && !canManage" :closable="false" type="warning" show-icon title="当前账号仅可访问和调用该模型，不能修改版本或发布状态。" />
     <AttributionBadges v-if="selectedAlgorithm" :attributions="rowAttributions(selectedAlgorithm)" />
 
     <el-table v-loading="loading" :data="versions" border empty-text="暂无上传版本">
       <el-table-column prop="version" label="Version" width="100" />
-      <el-table-column prop="status" label="状态" width="105"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
+      <el-table-column prop="status" label="状态" width="105"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row) }}</el-tag></template></el-table-column>
       <el-table-column label="Runtime" min-width="165"><template #default="{ row }"><code>{{ runtimeBackend(row) }}</code></template></el-table-column>
       <el-table-column label="Health" width="105"><template #default="{ row }"><el-tag size="small" :type="runtimeHealth(row) === 'ready' ? 'success' : 'info'">{{ runtimeHealth(row) }}</el-tag></template></el-table-column>
       <el-table-column label="Package SHA256" min-width="170"><template #default="{ row }"><el-tooltip :content="row.package_sha256"><code>{{ shortDigest(row.package_sha256) }}</code></el-tooltip></template></el-table-column>
@@ -187,14 +200,16 @@ onMounted(loadAlgorithms)
       <el-table-column label="创建时间" width="170"><template #default="{ row }">{{ formatDate(row.created_at) }}</template></el-table-column>
       <el-table-column label="操作" min-width="290" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="row.status === 'built'" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, deployAlgorithmVersion)">部署</el-button>
-          <el-button v-if="['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, redeployAlgorithmVersion)">重部署</el-button>
+          <template v-if="canManage">
+            <el-button v-if="row.status === 'built'" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, deployAlgorithmVersion)">部署</el-button>
+            <el-button v-if="['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, redeployAlgorithmVersion)">重部署</el-button>
+            <el-button v-if="row.status === 'deployed_staging'" type="primary" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, activateAlgorithmVersion)">激活</el-button>
+            <el-button v-if="row.status !== 'active' && selectedAlgorithm?.active_version_id !== row.version_id" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, rollbackAlgorithmVersion, `确认回滚到 ${row.version}？`)">回滚</el-button>
+            <el-button v-if="['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, freezeAlgorithmVersion, `冻结版本 ${row.version} 后，新任务将不能选择它。`)">冻结</el-button>
+            <el-button v-if="row.status !== 'decommissioned'" type="danger" plain size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, decommissionAlgorithmVersion, `下线版本 ${row.version}？历史记录仍会保留。`)">下线</el-button>
+            <el-button v-else type="danger" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, deleteAlgorithmVersion, `确认删除已下线版本 ${row.version}？上传包和版本记录会删除，历史运行记录仍会保留。`)">删除</el-button>
+          </template>
           <el-button size="small" :loading="actionVersionId === row.version_id" @click="openLogs(row)">日志</el-button>
-          <el-button v-if="row.status === 'deployed_staging'" type="primary" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, activateAlgorithmVersion)">激活</el-button>
-          <el-button v-if="row.status === 'deployed_staging' && selectedAlgorithm?.active_version_id !== row.version_id" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, rollbackAlgorithmVersion, `确认回滚到 ${row.version}？`)">回滚</el-button>
-          <el-button v-if="['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, freezeAlgorithmVersion, `冻结版本 ${row.version} 后，新任务将不能选择它。`)">冻结</el-button>
-          <el-button v-if="row.status !== 'decommissioned'" type="danger" plain size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, decommissionAlgorithmVersion, `下线版本 ${row.version}？历史记录仍会保留。`)">下线</el-button>
-          <el-button v-else type="danger" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, deleteAlgorithmVersion, `确认删除已下线版本 ${row.version}？上传包和版本记录会删除，历史运行记录仍会保留。`)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -216,6 +231,7 @@ onMounted(loadAlgorithms)
         </el-descriptions>
       </template>
     </el-drawer>
+    <AlgorithmCreditDrawer v-model:visible="creditVisible" :algorithm-id="selectedAlgorithmId" />
   </div>
 </template>
 
@@ -223,6 +239,7 @@ onMounted(loadAlgorithms)
 .management-panel { display: grid; gap: 16px; }
 .management-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 12px; }
 .management-toolbar > div { display: grid; gap: 6px; }
+.management-toolbar .management-actions { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .management-toolbar label { color: var(--app-ink-muted); font-size: 12px; }
 .selected-algorithm-title { color: var(--app-ink); font-size: 15px; overflow-wrap: anywhere; }
 code { font-family: var(--app-mono-font); font-size: 12px; }

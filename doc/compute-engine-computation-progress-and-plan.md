@@ -53,7 +53,7 @@
 |---|---:|---|
 | MVP/P0 产品闭环 | 约 92%-95% | 主流程、adapter、artifact、审计、planner、权限隔离、CSV import report、suggestion 状态机、objective 校验、worker heartbeat/cancel、integration config 前端管理均已落地；剩余主要是前端 e2e、审计元数据细化和真实运行环境验收 |
 | Phase 1 可演示计算智能模块 | 约 82%-85% | mock/local/fixture/fake external 演示能力已较完整；真实 ORCA/HPC、SpecLabOS、生产级 worker 运维仍未落地 |
-| 完整参考项目目标 Phase 1-7 | 约 50%-55% | 本地结构/xTB、ComputeEngine laser parser fixture、ORCA fake external、integration config 已落地；AiiDA/真实 ORCA executor/SpecLabOS/Atlas/对象存储仍是后续工作 |
+| 完整参考项目目标 Phase 1-7 | 约 50%-55% | 本地结构/xTB、ComputeEngine laser parser fixture、ORCA fake external、integration config 已落地；AiiDA/真实 ORCA executor/SpecLabOS/对象存储仍是后续工作 |
 
 核心结论：当前版本已经适合作为“可演示计算智能模块”的基线。下一步重点不是再造一套 adapter 或 planner，而是把真实依赖环境、真实外部执行器、真实实验系统和生产级存储/审计逐步接上。
 
@@ -177,7 +177,6 @@
 | AiiDA worker | 仅 external ref 字段和状态占位 | P2 |
 | ORCA laser workflow | 有 fixture parser、受控配置和 fake external executor；真实 executor 未实现 | P1/P2 |
 | ComputeEngine spectra/gain parser | fixture raw outputs 和 parser 已实现 | 部分完成；需真实输出样本适配 |
-| Atlas/Olympus planner | 未接入；已有轻量 tanimoto 替代 | P2/P3 |
 | SpecLabOS 实验提交 | 集成配置占位，未提交实验 | P2 |
 | SmartAccess 事件 | 未接入 | P3 |
 | 对象存储/归档 | 当前是本地 `.runtime/outputs` | P2 |
@@ -205,7 +204,7 @@
 | 审计字段还不够可追责 | actor role/ip/user agent/source 和权限拒绝事件仍不完整 | 推进 D2 |
 | running cancel 对真实 external job 仍未闭合 | fake/local 已有语义，真实 HPC/AiiDA 还需 cancel hook | 在真实 executor 中实现 submit/poll/cancel 事件 |
 | artifact storage 暴露本地绝对路径 | 当前可用但不适合长期归档/对象存储 | 推进 D3：backend-owned scheme、stream/token、retention |
-| SpecLabOS/AiiDA/Atlas 仍未真实接入 | 只保留配置和字段边界，不能提交真实实验/外部优化 | 按 C3 和后续 adapter 增量接入 |
+| SpecLabOS/AiiDA 仍未真实接入 | 只保留配置和字段边界，不能提交真实实验或外部 workflow | 按 C3 和后续 adapter 增量接入 |
 
 ## 7. 后续开发计划
 
@@ -525,20 +524,20 @@ export ORCA_COMPUTE_ENGINE_FAKE_EXTERNAL_OUTCOME=success
 
 #### Task C2: Planner 约束和 objective 配置增强
 
-**目标：** 让 fallback/tanimoto 之外的 Atlas/Olympus 或自研 planner 可以接入。
+**目标：** 让 fallback/tanimoto 之外的自研 planner 可以接入。
 
 **当前状态（2026-07-02）：后端最小闭环已完成。**
 - `planner_config.constraints` 已收敛为 `PlannerConstraints` schema，拒绝未知字段，校验 `minimum_similarity/max_low_confidence_suggestions` 等约束。
 - planner response 新增 `skipped` 列表和 suggestion `confidence` 字段；候选被 allowed/excluded/descriptor 约束过滤时返回明确 skipped reason。
 - Tanimoto planner 对低于 `minimum_similarity` 或缺 descriptor/reference 的候选标记 `low` confidence；可通过 `max_low_confidence_suggestions` 控制是否返回低置信推荐。
 - suggestion 的 planner snapshot 已记录 `snapshot_schema_version/request_schema_version/response_schema_version`，并保留 request/response 原始快照。
-- Atlas/Olympus 尚未接入；后续应作为独立 optional adapter，不能进入 FastAPI 必需依赖。
+- 外部 planner 不进入 FastAPI 必需依赖。
 
 **验收标准：**
 - `planner_config.constraints` 有明确 schema 和校验。
 - planner adapter 返回 skipped/low_confidence reason，不静默伪装推荐。
 - suggestion 保存的 request/response 快照有版本兼容策略。
-- 可选接入 Atlas/Olympus 作为独立 adapter，不能成为 FastAPI 必需依赖。
+- 可选接入自研 planner adapter，不能成为 FastAPI 必需依赖。
 
 **预计改动：**
 - `backend/app/schemas/optimization.py`

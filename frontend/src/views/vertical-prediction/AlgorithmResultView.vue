@@ -1,5 +1,7 @@
 <script setup>
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
+import { Connection, Document, Histogram } from '@element-plus/icons-vue'
 
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
 
@@ -10,7 +12,11 @@ const props = defineProps({
   status: { type: String, default: '' },
   error: { type: Object, default: null },
   attributions: { type: Array, default: () => [] },
+  algorithmId: { type: String, default: '' },
+  runId: { type: String, default: '' },
 })
+
+const router = useRouter()
 
 const priorityValueKeys = ['value', 'predicted_value', 'prediction', 'score']
 const uncertaintyKeys = ['uncertainty', 'std', 'stddev', 'confidence', 'probability']
@@ -25,14 +31,28 @@ const predictionObject = computed(() => {
   return outputObject.value
 })
 
-const batchResultSections = computed(() => buildBatchResultSections(outputObject.value))
+const isRamanFunctionalGroupModel = computed(() => props.algorithmId === 'raman_structure_analyzer')
+const ramanFunctionalGroups = computed(() => {
+  if (!isRamanFunctionalGroupModel.value || !Array.isArray(outputObject.value.candidates)) return []
+  return outputObject.value.candidates
+    .map((item) => item?.functional_group ?? item?.structure ?? item)
+    .filter((item) => item !== null && item !== undefined && String(item).trim())
+    .map(String)
+})
+const batchResultSections = computed(() => buildBatchResultSections(
+  outputObject.value,
+  isRamanFunctionalGroupModel.value ? new Set(['candidates']) : new Set(),
+))
 const batchHighlights = computed(() => buildBatchHighlights(batchResultSections.value))
 const mainPrediction = computed(() => buildMainPrediction(predictionObject.value, outputObject.value))
 const evidence = computed(() => buildEvidence(
   outputObject.value,
   predictionObject.value,
   mainPrediction.value,
-  new Set(batchResultSections.value.map((section) => section.key)),
+  new Set([
+    ...batchResultSections.value.map((section) => section.key),
+    ...(isRamanFunctionalGroupModel.value ? ['candidates'] : []),
+  ]),
 ))
 const rawPanels = computed(() => {
   const panels = [
@@ -79,6 +99,20 @@ const hasStructuredContent = computed(() => Boolean(
   artifactRows.value.length,
 ))
 const inputHighlights = computed(() => scalarEntries(inputObject.value).slice(0, 4))
+const jumpActions = computed(() => {
+  const runId = String(props.runId || '').trim()
+  const algorithmId = String(props.algorithmId || '').trim()
+  const taskKeyword = runId || algorithmId
+  return [
+    { label: '知识库', icon: Connection, route: { path: '/knowledge', query: { tab: 'literature' } } },
+    {
+      label: '任务中心',
+      icon: Histogram,
+      route: { path: '/tasks/center', query: taskKeyword ? { module_id: 'research-engine', keyword: taskKeyword } : { module_id: 'research-engine' } },
+    },
+    ...(runId ? [{ label: '报告', icon: Document, route: { path: '/research-engine', query: { run_id: runId, action: 'report' } } }] : []),
+  ]
+})
 
 function artifactGroup(item) {
   const stepKey = item.step_key || item.stepKey || ''
@@ -88,8 +122,9 @@ function artifactGroup(item) {
   return '模型输出'
 }
 
-function buildBatchResultSections(output) {
+function buildBatchResultSections(output, hiddenKeys = new Set()) {
   return Object.entries(output)
+    .filter(([key]) => !hiddenKeys.has(key))
     .filter(([, value]) => Array.isArray(value) && value.length && value.every(isPlainObject))
     .map(([key, rows]) => buildFlatTableSection(key, rows, { preferredNestedKey: 'predictions', limitColumns: 14 }))
 }
@@ -333,10 +368,30 @@ function summarizeValue(value) {
 function stringifyJson(value) {
   return JSON.stringify(value ?? null, null, 2)
 }
+
+function openJump(route) {
+  if (!route) return
+  router.push(route)
+}
 </script>
 
 <template>
   <div class="algorithm-result-view">
+    <div v-if="jumpActions.length" class="result-jumpbar">
+      <span>快捷跳转</span>
+      <div class="jump-actions">
+        <el-button
+          v-for="action in jumpActions"
+          :key="action.label"
+          size="small"
+          :icon="action.icon"
+          @click="openJump(action.route)"
+        >
+          {{ action.label }}
+        </el-button>
+      </div>
+    </div>
+
     <section v-if="attributions.length" class="result-attribution">
       <span>模型开发者来源</span>
       <AttributionBadges :attributions="attributions" :limit="3" />
@@ -352,6 +407,25 @@ function stringifyJson(value) {
     />
 
     <template v-if="status !== 'failed' && hasOutput">
+      <el-alert
+        v-if="isRamanFunctionalGroupModel"
+        title="当前模型识别拉曼光谱中的官能团，不输出完整分子结构或置信分数。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+
+      <section v-if="isRamanFunctionalGroupModel" class="result-section">
+        <div class="section-heading">
+          <h4>检测到的官能团</h4>
+          <span>{{ ramanFunctionalGroups.length }} 项</span>
+        </div>
+        <div v-if="ramanFunctionalGroups.length" class="tag-list">
+          <el-tag v-for="item in ramanFunctionalGroups" :key="item" effect="plain">{{ item }}</el-tag>
+        </div>
+        <div v-else class="empty-result">未检测到官能团</div>
+      </section>
+
       <section v-if="batchHighlights.length" class="prediction-dashboard" aria-label="批量预测概览">
         <article v-for="item in batchHighlights" :key="item.key" class="signal-card">
           <span>{{ item.label }}</span>
@@ -505,6 +579,31 @@ function stringifyJson(value) {
   display: grid;
   gap: 14px;
   min-width: 0;
+}
+
+.result-jumpbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.result-jumpbar > span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.jump-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .result-error {

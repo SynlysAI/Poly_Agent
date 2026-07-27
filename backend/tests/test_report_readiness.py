@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -76,3 +77,17 @@ class ReportReadinessTest(unittest.TestCase):
         self.assertNotIn("secret-key-for-test", str(body))
         self.assertNotIn(str(self.runtime_root), str(body))
         client.close()
+
+    def test_readiness_warns_when_playwright_chromium_is_missing(self) -> None:
+        with patch.object(ReportService, "_playwright_pdf_ready", return_value=False):
+            readiness = ReportService().get_readiness()
+
+        self.assertFalse(readiness.pdf_ready)
+        self.assertIn("Playwright Chromium 不可用，PDF 输出将失败。", readiness.warnings)
+
+    def test_readiness_reports_pdf_ready_after_chromium_install(self) -> None:
+        with patch.object(ReportService, "_playwright_pdf_ready", return_value=True):
+            readiness = ReportService().get_readiness()
+
+        self.assertTrue(readiness.pdf_ready)
+        self.assertNotIn("Playwright Chromium 不可用，PDF 输出将失败。", readiness.warnings)

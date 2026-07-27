@@ -23,7 +23,6 @@ enabled/endpoint/config_summary 等元数据。
   - artifact-store: enabled, status=up
   - alchemist-backend: 有 endpoint 时 enabled；endpoint 不可达时显示 down
   - orca: 仅 ORCA_LICENSE_AVAILABLE=true 且 probe 正常时标记可用
-  - atlas: 默认 disabled, status=down
   - speclabos: 默认 disabled
 """
 
@@ -83,16 +82,6 @@ SERVICE_CONFIGS: dict[str, dict[str, Any]] = {
         "config_summary": {
             "license_available": False,
             "note": "ORCA 商业软件，仅做路径/许可证探测",
-        },
-    },
-    "atlas": {
-        "display_name": "Atlas optimizer",
-        "service_type": "optimizer",
-        "enabled": False,
-        "endpoint": "http://127.0.0.1:65100",
-        "config_summary": {
-            "status": "down",
-            "note": "参考仓库不完整，默认 disabled",
         },
     },
     "speclabos": {
@@ -210,18 +199,6 @@ def build_configs(root: str, mode: str, alchemist_available: str) -> dict[str, d
                 if orca_available
                 else "ORCA license 未标记可用或可执行文件未找到"
             ),
-        },
-    }
-
-    # ---- atlas ----
-    atlas_reachable = probe_port("127.0.0.1", 65100)
-    configs["atlas"] = {
-        **SERVICE_CONFIGS["atlas"],
-        "enabled": False,  # 默认 disabled
-        "config_summary": {
-            "port": 65100,
-            "reachable": atlas_reachable,
-            "note": "参考仓库不完整，默认 disabled",
         },
     }
 

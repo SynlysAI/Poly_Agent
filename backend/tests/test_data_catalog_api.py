@@ -141,7 +141,7 @@ class DataCatalogServiceTest(unittest.TestCase):
 
         data = service.list_datasets()
 
-        self.assertEqual(len(data.items), 6)
+        self.assertEqual(len(data.items), 16)
         self.assertFalse(any(obj.exists for dataset in data.items for obj in dataset.objects))
 
     def test_dataset_catalog_prefers_poly_data_metadata(self) -> None:
@@ -187,7 +187,7 @@ class DataCatalogServiceTest(unittest.TestCase):
         ):
             data = service.list_datasets()
 
-        self.assertEqual(len(data.items), 6)
+        self.assertEqual(len(data.items), 16)
         openpoly = next(item for item in data.items if item.dataset_id == "openpoly")
         self.assertEqual(openpoly.display_name, "OpenPoly Mongo")
         self.assertEqual(openpoly.description, "从 poly_data.datasets 读取的数据集说明。")
@@ -218,7 +218,7 @@ class DataCatalogServiceTest(unittest.TestCase):
 
         self.assertEqual(data.material_record_count, 10)
         self.assertNotEqual(data.material_record_count, data.total_rows)
-        self.assertEqual(next(item for item in data.sources if item.source == "mongodb.poly_data").status, "ready")
+        self.assertEqual(next(item for item in data.sources if item.source == "mongodb.poly_data").status, "degraded")
 
     def test_material_record_count_returns_none_for_degraded_poly_data_collection(self) -> None:
         data = DataCatalogService(s3_client=FakeS3Client(configured=False))._material_record_count([
@@ -625,13 +625,26 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
 
         self.assertEqual(response.status_code, 404)
 
-    def test_non_admin_cannot_list_collection_records(self) -> None:
+    def test_authenticated_user_can_drill_down_records(self) -> None:
         self._seed_demo_records()
         self._login_as("regular-user", role="user")
 
-        response = self.client.get("/api/v1/data-catalog/mongo-collections/computation_runs/records")
+        collection_response = self.client.get(
+            "/api/v1/data-catalog/mongo-collections/computation_runs/records"
+        )
+        detail_response = self.client.get(
+            "/api/v1/data-catalog/mongo-collections/computation_runs/records/run-001"
+        )
+        with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+            dataset_response = self.client.get(
+                "/api/v1/data-catalog/datasets/pi1m_v2/records",
+                params={"page_size": 10},
+            )
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(collection_response.status_code, 200)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(dataset_response.status_code, 200)
+        self.assertNotIn("secret_refs", detail_response.json()["data"]["document"])
 
     def test_list_collection_records_supports_pagination_and_keyword(self) -> None:
         self._seed_demo_records()

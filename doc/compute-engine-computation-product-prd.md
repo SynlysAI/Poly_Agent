@@ -54,7 +54,7 @@
 | N2 | 把 AiiDA PostgreSQL 当成 Poly_Agent 主业务库 | AiiDA 是外部 provenance 系统，业务只保存引用和摘要 |
 | N3 | 把 ORCA license/HPC key/SpecLabOS token 写入业务库 | 敏感配置只能通过环境变量或 secret reference |
 | N4 | 迁移 ComputeEngine Streamlit/SiLA 仪器层作为主界面 | Poly_Agent 已有 Vue/FastAPI 架构，实验设备由 SpecLabOS 承担 |
-| N5 | 第一版强依赖 Atlas/Olympus | 依赖重且未在当前环境完整验证，当前用轻量 tanimoto 替代 |
+| N5 | 第一版强依赖外部优化器 | 依赖重且未在当前环境完整验证，当前用轻量 tanimoto 替代 |
 
 ## 5. 用户和角色
 
@@ -186,7 +186,7 @@
 | OPT-006 | P1 | tanimoto planner | 已完成轻量版 |
 | OPT-007 | P1 | 自动 observation 和下一轮 suggestion | 已完成 MVP |
 | OPT-008 | P1 | configurable computation preset | 未完成，当前 submit 硬编码 `MOCK_LASER` |
-| OPT-009 | P2 | Atlas/Olympus adapter | 未完成 |
+| OPT-009 | P2 | 自研 planner adapter | 未完成 |
 
 ### 8.4 集成和实验
 
@@ -317,4 +317,4 @@
 | Q2 | ORCA external 先接 HPC 脚本还是 AiiDA | 先做受控 fake/external executor 边界，再决定 HPC/AiiDA |
 | Q3 | artifact 是否迁移对象存储 | 当前本地 `.runtime/outputs`，生产化再引入 S3/MinIO |
 | Q4 | SpecLabOS 结果用 webhook 还是 polling | 第一版 polling，后续支持 webhook |
-| Q5 | Atlas/Olympus 是否作为主依赖 | 不进入主后端，作为独立可选 optimizer adapter |
+| Q5 | 外部优化器是否作为主依赖 | 不进入主后端，作为独立可选 optimizer adapter |

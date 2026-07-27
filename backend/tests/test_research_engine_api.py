@@ -275,7 +275,13 @@ class AlgorithmPackageApiTest(ComputationTestCase):
             "status": "active",
         }
 
-    def _pack_activate_simple_algorithm(self, algorithm_id: str, *, visibility: str | None = None) -> str:
+    def _pack_activate_simple_algorithm(
+        self,
+        algorithm_id: str,
+        *,
+        visibility: str | None = None,
+        contributors: list[dict] | None = None,
+    ) -> str:
         handler_source = b"""
 def predict(inputs, context=None, model=None):
     return {"prediction": {"value": inputs.get("smiles", "")}}
@@ -293,6 +299,8 @@ def predict(inputs, context=None, model=None):
         }
         if visibility is not None:
             data["visibility"] = visibility
+        if contributors is not None:
+            data["contributors"] = json.dumps(contributors, ensure_ascii=False)
         pack_resp = self.client.post(
             f"{self.base_url}/algorithm-packages:pack",
             data=data,
@@ -728,6 +736,120 @@ sample_input:
 
         logs_resp = self.client.get(f"{self.base_url}/algorithms/public_access_demo/versions/{version_id}/logs")
         self.assertEqual(logs_resp.status_code, 403, logs_resp.text)
+
+    def test_credit_summary_aggregates_existing_records_without_exposing_runs(self) -> None:
+        """Credit 汇总只返回贡献构成和运行计数，不泄露运行输入或项目内容。"""
+        self._login_as("user-a")
+        contributors = [
+            {
+                "user_id": "student-1",
+                "name": "学生开发者",
+                "role": "developer",
+                "organization": "Demo Institute",
+                "mentor_relation": "课题组指导",
+                "description": "实现模型推理入口",
+            },
+            {
+                "name": "导师审核",
+                "role": "reviewer",
+                "organization": "Demo Institute",
+                "description": "验证模型适用边界",
+            },
+        ]
+        self._pack_activate_simple_algorithm(
+            "credit_summary_demo",
+            visibility="public",
+            contributors=contributors,
+        )
+        for user_id in ("user-a", "user-b"):
+            self._login_as(user_id)
+            run_resp = self.client.post(
+                f"{self.base_url}/algorithm-runs",
+                json={
+                    "algorithm_id": "credit_summary_demo",
+                    "trigger_source": "human_workflow",
+                    "problem_spec_id": None,
+                    "research_run_id": "rr-credit-demo" if user_id == "user-b" else None,
+                    "input_snapshot": {"smiles": "CCO"},
+                },
+            )
+            self.assertEqual(run_resp.status_code, 200, run_resp.text)
+
+        summary_resp = self.client.get(f"{self.base_url}/algorithms/credit_summary_demo/credit-summary")
+        self.assertEqual(summary_resp.status_code, 200, summary_resp.text)
+        summary = summary_resp.json()["data"]
+        self.assertEqual(summary["visibility"], "public")
+        self.assertEqual(summary["metrics"]["version_count"], 1)
+        self.assertEqual(summary["metrics"]["validated_version_count"], 1)
+        self.assertEqual(summary["metrics"]["run_count"], 2)
+        self.assertEqual(summary["metrics"]["success_run_count"], 2)
+        self.assertEqual(summary["metrics"]["caller_count"], 2)
+        self.assertEqual(summary["metrics"]["reused_project_count"], 1)
+        self.assertEqual(summary["metrics"]["contributor_count"], 2)
+        self.assertEqual(summary["metrics"]["role_breakdown"]["developer"], 1)
+        self.assertEqual(summary["metrics"]["role_breakdown"]["reviewer"], 1)
+        self.assertNotIn("input_snapshot", json.dumps(summary, ensure_ascii=False))
+        self.assertNotIn("CCO", json.dumps(summary, ensure_ascii=False))
+
+    def test_private_credit_summary_is_not_visible_to_other_users(self) -> None:
+        """普通用户不能查看他人私有上传算法的 Credit 汇总。"""
+        self._login_as("user-a")
+        self._pack_activate_simple_algorithm("private_credit_demo", visibility="private")
+
+        self._login_as("user-b")
+        summary_resp = self.client.get(f"{self.base_url}/algorithms/private_credit_demo/credit-summary")
+        self.assertEqual(summary_resp.status_code, 403, summary_resp.text)
+
+    def test_admin_can_correct_credit_summary_and_audit_is_recorded(self) -> None:
+        """管理员可修正当前贡献关系，且修正原因进入审计记录。"""
+        self._login_as("user-a")
+        self._pack_activate_simple_algorithm("credit_correction_demo", visibility="public")
+
+        self._login_as("normal_user")
+        forbidden_resp = self.client.patch(
+            f"{self.base_url}/algorithms/credit_correction_demo/credit-summary",
+            json={
+                "contributors": [],
+                "mentor_team": "普通用户尝试修正",
+                "reason": "not allowed",
+            },
+        )
+        self.assertEqual(forbidden_resp.status_code, 403, forbidden_resp.text)
+
+        self._login_as("admin", role="admin")
+        patch_resp = self.client.patch(
+            f"{self.base_url}/algorithms/credit_correction_demo/credit-summary",
+            json={
+                "contributors": [
+                    {
+                        "name": "更正作者",
+                        "role": "developer",
+                        "organization": "更正机构",
+                    }
+                ],
+                "developer_attribution": {
+                    "name": "更正作者",
+                    "role": "developer",
+                    "organization": "更正机构",
+                    "visibility": "prominent",
+                },
+                "mentor_team": "更正课题组",
+                "reason": "管理员核对上传登记后修正",
+            },
+        )
+        self.assertEqual(patch_resp.status_code, 200, patch_resp.text)
+        summary = patch_resp.json()["data"]
+        self.assertEqual(summary["contributors"][0]["name"], "更正作者")
+        self.assertEqual(summary["developer_attribution"]["organization"], "更正机构")
+        self.assertEqual(summary["mentor_team"], "更正课题组")
+
+        audit_resp = self.client.get(
+            f"{self.base_url}/audit",
+            params={"entity_type": "algorithm", "entity_id": "credit_correction_demo"},
+        )
+        self.assertEqual(audit_resp.status_code, 200, audit_resp.text)
+        event_types = {item["event_type"] for item in audit_resp.json()["data"]["items"]}
+        self.assertIn("credit_corrected", event_types)
 
     def test_pack_algorithm_package_persists_developer_attribution(self) -> None:
         """网页打包入口会把开发者来源写入 AlgorithmVersion。"""
@@ -1223,7 +1345,12 @@ sample_input_path: tests/sample_input.json
             },
         )
         self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
-        package_id = upload_resp.json()["data"]["package_id"]
+        upload_data = upload_resp.json()["data"]
+        package_id = upload_data["package_id"]
+        self.assertEqual(upload_data["algorithm_id"], "managed_resource_demo")
+        self.assertEqual(upload_data["version"], "0.1.0")
+        self.assertEqual(upload_data["resource_assets"][0]["key"], "model_weights")
+        self.assertTrue(upload_data["resource_assets"][0]["binding_required"])
         with patch.dict("os.environ", {}, clear=True):
             validate_resp = self.client.post(
                 f"{self.base_url}/algorithm-packages/{package_id}:validate",
@@ -1400,6 +1527,275 @@ sample_input_path: tests/sample_input.json
         detail_resp = self.client.get(f"{self.base_url}/algorithm-packages/{package_id}")
         self.assertEqual(detail_resp.json()["data"]["status"], "validation_failed")
 
+    def test_targeted_version_upload_rejects_mismatched_algorithm_id(self) -> None:
+        self._pack_activate_simple_algorithm("vertical_tg_predictor_demo")
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+        mismatched_buffer = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(template_resp.content)) as source_zip:
+            with zipfile.ZipFile(
+                mismatched_buffer, "w", compression=zipfile.ZIP_DEFLATED
+            ) as target_zip:
+                for member in source_zip.infolist():
+                    if member.is_dir():
+                        continue
+                    content = source_zip.read(member.filename)
+                    if member.filename == "polyagent.algorithm.yaml":
+                        contract = yaml.safe_load(content)
+                        contract["algorithm_id"] = "another_algorithm"
+                        content = yaml.safe_dump(
+                            contract, allow_unicode=True, sort_keys=False
+                        ).encode("utf-8")
+                    target_zip.writestr(member, content)
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={"target_algorithm_id": "vertical_tg_predictor_demo"},
+            files={
+                "file": (
+                    "mismatch.zip",
+                    mismatched_buffer.getvalue(),
+                    "application/zip",
+                )
+            },
+        )
+
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package_id = upload_resp.json()["data"]["package_id"]
+        validate_resp = self.client.post(f"{self.base_url}/algorithm-packages/{package_id}:validate")
+
+        self.assertEqual(validate_resp.status_code, 409)
+        self.assertIn("目标算法 ID", validate_resp.text)
+
+    def test_targeted_version_upload_requires_an_active_target(self) -> None:
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={"target_algorithm_id": "missing_algorithm"},
+            files={"file": ("missing.zip", template_resp.content, "application/zip")},
+        )
+
+        self.assertEqual(upload_resp.status_code, 409)
+        self.assertIn("活动版本", upload_resp.text)
+
+    def test_targeted_version_upload_rejects_duplicate_semantic_version(self) -> None:
+        self._pack_activate_simple_algorithm("vertical_tg_predictor_demo")
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+        first_upload = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={
+                "target_algorithm_id": "vertical_tg_predictor_demo",
+                "target_version": "0.1.1",
+            },
+            files={"file": ("first.zip", template_resp.content, "application/zip")},
+        )
+        first_package_id = first_upload.json()["data"]["package_id"]
+        first_validate = self.client.post(
+            f"{self.base_url}/algorithm-packages/{first_package_id}:validate"
+        )
+        self.assertEqual(first_validate.status_code, 200, first_validate.text)
+
+        second_upload = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={
+                "target_algorithm_id": "vertical_tg_predictor_demo",
+                "target_version": "0.1.1",
+            },
+            files={"file": ("second.zip", template_resp.content, "application/zip")},
+        )
+        second_package_id = second_upload.json()["data"]["package_id"]
+        second_validate = self.client.post(
+            f"{self.base_url}/algorithm-packages/{second_package_id}:validate"
+        )
+
+        self.assertEqual(second_validate.status_code, 409)
+        self.assertIn("语义版本", second_validate.text)
+
+    def test_existing_model_id_requires_dedicated_version_upload(self) -> None:
+        """其他用户不能借首次上传入口覆盖已有模型 ID。"""
+        self._login_as("original-owner")
+        self._pack_activate_simple_algorithm("owned_model_demo", visibility="public")
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+        replacement = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(template_resp.content)) as source_zip:
+            with zipfile.ZipFile(replacement, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                for member in source_zip.infolist():
+                    if member.is_dir():
+                        continue
+                    content = source_zip.read(member.filename)
+                    if member.filename == "polyagent.algorithm.yaml":
+                        contract = yaml.safe_load(content)
+                        contract["algorithm_id"] = "owned_model_demo"
+                        contract["version"] = "0.2.0"
+                        content = yaml.safe_dump(
+                            contract, allow_unicode=True, sort_keys=False
+                        ).encode("utf-8")
+                    target_zip.writestr(member, content)
+
+        self._login_as("other-user")
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("duplicate-id.zip", replacement.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+
+        validate_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages/{upload_resp.json()['data']['package_id']}:validate"
+        )
+        self.assertEqual(validate_resp.status_code, 409, validate_resp.text)
+        self.assertIn("模型 ID", validate_resp.text)
+        self.assertIn("上传新版本", validate_resp.text)
+
+    def test_admin_release_preserves_owner_and_owner_can_rollback(self) -> None:
+        """管理员代发新版本不转移归属，原上传者仍可管理并看到回滚状态。"""
+        self._login_as("original-owner")
+        first_version_id = self._pack_activate_simple_algorithm(
+            "admin_release_demo", visibility="public"
+        )
+
+        self._login_as("system-admin", role="admin")
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:pack-version",
+            data={"target_algorithm_id": "admin_release_demo", "version": "0.1.1"},
+            files={
+                "files": (
+                    "handler.py",
+                    b"def predict(inputs, context=None, model=None):\n    return {'prediction': {'value': 2}}\n",
+                    "text/x-python",
+                )
+            },
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package = upload_resp.json()["data"]
+        self.assertEqual(package["created_by"], "original-owner")
+        self.assertEqual(package["uploaded_by"], "system-admin")
+
+        release_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages/{package['package_id']}:release"
+        )
+        self.assertEqual(release_resp.status_code, 200, release_resp.text)
+        released = release_resp.json()["data"]
+        self.assertEqual(released["status"], "active")
+        self.assertEqual(released["activation_kind"], "release")
+        self.assertEqual(released["previous_active_version_id"], first_version_id)
+        self.assertEqual(released["created_by"], "original-owner")
+        self.assertEqual(released["uploaded_by"], "system-admin")
+
+        registry_resp = self.client.get(f"{self.base_url}/algorithms/admin_release_demo")
+        self.assertEqual(registry_resp.json()["data"]["owner"], "original-owner")
+
+        self._login_as("original-owner")
+        versions_resp = self.client.get(
+            f"{self.base_url}/algorithms/admin_release_demo/versions",
+            params={"page_size": 20},
+        )
+        self.assertEqual(versions_resp.status_code, 200, versions_resp.text)
+        self.assertEqual(versions_resp.json()["data"]["total"], 2)
+
+        rollback_resp = self.client.post(
+            f"{self.base_url}/algorithms/admin_release_demo/versions/{first_version_id}:rollback"
+        )
+        self.assertEqual(rollback_resp.status_code, 200, rollback_resp.text)
+        rolled_back = rollback_resp.json()["data"]
+        self.assertEqual(rolled_back["status"], "active")
+        self.assertEqual(rolled_back["activation_kind"], "rollback")
+        self.assertEqual(rolled_back["rollback_status"], "completed")
+        self.assertEqual(rolled_back["previous_active_version_id"], released["version_id"])
+
+        self._login_as("other-user")
+        forbidden_resp = self.client.post(
+            f"{self.base_url}/algorithms/admin_release_demo/versions/{released['version_id']}:rollback"
+        )
+        self.assertEqual(forbidden_resp.status_code, 403, forbidden_resp.text)
+
+    def test_script_version_upload_inherits_active_package_contract(self) -> None:
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+        source_buffer = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(template_resp.content)) as source_zip:
+            with zipfile.ZipFile(source_buffer, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                for member in source_zip.infolist():
+                    if not member.is_dir():
+                        target_zip.writestr(member, source_zip.read(member.filename))
+                target_zip.writestr("models/weights.bin", b"old-weights")
+        first_upload = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            files={"file": ("first.zip", source_buffer.getvalue(), "application/zip")},
+        )
+        first_package_id = first_upload.json()["data"]["package_id"]
+        first_validate = self.client.post(
+            f"{self.base_url}/algorithm-packages/{first_package_id}:validate"
+        )
+        version_id = first_validate.json()["data"]["version_id"]
+        self.client.post(f"{self.base_url}/algorithm-packages/{first_package_id}:build")
+        self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}:deploy"
+        )
+        self.client.post(
+            f"{self.base_url}/algorithms/vertical_tg_predictor_demo/versions/{version_id}:activate"
+        )
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:pack-version",
+            data={
+                "target_algorithm_id": "vertical_tg_predictor_demo",
+                "version": "0.1.1",
+            },
+            files=[
+                (
+                    "files",
+                    (
+                        "handler.py",
+                        b"def predict(inputs, context=None, model=None):\n    return {'prediction': {'value': 321}}\n",
+                        "text/x-python",
+                    ),
+                ),
+                ("files", ("weights.bin", b"new-weights", "application/octet-stream")),
+            ],
+        )
+
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        package = upload_resp.json()["data"]
+        self.assertEqual(package["status"], "uploaded")
+        self.assertEqual(package["target_algorithm_id"], "vertical_tg_predictor_demo")
+        download_resp = self.client.get(
+            f"{self.base_url}/algorithm-packages/{package['package_id']}/download"
+        )
+        with zipfile.ZipFile(io.BytesIO(download_resp.content)) as archive:
+            contract = yaml.safe_load(archive.read("polyagent.algorithm.yaml"))
+            source = archive.read("src/handler.py")
+            weights = archive.read("models/weights.bin")
+            self.assertNotIn("weights.bin", archive.namelist())
+
+        self.assertEqual(contract["algorithm_id"], "vertical_tg_predictor_demo")
+        self.assertEqual(contract["name"], "Polymer Tg Predictor Demo")
+        self.assertEqual(contract["version"], "0.1.1")
+        self.assertEqual(contract["input_schema"]["required"], ["smiles"])
+        self.assertIn(b"321", source)
+        self.assertEqual(weights, b"new-weights")
+
+        self._login_as("other-user", role="user")
+        forbidden_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:pack-version",
+            data={
+                "target_algorithm_id": "vertical_tg_predictor_demo",
+                "version": "0.1.2",
+            },
+            files={
+                "files": (
+                    "handler.py",
+                    b"def predict(inputs, context=None, model=None):\n    return {'prediction': 1}\n",
+                    "text/x-python",
+                )
+            },
+        )
+        self.assertEqual(forbidden_resp.status_code, 403)
+
+        forbidden_zip_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={"target_algorithm_id": "vertical_tg_predictor_demo"},
+            files={"file": ("forbidden.zip", template_resp.content, "application/zip")},
+        )
+        self.assertEqual(forbidden_zip_resp.status_code, 403)
+
     def test_upload_rejects_zip_symlink_on_validate(self) -> None:
         """ZIP 符号链接在校验阶段被拒绝。"""
         buffer = io.BytesIO()
@@ -1475,6 +1871,7 @@ sample_input_path: tests/sample_input.json
 
         second_upload = self.client.post(
             f"{self.base_url}/algorithm-packages",
+            data={"target_algorithm_id": "vertical_tg_predictor_demo"},
             files={"file": ("second.zip", second_buffer.getvalue(), "application/zip")},
         )
         second_package_id = second_upload.json()["data"]["package_id"]

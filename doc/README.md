@@ -34,6 +34,8 @@
 | [research-report-generation-product-design.md](research-report-generation-product-design.md) | 自动研发报告生成、渲染器和 LLM provider 设计 |
 | [knowledge-base-rag-kg-product-design.md](knowledge-base-rag-kg-product-design.md) | 知识库 RAG + 知识图谱产品设计 |
 | [knowledge-base-rag-kg-upgrade-plan.md](knowledge-base-rag-kg-upgrade-plan.md) | 知识库内容、检索和界面增强计划 |
+| [platform-positioning-and-small-iteration-plan.md](platform-positioning-and-small-iteration-plan.md) | 平台定位、credit、低学习成本和小步优化方案 |
+| [internagents-inspired-product-optimization-design.md](internagents-inspired-product-optimization-design.md) | 借鉴 InternAgents 工作台模型的 PolyAgent 产品设计优化方案 |
 | [literature-rag-service-design.md](literature-rag-service-design.md) | 独立 Literature RAG 服务设计与运行说明 |
 
 ## 进度、计划与验收

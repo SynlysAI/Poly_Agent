@@ -8,7 +8,7 @@ from io import BytesIO
 from typing import Any
 from uuid import uuid4
 
-from .query import expand_query_text, has_domain_anchor, tokenize_query
+from .query import expand_query_text, extract_graph_query_terms, has_domain_anchor, tokenize_query
 from .storage import utc_now
 
 
@@ -255,33 +255,96 @@ class Neo4jGraphStore:
             return [{**dict(record["node"]), "score": float(record["score"])} for record in records]
 
     def subgraph(self, corpus_id: str, query: str, limit: int = 30) -> dict[str, Any]:
+        normalized_limit = max(1, min(int(limit or 30), 100))
+        search_terms = extract_graph_query_terms(query, max_terms=32)
         with self.driver.session() as session:
-            records = session.run(
-                "MATCH (p:Paper {corpus_id: $corpus_id})-[matched_rel:CONTAINS|MENTIONS]->(matched_node) "
-                "WHERE toLower(p.title) CONTAINS toLower($search_query) "
-                "   OR toLower(coalesce(matched_node.text, matched_node.label, '')) CONTAINS toLower($search_query) "
-                "WITH collect(DISTINCT p) AS matched_papers "
-                "UNWIND matched_papers AS p "
-                "MATCH (p)-[r:MENTIONS|CONTAINS]->(n) "
-                "RETURN p, r, n "
-                "ORDER BY CASE type(r) WHEN 'MENTIONS' THEN 0 ELSE 1 END "
-                "LIMIT $limit",
-                corpus_id=corpus_id, search_query=query, limit=limit,
-            )
-            nodes: dict[str, dict[str, Any]] = {}
-            edges = []
-            for index, record in enumerate(records):
-                paper = dict(record["p"])
-                target = dict(record["n"])
-                paper_id = f"paper:{paper['document_id']}"
-                target_id = target.get("source_id")
-                nodes[paper_id] = {"id": paper_id, "label": paper["title"], "type": "Paper", "score": 1.0,
-                                   "properties": paper}
-                nodes[target_id] = {"id": target_id, "label": target.get("label") or target.get("text", "")[:80],
-                                    "type": target.get("entity_type") or "Chunk", "score": 1.0, "properties": target}
-                edges.append({"id": f"edge:{index}", "source": paper_id, "target": target_id,
-                              "type": record["r"].type, "weight": 1.0, "properties": dict(record["r"])})
-            return {"nodes": list(nodes.values())[:limit], "edges": edges[:limit]}
+            if search_terms:
+                records = session.run(
+                    "MATCH (p:Paper {corpus_id: $corpus_id})-[matched_rel:CONTAINS|MENTIONS]->(matched_node) "
+                    "WITH p, matched_node, [term IN $search_terms WHERE "
+                    "  ANY(value IN [p.title, p.doi, p.journal, matched_node.text, matched_node.label, "
+                    "                matched_node.entity_type, matched_node.type] "
+                    "      WHERE toLower(coalesce(toString(value), '')) CONTAINS term)] AS matched_terms "
+                    "WHERE size(matched_terms) > 0 "
+                    "WITH p, max(size(matched_terms)) AS paper_score "
+                    "ORDER BY paper_score DESC, coalesce(p.year, 0) DESC, toLower(coalesce(p.title, '')) ASC "
+                    "LIMIT $paper_limit "
+                    "MATCH (p)-[r:MENTIONS|CONTAINS]->(n) "
+                    "WITH p, r, n, paper_score, [term IN $search_terms WHERE "
+                    "  ANY(value IN [p.title, n.text, n.label, n.entity_type, n.type] "
+                    "      WHERE toLower(coalesce(toString(value), '')) CONTAINS term)] AS node_terms "
+                    "RETURN p, r, n, paper_score + size(node_terms) AS score "
+                    "ORDER BY score DESC, CASE type(r) WHEN 'MENTIONS' THEN 0 ELSE 1 END, "
+                    "         toLower(coalesce(n.label, n.text, '')) ASC "
+                    "LIMIT $limit",
+                    corpus_id=corpus_id,
+                    search_terms=search_terms,
+                    paper_limit=max(1, min(normalized_limit, 12)),
+                    limit=normalized_limit,
+                )
+                data = self._records_to_subgraph(records, normalized_limit)
+                if data["nodes"]:
+                    return data
+            return self._representative_subgraph(session, corpus_id, normalized_limit)
+
+    def _representative_subgraph(self, session: Any, corpus_id: str, limit: int) -> dict[str, Any]:
+        records = session.run(
+            "MATCH (p:Paper {corpus_id: $corpus_id})-[r:MENTIONS|CONTAINS]->(n) "
+            "RETURN p, r, n, CASE type(r) WHEN 'MENTIONS' THEN 2 ELSE 1 END AS score "
+            "ORDER BY CASE type(r) WHEN 'MENTIONS' THEN 0 ELSE 1 END, coalesce(p.year, 0) DESC, "
+            "         toLower(coalesce(p.title, '')) ASC, toLower(coalesce(n.label, n.text, '')) ASC "
+            "LIMIT $limit",
+            corpus_id=corpus_id,
+            limit=limit,
+        )
+        data = self._records_to_subgraph(records, limit)
+        if data["nodes"]:
+            data["provenance"] = {"match_mode": "representative_fallback"}
+            return data
+        paper_records = session.run(
+            "MATCH (p:Paper {corpus_id: $corpus_id}) "
+            "RETURN p, null AS r, null AS n, 1 AS score "
+            "ORDER BY coalesce(p.year, 0) DESC, toLower(coalesce(p.title, '')) ASC "
+            "LIMIT $limit",
+            corpus_id=corpus_id,
+            limit=limit,
+        )
+        data = self._records_to_subgraph(paper_records, limit)
+        if data["nodes"]:
+            data["provenance"] = {"match_mode": "paper_fallback"}
+        return data
+
+    @staticmethod
+    def _records_to_subgraph(records: Any, limit: int) -> dict[str, Any]:
+        nodes: dict[str, dict[str, Any]] = {}
+        edges = []
+        edge_index = 0
+        for record in records:
+            paper = dict(record["p"])
+            score = float(record.get("score") or 1.0)
+            paper_id = f"paper:{paper['document_id']}"
+            nodes[paper_id] = {"id": paper_id, "label": paper.get("title") or paper_id, "type": "Paper",
+                               "score": max(score, 1.0),
+                               "properties": Neo4jGraphStore._public_graph_properties(paper)}
+            raw_target = record.get("n")
+            raw_relationship = record.get("r")
+            if raw_target is None or raw_relationship is None:
+                continue
+            target = dict(raw_target)
+            target_id = target.get("source_id") or f"{paper['document_id']}:{target.get('chunk_id') or target.get('label') or len(nodes)}"
+            nodes[target_id] = {"id": target_id, "label": target.get("label") or target.get("text", "")[:80] or target_id,
+                                "type": target.get("entity_type") or "Chunk", "score": max(score, 1.0),
+                                "properties": Neo4jGraphStore._public_graph_properties(target)}
+            edges.append({"id": f"edge:{edge_index}", "source": paper_id, "target": target_id,
+                          "type": raw_relationship.type, "weight": score,
+                          "properties": Neo4jGraphStore._public_graph_properties(dict(raw_relationship))})
+            edge_index += 1
+        return {"nodes": list(nodes.values())[:limit], "edges": edges[:limit]}
+
+    @staticmethod
+    def _public_graph_properties(properties: dict[str, Any]) -> dict[str, Any]:
+        blocked = {"embedding", "storage_uri", "object_key", "content_hash", "_id"}
+        return {key: value for key, value in properties.items() if key not in blocked}
 
     def corpus_stats(self, corpus_id: str) -> dict[str, int]:
         with self.driver.session() as session:

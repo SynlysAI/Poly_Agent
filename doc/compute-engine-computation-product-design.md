@@ -48,7 +48,7 @@ Vue frontend
 外部系统边界：
 - RDKit/OpenBabel/xTB 是可选本地依赖，不阻塞应用启动。
 - ORCA/ComputeEngine 目前支持 fixture/parser；external executor 未实现。
-- AiiDA、SpecLabOS、Atlas/Olympus 仍为后续 adapter，不进入主后端必需依赖。
+- AiiDA、SpecLabOS 仍为后续 adapter，不进入主后端必需依赖；优化主链路使用当前内置 planner。
 
 ## 4. 组件职责
 
@@ -515,7 +515,7 @@ PYTHONPATH=backend python -m unittest \
 | running cancel 不杀子进程 | 资源泄露 | local adapter cancel hook |
 | ORCA external 执行器未实现 | 真实 ComputeEngine laser 不能跑 | 先实现 fake executor 边界 |
 | artifact 绝对路径暴露 | 部署信息泄露 | 后续改 storage scheme |
-| Atlas/Olympus 依赖复杂 | 优化能力受限 | 轻量 tanimoto 保底，Atlas 独立 adapter |
+| 外部优化器依赖复杂 | 优化能力受限 | 使用内置 fallback/tanimoto planner 保底 |
 
 ## 14. ADR 建议
 
@@ -523,5 +523,5 @@ PYTHONPATH=backend python -m unittest \
 - ADR-001: computation adapter 不直接写 repository。
 - ADR-002: AiiDA 作为外部计算/provenance 系统，不进入业务库。
 - ADR-003: Mongo polling + demo JSON store 作为 MVP 队列和本地兜底。
-- ADR-004: Atlas/Olympus 不进入主后端依赖。
+- ADR-004: 外部优化器不进入主后端依赖。
 - ADR-005: artifact 文件本地存储，metadata/checksum 进入业务库。

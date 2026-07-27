@@ -228,6 +228,15 @@ const activeMainAction = computed(() => {
   if (currentStep.value === 2 || currentStep.value === 3) return 'auto'
   return 'runs'
 })
+const showInitialAttribution = computed(() => (
+  currentStep.value === 1
+  && !problemSpec.value
+  && !executionMode.value
+  && !manualWorkflow.value
+  && !workflowRun.value
+  && !algorithmRun.value
+  && !researchRun.value
+))
 
 if (route.query.run_id) {
   algorithmRun.value = { run_id: String(route.query.run_id) }
@@ -711,7 +720,7 @@ async function restoreRouteState() {
       currentStep.value = TERMINAL_RUN_STATUSES.has(run.status) ? 5 : 4
     }
 
-    if (researchRunId) {
+  if (researchRunId) {
       const run = await getResearchRun(researchRunId)
       researchRun.value = run
       algorithmRun.value = null
@@ -727,6 +736,10 @@ async function restoreRouteState() {
       if (currentStep.value === 5) {
         await loadResearchTraceability()
       }
+    }
+
+    if (route.query.action === 'report' && reportSubject.value) {
+      openReportDrawer()
     }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -854,6 +867,8 @@ watch(
       </div>
       <div class="topbar-right">
         <el-button :icon="Collection" @click="openExamples">示例流程</el-button>
+        <el-button @click="$router.push('/knowledge')">知识库</el-button>
+        <el-button @click="$router.push({ path: '/tasks/center', query: { module_id: 'research-engine' } })">任务中心</el-button>
         <span v-if="problemSpec" class="topbar-badge">
           <el-icon><Check /></el-icon>
           {{ problemSpec.name }}
@@ -864,7 +879,7 @@ watch(
       </div>
     </section>
 
-    <AttributionBanner module-id="research_engine" label="参考框架" compact />
+    <AttributionBanner v-if="showInitialAttribution" module-id="research_engine" label="参考框架" compact />
 
     <!-- 主体：左侧工作流树 + 右侧工作区 -->
     <div class="workflow-body">
@@ -1575,6 +1590,8 @@ watch(
 .topbar-right {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 

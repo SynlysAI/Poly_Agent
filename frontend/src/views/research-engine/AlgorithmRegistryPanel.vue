@@ -1,13 +1,14 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search, View as ViewIcon } from '@element-plus/icons-vue'
+import { Medal, Refresh, Search, View as ViewIcon } from '@element-plus/icons-vue'
 
 import {
   getAlgorithm,
   getApiErrorMessage,
   listAlgorithms,
 } from '../../api/polyAgentApi'
+import AlgorithmCreditDrawer from '../../components/algorithm/AlgorithmCreditDrawer.vue'
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
 import AttributionBanner from '../../components/attribution/AttributionBanner.vue'
 
@@ -17,6 +18,8 @@ const loading = ref(false)
 const algorithms = ref([])
 const detailVisible = ref(false)
 const detail = ref(null)
+const creditVisible = ref(false)
+const creditAlgorithmId = ref('')
 const showDemoAlgorithms = ref(false)
 // 多选模式：已选算法列表 [{algorithm_id, name, step_id}]
 const selectedAlgorithms = ref([])
@@ -209,6 +212,11 @@ async function showDetail(algo) {
   }
 }
 
+function openCredit(algo) {
+  creditAlgorithmId.value = algo?.algorithm_id || detail.value?.algorithm_id || ''
+  if (creditAlgorithmId.value) creditVisible.value = true
+}
+
 function isSelected(algorithmId) {
   return selectedAlgorithms.value.some(s => s.algorithm_id === algorithmId)
 }
@@ -331,6 +339,7 @@ onMounted(loadData)
         </div>
         <div class="algo-actions">
           <el-button text type="primary" size="small" :icon="ViewIcon" @click="showDetail(algo)">查看详情</el-button>
+          <el-button text size="small" :icon="Medal" @click="openCredit(algo)">贡献分析</el-button>
           <el-button
             v-if="(algo.trigger_modes || []).includes('human_workflow') && algo.status === 'active'"
             :type="isSelected(algo.algorithm_id) ? 'warning' : 'primary'"
@@ -359,6 +368,9 @@ onMounted(loadData)
           compact
           class="detail-attribution-banner"
         />
+        <div class="detail-action-row">
+          <el-button :icon="Medal" @click="openCredit(detail)">贡献分析</el-button>
+        </div>
 
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="ID">{{ detail.algorithm_id }}</el-descriptions-item>
@@ -391,6 +403,8 @@ onMounted(loadData)
         <pre v-if="detail.validation_metric && Object.keys(detail.validation_metric).length" class="schema-json">{{ JSON.stringify(detail.validation_metric, null, 2) }}</pre>
       </template>
     </el-drawer>
+
+    <AlgorithmCreditDrawer v-model:visible="creditVisible" :algorithm-id="creditAlgorithmId" />
 
   </div>
 </template>
@@ -520,6 +534,12 @@ onMounted(loadData)
 }
 
 .detail-attribution-banner {
+  margin-bottom: 14px;
+}
+
+.detail-action-row {
+  display: flex;
+  justify-content: flex-end;
   margin-bottom: 14px;
 }
 

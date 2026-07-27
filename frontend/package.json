@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test:knowledge-graph-keywords": "node src/utils/knowledgeGraphKeywords.test.mjs",
     "test:llm-models": "node src/utils/llmModels.test.mjs",
+    "test:vertical-prediction": "node src/utils/verticalPredictionState.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

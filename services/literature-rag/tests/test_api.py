@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.query import extract_graph_query_terms
 from app.main import create_app, create_default_service
 from app.service import LiteratureRagService
 from app.storage import MemoryGraphStore, MemoryObjectStore, MemoryRepository
@@ -332,6 +333,65 @@ def test_configured_answer_generator_receives_traceable_evidence() -> None:
     })
     assert response.json()["data"]["answer"] == "The PAG controls sensitivity [1]."
     assert captured["chunk_id"] == "chunk_00001"
+
+
+def test_query_with_mixed_chinese_graph_query_returns_graph_context() -> None:
+    client, service = build_client()
+    service.seed_indexed_document(
+        corpus_id="krf_photoresist",
+        doi="10.1000/graph-context",
+        title="KrF photoresist graph source",
+        chunks=["KrF chemically amplified photoresists use polymer resin and photoacid generators."],
+    )
+
+    class QueryAwareGraphStore:
+        def subgraph(self, corpus_id: str, query: str, limit: int = 30):
+            terms = extract_graph_query_terms(query)
+            if not {"krf", "photoresist", "resin"} & set(terms):
+                return {"nodes": [], "edges": []}
+            return {
+                "nodes": [
+                    {
+                        "id": "paper:graph-context",
+                        "label": "KrF photoresist graph source",
+                        "type": "Paper",
+                        "score": 2.0,
+                        "properties": {"document_id": "graph-context"},
+                    },
+                    {
+                        "id": "entity:resin",
+                        "label": "phenolic resin",
+                        "type": "Resin",
+                        "score": 2.0,
+                        "properties": {"document_id": "graph-context"},
+                    },
+                ],
+                "edges": [
+                    {
+                        "id": "edge:graph-context",
+                        "source": "paper:graph-context",
+                        "target": "entity:resin",
+                        "type": "MENTIONS",
+                        "weight": 2.0,
+                        "properties": {},
+                    }
+                ],
+            }
+
+    service.graph_store = QueryAwareGraphStore()
+
+    response = client.post("/api/v1/query", headers={"Authorization": "Bearer query-secret"}, json={
+        "corpus_id": "krf_photoresist",
+        "question": "KrF || 光刻胶 || resin",
+        "top_k": 3,
+        "include_graph_context": True,
+    })
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["graph_context"] is not None
+    assert data["graph_context"]["nodes"]
+    assert any(node["type"] == "Resin" for node in data["graph_context"]["nodes"])
 
 
 def test_same_pdf_can_be_registered_in_two_corpora() -> None:
