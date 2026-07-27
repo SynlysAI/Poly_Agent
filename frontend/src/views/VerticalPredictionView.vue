@@ -15,18 +15,19 @@ import {
 } from '../api/polyAgentApi'
 import AlgorithmManagementPanel from './vertical-prediction/AlgorithmManagementPanel.vue'
 import AlgorithmHandoffPanel from './vertical-prediction/AlgorithmHandoffPanel.vue'
-import AlgorithmResourcePanel from './vertical-prediction/AlgorithmResourcePanel.vue'
 import AlgorithmRunHistoryPanel from './vertical-prediction/AlgorithmRunHistoryPanel.vue'
 import AlgorithmTestPanel from './vertical-prediction/AlgorithmTestPanel.vue'
 import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue'
 import AttributionBadges from '../components/attribution/AttributionBadges.vue'
 import { formatApiDateTime } from '../utils/datetime'
+import { canManageUploadedAlgorithm } from '../utils/verticalPredictionState.mjs'
+import { authState } from '../auth/authState'
 
 const route = useRoute()
 const router = useRouter()
 
 const detailTabMap = { management: 'api', test: 'experience', runs: 'api' }
-const routeModes = new Set(['center', 'doc', 'upload', 'resources', 'detail'])
+const routeModes = new Set(['center', 'doc', 'upload', 'detail'])
 
 const activeMode = ref(normalizeMode(route.query.tab))
 const detailActiveTab = ref(normalizeDetailTab(route.query.tab))
@@ -42,6 +43,7 @@ const materialFilter = ref('')
 const selectedAlgorithmId = ref(normalizeQueryString(route.query.algorithm_id))
 const selectedHandoffId = ref(normalizeQueryString(route.query.handoff_id))
 const docEntryMode = ref(normalizeQueryString(route.query.doc_mode) === 'download' ? 'download' : 'upload')
+const uploadContextMode = ref(normalizeQueryString(route.query.upload_mode) === 'new_version' ? 'new_version' : 'new_algorithm')
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === selectedAlgorithmId.value) || null)
 const selectedVersions = computed(() => versionMap.value[selectedAlgorithmId.value] || [])
@@ -87,6 +89,7 @@ const detailHighlights = computed(() => {
 })
 
 const selectedAlgorithmAttributions = computed(() => algorithmAttributions(selectedAlgorithm.value))
+const canManageSelectedAlgorithm = computed(() => canManageUploadedAlgorithm(selectedAlgorithm.value, authState))
 
 const bestPracticeItems = computed(() => [
   '先在互动体验里用最小样例完成一次预测，确认字段名和类型与模型说明一致。',
@@ -103,7 +106,7 @@ function normalizeMode(tab) {
   if (value === 'upload') return 'upload'
   if (value === 'doc' || value === 'handoff') return 'doc'
   if (value === 'detail' || detailTabMap[value]) return 'detail'
-  return routeModes.has(value) ? value : 'doc'
+  return routeModes.has(value) ? value : 'center'
 }
 
 function normalizeDetailTab(tab) {
@@ -118,20 +121,23 @@ function syncRoute() {
     delete query.algorithm_id
     delete query.handoff_id
     delete query.doc_mode
+    delete query.upload_mode
   } else if (activeMode.value === 'doc') {
     query.tab = 'doc'
     delete query.algorithm_id
+    delete query.upload_mode
     if (selectedHandoffId.value) query.handoff_id = selectedHandoffId.value
     else delete query.handoff_id
     query.doc_mode = docEntryMode.value
   } else if (activeMode.value === 'upload') {
     query.tab = 'upload'
-    delete query.algorithm_id
-    delete query.handoff_id
-    delete query.doc_mode
-  } else if (activeMode.value === 'resources') {
-    query.tab = 'resources'
-    delete query.algorithm_id
+    if (uploadContextMode.value === 'new_version' && selectedAlgorithmId.value) {
+      query.upload_mode = 'new_version'
+      query.algorithm_id = selectedAlgorithmId.value
+    } else {
+      delete query.upload_mode
+      delete query.algorithm_id
+    }
     delete query.handoff_id
     delete query.doc_mode
   } else {
@@ -139,6 +145,7 @@ function syncRoute() {
     if (selectedAlgorithmId.value) query.algorithm_id = selectedAlgorithmId.value
     delete query.handoff_id
     delete query.doc_mode
+    delete query.upload_mode
   }
   if (JSON.stringify(query) !== JSON.stringify(route.query)) router.replace({ query })
 }
@@ -151,10 +158,11 @@ watch(
     selectedAlgorithmId.value = normalizeQueryString(query.algorithm_id)
     selectedHandoffId.value = normalizeQueryString(query.handoff_id)
     docEntryMode.value = normalizeQueryString(query.doc_mode) === 'download' ? 'download' : 'upload'
+    uploadContextMode.value = normalizeQueryString(query.upload_mode) === 'new_version' ? 'new_version' : 'new_algorithm'
   },
 )
 
-watch([activeMode, selectedAlgorithmId, selectedHandoffId, docEntryMode], syncRoute)
+watch([activeMode, selectedAlgorithmId, selectedHandoffId, docEntryMode, uploadContextMode], syncRoute)
 
 async function loadData() {
   loading.value = true
@@ -201,7 +209,7 @@ function reconcileSelectedAlgorithm() {
   if (currentExists) return
 
   selectedAlgorithmId.value = ''
-  if (activeMode.value === 'detail') {
+  if (activeMode.value === 'detail' || (activeMode.value === 'upload' && uploadContextMode.value === 'new_version')) {
     activeMode.value = 'center'
     if (currentId) ElMessage.info('模型已删除，已返回模型中心')
   }
@@ -223,6 +231,14 @@ function handleRunCreated() {
 }
 
 function openUpload() {
+  uploadContextMode.value = 'new_algorithm'
+  selectedAlgorithmId.value = ''
+  activeMode.value = 'upload'
+}
+
+function openNewVersion() {
+  if (!selectedAlgorithmId.value) return
+  uploadContextMode.value = 'new_version'
   activeMode.value = 'upload'
 }
 
@@ -234,10 +250,6 @@ function openDoc(mode = 'upload') {
 
 function openCenter() {
   activeMode.value = 'center'
-}
-
-function openResources() {
-  activeMode.value = 'resources'
 }
 
 function openDetail(algorithmId, tab = 'experience') {
@@ -338,25 +350,6 @@ onMounted(() => {
       </div>
       </header>
 
-      <section class="entry-band" v-loading="loading" aria-label="算法接入入口">
-        <button class="entry-card" type="button" @click="openDoc('upload')">
-          <span>有需求文档</span>
-          <strong>上传文档，系统生成草案</strong>
-        </button>
-        <button class="entry-card" type="button" @click="openDoc('download')">
-          <span>没有需求文档</span>
-          <strong>先下载模板，再填写上传</strong>
-        </button>
-        <button class="entry-card subtle" type="button" @click="openUpload">
-          <span>更多方式</span>
-          <strong>模型文件 / 标准 ZIP</strong>
-        </button>
-        <button class="entry-card subtle" type="button" @click="openResources">
-          <span>大文件资源</span>
-          <strong>登记权重 / 数据库路径</strong>
-        </button>
-      </section>
-
       <section class="status-band" v-loading="loading" aria-label="垂类预测模型状态摘要">
         <div v-for="item in statusItems" :key="item.label" class="status-item">
           <el-icon><component :is="item.icon" /></el-icon>
@@ -378,23 +371,23 @@ onMounted(() => {
       <div class="subnav-row">
         <el-button text @click="openCenter">返回模型中心</el-button>
         <el-button text type="primary" @click="openDoc('upload')">需求文档</el-button>
-        <el-button text type="primary" @click="openResources">资源管理</el-button>
       </div>
-      <AlgorithmUploadPanel @changed="handleChanged" @view-detail="openDetail" />
-    </template>
-
-    <template v-if="activeMode === 'resources'">
-      <div class="subnav-row">
-        <el-button text @click="openCenter">返回模型中心</el-button>
-        <el-button text type="primary" @click="openUpload">高级导入</el-button>
-      </div>
-      <AlgorithmResourcePanel @changed="handleChanged" />
+      <AlgorithmUploadPanel
+        v-if="uploadContextMode !== 'new_version' || (!loading && selectedAlgorithm)"
+        :mode="uploadContextMode"
+        :target-algorithm="selectedAlgorithm"
+        :target-version="activeVersion"
+        :target-versions="selectedVersions"
+        @changed="handleChanged"
+        @view-detail="openDetail"
+      />
+      <el-skeleton v-else :rows="8" animated />
     </template>
 
     <template v-else-if="activeMode === 'detail' && selectedAlgorithm">
       <div class="subnav-row">
         <el-button text @click="openCenter">返回模型中心</el-button>
-        <el-button text type="primary" @click="openUpload">上传新版本</el-button>
+        <el-button v-if="canManageSelectedAlgorithm" text type="primary" @click="openNewVersion">上传新版本</el-button>
       </div>
       <section class="detail-banner">
         <div class="model-avatar"><el-icon><DataAnalysis /></el-icon></div>
@@ -529,9 +522,8 @@ onMounted(() => {
               <p>共 {{ filteredAlgorithms.length }} 个可管理模型</p>
             </div>
             <div class="list-actions">
-              <el-button :icon="Document" @click="openDoc('upload')">需求文档</el-button>
-              <el-button :icon="Key" @click="openResources">资源管理</el-button>
-              <el-button type="primary" :icon="UploadFilled" @click="openUpload">高级导入</el-button>
+              <el-button type="primary" plain :icon="Document" @click="openDoc('upload')">需求文档导入</el-button>
+              <el-button type="primary" plain :icon="UploadFilled" @click="openUpload">高级导入</el-button>
             </div>
           </div>
 
@@ -566,8 +558,8 @@ onMounted(() => {
             <strong>还没有符合条件的垂类预测模型</strong>
             <span>先走需求文档或高级导入，模型会出现在这里。</span>
             <div class="empty-actions">
-              <el-button @click="openDoc('download')">需求文档</el-button>
-              <el-button type="primary" @click="openUpload">高级导入</el-button>
+              <el-button type="primary" plain :icon="Document" @click="openDoc('upload')">需求文档导入</el-button>
+              <el-button type="primary" plain :icon="UploadFilled" @click="openUpload">高级导入</el-button>
             </div>
           </div>
         </main>
@@ -593,13 +585,6 @@ h3 { font-size: 15px; }
 .model-page-hero p:last-child, .list-head p, .detail-main p { margin: 7px 0 0; color: var(--app-ink-muted); font-size: 14px; line-height: 1.6; }
 .hero-actions, .detail-actions, .subnav-row, .list-actions, .empty-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .hero-actions { justify-content: flex-end; }
-.entry-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.entry-card { min-width: 0; display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: #fff; color: inherit; text-align: left; cursor: pointer; transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease; }
-.entry-card:hover { border-color: #bfdbfe; box-shadow: 0 10px 22px rgba(37, 99, 235, 0.09); transform: translateY(-1px); }
-.entry-card:focus-visible { outline: 3px solid var(--app-primary-light); outline-offset: 2px; }
-.entry-card span { color: var(--app-ink-muted); font-size: 12px; }
-.entry-card strong { color: var(--app-ink); font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
-.entry-card.subtle { background: #f8fbff; }
 .status-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
 .status-item { min-width: 0; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; padding: 12px 14px; border-right: 1px solid var(--app-border-soft); }
 .status-item:last-child { border-right: 0; }
@@ -654,13 +639,11 @@ h3 { font-size: 15px; }
 .api-note { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; color: var(--app-ink-muted); font-size: 13px; }
 .history-panel { padding-top: 16px; border-top: 1px solid var(--app-border-soft); }
 @media (max-width: 1180px) {
-  .entry-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .model-card-grid, .info-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
   .model-page-hero, .list-head, .detail-banner { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
   .hero-actions { justify-content: flex-start; }
-  .entry-band { grid-template-columns: 1fr; }
   .status-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .status-item:nth-child(2) { border-right: 0; }
   .status-item:nth-child(-n+2) { border-bottom: 1px solid var(--app-border-soft); }

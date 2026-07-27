@@ -13,6 +13,7 @@ from threading import RLock
 from typing import Any
 
 from app.core.config import settings
+from app.services.poly_data_extra_datasets import EXTRA_DATASET_SPECS
 
 
 COLLECTION_NAMES = [
@@ -47,6 +48,7 @@ COLLECTION_NAMES = [
     "poly_data.md_allatom_diamines",
     "poly_data.md_allatom_dianhydrides",
     "poly_data.md_allatom_carbon_results",
+    *[f"poly_data.{spec.collection_name}" for spec in EXTRA_DATASET_SPECS],
     "poly_data.dataset_stats",
 ]
 

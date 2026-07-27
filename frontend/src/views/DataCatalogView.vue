@@ -25,7 +25,6 @@ import {
   listDataCatalogDatasets,
   listDataCatalogMongoCollections,
 } from '../api/polyAgentApi'
-import { authState } from '../auth/authState'
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 use([
@@ -86,7 +85,6 @@ const pi1mFilters = reactive({
   page_size: 50,
 })
 
-const canDrilldownRecords = computed(() => !authState.authEnabled || authState.role === 'admin')
 const sourceReadyCount = computed(() => (overview.value?.sources || []).filter((item) => item.status === 'ready').length)
 const sourceTotalCount = computed(() => (overview.value?.sources || []).length)
 const selectedCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === selectedCollectionName.value) || null)
@@ -673,12 +671,6 @@ async function loadPi1mOverview() {
 }
 
 async function loadAnalysisSamples() {
-  if (!canDrilldownRecords.value) {
-    materialAnalysisRecords.value = []
-    computationAnalysisRecords.value = []
-    artifactAnalysisRecords.value = []
-    return
-  }
   const materialCollectionName = materialCollection.value ? collectionIdentity(materialCollection.value) : ''
   const requests = [
     materialCollectionName
@@ -712,10 +704,6 @@ async function openDatasetRecords(dataset) {
     ElMessage.info('该数据集当前只登记了文件和字段说明')
     return
   }
-  if (!canDrilldownRecords.value) {
-    ElMessage.warning('集合记录下钻仅管理员可用')
-    return
-  }
   datasetDrawerVisible.value = false
   if (dataset.dataset_id === 'pi1m_v2') {
     activeTab.value = 'mongo'
@@ -735,10 +723,6 @@ async function openDatasetRecords(dataset) {
 }
 
 async function openCollection(collection) {
-  if (!canDrilldownRecords.value) {
-    ElMessage.warning('集合记录下钻仅管理员可用')
-    return
-  }
   activeTab.value = 'mongo'
   selectedCollectionName.value = collectionIdentity(collection)
   recordFilters.page = 1
@@ -747,7 +731,7 @@ async function openCollection(collection) {
 }
 
 async function loadCollectionRecords() {
-  if (!selectedCollectionName.value || !canDrilldownRecords.value) return
+  if (!selectedCollectionName.value) return
   if (selectedCollectionName.value === 'poly_data.pi1m_samples') {
     await loadPi1mRecords({ reset: true })
     return
@@ -782,7 +766,6 @@ function pi1mQueryParams(cursor = null) {
 }
 
 async function loadPi1mRecords({ reset = false } = {}) {
-  if (!canDrilldownRecords.value) return
   pi1mLoading.value = true
   recordsLoading.value = true
   try {
@@ -855,7 +838,7 @@ watch(recordDrawerVisible, (visible) => {
 onMounted(async () => {
   selectedCollectionName.value = String(route.query.collection || '')
   await loadDataCatalog()
-  if (selectedCollectionName.value && canDrilldownRecords.value) {
+  if (selectedCollectionName.value) {
     activeTab.value = 'mongo'
     await loadCollectionRecords()
     if (route.query.record) {
@@ -986,14 +969,14 @@ onMounted(async () => {
                 <el-tag :type="statusTag(selectedCollection.status)">{{ collectionIdentity(selectedCollection) }}</el-tag>
               </div>
 
-              <div v-if="canDrilldownRecords" class="record-tools">
+              <div class="record-tools">
                 <el-input v-model="recordFilters.keyword" clearable placeholder="搜索主键、状态、类型或文本" @keyup.enter="handleRecordSearch">
                   <template #prefix><el-icon><Search /></el-icon></template>
                 </el-input>
                 <el-button @click="handleRecordSearch">查询</el-button>
               </div>
 
-              <div v-if="canDrilldownRecords && selectedCollectionName === 'poly_data.pi1m_samples'" class="pi1m-filter-panel">
+              <div v-if="selectedCollectionName === 'poly_data.pi1m_samples'" class="pi1m-filter-panel">
                 <el-input v-model="pi1mFilters.row_start" placeholder="起始行号" clearable />
                 <el-input v-model="pi1mFilters.row_end" placeholder="结束行号" clearable />
                 <el-input v-model="pi1mFilters.sa_min" placeholder="SA 最小值" clearable />
@@ -1005,15 +988,7 @@ onMounted(async () => {
                 <el-button type="primary" :loading="pi1mLoading" @click="loadPi1mRecords({ reset: true })">筛选</el-button>
               </div>
 
-              <el-alert
-                v-else
-                type="info"
-                :closable="false"
-                title="集合记录下钻仅管理员可用"
-                description="当前账号可以查看集合规模和说明，原始记录详情需要管理员权限。"
-              />
-
-              <div v-if="canDrilldownRecords" class="record-visual-grid">
+              <div class="record-visual-grid">
                 <div class="visual-panel">
                   <h3>状态分布</h3>
                   <v-chart class="record-chart" :option="recordStatusOption" autoresize />
@@ -1028,7 +1003,7 @@ onMounted(async () => {
                 </div>
               </div>
 
-              <el-table v-if="canDrilldownRecords" :data="collectionRecords" v-loading="recordsLoading" stripe class="record-table">
+              <el-table :data="collectionRecords" v-loading="recordsLoading" stripe class="record-table">
                 <el-table-column prop="record_id" label="Record ID" min-width="170" />
                 <el-table-column prop="title" label="标题" min-width="180" />
                 <el-table-column label="状态" width="110">
@@ -1051,7 +1026,7 @@ onMounted(async () => {
               </el-table>
 
               <el-pagination
-                v-if="canDrilldownRecords && selectedCollectionName !== 'poly_data.pi1m_samples'"
+                v-if="selectedCollectionName !== 'poly_data.pi1m_samples'"
                 class="record-pagination"
                 background
                 layout="prev, pager, next, total"
@@ -1060,7 +1035,7 @@ onMounted(async () => {
                 :total="collectionTotal"
                 @current-change="handleRecordPageChange"
               />
-              <div v-if="canDrilldownRecords && selectedCollectionName === 'poly_data.pi1m_samples'" class="pi1m-cursor-actions">
+              <div v-if="selectedCollectionName === 'poly_data.pi1m_samples'" class="pi1m-cursor-actions">
                 <span>已加载 {{ formatNumber(collectionRecords.length) }} 条，游标分页避免千万级 skip 扫描。</span>
                 <el-button :disabled="!pi1mNextCursor" :loading="pi1mLoading" @click="loadPi1mRecords()">加载下一页</el-button>
               </div>

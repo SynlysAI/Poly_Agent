@@ -102,6 +102,81 @@ AlgorithmRunStatus = Literal["queued", "running", "completed", "failed", "cancel
 AlgorithmVisibility = Literal["private", "public"]
 """上传算法发布范围：private=仅创建人可见可调用，public=平台用户可见可调用。"""
 
+
+class AlgorithmContributor(BaseModel):
+    """算法贡献者记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str | None = Field(default=None, max_length=80)
+    name: str = Field(min_length=1, max_length=160)
+    role: str = Field(min_length=1, max_length=80)
+    organization: str | None = Field(default=None, max_length=160)
+    mentor_relation: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=600)
+
+    @field_validator("user_id", "name", "role", "organization", "mentor_relation", "description")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class AlgorithmCreditMetrics(BaseModel):
+    """算法贡献统计指标。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version_count: int = 0
+    validated_version_count: int = 0
+    run_count: int = 0
+    success_run_count: int = 0
+    caller_count: int = 0
+    reused_project_count: int = 0
+    contributor_count: int = 0
+    role_breakdown: dict[str, int] = Field(default_factory=dict)
+    latest_maintained_at: datetime | None = None
+
+
+class AlgorithmCreditSummary(BaseModel):
+    """算法贡献分析摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm_id: str
+    name: str
+    source: str
+    visibility: AlgorithmVisibility = "private"
+    status: AlgorithmStatus = "active"
+    owner: str | None = None
+    active_version_id: str | None = None
+    developer_attribution: AttributionItem | None = None
+    mentor_team: str | None = None
+    contributors: list[AlgorithmContributor] = Field(default_factory=list)
+    metrics: AlgorithmCreditMetrics = Field(default_factory=AlgorithmCreditMetrics)
+    generated_at: datetime
+
+
+class AlgorithmCreditUpdateRequest(BaseModel):
+    """算法贡献信息修正请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contributors: list[AlgorithmContributor] = Field(default_factory=list)
+    developer_attribution: AttributionItem | None = None
+    mentor_team: str | None = Field(default=None, max_length=160)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("更正原因不能为空")
+        return normalized
+
 AlgorithmPackageStatus = Literal[
     "uploaded",
     "validating",
@@ -700,6 +775,7 @@ class AlgorithmRegistryEntry(BaseModel):
     capability_group: str | None = Field(default=None, max_length=80)
     visibility: AlgorithmVisibility = "private"
     mentor_team: str | None = Field(default=None, max_length=160)
+    contributors: list[AlgorithmContributor] = Field(default_factory=list)
     developer_attribution: AttributionItem | None = None
     framework_attributions: list[AttributionItem] = Field(default_factory=list)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
@@ -763,6 +839,7 @@ class AlgorithmPackageCreate(BaseModel):
     developer_contact: str | None = Field(default=None, max_length=160)
     source_url: str | None = Field(default=None, max_length=600)
     citation: str | None = Field(default=None, max_length=1000)
+    contributors: list[AlgorithmContributor] = Field(default_factory=list)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
     logo_asset: str | None = Field(default=None, max_length=300)
     logo_url: str | None = Field(default=None, max_length=600)
@@ -783,8 +860,10 @@ class AlgorithmPackage(UtcDatetimeJsonModel):
     model_config = ConfigDict(extra="forbid")
 
     package_id: str
+    target_algorithm_id: str | None = None
     algorithm_id: str | None = None
     version: str | None = None
+    resource_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
     version_id: str | None = None
     status: AlgorithmPackageStatus = "uploaded"
     package_sha256: str
@@ -800,7 +879,9 @@ class AlgorithmPackage(UtcDatetimeJsonModel):
     environment_digest: str | None = None
     runtime_digest: str | None = None
     visibility: AlgorithmVisibility = "private"
+    contributors: list[AlgorithmContributor] = Field(default_factory=list)
     created_by: str
+    uploaded_by: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -838,9 +919,15 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     visibility: AlgorithmVisibility = "private"
     developer_attribution: AttributionItem | None = None
     mentor_team: str | None = Field(default=None, max_length=160)
+    contributors: list[AlgorithmContributor] = Field(default_factory=list)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
     implementation_notes: str | None = Field(default=None, max_length=1000)
     created_by: str
+    uploaded_by: str | None = None
+    activated_at: datetime | None = None
+    activation_kind: Literal["manual", "release", "rollback"] | None = None
+    previous_active_version_id: str | None = Field(default=None, max_length=120)
+    rollback_status: Literal["completed"] | None = None
     created_at: datetime
     updated_at: datetime
 

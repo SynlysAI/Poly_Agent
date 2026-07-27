@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Cpu, Refresh, Search, View, Finished } from '@element-plus/icons-vue'
+import { Connection, Cpu, DataAnalysis, Document, Finished, Refresh, Search, View } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, listGlobalTasks } from '../api/polyAgentApi'
 import {
@@ -154,6 +154,46 @@ function openModule(moduleId) {
   ElMessage.info(`${module?.name || '该模块'} 正在接入中`)
 }
 
+function openKnowledgeBase() {
+  router.push('/knowledge')
+}
+
+function openAlgorithmCenter() {
+  router.push({ path: '/vertical-prediction', query: { tab: 'center' } })
+}
+
+function openResearchEngine() {
+  router.push('/research-engine')
+}
+
+function taskSourceRoute(row) {
+  if (row?.route?.path) return row.route
+  return null
+}
+
+function openTaskSource(row) {
+  const target = taskSourceRoute(row)
+  if (!target) return
+  router.push(target)
+}
+
+function openTaskAlgorithmResult(row) {
+  const algorithmId = row?.raw?.algorithm_id
+  if (!algorithmId) return
+  router.push({ path: '/vertical-prediction', query: { tab: 'detail', algorithm_id: algorithmId } })
+}
+
+function openTaskReport(row) {
+  const routeQuery = row?.route?.query || {}
+  if (routeQuery.run_id) {
+    router.push({ path: '/research-engine', query: { run_id: routeQuery.run_id, action: 'report' } })
+    return
+  }
+  if (routeQuery.research_run_id) {
+    router.push({ path: '/research-engine', query: { research_run_id: routeQuery.research_run_id, action: 'report' } })
+  }
+}
+
 onMounted(() => {
   loadTasks()
 })
@@ -168,6 +208,9 @@ onMounted(() => {
           <p class="panel-subtitle">全局任务管理器用于统一追踪计算任务、湿实验优化任务和预测模型任务，并支持跨模块回访。</p>
         </div>
         <div class="header-actions">
+          <el-button :icon="Connection" @click="openKnowledgeBase">知识库</el-button>
+          <el-button :icon="DataAnalysis" @click="openAlgorithmCenter">算法结果</el-button>
+          <el-button :icon="Document" @click="openResearchEngine">报告</el-button>
           <el-button :icon="Refresh" :loading="loading" @click="loadTasks">刷新</el-button>
           <el-button :icon="Cpu" @click="$router.push('/computations/runs')">计算任务中心</el-button>
           <el-button type="primary" @click="$router.push('/tasks/submit')">提交任务</el-button>
@@ -290,6 +333,12 @@ onMounted(() => {
           <el-descriptions-item label="创建时间">{{ formatDate(selectedTask.created_at) }}</el-descriptions-item>
           <el-descriptions-item label="更新时间">{{ formatDate(selectedTask.updated_at) }}</el-descriptions-item>
         </el-descriptions>
+        <div class="task-detail-shortcuts">
+          <el-button :icon="Connection" @click="openKnowledgeBase">知识库</el-button>
+          <el-button :icon="DataAnalysis" :disabled="!selectedTask?.raw?.algorithm_id" @click="openTaskAlgorithmResult(selectedTask)">算法结果</el-button>
+          <el-button :icon="Document" :disabled="!taskSourceRoute(selectedTask)" @click="openTaskSource(selectedTask)">来源页</el-button>
+          <el-button :icon="Document" :disabled="!selectedTask?.route?.query?.run_id && !selectedTask?.route?.query?.research_run_id" @click="openTaskReport(selectedTask)">报告</el-button>
+        </div>
         <div class="task-detail-actions">
           <el-button @click="taskDrawerVisible = false">关闭</el-button>
           <el-button type="primary" :icon="actionIcon(selectedTask)" @click="navigateTask(selectedTask)">
@@ -321,6 +370,7 @@ onMounted(() => {
 
 .header-actions {
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .panel-subtitle {
@@ -402,6 +452,14 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 16px;
+}
+
+.task-detail-shortcuts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
 }
 
 .unavailable-grid {

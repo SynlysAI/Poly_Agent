@@ -10,8 +10,11 @@ import {
   DataAnalysis,
   Expand,
   Fold,
+  Histogram,
+  Document,
   Refresh,
   Search,
+  Setting,
 } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
@@ -28,6 +31,7 @@ import {
   queryKnowledgeBase,
   streamKnowledgeQuery,
 } from '../api/polyAgentApi'
+import { promptToGraphQuery } from '../utils/knowledgeGraphKeywords.mjs'
 
 use([
   GraphChart,
@@ -41,20 +45,23 @@ const router = useRouter()
 
 const systems = ref([])
 const health = ref(null)
-const activeModule = ref(route.query.module === 'graph' ? 'graph' : 'rag')
 const selectedSystemId = ref(typeof route.query.system === 'string' ? route.query.system : '')
 const loadingSystems = ref(false)
 const queryLoading = ref(false)
 const graphLoading = ref(false)
 const answer = ref(null)
 const graph = ref(null)
+const queryError = ref('')
+const graphError = ref('')
+const searchBatchId = ref(0)
+const activeTab = ref(normalizeKnowledgeTab(route.query.tab, route.query.module))
 const graphViewMode = ref('relationship')
 const selectedNodeId = ref('')
 const suggestedQuestions = ref([])
 const suggestionsLoading = ref(false)
 const topBarCollapsed = ref(false)
 const queryTrace = ref([])
-const queryPaneCollapsed = ref(false)
+const queryPaneCollapsed = ref(true)
 const citationPanelCollapsed = ref(true)
 const nodeDetailCollapsed = ref(false)
 const nodeDetailDrawerVisible = ref(false)
@@ -114,6 +121,16 @@ const canStreamQuery = computed(() => canRunQuery.value && hasCapability(selecte
 const canLoadGraph = computed(() => hasCapability(selectedSystem.value, 'graph') && selectedSystem.value?.status === 'ready')
 const canUseGraphContext = computed(() => canRunQuery.value && canLoadGraph.value)
 const canLoadSuggestions = computed(() => hasCapability(selectedSystem.value, 'suggestions') && selectedSystem.value?.status === 'ready')
+const hasJointResults = computed(() => Boolean(
+  answer.value
+  || graph.value
+  || queryError.value
+  || graphError.value
+  || queryLoading.value
+  || graphLoading.value
+  || queryTrace.value.length,
+))
+const showQueryLanding = computed(() => !hasJointResults.value)
 const queryUnavailableMessage = computed(() => {
   if (loadingSystems.value) return '正在检查知识库服务。'
   if (!health.value?.configured && !hasSystems.value) return '知识库服务未配置。'
@@ -224,7 +241,8 @@ const canOpenAnswerGraph = computed(() => (answerGraphContext.value?.nodes || []
 const graphEmptyMessage = computed(() => {
   if (isProductionNeo4j(selectedSystem.value) && !hasNeo4jGraphData(selectedSystem.value)) return 'Neo4j 已连接，但 KrF 图谱尚未完成 worker 索引。'
   if (!canLoadGraph.value) return '该知识库体系未提供可用图谱。'
-  if (!graph.value) return '尚未加载子图，输入关键词或使用默认关键词加载。'
+  if (graphError.value) return graphError.value
+  if (!graph.value) return '提交问题后将自动拆解关键词并加载对应知识图谱。'
   return '当前关键词未匹配到图谱节点。'
 })
 const graphLanes = computed(() => {
@@ -342,22 +360,22 @@ function normalizeKnowledgeMessage(message) {
     .replace(/知识库服务\s+/g, '知识库服务')
 }
 
-watch(activeModule, (module) => {
-  updateRouteQuery({ module })
-  if (module === 'graph') {
-    ensureGraphLoaded()
-  }
-})
+function normalizeKnowledgeTab(tab, module) {
+  const normalizedTab = Array.isArray(tab) ? tab[0] : tab
+  if (normalizedTab === 'graph') return 'graph'
+  if (normalizedTab === 'literature') return 'literature'
+  return module === 'graph' ? 'graph' : 'literature'
+}
 
-watch(
-  () => route.query.module,
-  (module) => {
-    const nextModule = module === 'graph' ? 'graph' : 'rag'
-    if (nextModule !== activeModule.value) {
-      activeModule.value = nextModule
-    }
-  },
-)
+function setGraphQueryFromQuestion(question) {
+  graphForm.query = promptToGraphQuery(question, { maxKeywords: 10 })
+}
+
+function useQuestionForGraphSearch() {
+  if (!queryForm.question.trim()) return
+  setGraphQueryFromQuestion(queryForm.question)
+  activeTab.value = 'graph'
+}
 
 watch(
   () => route.query.system,
@@ -371,6 +389,18 @@ watch(
 )
 
 watch(
+  () => [route.query.tab, route.query.module],
+  ([tab, module]) => {
+    const nextTab = normalizeKnowledgeTab(tab, module)
+    if (nextTab !== activeTab.value) activeTab.value = nextTab
+  },
+)
+
+watch(activeTab, (tab) => {
+  updateRouteQuery({ tab: tab === 'graph' ? 'graph' : 'literature' })
+})
+
+watch(
   canUseGraphContext,
   (enabled) => {
     queryForm.include_graph_context = Boolean(enabled)
@@ -379,8 +409,9 @@ watch(
 )
 
 watch(canLoadGraph, (enabled) => {
-  if (enabled && activeModule.value === 'graph') {
-    ensureGraphLoaded()
+  if (enabled && hasJointResults.value && !graph.value && !graphLoading.value && queryForm.question.trim()) {
+    setGraphQueryFromQuestion(queryForm.question)
+    void runGraphQueryForBatch(searchBatchId.value, graphForm.query || queryForm.question)
   }
 })
 
@@ -452,9 +483,21 @@ function selectInitialSystem(systemData) {
 function handleSystemChange() {
   resetWorkspace()
   updateRouteQuery({ system: selectedSystemId.value || undefined })
-  if (activeModule.value === 'graph') {
-    ensureGraphLoaded()
+  if (canLoadSuggestions.value) {
+    loadSuggestedQuestions()
   }
+}
+
+function openTaskCenter() {
+  router.push('/tasks/center')
+}
+
+function openAlgorithmCenter() {
+  router.push({ path: '/vertical-prediction', query: { tab: 'center' } })
+}
+
+function openReportCenter() {
+  router.push('/research-engine')
 }
 
 function nodeTypeTag(type) {
@@ -552,8 +595,8 @@ async function loadBootstrap() {
     systems.value = systemData.items || []
     health.value = healthData
     selectInitialSystem(systemData)
-    if (activeModule.value === 'graph') {
-      await ensureGraphLoaded()
+    if (canLoadSuggestions.value) {
+      void loadSuggestedQuestions()
     }
   } catch (error) {
     ElMessage.error(normalizeKnowledgeMessage(getApiErrorMessage(error)))
@@ -562,38 +605,37 @@ async function loadBootstrap() {
   }
 }
 
-function defaultGraphQuery() {
-  const tags = selectedSystem.value?.tags || []
-  const krfTag = tags.find((tag) => /krf/i.test(tag))
-  return krfTag || tags[0] || selectedSystem.value?.material_family || selectedSystem.value?.name || ''
-}
-
-async function ensureGraphLoaded() {
-  if (!canLoadGraph.value || graph.value || graphLoading.value) return
-  if (!graphForm.query.trim()) {
-    graphForm.query = defaultGraphQuery()
-  }
-  if (graphForm.query.trim()) {
-    await loadGraph({ silent: true })
-  }
-}
-
 async function runQuery() {
   if (!canRunQuery.value || !selectedSystemId.value || !queryForm.question.trim()) return
+  const batchId = searchBatchId.value + 1
+  const question = queryForm.question.trim()
+  searchBatchId.value = batchId
   queryLoading.value = true
+  graphLoading.value = canLoadGraph.value
+  queryError.value = ''
+  graphError.value = ''
   answer.value = { answer: '', hits: [], citations: [], configured: true, message: canStreamQuery.value ? '知识库流式检索' : '知识库检索' }
   graph.value = null
+  setGraphQueryFromQuestion(question)
+  selectedNodeId.value = ''
   queryTrace.value = []
   const payload = {
     system_id: selectedSystemId.value,
-    question: queryForm.question,
+    question,
     mode: queryForm.mode,
     top_k: queryForm.top_k,
     include_graph_context: canUseGraphContext.value && queryForm.include_graph_context,
   }
+  const literatureTask = runLiteratureQueryForBatch(batchId, payload)
+  const graphTask = runGraphQueryForBatch(batchId, graphForm.query || question)
+  await Promise.allSettled([literatureTask, graphTask])
+}
+
+async function runLiteratureQueryForBatch(batchId, payload) {
   try {
     if (canStreamQuery.value) {
       await streamKnowledgeQuery(payload, (event) => {
+        if (batchId !== searchBatchId.value) return
         if (event.label) {
           queryTrace.value.push({ event: event.event, label: event.label, elapsed_ms: event.elapsed_ms })
         }
@@ -601,8 +643,11 @@ async function runQuery() {
           answer.value.hits = event.hits || []
           answer.value.citations = event.citations || []
           answer.value.graph_context = event.graph_context || null
-          graph.value = event.graph_context || null
-          selectedNodeId.value = graph.value?.nodes?.[0]?.id || ''
+          if (!graph.value && graphError.value && (event.graph_context?.nodes || []).length) {
+            graph.value = event.graph_context
+            selectedNodeId.value = event.graph_context.nodes?.[0]?.id || ''
+            graphError.value = ''
+          }
         }
         if (event.event === 'answer_delta') {
           answer.value.answer += event.content || ''
@@ -613,6 +658,7 @@ async function runQuery() {
       })
     } else {
       const data = await queryKnowledgeBase(payload)
+      if (batchId !== searchBatchId.value) return
       answer.value = {
         ...data,
         hits: data?.hits || [],
@@ -621,14 +667,57 @@ async function runQuery() {
         configured: data?.configured ?? true,
         message: normalizeKnowledgeMessage(data?.message || '知识库检索完成'),
       }
-      graph.value = data?.graph_context || null
-      selectedNodeId.value = graph.value?.nodes?.[0]?.id || ''
+      if (!graph.value && graphError.value && (data?.graph_context?.nodes || []).length) {
+        graph.value = data.graph_context
+        selectedNodeId.value = data.graph_context.nodes?.[0]?.id || ''
+        graphError.value = ''
+      }
     }
   } catch (error) {
+    if (batchId !== searchBatchId.value) return
     answer.value = null
-    ElMessage.error(normalizeKnowledgeMessage(getApiErrorMessage(error)))
+    queryError.value = normalizeKnowledgeMessage(getApiErrorMessage(error))
+    ElMessage.error(queryError.value)
   } finally {
-    queryLoading.value = false
+    if (batchId === searchBatchId.value) {
+      queryLoading.value = false
+    }
+  }
+}
+
+async function runGraphQueryForBatch(batchId, question) {
+  if (!canLoadGraph.value) {
+    graphLoading.value = false
+    graphError.value = '当前知识库体系未提供可用图谱能力。'
+    return
+  }
+  if (!selectedSystemId.value || !question.trim()) {
+    graphLoading.value = false
+    graphError.value = '请输入问题后加载对应知识图谱。'
+    return
+  }
+  graphLoading.value = true
+  try {
+    const data = await getKnowledgeSubgraph(selectedSystemId.value, { query: question, limit: graphForm.limit })
+    if (batchId !== searchBatchId.value) return
+    graph.value = data
+    selectedNodeId.value = data?.nodes?.[0]?.id || ''
+  } catch (error) {
+    if (batchId !== searchBatchId.value) return
+    const fallbackGraph = answerGraphContext.value
+    if ((fallbackGraph?.nodes || []).length) {
+      graph.value = fallbackGraph
+      selectedNodeId.value = fallbackGraph.nodes?.[0]?.id || ''
+      graphError.value = ''
+      return
+    }
+    graph.value = null
+    graphError.value = normalizeKnowledgeMessage(getApiErrorMessage(error))
+    ElMessage.error(graphError.value)
+  } finally {
+    if (batchId === searchBatchId.value) {
+      graphLoading.value = false
+    }
   }
 }
 
@@ -642,19 +731,26 @@ async function loadGraph({ silent = false } = {}) {
     return
   }
   graphLoading.value = true
+  graphError.value = ''
   try {
     graph.value = await getKnowledgeSubgraph(selectedSystemId.value, { query: graphForm.query, limit: graphForm.limit })
     selectedNodeId.value = graph.value.nodes?.[0]?.id || ''
   } catch (error) {
-    ElMessage.error(normalizeKnowledgeMessage(getApiErrorMessage(error)))
+    graphError.value = normalizeKnowledgeMessage(getApiErrorMessage(error))
+    ElMessage.error(graphError.value)
   } finally {
     graphLoading.value = false
   }
 }
 
 function resetWorkspace() {
+  searchBatchId.value += 1
   answer.value = null
   graph.value = null
+  queryError.value = ''
+  graphError.value = ''
+  queryLoading.value = false
+  graphLoading.value = false
   selectedNodeId.value = ''
   queryTrace.value = []
   suggestedQuestions.value = []
@@ -664,8 +760,8 @@ function openAnswerGraphContext() {
   if (!canOpenAnswerGraph.value) return
   graph.value = answerGraphContext.value
   selectedNodeId.value = graph.value.nodes?.[0]?.id || ''
-  graphForm.query = queryForm.question
-  activeModule.value = 'graph'
+  setGraphQueryFromQuestion(queryForm.question)
+  activeTab.value = 'graph'
 }
 
 async function refreshAll() {
@@ -714,10 +810,10 @@ onMounted(loadBootstrap)
         </div>
       </div>
 
-      <div v-else class="panel-header knowledge-header">
+      <div v-else class="panel-header knowledge-header" :class="{ 'landing-header': showQueryLanding }">
         <div>
-          <h3 class="panel-title">知识库工作台</h3>
-          <p class="panel-subtitle">在同一工作区完成知识检索、证据核查和图谱关系浏览。</p>
+          <h3 class="panel-title">知识增强</h3>
+          <p v-if="!showQueryLanding" class="panel-subtitle">知识检索、证据核查与图谱关系</p>
         </div>
         <div class="header-actions">
           <el-select
@@ -727,7 +823,7 @@ onMounted(loadBootstrap)
             :disabled="!hasSystems"
             placeholder="暂无可用知识库体系"
             @change="handleSystemChange"
-        >
+          >
           <el-option
             v-for="system in systems"
             :key="system.system_id"
@@ -746,14 +842,17 @@ onMounted(loadBootstrap)
           <el-tag v-if="health || selectedSystem" :type="statusTagType(currentStatus)" effect="plain">
             {{ currentStatusLabel }}
           </el-tag>
-          <span class="status-message">{{ currentStatusMessage }}</span>
-          <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
-          <el-button :icon="Fold" @click="topBarCollapsed = true">隐藏</el-button>
+          <span v-if="!showQueryLanding" class="status-message">{{ currentStatusMessage }}</span>
+          <el-button :icon="Histogram" @click="openTaskCenter">任务中心</el-button>
+          <el-button :icon="DataAnalysis" @click="openAlgorithmCenter">算法结果</el-button>
+          <el-button :icon="Document" @click="openReportCenter">报告</el-button>
+          <el-button :icon="Refresh" circle aria-label="刷新知识库" @click="refreshAll" />
+          <el-button v-if="!showQueryLanding" :icon="Fold" @click="topBarCollapsed = true">隐藏</el-button>
         </div>
       </div>
 
       <div class="panel-body knowledge-body">
-        <div class="system-overview">
+        <div v-if="!showQueryLanding" class="system-overview">
           <div v-if="selectedSystem" class="system-meta">
             <el-icon><Collection /></el-icon>
             <div>
@@ -776,31 +875,95 @@ onMounted(loadBootstrap)
           </div>
         </div>
 
-        <el-tabs v-model="activeModule" class="knowledge-tabs">
-          <el-tab-pane name="rag">
-            <template #label>
-              <span class="tab-label"><el-icon><ChatLineRound /></el-icon>知识增强检索问答</span>
-            </template>
-          </el-tab-pane>
-          <el-tab-pane name="graph">
-            <template #label>
-              <span class="tab-label"><el-icon><Connection /></el-icon>知识图谱</span>
-            </template>
-          </el-tab-pane>
-        </el-tabs>
+        <section v-if="showQueryLanding && activeTab === 'literature'" class="knowledge-query-entry">
+          <div class="entry-heading">
+            <el-icon><ChatLineRound /></el-icon>
+            <h2>知识检索</h2>
+          </div>
+          <div class="entry-composer">
+            <el-input
+              v-model="queryForm.question"
+              type="textarea"
+              :rows="4"
+              maxlength="2000"
+              resize="none"
+              placeholder="输入需要检索的问题"
+              :disabled="!canRunQuery"
+              @keydown.ctrl.enter.prevent="runQuery"
+            />
+            <el-button
+              class="entry-submit"
+              type="primary"
+              :icon="Search"
+              :loading="queryLoading"
+              :disabled="!canRunQuery || !queryForm.question.trim()"
+              @click="runQuery"
+            >
+              检索
+            </el-button>
+          </div>
+          <div class="entry-suggestions">
+            <div class="entry-suggestion-head">
+              <span>建议问题</span>
+              <el-button text size="small" :loading="suggestionsLoading" :disabled="!canLoadSuggestions" @click="loadSuggestedQuestions">换一组</el-button>
+            </div>
+            <div class="entry-suggestion-list">
+              <button v-for="question in suggestedQuestions" :key="question" type="button" @click="queryForm.question = question">{{ question }}</button>
+              <span v-if="!suggestedQuestions.length" class="muted-text">当前暂无建议问题</span>
+            </div>
+          </div>
+          <el-collapse class="entry-advanced">
+            <el-collapse-item name="advanced">
+              <template #title>
+                <span class="entry-advanced-title"><el-icon><Setting /></el-icon>高级设置</span>
+              </template>
+              <div class="entry-advanced-grid">
+                <label>
+                  <span>模式</span>
+                  <el-segmented
+                    v-model="queryForm.mode"
+                    :disabled="!canRunQuery"
+                    :options="[
+                      { label: 'Hybrid', value: 'hybrid' },
+                      { label: 'Local', value: 'local' },
+                      { label: 'Global', value: 'global' },
+                      { label: 'Naive', value: 'naive' },
+                      { label: 'Mix', value: 'mix' },
+                    ]"
+                  />
+                </label>
+                <label>
+                  <span>Top K</span>
+                  <el-input-number v-model="queryForm.top_k" :min="1" :max="20" :disabled="!canRunQuery" />
+                </label>
+                <el-checkbox v-model="queryForm.include_graph_context" :disabled="!canUseGraphContext">图谱上下文</el-checkbox>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+          <span v-if="!canRunQuery" class="entry-status">{{ queryUnavailableMessage }}</span>
+        </section>
 
-        <div v-if="activeModule === 'rag'" class="rag-layout" :class="{ 'query-collapsed': queryPaneCollapsed, 'citations-collapsed': citationPanelCollapsed }">
-          <button
-            v-if="queryPaneCollapsed"
-            type="button"
-            class="side-restore-button query-restore-button"
-            aria-label="展开检索配置"
-            @click="queryPaneCollapsed = false"
-          >
-            <el-icon><Expand /></el-icon>
-            <span>检索</span>
-          </button>
-          <section v-else class="query-pane">
+        <div v-else class="knowledge-results-shell">
+          <section v-if="!showQueryLanding || activeTab === 'graph'" class="result-search-bar">
+            <el-input
+              v-model="queryForm.question"
+              type="textarea"
+              :rows="2"
+              maxlength="2000"
+              resize="none"
+              placeholder="输入需要检索的问题"
+              :disabled="!canRunQuery"
+              @keydown.ctrl.enter.prevent="runQuery"
+            />
+            <div class="result-search-actions">
+              <el-button text size="small" :icon="Setting" @click="queryPaneCollapsed = !queryPaneCollapsed">
+                {{ queryPaneCollapsed ? '展开配置' : '收起配置' }}
+              </el-button>
+              <el-button type="primary" :loading="queryLoading || graphLoading" :icon="Search" :disabled="!canRunQuery || !queryForm.question.trim()" @click="runQuery">联合检索</el-button>
+            </div>
+          </section>
+
+          <section v-if="!showQueryLanding && !queryPaneCollapsed" class="query-pane inline-query-pane">
             <div class="pane-toolbar">
               <div class="pane-heading">
                 <span>Query</span>
@@ -809,10 +972,7 @@ onMounted(loadBootstrap)
               <el-button text size="small" :icon="Fold" @click="queryPaneCollapsed = true">收起</el-button>
             </div>
             <el-form label-position="top">
-              <el-form-item label="问题">
-                <el-input v-model="queryForm.question" type="textarea" :rows="7" maxlength="2000" show-word-limit :disabled="!canRunQuery" />
-              </el-form-item>
-              <div class="control-grid">
+              <div class="control-grid inline-control-grid">
                 <el-form-item label="模式">
                   <el-segmented
                     v-model="queryForm.mode"
@@ -835,18 +995,17 @@ onMounted(loadBootstrap)
                   <el-input-number v-model="queryForm.top_k" :min="1" :max="20" :disabled="!canRunQuery" />
                   <small class="control-help">重排后最多送入回答阶段的证据条数，不等于最终引用数。</small>
                 </el-form-item>
-              </div>
-              <el-checkbox v-model="queryForm.include_graph_context" :disabled="!canUseGraphContext">返回图谱上下文</el-checkbox>
-              <div class="query-actions">
-                <el-button type="primary" :loading="queryLoading" :icon="Search" :disabled="!canRunQuery || !queryForm.question.trim()" @click="runQuery">检索问答</el-button>
+                <el-form-item label="图谱上下文">
+                  <el-checkbox v-model="queryForm.include_graph_context" :disabled="!canUseGraphContext">返回图谱上下文</el-checkbox>
+                  <small class="control-help">仅影响回答阶段；图谱 tab 会始终尝试加载子图。</small>
+                </el-form-item>
               </div>
             </el-form>
-            <div class="query-hints">
-              <span>AI 建议问题</span>
-              <el-button size="small" :loading="suggestionsLoading" :disabled="!canLoadSuggestions" @click="loadSuggestedQuestions">生成建议</el-button>
-              <button v-for="question in suggestedQuestions" :key="question" type="button" @click="queryForm.question = question">{{ question }}</button>
-            </div>
           </section>
+
+          <el-tabs v-model="activeTab" class="knowledge-workspace-tabs">
+            <el-tab-pane label="文献检索" name="literature">
+              <div class="rag-layout literature-results-layout" :class="{ 'citations-collapsed': citationPanelCollapsed }">
 
           <section class="answer-pane" v-loading="queryLoading">
             <div v-if="queryTrace.length" class="query-trace" aria-live="polite">
@@ -950,12 +1109,15 @@ onMounted(loadBootstrap)
             </div>
             <div v-else class="empty-state">
               <el-icon><DataAnalysis /></el-icon>
-              <span>{{ queryUnavailableMessage }}</span>
+              <span>{{ queryError || queryUnavailableMessage }}</span>
             </div>
           </section>
-        </div>
 
-        <div v-else class="graph-layout">
+              </div>
+            </el-tab-pane>
+
+            <el-tab-pane label="知识图谱" name="graph">
+          <div class="graph-layout graph-tab-panel">
           <section class="graph-toolbar">
             <div class="pane-heading compact">
               <span>Graph</span>
@@ -965,6 +1127,7 @@ onMounted(loadBootstrap)
               <el-input v-model="graphForm.query" placeholder="检索实体、论文、性质或方法" clearable :disabled="!canLoadGraph" @keyup.enter="loadGraph">
                 <template #prefix><el-icon><Search /></el-icon></template>
               </el-input>
+              <el-button :disabled="!queryForm.question.trim()" @click="useQuestionForGraphSearch">拆解当前问题</el-button>
               <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canLoadGraph" />
               <el-button type="primary" :loading="graphLoading" :disabled="!canLoadGraph || !graphForm.query.trim()" @click="loadGraph">加载子图</el-button>
             </div>
@@ -1095,6 +1258,9 @@ onMounted(loadBootstrap)
             </aside>
           </section>
         </div>
+            </el-tab-pane>
+          </el-tabs>
+      </div>
       </div>
     </section>
 
@@ -1239,7 +1405,6 @@ onMounted(loadBootstrap)
 .system-overview,
 .system-meta,
 .system-metrics,
-.tab-label,
 .query-actions,
 .answer-topline,
 .hit-title,
@@ -1337,6 +1502,75 @@ onMounted(loadBootstrap)
   gap: 14px;
 }
 
+.knowledge-header.landing-header {
+  align-items: center;
+  padding-block: 10px;
+}
+
+.knowledge-query-entry {
+  width: min(820px, 100%);
+  min-height: 430px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-self: center;
+  gap: 18px;
+  padding: 36px 16px 52px;
+}
+
+.entry-heading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--app-ink);
+}
+
+.entry-heading .el-icon { color: var(--app-primary-active); font-size: 24px; }
+.entry-heading h2 { margin: 0; font-size: 24px; letter-spacing: 0; }
+.entry-composer { position: relative; }
+.entry-composer :deep(.el-textarea__inner) {
+  min-height: 132px !important;
+  padding: 18px 112px 18px 18px;
+  border-radius: var(--app-radius-md);
+  font-size: 15px;
+  line-height: 1.7;
+  box-shadow: 0 0 0 1px var(--app-border) inset;
+}
+.entry-composer :deep(.el-textarea__inner:focus) { box-shadow: 0 0 0 1px var(--app-primary-active) inset; }
+.entry-submit { position: absolute; right: 14px; bottom: 14px; min-width: 88px; }
+.entry-suggestions { display: grid; gap: 10px; }
+.entry-suggestion-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.entry-suggestion-head > span { color: var(--app-ink-muted); font-size: 12px; font-weight: 700; }
+.entry-suggestion-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.entry-suggestion-list button {
+  max-width: 100%;
+  padding: 8px 11px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #fff;
+  color: var(--app-ink-body);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.entry-suggestion-list button:hover,
+.entry-suggestion-list button:focus-visible { border-color: var(--app-primary); color: var(--app-primary-active); outline: none; }
+.entry-advanced { border-top: 1px solid var(--app-border-soft); border-bottom: 1px solid var(--app-border-soft); }
+.entry-advanced-title { display: inline-flex; align-items: center; gap: 7px; color: var(--app-ink-body); font-size: 13px; }
+.entry-advanced-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 16px;
+  padding-bottom: 14px;
+}
+.entry-advanced-grid > label { display: grid; gap: 7px; color: var(--app-ink-muted); font-size: 12px; }
+.entry-status { color: var(--app-ink-muted); font-size: 13px; text-align: center; }
+
 .system-overview {
   min-height: 76px;
   flex-wrap: wrap;
@@ -1349,8 +1583,7 @@ onMounted(loadBootstrap)
   background: #f8fbff;
 }
 
-.system-meta,
-.tab-label {
+.system-meta {
   gap: 8px;
   font-weight: 700;
   color: var(--app-ink);
@@ -1394,8 +1627,57 @@ onMounted(loadBootstrap)
   overflow-wrap: anywhere;
 }
 
-.knowledge-tabs {
-  margin-bottom: -4px;
+.knowledge-results-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.result-search-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.result-search-bar :deep(.el-textarea__inner) {
+  min-height: 70px !important;
+  line-height: 1.6;
+}
+
+.result-search-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.inline-query-pane {
+  min-height: 0;
+}
+
+.inline-control-grid {
+  grid-template-columns: minmax(0, 1.4fr) minmax(160px, auto) minmax(180px, 0.8fr);
+  align-items: start;
+}
+
+.knowledge-workspace-tabs {
+  padding: 0 12px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.knowledge-workspace-tabs :deep(.el-tabs__header) {
+  margin-bottom: 12px;
+}
+
+.knowledge-workspace-tabs :deep(.el-tabs__content) {
+  overflow: visible;
 }
 
 .rag-layout {
@@ -1404,8 +1686,21 @@ onMounted(loadBootstrap)
   gap: 16px;
 }
 
+.literature-results-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.joint-results-layout {
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(420px, 0.92fr);
+  align-items: start;
+}
+
 .rag-layout.query-collapsed {
   grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.joint-results-layout.query-collapsed {
+  grid-template-columns: 44px minmax(0, 1fr) minmax(420px, 0.92fr);
 }
 
 .query-pane,
@@ -1768,6 +2063,11 @@ onMounted(loadBootstrap)
   gap: 12px;
 }
 
+.joint-graph-panel,
+.graph-tab-panel {
+  min-width: 0;
+}
+
 .graph-toolbar {
   justify-content: space-between;
   gap: 12px;
@@ -1830,8 +2130,18 @@ onMounted(loadBootstrap)
   gap: 16px;
 }
 
+.joint-graph-panel .graph-workspace,
+.graph-tab-panel .graph-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .graph-workspace.detail-collapsed {
   grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+.joint-graph-panel .graph-workspace.detail-collapsed,
+.graph-tab-panel .graph-workspace.detail-collapsed {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .graph-main-pane {
@@ -1855,9 +2165,19 @@ onMounted(loadBootstrap)
   background: #ffffff;
 }
 
+.joint-graph-panel .graph-chart-pane,
+.graph-tab-panel .graph-chart-pane {
+  min-height: clamp(420px, calc(100vh - 360px), 620px);
+}
+
 .relationship-chart {
   width: 100%;
   height: clamp(620px, calc(100vh - 340px), 760px);
+}
+
+.joint-graph-panel .relationship-chart,
+.graph-tab-panel .relationship-chart {
+  height: clamp(420px, calc(100vh - 360px), 620px);
 }
 
 .graph-board {
@@ -1869,6 +2189,12 @@ onMounted(loadBootstrap)
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
   background: #f8fafc;
+}
+
+.joint-graph-panel .graph-board,
+.graph-tab-panel .graph-board {
+  min-height: clamp(420px, calc(100vh - 360px), 620px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .graph-lane {
@@ -2060,6 +2386,13 @@ onMounted(loadBootstrap)
   gap: 12px;
 }
 
+.joint-graph-panel .graph-workspace > .node-detail,
+.joint-graph-panel .node-restore-button,
+.graph-tab-panel .graph-workspace > .node-detail,
+.graph-tab-panel .node-restore-button {
+  display: none;
+}
+
 .node-detail-header {
   justify-content: space-between;
   gap: 8px;
@@ -2169,11 +2502,14 @@ onMounted(loadBootstrap)
 
 @media (max-width: 1100px) {
   .rag-layout,
+  .joint-results-layout,
+  .literature-results-layout,
   .graph-workspace {
     grid-template-columns: 1fr;
   }
 
-  .rag-layout.query-collapsed {
+  .rag-layout.query-collapsed,
+  .joint-results-layout.query-collapsed {
     grid-template-columns: 1fr;
   }
 
@@ -2214,6 +2550,7 @@ onMounted(loadBootstrap)
   .knowledge-dock,
   .knowledge-header,
   .system-overview,
+  .result-search-actions,
   .graph-toolbar,
   .graph-controls,
   .graph-summary {
@@ -2232,6 +2569,7 @@ onMounted(loadBootstrap)
   }
 
   .header-actions {
+    flex: 0 0 auto;
     width: 100%;
     justify-content: stretch;
   }
@@ -2247,6 +2585,30 @@ onMounted(loadBootstrap)
 
   .control-grid {
     grid-template-columns: 1fr;
+  }
+
+  .result-search-bar,
+  .inline-control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-search-actions {
+    align-items: stretch;
+  }
+
+  .knowledge-query-entry {
+    min-height: 360px;
+    padding: 24px 0 36px;
+  }
+
+  .entry-advanced-grid {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .entry-advanced-grid :deep(.el-segmented__group) {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .graph-board {
@@ -2269,6 +2631,9 @@ onMounted(loadBootstrap)
 }
 
 @media (max-width: 420px) {
+  .entry-composer :deep(.el-textarea__inner) { padding: 14px 14px 58px; }
+  .entry-submit { right: 10px; bottom: 10px; }
+
   .system-metrics {
     grid-template-columns: 1fr;
   }

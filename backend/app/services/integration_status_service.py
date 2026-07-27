@@ -33,7 +33,6 @@ class IntegrationStatusService:
             self._artifact_status(checked_at),
             self._literature_rag_status(checked_at),
             self._knowledge_graph_status(checked_at),
-            self._port_status("atlas", "127.0.0.1", 65100, checked_at),
             self._alchemist_status(checked_at),
             self._speclabos_status(checked_at),
             self._rdkit_status(checked_at),

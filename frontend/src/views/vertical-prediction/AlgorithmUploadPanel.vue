@@ -4,20 +4,27 @@ import { ElMessage } from 'element-plus'
 import { Box, Check, Delete, Download, Plus, UploadFilled } from '@element-plus/icons-vue'
 
 import {
-  activateAlgorithmVersion,
-  buildAlgorithmPackage,
-  deployAlgorithmVersion,
+  createAlgorithmResource,
   downloadAlgorithmPackage,
   downloadAlgorithmPackageTemplate,
   getApiErrorMessage,
+  listAlgorithmResources,
   packAlgorithmPackage,
+  packAlgorithmVersionPackage,
+  releaseAlgorithmPackage,
   uploadAlgorithmPackage,
-  validateAlgorithmPackage,
 } from '../../api/polyAgentApi'
+import { suggestNextPatch } from '../../utils/verticalPredictionState.mjs'
 
+const props = defineProps({
+  mode: { type: String, default: 'new_algorithm' },
+  targetAlgorithm: { type: Object, default: null },
+  targetVersion: { type: Object, default: null },
+  targetVersions: { type: Array, default: () => [] },
+})
 const emit = defineEmits(['changed', 'view-detail'])
 
-const currentStep = ref(0)
+const currentStep = ref(props.mode === 'new_version' ? 1 : 0)
 const uploadMode = ref('script')
 const loading = ref(false)
 const sourceFiles = ref([])
@@ -25,6 +32,15 @@ const requirementsFiles = ref([])
 const zipFiles = ref([])
 const currentPackage = ref(null)
 const expandedAdvanced = ref([])
+const availableResources = reactive({})
+const selectedResourceIds = reactive({})
+const resourceDrafts = reactive({})
+const registeringResourceKey = ref('')
+const isNewVersion = computed(() => props.mode === 'new_version')
+const declaredResourceAssets = computed(() => currentPackage.value?.resource_assets || [])
+const unresolvedRequiredBindings = computed(() => declaredResourceAssets.value.filter(
+  (spec) => spec.binding_required && !selectedResourceIds[spec.key],
+))
 
 const uploadModeOptions = [
   {
@@ -80,6 +96,7 @@ const outputFields = ref([
 const inputAssetRows = ref([])
 const outputAssetRows = ref([])
 const resourceAssetRows = ref([])
+const contributorRows = ref([])
 
 const dataKindOptions = [
   { label: '表格', value: 'table' },
@@ -159,6 +176,7 @@ const contract = computed(() => ({
   developer_contact: form.developer_contact || null,
   source_url: form.source_url || null,
   citation: form.citation || null,
+  contributors: contributorsPayload(),
   method_attributions: [],
   logo_asset: form.logo_asset || null,
   logo_url: form.logo_url || null,
@@ -178,9 +196,27 @@ const processSteps = computed(() => {
 })
 
 const uploadStepTitle = computed(() => {
-  const titles = ['选择上传方式', uploadMode.value === 'zip' ? '上传标准 ZIP' : '填写信息并上传文件', '校验部署', '完成']
+  const titles = [
+    '选择上传方式',
+    isNewVersion.value ? '上传新版本内容' : (uploadMode.value === 'zip' ? '上传标准 ZIP' : '填写信息并上传文件'),
+    '校验部署',
+    '完成',
+  ]
   return titles[currentStep.value] || titles[0]
 })
+
+watch(
+  () => [props.mode, props.targetAlgorithm, props.targetVersion, props.targetVersions],
+  () => {
+    if (!isNewVersion.value || !props.targetAlgorithm || currentStep.value === 3) return
+    const contract = props.targetVersion?.contract || {}
+    form.algorithm_id = props.targetAlgorithm.algorithm_id
+    form.name = props.targetAlgorithm.name || contract.name || props.targetAlgorithm.algorithm_id
+    form.version = suggestNextPatch(props.targetVersions)
+    if (currentStep.value === 0) currentStep.value = 1
+  },
+  { immediate: true, deep: true },
+)
 
 function schemaFromRows(rows) {
   const fields = {}
@@ -318,6 +354,34 @@ function removeField(target, index) {
   target.splice(index, 1)
 }
 
+function addContributorRow() {
+  contributorRows.value.push({
+    user_id: '',
+    name: '',
+    role: 'developer',
+    organization: form.developer_organization || '',
+    mentor_relation: '',
+    description: '',
+  })
+}
+
+function removeContributorRow(index) {
+  contributorRows.value.splice(index, 1)
+}
+
+function contributorsPayload() {
+  return contributorRows.value
+    .map((row) => ({
+      user_id: String(row.user_id || '').trim() || null,
+      name: String(row.name || '').trim(),
+      role: String(row.role || '').trim() || 'developer',
+      organization: String(row.organization || '').trim() || null,
+      mentor_relation: String(row.mentor_relation || '').trim() || null,
+      description: String(row.description || '').trim() || null,
+    }))
+    .filter((item) => item.name && item.role)
+}
+
 function saveBlob(file) {
   const url = URL.createObjectURL(file.blob)
   const link = document.createElement('a')
@@ -345,6 +409,14 @@ async function downloadGeneratedPackage() {
 }
 
 function validateBeforeSubmit() {
+  if (isNewVersion.value) {
+    if (!props.targetAlgorithm?.algorithm_id) return '未找到目标模型，请返回模型详情后重试'
+    if (!/^\d+\.\d+\.\d+$/.test(form.version.trim())) return '版本号必须是 x.y.z 格式'
+    if (props.targetVersions.some((item) => item.version === form.version.trim())) return '该语义版本已存在，请修改版本号'
+    if (uploadMode.value === 'zip' && !zipFiles.value[0]?.raw) return '请选择标准 ZIP 文件'
+    if (uploadMode.value === 'script' && !sourceFiles.value.length) return '请至少选择一个 Python 源文件'
+    return ''
+  }
   if (uploadMode.value === 'zip') {
     if (!zipFiles.value[0]?.raw) return '请选择标准 ZIP 文件'
     return ''
@@ -373,21 +445,88 @@ function goNext() {
   }
 }
 
+function clearResourceBindingState() {
+  for (const target of [availableResources, selectedResourceIds, resourceDrafts]) {
+    Object.keys(target).forEach((key) => delete target[key])
+  }
+}
+
 function goPrevious() {
   if (loading.value || currentStep.value === 0) return
+  if (currentStep.value === 2) {
+    currentPackage.value = null
+    clearResourceBindingState()
+  }
   currentStep.value -= 1
 }
 
+function resourceBindingsPayload() {
+  return declaredResourceAssets.value
+    .filter((spec) => selectedResourceIds[spec.key])
+    .map((spec) => ({ asset_key: spec.key, resource_id: selectedResourceIds[spec.key] }))
+}
+
+async function prepareResourceBindings(pkg) {
+  clearResourceBindingState()
+  const inheritedBindings = new Map(
+    (props.targetVersion?.resource_bindings || []).map((item) => [item.asset_key, item.resource_id]),
+  )
+  await Promise.all((pkg.resource_assets || []).map(async (spec) => {
+    const response = await listAlgorithmResources({
+      algorithm_id: pkg.algorithm_id || props.targetAlgorithm?.algorithm_id || form.algorithm_id,
+      asset_key: spec.key,
+      status: 'active',
+      page_size: 100,
+    })
+    const items = response.items || []
+    availableResources[spec.key] = items
+    const inheritedId = inheritedBindings.get(spec.key)
+    if (inheritedId && items.some((item) => item.resource_id === inheritedId)) {
+      selectedResourceIds[spec.key] = inheritedId
+    } else if (items.length === 1) {
+      selectedResourceIds[spec.key] = items[0].resource_id
+    } else {
+      selectedResourceIds[spec.key] = ''
+    }
+    resourceDrafts[spec.key] = {
+      expanded: false,
+      name: spec.label || spec.key,
+      path: '',
+    }
+  }))
+}
+
+async function registerInlineResource(spec) {
+  const draft = resourceDrafts[spec.key]
+  if (!draft?.path?.trim()) {
+    ElMessage.warning('请填写后端宿主机可访问的资源路径')
+    return
+  }
+  registeringResourceKey.value = spec.key
+  try {
+    const resource = await createAlgorithmResource({
+      algorithm_id: currentPackage.value?.algorithm_id || props.targetAlgorithm?.algorithm_id || form.algorithm_id,
+      asset_key: spec.key,
+      name: draft.name.trim() || spec.label || spec.key,
+      path: draft.path.trim(),
+      storage_mode: 'mounted_path',
+      resource_type: spec.resource_type || null,
+      required_files: spec.required_files || [],
+      description: spec.description || null,
+    })
+    availableResources[spec.key] = [resource, ...(availableResources[spec.key] || [])]
+    selectedResourceIds[spec.key] = resource.resource_id
+    draft.expanded = false
+    ElMessage.success('资源路径已校验并绑定')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    registeringResourceKey.value = ''
+  }
+}
+
 async function finalizePackage(pkg) {
-  let current = pkg
-  if (current.status !== 'validated') current = await validateAlgorithmPackage(current.package_id)
-  currentPackage.value = current
-  current = await buildAlgorithmPackage(current.package_id)
-  currentPackage.value = current
-  const version = await deployAlgorithmVersion(current.algorithm_id, current.version_id)
-  currentPackage.value = { ...current, status: version.status }
-  await activateAlgorithmVersion(current.algorithm_id, current.version_id)
-  currentPackage.value = { ...currentPackage.value, status: 'active' }
+  currentPackage.value = await releaseAlgorithmPackage(pkg.package_id, resourceBindingsPayload())
 }
 
 async function submit() {
@@ -398,15 +537,26 @@ async function submit() {
   }
   loading.value = true
   currentStep.value = 2
-  currentPackage.value = null
   try {
-    let pkg
-    if (uploadMode.value === 'zip') {
+    let pkg = currentPackage.value
+    if (!pkg && uploadMode.value === 'zip') {
       const data = new FormData()
       data.append('file', zipFiles.value[0].raw)
-      data.append('visibility', form.visibility)
+      if (isNewVersion.value) {
+        data.append('target_algorithm_id', props.targetAlgorithm.algorithm_id)
+        data.append('target_version', form.version.trim())
+      } else {
+        data.append('visibility', form.visibility)
+      }
       pkg = await uploadAlgorithmPackage(data)
-    } else {
+    } else if (!pkg && isNewVersion.value) {
+      const data = new FormData()
+      data.append('target_algorithm_id', props.targetAlgorithm.algorithm_id)
+      data.append('version', form.version.trim())
+      sourceFiles.value.forEach((file) => data.append('files', file.raw))
+      if (requirementsFiles.value[0]?.raw) data.append('requirements', requirementsFiles.value[0].raw)
+      pkg = await packAlgorithmVersionPackage(data)
+    } else if (!pkg) {
       const data = new FormData()
       for (const key of [
         'algorithm_id',
@@ -430,6 +580,7 @@ async function submit() {
         if (form[key]) data.append(key, form[key])
       }
       data.append('method_attributions', JSON.stringify(contract.value.method_attributions))
+      data.append('contributors', JSON.stringify(contract.value.contributors))
       data.append('material_scope', JSON.stringify(form.material_scope))
       data.append('task_scope', JSON.stringify(form.task_scope))
       data.append('trigger_modes', JSON.stringify(form.trigger_modes))
@@ -446,10 +597,17 @@ async function submit() {
       pkg = await packAlgorithmPackage(data)
     }
     currentPackage.value = pkg
+    if (declaredResourceAssets.value.length && !Object.keys(availableResources).length) {
+      await prepareResourceBindings(pkg)
+    }
+    if (unresolvedRequiredBindings.value.length) {
+      ElMessage.warning('请先为必需资源选择或登记后端挂载路径')
+      return
+    }
     await finalizePackage(pkg)
     currentStep.value = 3
     emit('changed', currentPackage.value)
-    ElMessage.success('模型版本已完成校验、部署并激活')
+    ElMessage.success(currentPackage.value?.rollback_status === 'completed' ? '模型版本已完成回滚' : '模型版本已完成校验、部署并激活')
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -459,10 +617,11 @@ async function submit() {
 
 function resetForNextUpload() {
   currentPackage.value = null
-  currentStep.value = 0
+  currentStep.value = isNewVersion.value ? 1 : 0
   sourceFiles.value = []
   requirementsFiles.value = []
   zipFiles.value = []
+  clearResourceBindingState()
 }
 
 function viewModelDetail() {
@@ -476,14 +635,15 @@ function viewModelDetail() {
     <div class="wizard-shell">
       <div class="wizard-head">
         <div>
-          <p class="wizard-eyebrow">高级导入</p>
+          <p class="wizard-eyebrow">{{ isNewVersion ? '上传新版本' : '高级导入' }}</p>
           <h2>{{ uploadStepTitle }}</h2>
-          <p>Python 脚本会由平台打包为标准 ZIP；已有完整包时可直接上传标准 ZIP。</p>
+          <p v-if="isNewVersion">目标模型已锁定；选择新脚本或标准 ZIP，确认版本后将直接校验、部署并激活。</p>
+          <p v-else>Python 脚本会由平台打包为标准 ZIP；已有完整包时可直接上传标准 ZIP。</p>
         </div>
         <el-button :icon="Download" @click="downloadTemplate">下载标准模板</el-button>
       </div>
-      <el-steps :active="currentStep" finish-status="success" simple>
-        <el-step title="选择方式" />
+      <el-steps :active="isNewVersion ? currentStep - 1 : currentStep" finish-status="success" simple>
+        <el-step v-if="!isNewVersion" title="选择方式" />
         <el-step title="上传内容" />
         <el-step title="校验部署" />
         <el-step title="完成" />
@@ -494,7 +654,7 @@ function viewModelDetail() {
       <div class="section-heading">
         <div>
           <h3>选择上传方式</h3>
-          <p>根据手头材料选择接入路径。首次接入建议使用 Python 脚本自动打包。</p>
+          <p>{{ isNewVersion ? '新脚本会继承当前活动版本的完整包内容和契约。' : '根据手头材料选择接入路径。首次接入建议使用 Python 脚本自动打包。' }}</p>
         </div>
       </div>
       <div class="upload-mode-grid" role="radiogroup" aria-label="选择上传方式">
@@ -523,12 +683,56 @@ function viewModelDetail() {
     <section v-else-if="currentStep === 1" class="wizard-section step-card">
       <div class="section-heading">
         <div>
-          <h3>{{ uploadMode === 'zip' ? '上传标准 ZIP' : '填写必要信息' }}</h3>
-          <p>{{ uploadMode === 'zip' ? 'ZIP 内需要包含 polyagent.algorithm.yaml。' : '这几项会生成模型卡片、版本记录和测试表单。' }}</p>
+          <h3>{{ isNewVersion ? '上传文件并确认版本' : (uploadMode === 'zip' ? '上传标准 ZIP' : '填写必要信息') }}</h3>
+          <p>{{ isNewVersion ? '模型信息和契约均从当前活动版本继承。' : (uploadMode === 'zip' ? 'ZIP 内需要包含 polyagent.algorithm.yaml。' : '这几项会生成模型卡片、版本记录和测试表单。') }}</p>
         </div>
       </div>
 
+      <el-segmented
+        v-if="isNewVersion"
+        v-model="uploadMode"
+        class="new-version-mode-switch"
+        :options="[
+          { label: '上传新脚本或模型文件', value: 'script' },
+          { label: '上传标准 ZIP', value: 'zip' },
+        ]"
+      />
+
       <template v-if="uploadMode === 'script'">
+        <template v-if="isNewVersion">
+          <el-form label-position="top" class="metadata-form new-version-form">
+            <div class="simple-form-grid">
+              <el-form-item label="目标模型">
+                <el-input :model-value="form.name" disabled />
+              </el-form-item>
+              <el-form-item label="算法 ID">
+                <el-input :model-value="form.algorithm_id" disabled />
+              </el-form-item>
+              <el-form-item label="新版本">
+                <el-input v-model="form.version" placeholder="0.1.1" />
+              </el-form-item>
+            </div>
+          </el-form>
+          <div class="source-grid new-version-source">
+            <section>
+              <h3>新版本文件</h3>
+              <el-upload v-model:file-list="sourceFiles" drag multiple :auto-upload="false" accept=".py,.json,.md,.txt,.dat,.pkl,.joblib,.npy,.npz,.csv,.xlsx,.png,.jpg,.jpeg,.webp">
+                <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+                <div class="el-upload__text">拖入新脚本或模型文件，或点击选择</div>
+              </el-upload>
+              <el-upload v-model:file-list="requirementsFiles" :auto-upload="false" :limit="1" accept=".txt">
+                <el-button>替换 requirements.txt</el-button>
+              </el-upload>
+            </section>
+            <el-alert
+              title="名称、作者、机构、输入输出契约、资源声明和发布范围均继承当前活动版本。"
+              type="info"
+              :closable="false"
+              show-icon
+            />
+          </div>
+        </template>
+        <template v-else>
         <el-form label-position="top" class="metadata-form">
           <div class="simple-form-grid">
             <el-form-item label="模型名称"><el-input v-model="form.name" placeholder="例如 Polymer Tg Predictor" /></el-form-item>
@@ -618,6 +822,28 @@ function viewModelDetail() {
         </section>
 
         <el-collapse v-model="expandedAdvanced" class="advanced-collapse">
+          <el-collapse-item name="contributors">
+            <template #title>
+              <span class="advanced-title">贡献者台账（可选）</span>
+            </template>
+            <section class="schema-section contributor-section">
+              <div class="section-heading">
+                <div>
+                  <h3>结构化贡献者</h3>
+                  <p>用于详情页贡献分析，旧包不填写也可正常上传运行。</p>
+                </div>
+                <el-button :icon="Plus" @click="addContributorRow">添加贡献者</el-button>
+              </div>
+              <el-table :data="contributorRows" border size="small" empty-text="未填写结构化贡献者">
+                <el-table-column label="姓名" min-width="140"><template #default="{ row }"><el-input v-model="row.name" placeholder="开发者姓名" /></template></el-table-column>
+                <el-table-column label="角色" width="140"><template #default="{ row }"><el-select v-model="row.role"><el-option label="开发" value="developer" /><el-option label="审核" value="reviewer" /><el-option label="指导" value="mentor" /><el-option label="维护" value="maintainer" /><el-option label="数据" value="data" /><el-option label="方法" value="method" /></el-select></template></el-table-column>
+                <el-table-column label="机构" min-width="150"><template #default="{ row }"><el-input v-model="row.organization" placeholder="单位或团队" /></template></el-table-column>
+                <el-table-column label="导师关系" min-width="150"><template #default="{ row }"><el-input v-model="row.mentor_relation" placeholder="指导、审核或课题组归属" /></template></el-table-column>
+                <el-table-column label="说明" min-width="180"><template #default="{ row }"><el-input v-model="row.description" placeholder="贡献说明" /></template></el-table-column>
+                <el-table-column width="52"><template #default="{ $index }"><el-button text :icon="Delete" aria-label="删除贡献者" @click="removeContributorRow($index)" /></template></el-table-column>
+              </el-table>
+            </section>
+          </el-collapse-item>
           <el-collapse-item name="advanced">
             <template #title>
               <span class="advanced-title">高级配置 / 契约编辑</span>
@@ -686,10 +912,18 @@ function viewModelDetail() {
             <section class="contract-preview"><h3>polyagent.algorithm.yaml 预览</h3><pre>{{ contractPreview }}</pre></section>
           </el-collapse-item>
         </el-collapse>
+        </template>
       </template>
 
       <section v-else class="zip-upload">
-        <el-form label-position="top" class="metadata-form">
+        <el-form v-if="isNewVersion" label-position="top" class="metadata-form new-version-form">
+          <div class="simple-form-grid">
+            <el-form-item label="目标模型"><el-input :model-value="form.name" disabled /></el-form-item>
+            <el-form-item label="算法 ID"><el-input :model-value="form.algorithm_id" disabled /></el-form-item>
+            <el-form-item label="新版本"><el-input v-model="form.version" placeholder="0.1.1" /></el-form-item>
+          </div>
+        </el-form>
+        <el-form v-else label-position="top" class="metadata-form">
           <el-form-item label="发布范围">
             <el-radio-group v-model="form.visibility" class="visibility-options">
               <el-radio-button value="private">非公开发布</el-radio-button>
@@ -713,10 +947,56 @@ function viewModelDetail() {
       </div>
       <div class="deploy-summary">
         <span>上传方式：{{ uploadMode === 'zip' ? '标准 ZIP' : 'Python 脚本' }}</span>
-        <span>发布范围：{{ form.visibility === 'public' ? '公开发布' : '非公开发布' }}</span>
+        <span v-if="!isNewVersion">发布范围：{{ form.visibility === 'public' ? '公开发布' : '非公开发布' }}</span>
+        <span v-if="isNewVersion">目标：{{ form.algorithm_id }} / {{ form.version }}</span>
         <span v-if="uploadMode === 'script'">模型：{{ form.name }} / {{ form.version }}</span>
         <span v-if="uploadMode === 'zip'">文件：{{ zipFiles[0]?.name || '已选择 ZIP' }}</span>
       </div>
+      <section v-if="declaredResourceAssets.length" class="resource-binding-panel">
+        <div class="section-heading">
+          <div>
+            <h3>运行资源绑定</h3>
+            <p>该模型声明了 ZIP 外的权重或数据库。请选择已登记资源，或在这里登记后端可访问的挂载路径。</p>
+          </div>
+        </div>
+        <div v-for="spec in declaredResourceAssets" :key="spec.key" class="resource-binding-row">
+          <div class="resource-binding-copy">
+            <strong>{{ spec.label || spec.key }}</strong>
+            <span>{{ spec.key }}<template v-if="spec.resource_type"> · {{ spec.resource_type }}</template></span>
+            <small v-if="spec.required_files?.length">必需文件：{{ spec.required_files.join(', ') }}</small>
+          </div>
+          <el-select
+            v-model="selectedResourceIds[spec.key]"
+            clearable
+            filterable
+            :placeholder="spec.binding_required ? '请选择必需资源' : '可选：使用服务默认资源'"
+          >
+            <el-option
+              v-for="resource in availableResources[spec.key] || []"
+              :key="resource.resource_id"
+              :label="`${resource.name} · ${resource.path}`"
+              :value="resource.resource_id"
+            />
+          </el-select>
+          <el-button @click="resourceDrafts[spec.key].expanded = !resourceDrafts[spec.key].expanded">登记新路径</el-button>
+          <div v-if="resourceDrafts[spec.key]?.expanded" class="inline-resource-form">
+            <el-input v-model="resourceDrafts[spec.key].name" placeholder="资源名称" />
+            <el-input v-model="resourceDrafts[spec.key].path" placeholder="后端宿主机挂载路径" />
+            <el-button
+              type="primary"
+              :loading="registeringResourceKey === spec.key"
+              @click="registerInlineResource(spec)"
+            >校验并绑定</el-button>
+          </div>
+        </div>
+        <el-alert
+          v-if="unresolvedRequiredBindings.length"
+          title="仍有必需资源未绑定，完成选择后可继续校验部署。"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
+      </section>
       <div v-if="loading || currentPackage" class="validation-results">
         <div v-for="step in processSteps" :key="step.title" :class="{ done: step.done }">
           <el-icon><Check /></el-icon>
@@ -754,7 +1034,7 @@ function viewModelDetail() {
     </section>
 
     <div class="wizard-footer">
-      <el-button :disabled="currentStep === 0 || loading || currentStep === 3" @click="goPrevious">上一步</el-button>
+      <el-button :disabled="currentStep === 0 || (isNewVersion && currentStep === 1) || loading || currentStep === 3" @click="goPrevious">上一步</el-button>
       <el-button v-if="currentStep < 2" type="primary" @click="goNext">下一步</el-button>
       <el-button v-else-if="currentStep === 2" type="primary" :loading="loading" @click="submit">校验部署</el-button>
       <el-button v-else type="primary" @click="viewModelDetail">查看模型详情</el-button>
@@ -767,6 +1047,12 @@ function viewModelDetail() {
 .wizard-shell, .wizard-section { border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: #fff; padding: 16px; }
 .wizard-head, .section-heading, .submit-row, .success-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .step-card { min-height: 260px; }
+.resource-binding-panel { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--app-border); background: #f8fafc; }
+.resource-binding-panel h3, .resource-binding-panel p { margin: 0; }
+.resource-binding-row { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.3fr) auto; gap: 10px; align-items: center; padding-top: 12px; border-top: 1px solid var(--app-border); }
+.resource-binding-copy { display: grid; gap: 3px; min-width: 0; }
+.resource-binding-copy span, .resource-binding-copy small { color: var(--app-text-muted); overflow-wrap: anywhere; }
+.inline-resource-form { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(160px, 0.7fr) minmax(260px, 1.3fr) auto; gap: 10px; }
 .wizard-eyebrow { margin: 0 0 4px; color: var(--app-primary-active); font-size: 12px; font-weight: 700; }
 h2, h3 { margin: 0; color: var(--app-ink); letter-spacing: 0; }
 h2 { font-size: 22px; line-height: 1.25; }
@@ -774,6 +1060,7 @@ h3 { font-size: 15px; }
 .wizard-head p:last-child, .section-heading p, .submit-row p { margin: 4px 0 0; color: var(--app-ink-muted); font-size: 13px; line-height: 1.55; }
 .wizard-shell :deep(.el-steps) { margin-top: 16px; }
 .metadata-form { margin-top: 12px; }
+.new-version-mode-switch { margin: 4px 0 16px; }
 .visibility-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .simple-form-grid { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr) 140px; gap: 0 14px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0 14px; }
@@ -813,6 +1100,9 @@ h3 { font-size: 15px; }
 @media (max-width: 1100px) { .validation-results { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
   .wizard-head, .section-heading, .submit-row, .success-actions, .wizard-footer { align-items: stretch; flex-direction: column; }
-  .simple-form-grid, .form-grid, .asset-contract-grid, .source-grid, .validation-results, .upload-mode-grid { grid-template-columns: 1fr; }
+  .simple-form-grid, .form-grid, .asset-contract-grid, .source-grid, .validation-results, .upload-mode-grid, .resource-binding-row, .inline-resource-form { grid-template-columns: 1fr; }
+  .inline-resource-form { grid-column: 1; }
+  .new-version-mode-switch { width: 100%; }
+  .new-version-mode-switch :deep(.el-segmented__group) { display: grid; grid-template-columns: 1fr; width: 100%; }
 }
 </style>

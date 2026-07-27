@@ -8,12 +8,17 @@ import hashlib
 import hmac
 import json
 import os
+import signal
 import stat
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from io import BytesIO
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -28,6 +33,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.core.config import settings  # noqa: E402
 from app.services.data_catalog_service import DATASET_DEFINITIONS, MINIO_OBJECT_MAPPINGS  # noqa: E402
+from app.services.poly_data_extra_datasets import EXTRA_DATASET_SPECS, DatasetFileSpec, ExtraDatasetSpec  # noqa: E402
 
 
 DEFAULT_BUCKET = "polymer-data"
@@ -43,9 +49,12 @@ TARGET_MD_ALLATOM_FILES_COLLECTION = "md_allatom_files"
 TARGET_MD_ALLATOM_DIAMINES_COLLECTION = "md_allatom_diamines"
 TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION = "md_allatom_dianhydrides"
 TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION = "md_allatom_carbon_results"
+EXTRA_TARGET_COLLECTIONS = {spec.dataset_id: spec.collection_name for spec in EXTRA_DATASET_SPECS}
 TARGET_DATASET_STATS_COLLECTION = "dataset_stats"
 TARGET_IMPORT_JOBS_COLLECTION = "import_jobs"
 TARGET_IMPORT_CHECKPOINTS_COLLECTION = "import_checkpoints"
+TARGET_UPLOAD_JOBS_COLLECTION = "upload_jobs"
+TARGET_UPLOAD_CHECKPOINTS_COLLECTION = "upload_checkpoints"
 RADONPY_OBJECT_KEY = "datasets/radonpy_pi1070/raw/pi1070.xlsx"
 PI1M_OBJECT_KEY = "datasets/pi1m_v2/raw/pi1m_v2.csv"
 SMIPOLY_OBJECT_KEY = "datasets/smipoly/raw/202207_smip_monset.csv"
@@ -60,6 +69,12 @@ MD_ALLATOM_DEFAULT_ROOT = "/polymer-multi-modal/MD-AllAtom"
 MD_ALLATOM_DEFAULT_FAMILIES = ("C", "F", "Si")
 DEFAULT_PI1M_SAMPLE_SIZE = 10000
 DEFAULT_PI1M_CHUNK_SIZE = 50000
+DEFAULT_EXTRA_SAMPLE_SIZE = 10000
+DEFAULT_UPLOAD_WORKERS = 8
+DEFAULT_UPLOAD_RETRIES = 3
+UPLOAD_MULTIPART_THRESHOLD = 64 * 1024 * 1024
+UPLOAD_PART_SIZE = 64 * 1024 * 1024
+UPLOAD_READ_CHUNK_SIZE = 8 * 1024 * 1024
 MANIFEST_KEY = "manifests/poly_data_manifest.json"
 LOCAL_MANIFEST_PATH = Path(".runtime/data_catalog/poly_data_manifest.json")
 MD_ALLATOM_STRUCTURED_OBJECT_KEYS = {
@@ -68,6 +83,17 @@ MD_ALLATOM_STRUCTURED_OBJECT_KEYS = {
     "carbon": "datasets/md_allatom/structured/carbon.csv",
     "requirements_doc": "datasets/md_allatom/docs/integration_requirements.docx",
 }
+
+
+class MigrationCancelled(RuntimeError):
+    """Raised when a migration receives a shutdown request."""
+
+
+class MigrationConfigurationError(ValueError):
+    """Raised when an applied migration lacks required configuration."""
+
+
+CANCEL_EVENT = threading.Event()
 
 
 @dataclass(frozen=True)
@@ -146,6 +172,17 @@ SFTP_OBJECT_MIGRATIONS = [
         object_key=POLYUNIVERSE_OBJECT_KEYS["epoxy_diN.csv"],
         content_type="text/csv; charset=utf-8",
     ),
+    *[
+        SftpObjectMigrationRecord(
+            dataset_id=spec.dataset_id,
+            role=file_spec.role,
+            remote_relative_path=file_spec.remote_relative_path,
+            object_key=file_spec.object_key,
+            content_type=file_spec.content_type,
+        )
+        for spec in EXTRA_DATASET_SPECS
+        for file_spec in spec.files
+    ],
 ]
 
 
@@ -190,6 +227,169 @@ class S3Client:
         with urllib.request.urlopen(request, timeout=30) as response:
             response.read()
 
+    def put_object_multipart(
+        self,
+        bucket: str,
+        object_key: str,
+        chunks: Any,
+        *,
+        content_type: str,
+        part_size: int = 64 * 1024 * 1024,
+    ) -> None:
+        """Upload an object using S3 multipart upload from a byte chunk iterator."""
+        upload_id = self._create_multipart_upload(bucket, object_key, content_type=content_type)
+        parts: list[dict[str, Any]] = []
+        try:
+            buffer = bytearray()
+            part_number = 1
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                buffer.extend(chunk)
+                while len(buffer) >= part_size:
+                    payload = bytes(buffer[:part_size])
+                    del buffer[:part_size]
+                    etag = self._upload_part(bucket, object_key, upload_id, part_number, payload)
+                    parts.append({"part_number": part_number, "etag": etag})
+                    part_number += 1
+            if buffer or not parts:
+                etag = self._upload_part(bucket, object_key, upload_id, part_number, bytes(buffer))
+                parts.append({"part_number": part_number, "etag": etag})
+            self._complete_multipart_upload(bucket, object_key, upload_id, parts)
+        except BaseException:
+            self._abort_multipart_upload(bucket, object_key, upload_id)
+            raise
+
+    def list_objects(self, bucket: str, prefix: str) -> dict[str, dict[str, Any]]:
+        """List object metadata under a prefix without generating HEAD 404 responses."""
+        objects: dict[str, dict[str, Any]] = {}
+        continuation: str | None = None
+        while True:
+            query = {
+                "list-type": "2",
+                "prefix": prefix,
+                "max-keys": "1000",
+                "encoding-type": "url",
+            }
+            if continuation:
+                query["continuation-token"] = continuation
+            request = self._signed_request("GET", bucket, "", query=query)
+            with urllib.request.urlopen(request, timeout=120) as response:
+                root = ET.fromstring(response.read())
+            for item in root.findall(".//{*}Contents"):
+                encoded_key = item.findtext("{*}Key") or ""
+                object_key = urllib.parse.unquote(encoded_key)
+                if not object_key:
+                    continue
+                objects[object_key] = {
+                    "size_bytes": int(item.findtext("{*}Size") or 0),
+                    "etag": (item.findtext("{*}ETag") or "").strip('"'),
+                    "last_modified": item.findtext("{*}LastModified"),
+                }
+            if (root.findtext("{*}IsTruncated") or "false").lower() != "true":
+                break
+            continuation = root.findtext("{*}NextContinuationToken") or None
+            if not continuation:
+                break
+        return objects
+
+    def list_multipart_uploads(self, bucket: str, prefix: str) -> list[dict[str, str]]:
+        """List incomplete multipart uploads under a migration-owned prefix."""
+        uploads: list[dict[str, str]] = []
+        key_marker: str | None = None
+        upload_id_marker: str | None = None
+        while True:
+            query = {"uploads": "", "prefix": prefix, "max-uploads": "1000", "encoding-type": "url"}
+            if key_marker:
+                query["key-marker"] = key_marker
+            if upload_id_marker:
+                query["upload-id-marker"] = upload_id_marker
+            request = self._signed_request("GET", bucket, "", query=query)
+            with urllib.request.urlopen(request, timeout=120) as response:
+                root = ET.fromstring(response.read())
+            for item in root.findall(".//{*}Upload"):
+                key = urllib.parse.unquote(item.findtext("{*}Key") or "")
+                upload_id = item.findtext("{*}UploadId") or ""
+                if key and upload_id:
+                    uploads.append({"object_key": key, "upload_id": upload_id})
+            if (root.findtext("{*}IsTruncated") or "false").lower() != "true":
+                break
+            key_marker = root.findtext("{*}NextKeyMarker") or None
+            upload_id_marker = root.findtext("{*}NextUploadIdMarker") or None
+            if not key_marker:
+                break
+        return uploads
+
+    def abort_multipart_upload(self, bucket: str, object_key: str, upload_id: str) -> None:
+        """Abort one explicitly selected incomplete multipart upload."""
+        self._abort_multipart_upload(bucket, object_key, upload_id)
+
+    def _create_multipart_upload(self, bucket: str, object_key: str, *, content_type: str) -> str:
+        request = self._signed_request(
+            "POST",
+            bucket,
+            object_key,
+            query={"uploads": ""},
+            headers={"content-type": content_type},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            root = ET.fromstring(response.read())
+        upload_id = root.findtext(".//{*}UploadId") or root.findtext("UploadId")
+        if not upload_id:
+            raise RuntimeError("MinIO multipart upload did not return UploadId")
+        return upload_id
+
+    def _upload_part(self, bucket: str, object_key: str, upload_id: str, part_number: int, payload: bytes) -> str:
+        request = self._signed_request(
+            "PUT",
+            bucket,
+            object_key,
+            query={"partNumber": str(part_number), "uploadId": upload_id},
+            body=payload,
+        )
+        with urllib.request.urlopen(request, timeout=300) as response:
+            response.read()
+            return (response.headers.get("ETag") or "").strip('"')
+
+    def _complete_multipart_upload(
+        self,
+        bucket: str,
+        object_key: str,
+        upload_id: str,
+        parts: list[dict[str, Any]],
+    ) -> None:
+        body = (
+            "<CompleteMultipartUpload>"
+            + "".join(
+                f"<Part><PartNumber>{part['part_number']}</PartNumber><ETag>\"{part['etag']}\"</ETag></Part>"
+                for part in parts
+            )
+            + "</CompleteMultipartUpload>"
+        ).encode("utf-8")
+        request = self._signed_request(
+            "POST",
+            bucket,
+            object_key,
+            query={"uploadId": upload_id},
+            body=body,
+            headers={"content-type": "application/xml"},
+        )
+        with urllib.request.urlopen(request, timeout=120) as response:
+            response.read()
+
+    def _abort_multipart_upload(self, bucket: str, object_key: str, upload_id: str) -> None:
+        request = self._signed_request(
+            "DELETE",
+            bucket,
+            object_key,
+            query={"uploadId": upload_id},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                response.read()
+        except Exception:
+            pass
+
     def delete_object(self, bucket: str, object_key: str) -> None:
         request = self._signed_request("DELETE", bucket, object_key)
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -201,19 +401,27 @@ class S3Client:
         with urllib.request.urlopen(request, timeout=120) as response:
             return response.read()
 
+    def open_object(self, bucket: str, object_key: str) -> Any:
+        """Open an object as a streaming HTTP response; caller must close it."""
+        request = self._signed_request("GET", bucket, object_key)
+        return urllib.request.urlopen(request, timeout=300)
+
     def _signed_request(
         self,
         method: str,
         bucket: str,
         object_key: str,
         *,
+        query: dict[str, str] | None = None,
         body: bytes = b"",
         headers: dict[str, str] | None = None,
     ) -> urllib.request.Request:
         headers = {key.lower(): value for key, value in (headers or {}).items()}
         parsed_endpoint = urllib.parse.urlparse(self.endpoint)
         host = parsed_endpoint.netloc
-        canonical_uri = f"/{bucket}/{urllib.parse.quote(object_key, safe='/-_.~')}"
+        encoded_key = urllib.parse.quote(object_key, safe="/-_.~")
+        canonical_uri = f"/{bucket}{('/' + encoded_key) if encoded_key else ''}"
+        canonical_query = self._canonical_query(query or {})
         amz_date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         date_stamp = amz_date[:8]
         payload_hash = hashlib.sha256(body).hexdigest()
@@ -226,7 +434,7 @@ class S3Client:
         signed_header_keys = sorted(signed_headers_map)
         canonical_headers = "".join(f"{key}:{str(signed_headers_map[key]).strip()}\n" for key in signed_header_keys)
         signed_headers = ";".join(signed_header_keys)
-        canonical_request = "\n".join([method, canonical_uri, "", canonical_headers, signed_headers, payload_hash])
+        canonical_request = "\n".join([method, canonical_uri, canonical_query, canonical_headers, signed_headers, payload_hash])
         credential_scope = f"{date_stamp}/{self.region}/{self.service}/aws4_request"
         string_to_sign = "\n".join(
             [
@@ -245,10 +453,16 @@ class S3Client:
         request_headers = {key: value for key, value in signed_headers_map.items() if key != "host"}
         request_headers["Authorization"] = authorization
         return urllib.request.Request(
-            f"{self.endpoint}{canonical_uri}",
+            f"{self.endpoint}{canonical_uri}{('?' + canonical_query) if canonical_query else ''}",
             method=method,
             headers=request_headers,
             data=body if method in {"PUT", "POST"} else None,
+        )
+
+    def _canonical_query(self, query: dict[str, str]) -> str:
+        return "&".join(
+            f"{urllib.parse.quote(str(key), safe='-_.~')}={urllib.parse.quote(str(value), safe='-_.~')}"
+            for key, value in sorted(query.items())
         )
 
     def _signing_key(self, date_stamp: str) -> bytes:
@@ -271,6 +485,7 @@ class SftpClient:
         self._ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self._ssh.connect(hostname=host, port=port, username=username, password=password, timeout=20)
         self._sftp = self._ssh.open_sftp()
+        self._sftp.get_channel().settimeout(300)
 
     def stat_file(self, remote_path: str) -> dict[str, Any]:
         attrs = self._sftp.stat(remote_path)
@@ -283,12 +498,22 @@ class SftpClient:
         with self._sftp.open(remote_path, "rb") as fp:
             return fp.read()
 
+    def read_file_chunks(self, remote_path: str, *, chunk_size: int = 8 * 1024 * 1024) -> Any:
+        with self._sftp.open(remote_path, "rb") as fp:
+            while True:
+                chunk = fp.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
     def list_files_recursive(self, remote_root: str) -> list[dict[str, Any]]:
         """Return all files under a remote directory with paths relative to the root."""
         root = remote_root.rstrip("/")
         files: list[dict[str, Any]] = []
 
         def walk(current: str) -> None:
+            if CANCEL_EVENT.is_set():
+                raise MigrationCancelled("migration cancelled")
             for attrs in self._sftp.listdir_attr(current):
                 name = attrs.filename
                 if name in {".", ".."}:
@@ -313,8 +538,375 @@ class SftpClient:
         return sorted(files, key=lambda item: item["relative_path"])
 
     def close(self) -> None:
-        self._sftp.close()
-        self._ssh.close()
+        try:
+            self._sftp.close()
+        finally:
+            self._ssh.close()
+
+
+def validate_runtime_configuration(args: argparse.Namespace, *, sftp_password: str) -> None:
+    """Fail before any mutation when an applied SFTP migration is misconfigured."""
+    if not args.apply:
+        return
+    if not 1 <= int(args.upload_workers) <= 64:
+        raise MigrationConfigurationError("--upload-workers must be between 1 and 64")
+    if not 0 <= int(args.upload_retries) <= 10:
+        raise MigrationConfigurationError("--upload-retries must be between 0 and 10")
+    if not (args.migrate_sftp_open_databases or args.migrate_sftp_md_allatom):
+        return
+    missing: list[str] = []
+    if not sftp_password:
+        missing.append(args.sftp_password_env)
+    if not args.endpoint:
+        missing.append("MINIO_ENDPOINT/--endpoint")
+    if not args.access_key:
+        missing.append("MINIO_ACCESS_KEY/--access-key")
+    if not args.secret_key:
+        missing.append("MINIO_SECRET_KEY/--secret-key")
+    if not args.mongodb_uri:
+        missing.append("DATA_ASSET_MONGODB_URI/--mongodb-uri")
+    if missing:
+        raise MigrationConfigurationError("missing required migration configuration: " + ", ".join(missing))
+
+
+def _load_target_inventory(s3_client: Any, bucket: str, prefixes: list[str]) -> dict[str, dict[str, Any]] | None:
+    if s3_client is None or not hasattr(s3_client, "list_objects"):
+        return None
+    inventory: dict[str, dict[str, Any]] = {}
+    for prefix in sorted(set(prefixes)):
+        inventory.update(s3_client.list_objects(bucket, prefix))
+    return inventory
+
+
+def cleanup_incomplete_multipart_uploads(s3_client: Any, *, bucket: str, prefixes: list[str]) -> int:
+    """Abort only incomplete uploads under explicitly supplied migration prefixes."""
+    if s3_client is None or not hasattr(s3_client, "list_multipart_uploads"):
+        return 0
+    cleaned = 0
+    for prefix in sorted(set(prefixes)):
+        for upload in s3_client.list_multipart_uploads(bucket, prefix):
+            s3_client.abort_multipart_upload(bucket, upload["object_key"], upload["upload_id"])
+            cleaned += 1
+    return cleaned
+
+
+def _persist_upload_checkpoint(target_db: Any, record: dict[str, Any], *, job_id: str) -> None:
+    if target_db is None or not record.get("object_key"):
+        return
+    target_db[TARGET_UPLOAD_CHECKPOINTS_COLLECTION].update_one(
+        {"bucket": record.get("bucket"), "object_key": record["object_key"]},
+        {
+            "$set": {
+                "job_id": job_id,
+                "dataset_id": record.get("dataset_id"),
+                "family": record.get("family"),
+                "role": record.get("role"),
+                "remote_path": record.get("remote_path"),
+                "source": record.get("remote"),
+                "target": record.get("target"),
+                "status": record.get("status"),
+                "attempts": int(record.get("attempts") or 0),
+                "error": record.get("error"),
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+        upsert=True,
+    )
+
+
+def _persist_dataset_object(target_db: Any, record: dict[str, Any]) -> None:
+    if target_db is None or not record.get("object_key"):
+        return
+    target_db["dataset_objects"].update_one(
+        {"object_key": record["object_key"]},
+        {"$set": {**record, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+
+
+def _start_upload_job(
+    target_db: Any,
+    *,
+    job_id: str,
+    job_type: str,
+    records: list[dict[str, Any]],
+    upload_workers: int,
+) -> None:
+    if target_db is None:
+        return
+    now = datetime.now(timezone.utc)
+    target_db[TARGET_UPLOAD_JOBS_COLLECTION].update_one(
+        {"job_id": job_id},
+        {
+            "$set": {
+                "job_id": job_id,
+                "job_type": job_type,
+                "status": "running",
+                "worker_count": upload_workers,
+                "total_files": len(records),
+                "total_bytes": sum(int((record.get("remote") or {}).get("size_bytes") or 0) for record in records),
+                "completed_files": 0,
+                "skipped_files": 0,
+                "failed_files": 0,
+                "uploaded_bytes": 0,
+                "started_at": now,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+    )
+
+
+def _update_upload_job(target_db: Any, *, job_id: str, record: dict[str, Any]) -> None:
+    if target_db is None:
+        return
+    status = record.get("status")
+    increments: dict[str, int] = {}
+    if status == "uploaded":
+        increments = {
+            "completed_files": 1,
+            "uploaded_bytes": int((record.get("target") or {}).get("size_bytes") or 0),
+        }
+    elif status == "already_migrated":
+        increments = {"completed_files": 1, "skipped_files": 1}
+    elif status in {"failed", "verify_failed"}:
+        increments = {"failed_files": 1}
+    update: dict[str, Any] = {"$set": {"updated_at": datetime.now(timezone.utc)}}
+    if increments:
+        update["$inc"] = increments
+    target_db[TARGET_UPLOAD_JOBS_COLLECTION].update_one({"job_id": job_id}, update, upsert=True)
+
+
+def _finish_upload_job(target_db: Any, *, job_id: str, records: list[dict[str, Any]], cancelled: bool) -> None:
+    if target_db is None:
+        return
+    failed = any(record.get("status") in {"failed", "verify_failed"} for record in records)
+    now = datetime.now(timezone.utc)
+    target_db[TARGET_UPLOAD_JOBS_COLLECTION].update_one(
+        {"job_id": job_id},
+        {
+            "$set": {
+                "status": "cancelled" if cancelled else ("failed" if failed else "completed"),
+                "finished_at": now,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+    )
+
+
+def _cancellable_chunks(sftp_client: Any, remote_path: str, cancel_event: threading.Event) -> Any:
+    for chunk in sftp_client.read_file_chunks(remote_path, chunk_size=UPLOAD_READ_CHUNK_SIZE):
+        if cancel_event.is_set():
+            raise MigrationCancelled("migration cancelled")
+        yield chunk
+
+
+def _describe_upload_error(exc: BaseException) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTPError {exc.code} {exc.reason}"
+    return f"{exc.__class__.__name__}: {exc}"
+
+
+def _upload_one_record(
+    record: dict[str, Any],
+    *,
+    sftp_client: Any,
+    s3_client: Any,
+    bucket: str,
+    target_inventory: dict[str, dict[str, Any]] | None,
+    upload_retries: int,
+    cancel_event: threading.Event,
+) -> dict[str, Any]:
+    result = dict(record)
+    object_key = str(result["object_key"])
+    remote = result.get("remote") or {}
+    target = target_inventory.get(object_key) if target_inventory is not None else s3_client.head_object(bucket, object_key)
+    result["target"] = target
+    result["target_exists"] = target is not None
+    result["attempts"] = 0
+    if target and int(target.get("size_bytes") or 0) == int(remote.get("size_bytes") or 0):
+        result["status"] = "already_migrated"
+        result["error"] = None
+        return result
+
+    for attempt in range(1, upload_retries + 2):
+        result["attempts"] = attempt
+        if cancel_event.is_set():
+            raise MigrationCancelled("migration cancelled")
+        try:
+            remote_size = int(remote.get("size_bytes") or 0)
+            if remote_size >= UPLOAD_MULTIPART_THRESHOLD and hasattr(s3_client, "put_object_multipart"):
+                s3_client.put_object_multipart(
+                    bucket,
+                    object_key,
+                    _cancellable_chunks(sftp_client, str(result["remote_path"]), cancel_event),
+                    content_type=str(result.get("content_type") or "application/octet-stream"),
+                    part_size=UPLOAD_PART_SIZE,
+                )
+            else:
+                content = sftp_client.read_file(str(result["remote_path"]))
+                if cancel_event.is_set():
+                    raise MigrationCancelled("migration cancelled")
+                s3_client.put_object(
+                    bucket,
+                    object_key,
+                    content,
+                    str(result.get("content_type") or "application/octet-stream"),
+                )
+            target = s3_client.head_object(bucket, object_key)
+            result["target"] = target
+            result["target_exists"] = target is not None
+            if target and int(target.get("size_bytes") or 0) == remote_size:
+                result["status"] = "uploaded"
+                result["error"] = None
+                return result
+            result["status"] = "verify_failed"
+            result["error"] = "size mismatch"
+        except MigrationCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - retry and persist external boundary failures.
+            result["status"] = "failed"
+            result["error"] = _describe_upload_error(exc)
+        if attempt <= upload_retries:
+            time.sleep(2 ** (attempt - 1))
+    return result
+
+
+def upload_records_concurrently(
+    records: list[dict[str, Any]],
+    *,
+    sftp_client: Any,
+    sftp_client_factory: Any | None,
+    s3_client: Any,
+    target_db: Any,
+    bucket: str,
+    job_type: str,
+    upload_workers: int,
+    upload_retries: int,
+    target_inventory: dict[str, dict[str, Any]] | None,
+    on_record_complete: Any | None = None,
+    cancel_event: threading.Event | None = None,
+) -> list[dict[str, Any]]:
+    """Upload records with bounded concurrency and durable file-level checkpoints."""
+    if not records:
+        return []
+    cancel_event = cancel_event or CANCEL_EVENT
+    workers = max(1, min(int(upload_workers), 64))
+    job_id = f"{job_type}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    _start_upload_job(target_db, job_id=job_id, job_type=job_type, records=records, upload_workers=workers)
+    results: list[dict[str, Any] | None] = [None] * len(records)
+    thread_local = threading.local()
+    owned_clients: list[Any] = []
+    clients_lock = threading.Lock()
+    progress_lock = threading.Lock()
+    progress = {"processed": 0, "completed": 0, "skipped": 0, "failed": 0, "uploaded_bytes": 0}
+    progress_started = monotonic()
+    last_progress_log = [progress_started]
+
+    def report_progress(record: dict[str, Any]) -> None:
+        status = record.get("status")
+        now = monotonic()
+        with progress_lock:
+            progress["processed"] += 1
+            if status == "uploaded":
+                progress["completed"] += 1
+                progress["uploaded_bytes"] += int((record.get("target") or {}).get("size_bytes") or 0)
+            elif status == "already_migrated":
+                progress["completed"] += 1
+                progress["skipped"] += 1
+            elif status in {"failed", "verify_failed"}:
+                progress["failed"] += 1
+            should_log = (
+                status in {"failed", "verify_failed"}
+                or now - last_progress_log[0] >= 10
+                or progress["processed"] == len(records)
+            )
+            if not should_log:
+                return
+            elapsed = max(now - progress_started, 0.001)
+            throughput = progress["uploaded_bytes"] / 1024 / 1024 / elapsed
+            print(
+                f"[upload] job={job_id} processed={progress['processed']}/{len(records)} "
+                f"completed={progress['completed']} skipped={progress['skipped']} failed={progress['failed']} "
+                f"throughput={throughput:.2f}MiB/s key={record.get('object_key')} status={status}",
+                flush=True,
+            )
+            last_progress_log[0] = now
+
+    def worker_client() -> Any:
+        if sftp_client_factory is None:
+            return sftp_client
+        client = getattr(thread_local, "sftp_client", None)
+        if client is None:
+            client = sftp_client_factory()
+            thread_local.sftp_client = client
+            with clients_lock:
+                owned_clients.append(client)
+        return client
+
+    def run_one(index: int) -> tuple[int, dict[str, Any]]:
+        record = dict(records[index])
+        try:
+            result = _upload_one_record(
+                record,
+                sftp_client=worker_client(),
+                s3_client=s3_client,
+                bucket=bucket,
+                target_inventory=target_inventory,
+                upload_retries=upload_retries,
+                cancel_event=cancel_event,
+            )
+        except MigrationCancelled:
+            result = {**record, "status": "cancelled", "error": "migration cancelled"}
+        except Exception as exc:  # noqa: BLE001 - isolate connection/worker failures to one file.
+            result = {
+                **record,
+                "status": "failed",
+                "attempts": int(record.get("attempts") or 0),
+                "error": _describe_upload_error(exc),
+            }
+        _persist_upload_checkpoint(target_db, result, job_id=job_id)
+        _persist_dataset_object(target_db, result)
+        if on_record_complete is not None:
+            on_record_complete(result)
+        _update_upload_job(target_db, job_id=job_id, record=result)
+        report_progress(result)
+        return index, result
+
+    try:
+        if workers == 1:
+            for index in range(len(records)):
+                if cancel_event.is_set():
+                    break
+                result_index, result = run_one(index)
+                results[result_index] = result
+        else:
+            max_in_flight = min(32, workers * 4)
+            next_index = 0
+            futures: dict[Future[tuple[int, dict[str, Any]]], int] = {}
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="poly-upload") as executor:
+                while next_index < len(records) or futures:
+                    while not cancel_event.is_set() and next_index < len(records) and len(futures) < max_in_flight:
+                        future = executor.submit(run_one, next_index)
+                        futures[future] = next_index
+                        next_index += 1
+                    if not futures:
+                        break
+                    completed, _ = wait(futures, return_when=FIRST_COMPLETED)
+                    for future in completed:
+                        futures.pop(future, None)
+                        result_index, result = future.result()
+                        results[result_index] = result
+        finalized = [result for result in results if result is not None]
+        _finish_upload_job(target_db, job_id=job_id, records=finalized, cancelled=cancel_event.is_set())
+        return finalized
+    finally:
+        for client in owned_clients:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 def verify_match(source: dict[str, Any], target: dict[str, Any]) -> tuple[bool, str | None]:
@@ -353,6 +945,11 @@ def dataset_documents() -> list[dict[str, Any]]:
 
 def dataset_record_metadata(dataset_id: str) -> dict[str, Any]:
     """Return dataset row-level import metadata."""
+    if dataset_id in EXTRA_TARGET_COLLECTIONS:
+        return {
+            "record_collection_key": f"poly_data.{EXTRA_TARGET_COLLECTIONS[dataset_id]}",
+            "record_mode": "full",
+        }
     if dataset_id == "openpoly":
         return {
             "record_collection_key": "poly_data.material_records",
@@ -450,6 +1047,8 @@ def migrate_minio_objects(client: Any, *, bucket: str, apply: bool, delete_legac
                         if delete_legacy and source is not None:
                             client.delete_object(bucket, mapping.legacy_key)
                         record["status"] = "renamed" if delete_legacy and source is not None else "copied"
+        except MigrationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 - manifest must preserve per-object failure.
             record["status"] = "failed"
             record["error"] = f"{exc.__class__.__name__}: {exc}"
@@ -464,12 +1063,25 @@ def migrate_sftp_open_database_objects(
     bucket: str,
     sftp_host: str,
     sftp_root: str,
+    dataset_ids: list[str] | None = None,
     apply: bool,
+    target_db: Any | None = None,
+    upload_workers: int = 1,
+    upload_retries: int = DEFAULT_UPLOAD_RETRIES,
+    sftp_client_factory: Any | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]]:
     """Upload source SFTP files into canonical MinIO dataset keys."""
     records: list[dict[str, Any]] = []
     root = sftp_root.rstrip("/")
+    requested = {item.strip() for item in (dataset_ids or []) if item.strip()}
+    if apply and target_db is not None:
+        create_indexes(target_db)
     for mapping in SFTP_OBJECT_MIGRATIONS:
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        if requested and mapping.dataset_id not in requested:
+            continue
         remote_path = f"{root}/{mapping.remote_relative_path}"
         record = {
             **asdict(mapping),
@@ -483,39 +1095,45 @@ def migrate_sftp_open_database_objects(
             "error": None,
         }
         try:
-            remote = sftp_client.stat_file(remote_path) if sftp_client else None
-            target = s3_client.head_object(bucket, mapping.object_key) if s3_client else None
-            record["remote"] = remote
-            record["target"] = target
-            record["target_exists"] = target is not None
-            if not apply:
-                records.append(record)
-                continue
-            if sftp_client is None:
+            record["remote"] = sftp_client.stat_file(remote_path) if sftp_client else None
+            if apply and sftp_client is None:
                 record["status"] = "skipped"
                 record["error"] = "SFTP client is not configured"
-            elif s3_client is None:
+            elif apply and s3_client is None:
                 record["status"] = "skipped"
                 record["error"] = "MinIO client is not configured"
-            elif remote is None:
+            elif apply and record["remote"] is None:
                 record["status"] = "missing_source"
-            elif target and target.get("size_bytes") == remote.get("size_bytes"):
-                record["status"] = "already_migrated"
-            else:
-                content = sftp_client.read_file(remote_path)
-                s3_client.put_object(bucket, mapping.object_key, content, mapping.content_type)
-                target = s3_client.head_object(bucket, mapping.object_key)
-                record["target"] = target
-                record["target_exists"] = target is not None
-                if target and target.get("size_bytes") == remote.get("size_bytes"):
-                    record["status"] = "uploaded"
-                else:
-                    record["status"] = "verify_failed"
-                    record["error"] = "size mismatch"
+        except MigrationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 - manifest must preserve per-object failure.
             record["status"] = "failed"
-            record["error"] = f"{exc.__class__.__name__}: {exc}"
+            record["error"] = _describe_upload_error(exc)
         records.append(record)
+
+    if not apply or sftp_client is None or s3_client is None:
+        return records
+    uploadable = [record for record in records if record.get("status") == "planned" and record.get("remote")]
+    inventory = _load_target_inventory(
+        s3_client,
+        bucket,
+        [f"datasets/{record['dataset_id']}/" for record in uploadable],
+    )
+    uploaded = upload_records_concurrently(
+        uploadable,
+        sftp_client=sftp_client,
+        sftp_client_factory=sftp_client_factory,
+        s3_client=s3_client,
+        target_db=target_db,
+        bucket=bucket,
+        job_type="open-databases",
+        upload_workers=upload_workers,
+        upload_retries=upload_retries,
+        target_inventory=inventory,
+        cancel_event=cancel_event,
+    )
+    uploaded_by_key = {record["object_key"]: record for record in uploaded}
+    records = [uploaded_by_key.get(record.get("object_key"), record) for record in records]
     return records
 
 
@@ -529,15 +1147,93 @@ def migrate_sftp_md_allatom_objects(
     md_root: str,
     families: list[str],
     apply: bool,
+    upload_workers: int = 1,
+    upload_retries: int = DEFAULT_UPLOAD_RETRIES,
+    sftp_client_factory: Any | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]]:
     """Upload MD-AllAtom raw SFTP files into MinIO and index them in MongoDB."""
     records: list[dict[str, Any]] = []
+    family_records_by_name: dict[str, list[dict[str, Any]]] = {}
     normalized_families = [family.strip() for family in families if family.strip()]
     for family in normalized_families:
         remote_family_root = f"{md_root.rstrip('/')}/{family}"
-        family_files = sftp_client.list_files_recursive(remote_family_root) if sftp_client else []
+        if sftp_client is None:
+            records.append({
+                "dataset_id": "md_allatom",
+                "role": "family_preflight",
+                "family": family,
+                "bucket": bucket,
+                "sftp_host": sftp_host,
+                "remote_path": remote_family_root,
+                "remote_file_count": None,
+                "remote_total_size": None,
+                "status": "skipped",
+                "error": "SFTP client is not configured",
+            })
+            continue
+        try:
+            family_files = sftp_client.list_files_recursive(remote_family_root)
+        except FileNotFoundError:
+            records.append({
+                "dataset_id": "md_allatom",
+                "role": "family_preflight",
+                "family": family,
+                "bucket": bucket,
+                "sftp_host": sftp_host,
+                "remote_path": remote_family_root,
+                "remote_file_count": 0,
+                "remote_total_size": 0,
+                "status": "missing_source",
+                "error": "remote family directory does not exist",
+            })
+            continue
+        except PermissionError as exc:
+            records.append({
+                "dataset_id": "md_allatom",
+                "role": "family_preflight",
+                "family": family,
+                "bucket": bucket,
+                "sftp_host": sftp_host,
+                "remote_path": remote_family_root,
+                "remote_file_count": None,
+                "remote_total_size": None,
+                "status": "inaccessible_source",
+                "error": f"{exc.__class__.__name__}: {exc}",
+            })
+            continue
+        except MigrationCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - preflight result must preserve source failures.
+            records.append({
+                "dataset_id": "md_allatom",
+                "role": "family_preflight",
+                "family": family,
+                "bucket": bucket,
+                "sftp_host": sftp_host,
+                "remote_path": remote_family_root,
+                "remote_file_count": None,
+                "remote_total_size": None,
+                "status": "failed",
+                "error": f"{exc.__class__.__name__}: {exc}",
+            })
+            continue
+        if not family_files:
+            records.append({
+                "dataset_id": "md_allatom",
+                "role": "family_preflight",
+                "family": family,
+                "bucket": bucket,
+                "sftp_host": sftp_host,
+                "remote_path": remote_family_root,
+                "remote_file_count": 0,
+                "remote_total_size": 0,
+                "status": "empty_source",
+                "error": "remote family directory is empty",
+            })
+            continue
         family_records: list[dict[str, Any]] = []
-        for index, file_info in enumerate(family_files, start=1):
+        for file_info in family_files:
             relative_path = str(file_info["relative_path"]).lstrip("/")
             object_key = f"datasets/md_allatom/raw/{family}/{urllib.parse.quote(relative_path, safe='/-_.~')}"
             remote_path = str(file_info["remote_path"])
@@ -559,44 +1255,109 @@ def migrate_sftp_md_allatom_objects(
                 "status": "planned",
                 "error": None,
             }
-            try:
-                target = s3_client.head_object(bucket, object_key) if s3_client else None
-                record["target"] = target
-                record["target_exists"] = target is not None
-                if not apply:
-                    family_records.append(record)
-                    continue
-                if sftp_client is None:
-                    record["status"] = "skipped"
-                    record["error"] = "SFTP client is not configured"
-                elif s3_client is None:
-                    record["status"] = "skipped"
-                    record["error"] = "MinIO client is not configured"
-                elif target and target.get("size_bytes") == file_info.get("size_bytes"):
-                    record["status"] = "already_migrated"
-                else:
-                    content = sftp_client.read_file(remote_path)
-                    s3_client.put_object(bucket, object_key, content, "application/octet-stream")
-                    target = s3_client.head_object(bucket, object_key)
-                    record["target"] = target
-                    record["target_exists"] = target is not None
-                    if target and target.get("size_bytes") == file_info.get("size_bytes"):
-                        record["status"] = "uploaded"
-                    else:
-                        record["status"] = "verify_failed"
-                        record["error"] = "size mismatch"
-            except Exception as exc:  # noqa: BLE001 - manifest must preserve per-file failure.
-                record["status"] = "failed"
-                record["error"] = f"{exc.__class__.__name__}: {exc}"
+            record["content_type"] = "application/octet-stream"
             family_records.append(record)
+        family_records_by_name[family] = family_records
+        records.extend(family_records)
 
-        if apply and s3_client is not None:
+    if apply and target_db is not None:
+        create_indexes(target_db)
+
+    raw_records = [record for record in records if record.get("role") == "raw_file"]
+    if apply and raw_records and sftp_client is not None and s3_client is not None:
+        inventory = _load_target_inventory(
+            s3_client,
+            bucket,
+            [f"datasets/md_allatom/raw/{family}/" for family in normalized_families],
+        )
+
+        def persist_md_file(record: dict[str, Any]) -> None:
+            if target_db is None or record.get("status") not in {"uploaded", "already_migrated"}:
+                return
+            document = build_md_allatom_file_document(record, family=str(record["family"]), index=0)
+            target_db[TARGET_MD_ALLATOM_FILES_COLLECTION].update_one(
+                {"md_allatom_file_id": document["md_allatom_file_id"]},
+                {"$set": document},
+                upsert=True,
+            )
+
+        uploaded = upload_records_concurrently(
+            raw_records,
+            sftp_client=sftp_client,
+            sftp_client_factory=sftp_client_factory,
+            s3_client=s3_client,
+            target_db=target_db,
+            bucket=bucket,
+            job_type="md-allatom",
+            upload_workers=upload_workers,
+            upload_retries=upload_retries,
+            target_inventory=inventory,
+            on_record_complete=persist_md_file,
+            cancel_event=cancel_event,
+        )
+        uploaded_by_key = {record["object_key"]: record for record in uploaded}
+        records = [uploaded_by_key.get(record.get("object_key"), record) for record in records]
+        family_records_by_name = {
+            family: [uploaded_by_key.get(record["object_key"], record) for record in family_records]
+            for family, family_records in family_records_by_name.items()
+        }
+
+    if apply and target_db is not None:
+        collection = target_db[TARGET_MD_ALLATOM_FILES_COLLECTION]
+        target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
+            {"dataset_id": "md_allatom"},
+            {
+                "$set": {
+                    "dataset_id": "md_allatom",
+                    "asset_coverage": {
+                        "file_count": int(collection.count_documents({})),
+                        "families": {
+                            family: int(collection.count_documents({"family": family}))
+                            for family in ("C", "F", "Si")
+                        },
+                    },
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+    if apply and s3_client is not None:
+        for family, family_records in family_records_by_name.items():
+            successful = [
+                record
+                for record in family_records
+                if record.get("status") in {"uploaded", "already_migrated"}
+            ]
+            remote_file_count = len(family_records)
+            minio_object_count = sum(
+                1 for record in family_records if record.get("target_exists")
+            )
+            mongo_index_count = (
+                int(target_db[TARGET_MD_ALLATOM_FILES_COLLECTION].count_documents({"family": family}))
+                if target_db is not None
+                else 0
+            )
+            counts_consistent = (
+                len(successful)
+                == remote_file_count
+                == minio_object_count
+                == mongo_index_count
+            )
             manifest = {
                 "dataset_id": "md_allatom",
                 "family": family,
-                "remote_root": remote_family_root,
+                "remote_root": f"{md_root.rstrip('/')}/{family}",
                 "generated_at": datetime.now(timezone.utc).isoformat(),
-                "file_count": len(family_records),
+                "sync_status": "verified" if counts_consistent else "partial_failure",
+                "counts_consistent": counts_consistent,
+                "file_count": remote_file_count,
+                "remote_file_count": remote_file_count,
+                "remote_total_size": sum(
+                    int((record.get("remote") or {}).get("size_bytes") or 0)
+                    for record in family_records
+                ),
+                "minio_object_count": minio_object_count,
+                "mongo_index_count": mongo_index_count,
                 "records": family_records,
             }
             s3_client.put_object(
@@ -605,34 +1366,6 @@ def migrate_sftp_md_allatom_objects(
                 json.dumps(manifest, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
                 "application/json; charset=utf-8",
             )
-
-        records.extend(family_records)
-
-    if apply and target_db is not None:
-        create_indexes(target_db)
-        documents = [
-            build_md_allatom_file_document(record, family=str(record["family"]), index=index)
-            for index, record in enumerate(records, start=1)
-            if record.get("status") in {"uploaded", "already_migrated"}
-        ]
-        upsert_documents(target_db[TARGET_MD_ALLATOM_FILES_COLLECTION], "md_allatom_file_id", documents)
-        target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
-            {"dataset_id": "md_allatom"},
-            {
-                "$set": {
-                    "dataset_id": "md_allatom",
-                    "asset_coverage": {
-                        "file_count": len(documents),
-                        "families": {
-                            family: sum(1 for doc in documents if doc.get("family") == family)
-                            for family in normalized_families
-                        },
-                    },
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-            upsert=True,
-        )
     return records
 
 
@@ -688,12 +1421,26 @@ def create_indexes(target_db: Any) -> None:
     )
     target_db[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION].create_index([("temperature", 1)], name="temperature")
     target_db[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION].create_index([("dp", 1)], name="dp")
+    for spec in EXTRA_DATASET_SPECS:
+        collection = target_db[spec.collection_name]
+        collection.create_index([("record_id", 1)], name="record_id", unique=True)
+        collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
+        collection.create_index([("source_file", 1), ("row_index", 1)], name="source_row")
+        collection.create_index([("title", 1)], name="title")
     target_db["migration_manifests"].create_index([("generated_at", -1)], name="generated_at")
     target_db[TARGET_DATASET_STATS_COLLECTION].create_index([("dataset_id", 1)], name="dataset_id", unique=True)
     target_db[TARGET_IMPORT_JOBS_COLLECTION].create_index([("job_id", 1)], name="job_id", unique=True)
     target_db[TARGET_IMPORT_JOBS_COLLECTION].create_index([("dataset_id", 1), ("started_at", -1)], name="dataset_started")
     target_db[TARGET_IMPORT_CHECKPOINTS_COLLECTION].create_index(
         [("job_id", 1), ("chunk_index", 1)], name="job_chunk", unique=True
+    )
+    target_db[TARGET_UPLOAD_JOBS_COLLECTION].create_index([("job_id", 1)], name="job_id", unique=True)
+    target_db[TARGET_UPLOAD_JOBS_COLLECTION].create_index([("started_at", -1)], name="started_at")
+    target_db[TARGET_UPLOAD_CHECKPOINTS_COLLECTION].create_index(
+        [("bucket", 1), ("object_key", 1)], name="bucket_object_key", unique=True
+    )
+    target_db[TARGET_UPLOAD_CHECKPOINTS_COLLECTION].create_index(
+        [("job_id", 1), ("status", 1)], name="job_status"
     )
 
 
@@ -896,6 +1643,181 @@ def build_polyuniverse_documents(dataframe: Any, *, source_file: str) -> list[di
             }
         )
     return docs
+
+
+def build_extra_dataset_documents(
+    dataframe: Any,
+    *,
+    dataset_spec: ExtraDatasetSpec,
+    file_spec: DatasetFileSpec,
+    start_index: int = 1,
+    source_start_index: int = 1,
+) -> list[dict[str, Any]]:
+    """Build generic Mongo documents for processed 05–16 open database tables."""
+    docs: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    source_file = Path(file_spec.remote_relative_path).name
+    records = dataframe.to_dict(orient="records")
+    for offset, raw in enumerate(records):
+        row_index = start_index + offset
+        source_row_index = source_start_index + offset
+        row = normalized_row(raw)
+        title = first_present(row, list(file_spec.title_fields)) or first_present(
+            row,
+            [
+                "smiles",
+                "SMILES",
+                "Smiles",
+                "product",
+                "polymer_smiles",
+                "smiles_polymer",
+                "polymer",
+                "Polymer",
+                "UUID",
+                "name",
+            ],
+        )
+        record_prefix = file_spec.record_prefix or dataset_spec.dataset_id.upper()
+        doc: dict[str, Any] = {
+            "record_id": f"{record_prefix}-{source_row_index:08d}",
+            "dataset": {"dataset_id": dataset_spec.dataset_id, "dataset_name": dataset_spec.display_name},
+            "source_file": source_file,
+            "source_table": file_spec.table_name or Path(source_file).stem,
+            "row_index": row_index,
+            "source_row_index": source_row_index,
+            "title": str(title) if title is not None else f"{dataset_spec.display_name} #{source_row_index}",
+            "smiles": first_present(
+                row,
+                [
+                    "smiles",
+                    "SMILES",
+                    "Smiles",
+                    "product",
+                    "methyl_terminated_product",
+                    "polymer_smiles",
+                    "smiles_polymer",
+                    "smiles_list",
+                    "smiles_monomer",
+                    "mono_smiles",
+                    "mono1_smiles",
+                    "mono2_smiles",
+                ],
+            ),
+            "raw": row,
+            "created_at": now,
+            "updated_at": now,
+        }
+        for field_name in file_spec.exposed_fields:
+            value = first_present(row, [field_name])
+            if value is not None:
+                doc[str(field_name).strip()] = value
+        docs.append(doc)
+    return docs
+
+
+def source_object_stream_or_bytes(s3_client: Any, bucket: str, object_key: str) -> Any:
+    """Return a context manager or byte buffer for reading a MinIO object."""
+    if hasattr(s3_client, "open_object"):
+        return s3_client.open_object(bucket, object_key)
+    return BytesIO(s3_client.get_object(bucket, object_key))
+
+
+def iter_extra_dataset_frames(
+    *,
+    s3_client: Any,
+    bucket: str,
+    file_spec: DatasetFileSpec,
+    remaining: int | None,
+) -> Any:
+    """Yield pandas dataframes for one generic dataset file."""
+    import pandas as pd
+
+    if file_spec.file_format == "xlsx":
+        dataframe = pd.read_excel(
+            BytesIO(s3_client.get_object(bucket, file_spec.object_key)),
+            sheet_name=file_spec.sheet_name or 0,
+        )
+        if remaining is not None:
+            dataframe = dataframe.head(max(remaining, 0))
+        if len(dataframe):
+            yield dataframe
+        return
+
+    read_kwargs: dict[str, Any] = {
+        "chunksize": max(int(file_spec.chunksize), 1),
+    }
+    if remaining is not None:
+        read_kwargs["nrows"] = max(int(remaining), 0)
+    if file_spec.separator is not None:
+        read_kwargs["sep"] = file_spec.separator
+    if file_spec.file_format == "tsv":
+        read_kwargs["sep"] = "\t"
+    if file_spec.file_format == "txt":
+        read_kwargs.update({"header": None, "names": ["smiles"]})
+    source = source_object_stream_or_bytes(s3_client, bucket, file_spec.object_key)
+    close = getattr(source, "close", None)
+    try:
+        for dataframe in pd.read_csv(source, **read_kwargs):
+            if len(dataframe):
+                yield dataframe
+    finally:
+        if callable(close):
+            close()
+
+
+def update_extra_dataset_stats(
+    stats: dict[str, Any],
+    *,
+    documents: list[dict[str, Any]],
+    file_spec: DatasetFileSpec,
+    sample_limit: int = 5000,
+    value_limit: int = 50000,
+) -> None:
+    """Accumulate compact stats for generic processed datasets."""
+    category_counts = stats.setdefault("category_counts", {})
+    source_counts = category_counts.setdefault("source_file", {})
+    table_counts = category_counts.setdefault("source_table", {})
+    numeric_values = stats.setdefault("_numeric_values", {})
+    samples = stats.setdefault("analysis_samples", [])
+    for doc in documents:
+        source_file = str(doc.get("source_file") or "")
+        source_table = str(doc.get("source_table") or "")
+        if source_file:
+            source_counts[source_file] = source_counts.get(source_file, 0) + 1
+        if source_table:
+            table_counts[source_table] = table_counts.get(source_table, 0) + 1
+        first_numeric: float | None = None
+        for field_name in file_spec.exposed_fields:
+            value = as_float(doc.get(field_name))
+            if value is None:
+                continue
+            values = numeric_values.setdefault(field_name, [])
+            if len(values) < value_limit:
+                values.append(value)
+            if first_numeric is None:
+                first_numeric = value
+        if len(samples) < sample_limit:
+            samples.append(
+                {
+                    "record_id": doc["record_id"],
+                    "x": doc.get("row_index"),
+                    "y": first_numeric,
+                    "category": source_table or source_file,
+                    "title": doc.get("title"),
+                    "source_file": source_file,
+                }
+            )
+
+
+def finalize_extra_dataset_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    """Finalize transient generic stats into the persisted dataset_stats shape."""
+    numeric_values = stats.pop("_numeric_values", {})
+    stats["numeric_histograms"] = {
+        field: histogram(values)
+        for field, values in numeric_values.items()
+        if values
+    }
+    return stats
 
 
 def parse_int(value: Any) -> int | None:
@@ -1431,6 +2353,110 @@ def import_polyuniverse_records(target_db: Any, *, s3_client: Any, bucket: str, 
     return summary
 
 
+def import_extra_open_database_records(
+    target_db: Any,
+    *,
+    s3_client: Any,
+    bucket: str,
+    dataset_ids: list[str],
+    sample_size: int | None,
+    apply: bool,
+) -> list[dict[str, Any]]:
+    """Import selected processed 05–16 dataset rows into generic Mongo collections."""
+    requested = {item.strip() for item in dataset_ids if item.strip()}
+    selected_specs = [spec for spec in EXTRA_DATASET_SPECS if not requested or spec.dataset_id in requested]
+    summaries: list[dict[str, Any]] = []
+    for dataset_spec in selected_specs:
+        summary = {
+            "dataset_id": dataset_spec.dataset_id,
+            "source_object_keys": [file_spec.object_key for file_spec in dataset_spec.files if file_spec.importable],
+            "target_collection": dataset_spec.collection_name,
+            "sample_size": sample_size,
+            "records_upserted": 0,
+            "failed_count": 0,
+            "checkpoint_count": 0,
+            "status": "planned",
+            "error": None,
+        }
+        if not apply:
+            summaries.append(summary)
+            continue
+        if s3_client is None:
+            summary["status"] = "skipped"
+            summary["error"] = "MinIO client is not configured"
+            summaries.append(summary)
+            continue
+        try:
+            create_indexes(target_db)
+            collection = target_db[dataset_spec.collection_name]
+            row_index = 1
+            stats: dict[str, Any] = {
+                "dataset_id": dataset_spec.dataset_id,
+                "record_count": 0,
+                "category_counts": {},
+                "analysis_samples": [],
+                "asset_coverage": {
+                    "importable_file_count": sum(1 for file_spec in dataset_spec.files if file_spec.importable),
+                },
+            }
+            for file_spec in dataset_spec.files:
+                if not file_spec.importable:
+                    continue
+                source_row_index = 1
+                while sample_size is None or summary["records_upserted"] < sample_size:
+                    remaining = None if sample_size is None else sample_size - summary["records_upserted"]
+                    if remaining is not None and remaining <= 0:
+                        break
+                    frames = iter_extra_dataset_frames(
+                        s3_client=s3_client,
+                        bucket=bucket,
+                        file_spec=file_spec,
+                        remaining=remaining,
+                    )
+                    any_frame = False
+                    for dataframe in frames:
+                        any_frame = True
+                        documents = build_extra_dataset_documents(
+                            dataframe,
+                            dataset_spec=dataset_spec,
+                            file_spec=file_spec,
+                            start_index=row_index,
+                            source_start_index=source_row_index,
+                        )
+                        if not documents:
+                            continue
+                        imported = upsert_documents_bulk(collection, "record_id", documents)
+                        summary["records_upserted"] += imported
+                        summary["checkpoint_count"] += 1
+                        row_index += len(documents)
+                        source_row_index += len(documents)
+                        stats["record_count"] = summary["records_upserted"]
+                        update_extra_dataset_stats(stats, documents=documents, file_spec=file_spec)
+                        if sample_size is not None and summary["records_upserted"] >= sample_size:
+                            break
+                    if not any_frame or sample_size is not None:
+                        break
+                    break
+            update_dataset_record_count(
+                target_db,
+                dataset_spec.dataset_id,
+                count=summary["records_upserted"],
+                record_mode="full" if sample_size is None else "sample",
+                collection_key=f"poly_data.{dataset_spec.collection_name}",
+            )
+            target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
+                {"dataset_id": dataset_spec.dataset_id},
+                {"$set": {**finalize_extra_dataset_stats(stats), "updated_at": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
+            summary["status"] = "imported"
+        except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
+            summary["status"] = "failed"
+            summary["error"] = f"{exc.__class__.__name__}: {exc}"
+        summaries.append(summary)
+    return summaries
+
+
 def upload_md_allatom_structured_assets(
     *,
     s3_client: Any,
@@ -1633,7 +2659,16 @@ def build_manifest(
     failed_sftp_objects = [
         record
         for record in (sftp_records or [])
-        if record["status"] in {"failed", "verify_failed", "copy_failed", "missing_source", "skipped"}
+        if record["status"] in {
+            "failed",
+            "verify_failed",
+            "copy_failed",
+            "missing_source",
+            "empty_source",
+            "inaccessible_source",
+            "skipped",
+            "cancelled",
+        }
     ]
     return {
         "operation": "poly_data_asset_migration",
@@ -1680,6 +2715,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--drop-source-after-verify", action="store_true", help="drop ai4ms.Poly_Agent after count verification")
     parser.add_argument("--skip-legacy-poly-agent", action="store_true", help="skip legacy ai4ms.Poly_Agent and poly_agent/* migration")
     parser.add_argument("--migrate-sftp-open-databases", action="store_true", help="copy SFTP open database files into MinIO")
+    parser.add_argument(
+        "--sftp-open-database-dataset-ids",
+        default=os.getenv("SFTP_OPEN_DATABASE_DATASET_IDS", ""),
+        help="comma-separated dataset ids for --migrate-sftp-open-databases; empty uploads all configured open database files",
+    )
     parser.add_argument("--migrate-sftp-md-allatom", action="store_true", help="copy SFTP MD-AllAtom raw files into MinIO")
     parser.add_argument("--sftp-host", default=os.getenv("SFTP_HOST", SFTP_DEFAULT_HOST))
     parser.add_argument("--sftp-port", type=int, default=int(os.getenv("SFTP_PORT", "22")))
@@ -1706,6 +2746,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="upload and import MD-AllAtom structured CSV files from refer/data",
     )
+    parser.add_argument(
+        "--import-extra-open-database-records",
+        action="store_true",
+        help="import processed 05–16 open database rows into generic poly_data collections",
+    )
+    parser.add_argument(
+        "--extra-dataset-ids",
+        default=os.getenv("EXTRA_DATASET_IDS", ""),
+        help="comma-separated extra dataset ids to import; empty imports all 05–16 configured datasets",
+    )
+    parser.add_argument(
+        "--extra-full-import",
+        action="store_true",
+        help="stream all configured extra dataset rows instead of limiting to --extra-sample-size",
+    )
+    parser.add_argument("--extra-sample-size", type=int, default=DEFAULT_EXTRA_SAMPLE_SIZE)
     parser.add_argument("--structured-data-root", type=Path, default=PROJECT_ROOT / "refer" / "data")
     parser.add_argument(
         "--requirements-doc",
@@ -1714,12 +2770,45 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--pi1m-sample-size", type=int, default=DEFAULT_PI1M_SAMPLE_SIZE)
     parser.add_argument("--pi1m-chunk-size", type=int, default=DEFAULT_PI1M_CHUNK_SIZE)
+    parser.add_argument(
+        "--upload-workers",
+        type=int,
+        default=int(os.getenv("POLY_DATA_UPLOAD_WORKERS", str(DEFAULT_UPLOAD_WORKERS))),
+        help="parallel SFTP-to-MinIO upload workers (1-64)",
+    )
+    parser.add_argument(
+        "--upload-retries",
+        type=int,
+        default=int(os.getenv("POLY_DATA_UPLOAD_RETRIES", str(DEFAULT_UPLOAD_RETRIES))),
+        help="retries after the first failed upload attempt (0-10)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = parse_args(argv or sys.argv[1:])
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+    sftp_password = os.getenv(args.sftp_password_env, "")
+    try:
+        validate_runtime_configuration(args, sftp_password=sftp_password)
+    except MigrationConfigurationError as exc:
+        print(f"configuration error: {exc}", file=sys.stderr)
+        return 2
+
+    CANCEL_EVENT.clear()
+
+    def request_shutdown(signum: int, _frame: Any) -> None:
+        if not CANCEL_EVENT.is_set():
+            print(f"received signal {signum}; stopping after active uploads are aborted", file=sys.stderr)
+        CANCEL_EVENT.set()
+
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, request_shutdown)
+        signal.signal(signal.SIGINT, request_shutdown)
     from pymongo import MongoClient  # imported lazily so tests can load without a live server
 
     mongo_client = MongoClient(args.mongodb_uri, serverSelectionTimeoutMS=5000)
@@ -1746,22 +2835,35 @@ def main(argv: list[str] | None = None) -> int:
     sftp_records: list[dict[str, Any]] = []
     if args.migrate_sftp_open_databases:
         sftp_client = None
-        sftp_password = os.getenv(args.sftp_password_env, "")
+
+        def open_sftp_client() -> SftpClient:
+            return SftpClient(
+                host=args.sftp_host,
+                port=args.sftp_port,
+                username=args.sftp_username,
+                password=sftp_password,
+            )
+
         try:
             if sftp_password:
-                sftp_client = SftpClient(
-                    host=args.sftp_host,
-                    port=args.sftp_port,
-                    username=args.sftp_username,
-                    password=sftp_password,
-                )
+                sftp_client = open_sftp_client()
             sftp_records = migrate_sftp_open_database_objects(
                 sftp_client,
                 s3_client,
                 bucket=args.bucket,
                 sftp_host=args.sftp_host,
                 sftp_root=args.sftp_root,
+                dataset_ids=[
+                    item.strip()
+                    for item in str(args.sftp_open_database_dataset_ids).split(",")
+                    if item.strip()
+                ],
                 apply=args.apply,
+                target_db=target_db,
+                upload_workers=args.upload_workers,
+                upload_retries=args.upload_retries,
+                sftp_client_factory=open_sftp_client if args.apply and args.upload_workers > 1 else None,
+                cancel_event=CANCEL_EVENT,
             )
         finally:
             if sftp_client is not None:
@@ -1769,15 +2871,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.migrate_sftp_md_allatom:
         sftp_client = None
-        sftp_password = os.getenv(args.sftp_password_env, "")
+
+        def open_md_sftp_client() -> SftpClient:
+            return SftpClient(
+                host=args.sftp_host,
+                port=args.sftp_port,
+                username=args.sftp_username,
+                password=sftp_password,
+            )
+
         try:
             if sftp_password:
-                sftp_client = SftpClient(
-                    host=args.sftp_host,
-                    port=args.sftp_port,
-                    username=args.sftp_username,
-                    password=sftp_password,
-                )
+                sftp_client = open_md_sftp_client()
             md_records = migrate_sftp_md_allatom_objects(
                 sftp_client,
                 s3_client,
@@ -1787,13 +2892,20 @@ def main(argv: list[str] | None = None) -> int:
                 md_root=args.md_allatom_root,
                 families=[item.strip() for item in str(args.md_allatom_families).split(",") if item.strip()],
                 apply=args.apply,
+                upload_workers=args.upload_workers,
+                upload_retries=args.upload_retries,
+                sftp_client_factory=open_md_sftp_client if args.apply and args.upload_workers > 1 else None,
+                cancel_event=CANCEL_EVENT,
             )
             sftp_records.extend(md_records)
         finally:
             if sftp_client is not None:
                 sftp_client.close()
 
-    object_records = [*minio_records, *sftp_records]
+    object_records = [
+        *minio_records,
+        *[record for record in sftp_records if "attempts" not in record],
+    ]
     if args.skip_legacy_poly_agent:
         mongo_summary = {
             "source_database": args.source_database,
@@ -1817,11 +2929,11 @@ def main(argv: list[str] | None = None) -> int:
             drop_source_after_verify=args.drop_source_after_verify,
         )
     import_summaries: list[dict[str, Any]] = []
-    if args.import_radonpy_records:
+    if not CANCEL_EVENT.is_set() and args.import_radonpy_records:
         import_summaries.append(
             import_radonpy_records(target_db, s3_client=s3_client, bucket=args.bucket, apply=args.apply)
         )
-    if args.import_pi1m_samples:
+    if not CANCEL_EVENT.is_set() and args.import_pi1m_samples:
         import_summaries.append(
             import_pi1m_samples(
                 target_db,
@@ -1832,15 +2944,15 @@ def main(argv: list[str] | None = None) -> int:
                 apply=args.apply,
             )
         )
-    if args.import_smipoly_records:
+    if not CANCEL_EVENT.is_set() and args.import_smipoly_records:
         import_summaries.append(
             import_smipoly_records(target_db, s3_client=s3_client, bucket=args.bucket, apply=args.apply)
         )
-    if args.import_polyuniverse_records:
+    if not CANCEL_EVENT.is_set() and args.import_polyuniverse_records:
         import_summaries.append(
             import_polyuniverse_records(target_db, s3_client=s3_client, bucket=args.bucket, apply=args.apply)
         )
-    if args.import_md_allatom_structured:
+    if not CANCEL_EVENT.is_set() and args.import_md_allatom_structured:
         import_summaries.append(
             import_md_allatom_structured_records(
                 target_db,
@@ -1848,6 +2960,17 @@ def main(argv: list[str] | None = None) -> int:
                 bucket=args.bucket,
                 structured_data_root=args.structured_data_root,
                 requirements_doc=args.requirements_doc,
+                apply=args.apply,
+            )
+        )
+    if not CANCEL_EVENT.is_set() and args.import_extra_open_database_records:
+        import_summaries.extend(
+            import_extra_open_database_records(
+                target_db,
+                s3_client=s3_client,
+                bucket=args.bucket,
+                dataset_ids=[item.strip() for item in str(args.extra_dataset_ids).split(",") if item.strip()],
+                sample_size=None if args.extra_full_import else args.extra_sample_size,
                 apply=args.apply,
             )
         )
@@ -1865,6 +2988,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = "APPLY" if args.apply else "DRY-RUN"
     print(f"{mode} Poly Data migration for bucket {args.bucket}")
     print(json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
+    if CANCEL_EVENT.is_set():
+        return 130
     failed_import = any(item.get("status") in {"failed", "skipped"} for item in import_summaries)
     failed = (
         manifest["minio"]["failed_count"]

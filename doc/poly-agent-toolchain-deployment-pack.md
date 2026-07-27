@@ -100,7 +100,6 @@ python deploy/toolchain/scripts/verify_toolchain.py --root /path/to/Poly_Agent
 | ALchemist | 主动学习优化后端 | Git / 本地路径 | `poly_agent_alchemist` | 8004 | 独立 FastAPI 服务，Poly_Agent 通过 `/api/v1/alchemist/*` 代理访问 |
 | AiiDA | 计算溯源框架 | conda-forge | `poly_agent_aiida` | — | 探测级部署，当前不承诺可提交真实 WorkChain |
 | ORCA | 量子化学程序 | 用户自行安装 | 系统 PATH | — | 商业软件，仅做路径/许可证标记和 probe；不自动安装 |
-| Atlas/ComputeEngine | 优化器 | 参考仓库 | — | 65100 | 默认 disabled；参考仓库不完整时只写配置摘要和 down 状态 |
 
 ## 服务集成状态策略
 
@@ -113,7 +112,6 @@ python deploy/toolchain/scripts/verify_toolchain.py --root /path/to/Poly_Agent
 | `alchemist-backend` | 有 endpoint 时 true | `up` / `down` | endpoint 配置且可达 → `up`；endpoint 不可达 → `down` |
 | `aiida` | 安装后 true | — | 写入 profile/config 摘要；标注 "deployed/probe only" |
 | `orca` | 条件 true | — | 仅 `ORCA_LICENSE_AVAILABLE=true` 且 probe 正常时 |
-| `atlas` | ❌ false | `down` | 默认 disabled |
 | `speclabos` | ❌ false | `not_configured` | MVP 不运行真实 workflow |
 
 ## 验收项目

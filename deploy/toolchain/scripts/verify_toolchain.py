@@ -6,10 +6,11 @@
   2. MongoDB ping
   3. 后端 /api/v1/health 健康检查
   4. 后端 /api/v1/integrations/status 集成状态
-  5. Smoke Demo 1: LOCAL_STRUCTURE / RDKit（CCO → structure.json/.xyz/.sdf）
-  6. Smoke Demo 2: LOCAL_XTB / XTB（O → CREST + xTB, normal_termination=true）
-  7. 后端单元测试
-  8. 前端构建
+  5. 报告 readiness 与真实最小 PDF 生成
+  6. Smoke Demo 1: LOCAL_STRUCTURE / RDKit（CCO → structure.json/.xyz/.sdf）
+  7. Smoke Demo 2: LOCAL_XTB / XTB（O → CREST + xTB, normal_termination=true）
+  8. 后端单元测试
+  9. 前端构建
 
 输出：
   - .runtime/toolchain-verify/report.json  （机器可读）
@@ -282,6 +283,46 @@ class ToolchainVerifier:
                 "error": str(exc),
             }, required=False)
 
+    def verify_report_pdf(self) -> None:
+        """Verify readiness and render a real minimal PDF with backend code."""
+        script = f"""
+import sys, tempfile
+from pathlib import Path
+sys.path.insert(0, {str(self.root / 'backend')!r})
+from app.services.report_service import ReportService
+from app.services.report_renderers.pdf import PdfCompiler
+
+readiness = ReportService().get_readiness()
+with tempfile.TemporaryDirectory(prefix='poly-agent-pdf-smoke-') as tmp:
+    result = PdfCompiler(timeout_seconds=30).compile(
+        '<!doctype html><html><body><h1>PolyAgent PDF smoke</h1></body></html>',
+        output_dir=Path(tmp),
+    )
+    pdf_path = result.get('pdf_path')
+    valid_pdf = bool(pdf_path and Path(pdf_path).read_bytes().startswith(b'%PDF'))
+    print('PDF_READY:', readiness.pdf_ready)
+    print('PDF_STATUS:', result.get('status'))
+    print('PDF_VALID:', valid_pdf)
+"""
+        result = run_cmd(
+            ["python", "-c", script],
+            cwd=str(self.root / "backend"),
+            timeout=60,
+            env={**os.environ.copy(), "PYTHONNOUSERSITE": "1"},
+        )
+        passed = (
+            result["success"]
+            and "PDF_READY: True" in result["stdout"]
+            and "PDF_STATUS: completed" in result["stdout"]
+            and "PDF_VALID: True" in result["stdout"]
+        )
+        self.add_result("report_pdf", passed, {
+            "readiness_endpoint": f"{self.backend_url}/api/v1/reports/readiness",
+            "pdf_header": "%PDF",
+            "output": result["stdout"][-1000:],
+            "error": result["stderr"][-1000:] if not passed else None,
+        })
+
     # ==============================================================
     # 5. Smoke Demo 1: LOCAL_STRUCTURE / RDKit
     # ==============================================================
@@ -513,7 +554,7 @@ except Exception as e:
         print()
 
         # ---- 核心工具 CLI ----
-        print("[1/8] 核心工具 CLI 验证")
+        print("[1/9] 核心工具 CLI 验证")
         self.verify_python()
         self.verify_node()
         self.verify_npm()
@@ -524,35 +565,39 @@ except Exception as e:
         print()
 
         # ---- MongoDB ----
-        print("[2/8] MongoDB 连通性")
+        print("[2/9] MongoDB 连通性")
         self.verify_mongodb()
         print()
 
         # ---- 后端健康 ----
-        print("[3/8] 后端健康检查")
+        print("[3/9] 后端健康检查")
         self.verify_backend_health()
         print()
 
         # ---- 集成状态 ----
-        print("[4/8] 集成状态")
+        print("[4/9] 集成状态")
         self.verify_integration_status()
         print()
 
+        print("[5/9] 报告 readiness 与 PDF smoke")
+        self.verify_report_pdf()
+        print()
+
         # ---- Smoke Demos ----
-        print("[5/8] Smoke Demo: LOCAL_STRUCTURE / RDKit")
+        print("[6/9] Smoke Demo: LOCAL_STRUCTURE / RDKit")
         self.verify_smoke_local_structure()
         print()
 
-        print("[6/8] Smoke Demo: LOCAL_XTB / XTB")
+        print("[7/9] Smoke Demo: LOCAL_XTB / XTB")
         self.verify_smoke_local_xtb()
         print()
 
         # ---- 测试 & 构建 ----
-        print("[7/8] 后端单元测试")
+        print("[8/9] 后端单元测试")
         self.verify_backend_tests()
         print()
 
-        print("[8/8] 前端构建")
+        print("[9/9] 前端构建")
         self.verify_frontend_build()
         print()
 

@@ -137,6 +137,7 @@ onMounted(() => {
           :artifact-refs="detail.artifact_refs"
           :status="detail.status"
           :error="detail.error"
+          :run-id="detail.run_id"
         />
       </template>
     </el-drawer>

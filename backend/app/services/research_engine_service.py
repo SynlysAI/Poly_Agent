@@ -24,6 +24,7 @@ from app.infra.computation_repositories import (
 from app.infra.research_engine_repositories import (
     AlgorithmRegistryRepository,
     AlgorithmRunRepository,
+    AlgorithmVersionRepository,
     ExecutionDecisionRepository,
     ManualAlgorithmWorkflowRepository,
     ResearchProblemSpecRepository,
@@ -35,6 +36,10 @@ from app.services.computation_service import ComputationService
 from app.services.algorithm_runtimes import AlgorithmRuntimeError
 from app.services.algorithm_file_adapters import AlgorithmFileAdapterRegistry
 from app.schemas.research_engine import (
+    AlgorithmContributor,
+    AlgorithmCreditMetrics,
+    AlgorithmCreditSummary,
+    AlgorithmCreditUpdateRequest,
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
     AlgorithmRun,
@@ -1004,6 +1009,162 @@ class ResearchEngineService:
         doc["trigger_modes"] = normalize_trigger_modes(doc.get("trigger_modes"))
         return AlgorithmRegistryEntry(**self._with_algorithm_metadata(doc))
 
+    def get_algorithm_credit_summary(
+        self,
+        algorithm_id: str,
+        *,
+        actor_user_id: str | None = None,
+        is_admin: bool = False,
+    ) -> AlgorithmCreditSummary:
+        """聚合算法轻量贡献台账。
+
+        Credit 只返回可复核的汇总计数和贡献构成，不返回具体用户输入、
+        项目内容、运行结果或存储路径。
+        """
+        algorithm_doc = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+        if not algorithm_doc:
+            raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
+        self._ensure_algorithm_credit_access(
+            algorithm_doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
+
+        versions, _ = AlgorithmVersionRepository.list_versions(
+            algorithm_id=algorithm_id,
+            page=1,
+            page_size=10000,
+        )
+        runs, _ = AlgorithmRunRepository.list_runs(
+            algorithm_id=algorithm_id,
+            page=1,
+            page_size=10000,
+        )
+        audit_events, _ = AuditEventRepository.list_events(
+            entity_type="algorithm",
+            entity_id=algorithm_id,
+            event_type=None,
+            page=1,
+            page_size=10000,
+        )
+
+        latest_version = self._latest_algorithm_version_doc(versions)
+        active_version_doc = next(
+            (
+                item for item in versions
+                if item.get("version_id") == algorithm_doc.get("active_version_id")
+            ),
+            None,
+        )
+        attribution_source = algorithm_doc or active_version_doc or latest_version or {}
+        contributors = self._credit_contributors_from_sources(
+            algorithm_doc,
+            active_version_doc,
+            latest_version,
+        )
+        role_breakdown: dict[str, int] = {}
+        for contributor in contributors:
+            role_breakdown[contributor.role] = role_breakdown.get(contributor.role, 0) + 1
+
+        project_keys: set[str] = set()
+        caller_ids: set[str] = set()
+        for run in runs:
+            created_by = run.get("created_by")
+            if created_by:
+                caller_ids.add(str(created_by))
+            for key in ("problem_spec_id", "campaign_id", "workflow_run_id", "research_run_id"):
+                value = run.get(key)
+                if value:
+                    project_keys.add(f"{key}:{value}")
+
+        latest_maintained_at = self._latest_credit_maintenance_time(versions, audit_events)
+        metrics = AlgorithmCreditMetrics(
+            version_count=len(versions),
+            validated_version_count=len([
+                item for item in versions
+                if str(item.get("status") or "") in {
+                    "validated",
+                    "building",
+                    "built",
+                    "deploying",
+                    "deployed_staging",
+                    "active",
+                    "frozen",
+                }
+            ]),
+            run_count=len(runs),
+            success_run_count=len([item for item in runs if item.get("status") == "completed"]),
+            caller_count=len(caller_ids),
+            reused_project_count=len(project_keys),
+            contributor_count=len(contributors),
+            role_breakdown=role_breakdown,
+            latest_maintained_at=latest_maintained_at,
+        )
+
+        return AlgorithmCreditSummary(
+            algorithm_id=str(algorithm_doc.get("algorithm_id") or algorithm_id),
+            name=str(algorithm_doc.get("name") or algorithm_id),
+            source=str(algorithm_doc.get("source") or "builtin"),
+            visibility=self._normalize_algorithm_visibility(algorithm_doc.get("visibility")),
+            status=algorithm_doc.get("status") or "active",
+            owner=algorithm_doc.get("owner"),
+            active_version_id=algorithm_doc.get("active_version_id"),
+            developer_attribution=self._coerce_attribution_item(
+                attribution_source.get("developer_attribution")
+            ),
+            mentor_team=algorithm_doc.get("mentor_team")
+            or (active_version_doc or {}).get("mentor_team")
+            or (latest_version or {}).get("mentor_team"),
+            contributors=contributors,
+            metrics=metrics,
+            generated_at=utc_now(),
+        )
+
+    def update_algorithm_credit_summary(
+        self,
+        algorithm_id: str,
+        payload: AlgorithmCreditUpdateRequest,
+        *,
+        actor_user_id: str,
+        request_id: str | None = None,
+    ) -> AlgorithmCreditSummary:
+        """管理员修正算法当前署名和贡献关系，并保留审计记录。"""
+        algorithm_doc = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+        if not algorithm_doc:
+            raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
+
+        fields = {
+            "contributors": [item.model_dump(mode="python") for item in payload.contributors],
+            "developer_attribution": (
+                payload.developer_attribution.model_dump(mode="python")
+                if payload.developer_attribution
+                else None
+            ),
+            "mentor_team": payload.mentor_team,
+        }
+        updated = AlgorithmRegistryRepository.update_fields(algorithm_id, fields)
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="algorithm",
+            entity_id=algorithm_id,
+            event_type="credit_corrected",
+            reason=payload.reason,
+            before={
+                "contributors": algorithm_doc.get("contributors") or [],
+                "developer_attribution": algorithm_doc.get("developer_attribution"),
+                "mentor_team": algorithm_doc.get("mentor_team"),
+            },
+            after=fields,
+            request_id=request_id,
+        )
+        return self.get_algorithm_credit_summary(
+            algorithm_id,
+            actor_user_id=actor_user_id,
+            is_admin=True,
+        )
+
     def list_algorithms(
         self,
         *,
@@ -1113,6 +1274,83 @@ class ResearchEngineService:
         if normalized in {"anonymous", "demo_user", "system"}:
             return True
         return normalized.startswith("u_") and len(normalized) >= 10
+
+    @staticmethod
+    def _normalize_algorithm_visibility(value: Any) -> str:
+        return "public" if str(value or "private") == "public" else "private"
+
+    @classmethod
+    def _ensure_algorithm_credit_access(
+        cls,
+        doc: dict,
+        *,
+        actor_user_id: str | None,
+        is_admin: bool,
+    ) -> None:
+        if is_admin or not actor_user_id:
+            return
+        if doc.get("source") != "uploaded_package":
+            return
+        if doc.get("owner") == actor_user_id:
+            return
+        if cls._normalize_algorithm_visibility(doc.get("visibility")) == "public":
+            return
+        raise HTTPException(status_code=403, detail="无权限访问该算法贡献分析")
+
+    @staticmethod
+    def _latest_algorithm_version_doc(versions: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not versions:
+            return None
+        return max(
+            versions,
+            key=lambda item: item.get("updated_at") or item.get("created_at") or utc_now(),
+        )
+
+    @classmethod
+    def _credit_contributors_from_sources(
+        cls,
+        *sources: dict[str, Any] | None,
+    ) -> list[AlgorithmContributor]:
+        for source in sources:
+            if not source:
+                continue
+            contributors = source.get("contributors") or []
+            if contributors:
+                return [cls._coerce_algorithm_contributor(item) for item in contributors]
+        return []
+
+    @staticmethod
+    def _coerce_algorithm_contributor(value: Any) -> AlgorithmContributor:
+        if isinstance(value, AlgorithmContributor):
+            return value
+        return AlgorithmContributor(**(value or {}))
+
+    @staticmethod
+    def _coerce_attribution_item(value: Any) -> AttributionItem | None:
+        if not value:
+            return None
+        if isinstance(value, AttributionItem):
+            return value
+        return AttributionItem(**value)
+
+    @staticmethod
+    def _latest_credit_maintenance_time(
+        versions: list[dict[str, Any]],
+        audit_events: list[dict[str, Any]],
+    ):
+        candidates = []
+        for version in versions:
+            for key in ("activated_at", "updated_at", "created_at"):
+                value = version.get(key)
+                if value is not None:
+                    candidates.append(value)
+        for event in audit_events:
+            value = event.get("created_at")
+            if value is not None:
+                candidates.append(value)
+        if not candidates:
+            return None
+        return max(candidates)
 
     # ------------------------------------------------------------------
     # Examples

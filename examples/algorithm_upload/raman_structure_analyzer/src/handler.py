@@ -65,17 +65,17 @@ def predict(inputs: dict, context: dict, model=None) -> dict:
         json.dumps(normalized_series, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    structure_result = {
-        "schema_version": "polyagent_structure_candidates.v1",
-        "candidates": candidates,
+    functional_group_result = {
+        "schema_version": "polyagent_functional_groups.v1",
+        "functional_groups": candidates,
         "metadata": {"spectype": spectype, "mode": mode, "requested_mode": requested_mode, "k": k},
     }
-    (output_dir / "structure_candidates.json").write_text(
-        json.dumps(structure_result, ensure_ascii=False, indent=2),
+    (output_dir / "functional_groups.json").write_text(
+        json.dumps(functional_group_result, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    with (output_dir / "candidates.csv").open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=["rank", "structure", "score"])
+    with (output_dir / "functional_groups.csv").open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=["rank", "functional_group"])
         writer.writeheader()
         writer.writerows(candidates)
     report = {
@@ -101,14 +101,14 @@ def predict(inputs: dict, context: dict, model=None) -> dict:
                 "mime_type": "application/json",
             },
             {
-                "key": "structure_candidates",
-                "path": "structure_candidates.json",
-                "artifact_type": "structure_json",
+                "key": "functional_groups",
+                "path": "functional_groups.json",
+                "artifact_type": "result_json",
                 "mime_type": "application/json",
             },
             {
-                "key": "candidate_table",
-                "path": "candidates.csv",
+                "key": "functional_group_table",
+                "path": "functional_groups.csv",
                 "artifact_type": "csv",
                 "mime_type": "text/csv",
             },
@@ -146,15 +146,11 @@ def _series_points(context: dict, key: str) -> list[dict[str, float]]:
 def _candidate_rows(raw_output) -> list[dict]:
     if isinstance(raw_output, list):
         return [
-            {"rank": index + 1, "structure": str(function_group), "score": None}
+            {"rank": index + 1, "functional_group": str(function_group)}
             for index, function_group in enumerate(raw_output)
         ]
     structures = raw_output.get("structure") if isinstance(raw_output, dict) else []
-    scores = raw_output.get("score") if isinstance(raw_output, dict) else []
     rows = []
     for index, structure in enumerate(structures or []):
-        score = scores[index] if index < len(scores or []) else None
-        if hasattr(score, "item"):
-            score = score.item()
-        rows.append({"rank": index + 1, "structure": str(structure), "score": score})
+        rows.append({"rank": index + 1, "functional_group": str(structure)})
     return rows

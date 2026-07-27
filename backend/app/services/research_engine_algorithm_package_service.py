@@ -29,6 +29,7 @@ from app.infra.research_engine_repositories import (
 from app.schemas.research_engine import (
     AlgorithmIOSchema,
     AlgorithmAssetSpec,
+    AlgorithmContributor,
     AlgorithmPackage,
     AlgorithmPackageCreate,
     AlgorithmPackageListData,
@@ -156,21 +157,94 @@ class AlgorithmPackageService:
                 zf.writestr(safe_path, content)
         return buffer.getvalue()
 
+    def pack_new_version_from_sources(
+        self,
+        target_algorithm_id: str,
+        version: str,
+        *,
+        source_files: dict[str, bytes],
+        requirements: bytes | None = None,
+    ) -> bytes:
+        """Clone the active package and replace only selected source files."""
+        if not source_files or not any(path.endswith(".py") for path in source_files):
+            raise HTTPException(status_code=422, detail="新版本至少需要上传一个 Python 源文件")
+        registry = AlgorithmRegistryRepository.find_one({"algorithm_id": target_algorithm_id})
+        active_version_id = (registry or {}).get("active_version_id")
+        if not active_version_id:
+            raise HTTPException(status_code=409, detail="目标算法没有可继承的活动版本")
+        active_version = self.get_version(active_version_id)
+        source_package = self.get_package(active_version.package_id)
+        source_path = Path(source_package.storage_uri)
+        if not source_path.is_file():
+            raise HTTPException(status_code=404, detail="当前版本算法包文件不存在")
+
+        output = io.BytesIO()
+        with zipfile.ZipFile(source_path) as source_zip:
+            source_names = [member.filename for member in source_zip.infolist() if not member.is_dir()]
+            replacements: dict[str, bytes] = {}
+            for raw_path, content in source_files.items():
+                normalized = self._normalize_archive_path(raw_path)
+                if "/" not in normalized and normalized.endswith(".py"):
+                    normalized = f"src/{normalized}"
+                elif "/" not in normalized:
+                    matching_paths = [path for path in source_names if Path(path).name == normalized]
+                    if len(matching_paths) == 1:
+                        normalized = matching_paths[0]
+                    elif len(matching_paths) > 1:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"原包中存在多个同名文件 '{normalized}'，请改用标准 ZIP 上传新版本",
+                        )
+                replacements[normalized] = content
+
+            contract = yaml.safe_load(source_zip.read(CONTRACT_FILENAME)) or {}
+            if contract.get("algorithm_id") != target_algorithm_id:
+                raise HTTPException(status_code=409, detail="当前版本契约与目标算法 ID 不一致")
+            contract["version"] = version.strip()
+            self._validate_contract(contract)
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                for member in source_zip.infolist():
+                    if member.is_dir() or member.filename in replacements:
+                        continue
+                    if member.filename == CONTRACT_FILENAME:
+                        target_zip.writestr(
+                            CONTRACT_FILENAME,
+                            yaml.safe_dump(contract, allow_unicode=True, sort_keys=False),
+                        )
+                    elif member.filename == "requirements.txt" and requirements is not None:
+                        target_zip.writestr(member, requirements)
+                    else:
+                        target_zip.writestr(member, source_zip.read(member.filename))
+                if requirements is not None and "requirements.txt" not in source_zip.namelist():
+                    target_zip.writestr("requirements.txt", requirements)
+                for path, content in replacements.items():
+                    self._validate_archive_member(path, len(content))
+                    target_zip.writestr(path, content)
+        return output.getvalue()
+
     def upload_package(
         self,
         *,
         filename: str,
         content: bytes,
         actor_user_id: str,
+        owner_user_id: str | None = None,
         visibility: str | None = None,
+        target_algorithm_id: str | None = None,
+        target_version: str | None = None,
     ) -> AlgorithmPackage:
         """保存上传 ZIP，返回包记录。"""
         if not filename.endswith(".zip"):
             raise HTTPException(status_code=422, detail="仅支持 .zip 算法包")
         if len(content) > MAX_PACKAGE_BYTES:
             raise HTTPException(status_code=413, detail="算法包超过 20MB 限制")
+        if target_version:
+            content = self._rewrite_contract_version(content, target_version)
+        if len(content) > MAX_PACKAGE_BYTES:
+            raise HTTPException(status_code=413, detail="重写版本后的算法包超过 20MB 限制")
+        contract_metadata = self._peek_contract_metadata(content)
         normalized_visibility = self._normalize_visibility(
-            visibility or self._peek_contract_visibility(content) or "private"
+            visibility or contract_metadata.get("visibility") or "private"
         )
         package_sha256 = hashlib.sha256(content).hexdigest()
         package_id = f"apkg_{uuid4().hex[:12]}"
@@ -181,8 +255,11 @@ class AlgorithmPackageService:
         zip_path.write_bytes(content)
         doc = {
             "package_id": package_id,
-            "algorithm_id": None,
-            "version": None,
+            "target_algorithm_id": target_algorithm_id.strip() if target_algorithm_id else None,
+            "algorithm_id": contract_metadata.get("algorithm_id"),
+            "version": contract_metadata.get("version"),
+            "resource_assets": contract_metadata.get("resource_assets") or [],
+            "contributors": contract_metadata.get("contributors") or [],
             "version_id": None,
             "status": "uploaded",
             "package_sha256": package_sha256,
@@ -198,12 +275,40 @@ class AlgorithmPackageService:
             "environment_digest": None,
             "runtime_digest": None,
             "visibility": normalized_visibility,
-            "created_by": actor_user_id,
+            "created_by": owner_user_id or actor_user_id,
+            "uploaded_by": actor_user_id,
             "created_at": now,
             "updated_at": now,
         }
         AlgorithmPackageRepository.save("package_id", doc)
         return AlgorithmPackage(**doc)
+
+    def _rewrite_contract_version(self, content: bytes, version: str) -> bytes:
+        """Rewrite only the semantic version in a targeted standard ZIP upload."""
+        try:
+            source_buffer = io.BytesIO(content)
+            output = io.BytesIO()
+            with zipfile.ZipFile(source_buffer) as source_zip:
+                if CONTRACT_FILENAME not in source_zip.namelist():
+                    raise HTTPException(status_code=422, detail=f"算法包缺少 {CONTRACT_FILENAME}")
+                contract = yaml.safe_load(source_zip.read(CONTRACT_FILENAME)) or {}
+                contract["version"] = version.strip()
+                with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                    for member in source_zip.infolist():
+                        if member.is_dir():
+                            continue
+                        if member.filename == CONTRACT_FILENAME:
+                            target_zip.writestr(
+                                CONTRACT_FILENAME,
+                                yaml.safe_dump(contract, allow_unicode=True, sort_keys=False),
+                            )
+                        else:
+                            target_zip.writestr(member, source_zip.read(member.filename))
+            return output.getvalue()
+        except HTTPException:
+            raise
+        except (zipfile.BadZipFile, yaml.YAMLError) as exc:
+            raise HTTPException(status_code=422, detail=f"无法读取算法包契约: {exc}") from exc
 
     def get_package(self, package_id: str) -> AlgorithmPackage:
         """获取算法包记录。"""
@@ -267,6 +372,37 @@ class AlgorithmPackageService:
                 contract.get("visibility") or package.visibility or "private"
             )
             self._validate_contract(contract)
+            if package.target_algorithm_id and contract["algorithm_id"] != package.target_algorithm_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"算法包契约 ID '{contract['algorithm_id']}' 与目标算法 ID "
+                        f"'{package.target_algorithm_id}' 不一致"
+                    ),
+                )
+            existing_model_version = AlgorithmVersionRepository.find_one(
+                {"algorithm_id": contract["algorithm_id"]}
+            )
+            if (
+                not package.target_algorithm_id
+                and existing_model_version
+                and existing_model_version.get("package_id") != package_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"模型 ID '{contract['algorithm_id']}' 已存在，"
+                        "请从模型详情使用“上传新版本”流程"
+                    ),
+                )
+            existing_version = AlgorithmVersionRepository.find_one(
+                {"algorithm_id": contract["algorithm_id"], "version": contract["version"]}
+            )
+            if existing_version and existing_version.get("package_id") != package_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"语义版本 '{contract['version']}' 已存在，请选择新版本号",
+                )
             sample_input = self._load_sample_input(extract_dir, contract)
             sample_input_files, parsed_inputs = self._load_sample_input_assets(extract_dir, contract)
             validation_output_dir = extract_dir / ".polyagent_validation_outputs"
@@ -333,6 +469,10 @@ class AlgorithmPackageService:
                 "contract": contract,
                 "visibility": contract["visibility"],
                 "mentor_team": contract.get("mentor_team"),
+                "contributors": [
+                    item.model_dump(mode="python")
+                    for item in self._contributors_from_contract(contract)
+                ],
                 "developer_attribution": (
                     developer_attribution.model_dump(mode="python")
                     if developer_attribution
@@ -344,6 +484,11 @@ class AlgorithmPackageService:
                 ],
                 "implementation_notes": contract.get("implementation_notes"),
                 "created_by": package.created_by,
+                "uploaded_by": package.uploaded_by or package.created_by,
+                "activated_at": None,
+                "activation_kind": None,
+                "previous_active_version_id": None,
+                "rollback_status": None,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -507,7 +652,13 @@ class AlgorithmPackageService:
             "deployment": version.deployment,
         }
 
-    def activate_version(self, algorithm_id: str, version_id: str) -> AlgorithmVersion:
+    def activate_version(
+        self,
+        algorithm_id: str,
+        version_id: str,
+        *,
+        activation_kind: str = "manual",
+    ) -> AlgorithmVersion:
         """激活算法版本，并写入 AlgorithmRegistry。"""
         version = self.get_version(version_id)
         if version.algorithm_id != algorithm_id:
@@ -518,6 +669,8 @@ class AlgorithmPackageService:
         now = utc_now()
         registry_entry = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
         previous_version_id = (registry_entry or {}).get("active_version_id")
+        if previous_version_id == version_id and version.status == "active":
+            return version
         if previous_version_id and previous_version_id != version_id:
             previous_version = self.get_version(previous_version_id)
             AlgorithmVersionRepository.update_fields(
@@ -531,6 +684,12 @@ class AlgorithmPackageService:
         developer_attribution = version.developer_attribution or self._developer_attribution_from_contract(
             contract,
             created_by=version.created_by,
+        )
+        contributors = (
+            version.contributors
+            or self._contributors_from_contract(contract)
+            or (registry_entry or {}).get("contributors")
+            or []
         )
         registry_doc = {
             "algorithm_id": algorithm_id,
@@ -550,7 +709,7 @@ class AlgorithmPackageService:
             "runtime_dependency": "uploaded_python_package",
             "version": contract.get("version", version.version),
             "validation_metric": {},
-            "owner": version.created_by,
+            "owner": (registry_entry or {}).get("owner") or version.created_by,
             "status": "active",
             "description": contract.get("description"),
             "active_version_id": version_id,
@@ -558,6 +717,10 @@ class AlgorithmPackageService:
             "deployment_status": "active",
             "visibility": self._normalize_visibility(version.visibility or contract.get("visibility") or "private"),
             "mentor_team": contract.get("mentor_team") or version.mentor_team,
+            "contributors": [
+                item.model_dump(mode="python") if hasattr(item, "model_dump") else item
+                for item in contributors
+            ],
             "developer_attribution": (
                 developer_attribution.model_dump(mode="python")
                 if developer_attribution
@@ -568,13 +731,49 @@ class AlgorithmPackageService:
             "implementation_notes": version.implementation_notes or contract.get("implementation_notes"),
         }
         AlgorithmRegistryRepository.save("algorithm_id", registry_doc)
-        AlgorithmVersionRepository.update_fields(version_id, {"status": "active", "updated_at": now})
+        AlgorithmVersionRepository.update_fields(
+            version_id,
+            {
+                "status": "active",
+                "activated_at": now,
+                "activation_kind": activation_kind,
+                "previous_active_version_id": previous_version_id,
+                "rollback_status": "completed" if activation_kind == "rollback" else None,
+                "updated_at": now,
+            },
+        )
         AlgorithmPackageRepository.update_fields(version.package_id, {"status": "active", "updated_at": now})
         return self.get_version(version_id)
 
     def rollback_version(self, algorithm_id: str, version_id: str) -> AlgorithmVersion:
         """回滚本质上是重新激活一个历史版本。"""
-        return self.activate_version(algorithm_id, version_id)
+        return self.activate_version(algorithm_id, version_id, activation_kind="rollback")
+
+    def release_package(
+        self,
+        package_id: str,
+        *,
+        resource_bindings: list[AlgorithmResourceBinding | dict[str, Any]] | None = None,
+    ) -> AlgorithmVersion:
+        """校验、构建、部署并自动激活一个上传包。"""
+        package = self.get_package(package_id)
+        if not package.version_id or package.status in {"uploaded", "validation_failed"}:
+            package = self.validate_package(package_id, resource_bindings=resource_bindings)
+        version = self.get_version(package.version_id or "")
+        if version.status == "validated":
+            self.build_package(package_id)
+            version = self.get_version(version.version_id)
+        if version.status == "built":
+            version = self.deploy_version(version.algorithm_id, version.version_id)
+        if version.status == "deployed_staging":
+            version = self.activate_version(
+                version.algorithm_id,
+                version.version_id,
+                activation_kind="release",
+            )
+        if version.status != "active":
+            raise HTTPException(status_code=409, detail=f"算法版本状态为 '{version.status}'，无法发布")
+        return version
 
     def freeze_version(self, algorithm_id: str, version_id: str) -> AlgorithmVersion:
         """冻结算法版本，禁止新任务继续选择该版本。"""
@@ -673,6 +872,15 @@ class AlgorithmPackageService:
         if version.status != "active":
             raise HTTPException(status_code=409, detail="算法当前没有可调用的 active 版本")
         return version
+
+    def resolve_algorithm_owner(self, algorithm_id: str) -> str | None:
+        """返回上传模型的固定归属用户。"""
+        entry = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+        owner = str((entry or {}).get("owner") or "").strip()
+        if owner:
+            return owner
+        version = self.resolve_active_version(algorithm_id)
+        return version.created_by if version else None
 
     def _set_unavailable_status(
         self,
@@ -1024,6 +1232,7 @@ class AlgorithmPackageService:
             source="uploaded_package",
             visibility=AlgorithmPackageService._normalize_visibility(contract.get("visibility")),
             mentor_team=contract.get("mentor_team"),
+            contributors=AlgorithmPackageService._contributors_from_contract(contract),
             developer_attribution=AlgorithmPackageService._developer_attribution_from_contract(
                 contract,
                 created_by="package_owner",
@@ -1088,6 +1297,7 @@ class AlgorithmPackageService:
             "developer_contact": payload.developer_contact,
             "source_url": payload.source_url,
             "citation": payload.citation,
+            "contributors": [item.model_dump(mode="python") for item in payload.contributors],
             "method_attributions": [
                 item.model_dump(mode="python")
                 for item in payload.method_attributions
@@ -1107,6 +1317,7 @@ class AlgorithmPackageService:
             "developer_contact",
             "source_url",
             "citation",
+            "contributors",
             "logo_asset",
             "logo_url",
             "implementation_notes",
@@ -1123,17 +1334,35 @@ class AlgorithmPackageService:
         return normalized
 
     @staticmethod
-    def _peek_contract_visibility(content: bytes) -> str | None:
+    def _peek_contract_metadata(content: bytes) -> dict[str, Any]:
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
                 with zf.open(CONTRACT_FILENAME) as fp:
                     contract = yaml.safe_load(fp.read().decode("utf-8"))
         except Exception:
-            return None
+            return {}
         if not isinstance(contract, dict):
-            return None
-        visibility = contract.get("visibility")
-        return str(visibility).strip().lower() if visibility else None
+            return {}
+        resource_assets = []
+        for raw_spec in contract.get("resource_assets") or []:
+            if not isinstance(raw_spec, dict):
+                continue
+            try:
+                resource_assets.append(
+                    AlgorithmAssetSpec(**raw_spec).model_dump(mode="python", exclude_none=True)
+                )
+            except ValueError:
+                continue
+        return {
+            "algorithm_id": str(contract.get("algorithm_id") or "").strip() or None,
+            "version": str(contract.get("version") or "").strip() or None,
+            "visibility": str(contract.get("visibility") or "").strip().lower() or None,
+            "resource_assets": resource_assets,
+            "contributors": [
+                item.model_dump(mode="python")
+                for item in AlgorithmPackageService._contributors_from_contract(contract)
+            ],
+        }
 
     @staticmethod
     def _developer_attribution_from_contract(contract: dict, *, created_by: str) -> AttributionItem | None:
@@ -1144,6 +1373,22 @@ class AlgorithmPackageService:
         source_url = str(contract.get("source_url") or "").strip() or None
         citation = str(contract.get("citation") or "").strip() or None
         logo_asset = str(contract.get("logo_asset") or contract.get("logo_url") or "").strip() or None
+        contributors = AlgorithmPackageService._contributors_from_contract(contract)
+        if not any((developer, organization, mentor_team, source_url, citation, logo_asset)) and contributors:
+            primary = next(
+                (
+                    item
+                    for item in contributors
+                    if item.role.lower() in {"developer", "author", "lead", "primary_developer"}
+                ),
+                contributors[0],
+            )
+            developer = primary.name
+            organization = primary.organization
+            mentor_team = mentor_team or (
+                primary.mentor_relation if primary.role.lower() in {"mentor", "advisor", "supervisor"} else None
+            )
+            citation = primary.description or citation
         if not any((developer, organization, mentor_team, source_url, citation, logo_asset)):
             return None
         display_name = developer or organization or "算法开发者"
@@ -1166,6 +1411,20 @@ class AlgorithmPackageService:
             logo_alt=organization or developer,
             visibility="prominent",
         )
+
+    @staticmethod
+    def _contributors_from_contract(contract: dict) -> list[AlgorithmContributor]:
+        raw_items = contract.get("contributors") or []
+        items: list[AlgorithmContributor] = []
+        for raw in raw_items:
+            if isinstance(raw, AlgorithmContributor):
+                items.append(raw)
+            elif isinstance(raw, dict):
+                try:
+                    items.append(AlgorithmContributor(**raw))
+                except ValueError:
+                    continue
+        return items
 
     @staticmethod
     def _method_attributions_from_contract(contract: dict) -> list[AttributionItem]:

@@ -20,7 +20,7 @@ README.md
 
 The runtime environment must already provide `torch`, `numpy`, and `scipy`.
 
-The model resources are not stored in the ZIP. The package first uses an optional managed resource binding, then `RAMAN_RESOURCES_ROOT`, then the service default path `/home/fangyikai/github_project/Spec_Agent/backend/resources/raman`. If you register a mounted resource in PolyAgent resource management, the registered path must be the Raman resource parent directory, not the `checkpoints` subdirectory:
+The model resources are not stored in the ZIP. The package first uses an optional managed resource binding, then `RAMAN_RESOURCES_ROOT`, then the service default path `/home/fangyikai/github_project/Spec_Agent/backend/resources/raman`. If the import contract needs a mounted resource, bind it during import validation. The registered path must be the Raman resource parent directory, not the `checkpoints` subdirectory:
 
 - `algorithm_id`: `raman_structure_analyzer`
 - `asset_key`: `raman_runtime_resources`
@@ -44,9 +44,9 @@ JSON parameters:
 
 - `spectype`: `raman`
 - `mode`: `function_groups`
-- `x0`, `x1`: optional spectral x-axis bounds
-- `k`: candidate count
-- `transmittance`: IR transmittance flag
+- `x0`, `x1`: optional spectral x-axis bounds; omitted values use the first and last x values in the file
+- `k`: compatibility field; currently unused by functional-group inference
+- `transmittance`: compatibility field; currently unused in Raman mode
 - `device`: `cpu` or `cuda`
 
 File parameter:
@@ -57,8 +57,10 @@ File parameter:
 
 The handler returns `polyagent_run_result.v1` with:
 
-- `output_summary.candidates`
+- `output_summary.candidates` (rows contain `rank` and `functional_group`; no confidence score)
 - `normalized_series.json`
-- `structure_candidates.json`
-- `candidates.csv`
+- `functional_groups.json`
+- `functional_groups.csv`
 - `report.json`
+
+This mode detects functional groups only. It does not generate a complete molecular structure or a meaningful confidence score.

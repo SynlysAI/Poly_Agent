@@ -591,6 +591,10 @@ export function getAlgorithm(algorithmId) {
   return apiClient.get(`/research-engine/algorithms/${algorithmId}`).then(unwrapResponse)
 }
 
+export function getAlgorithmCreditSummary(algorithmId) {
+  return apiClient.get(`/research-engine/algorithms/${algorithmId}/credit-summary`).then(unwrapResponse)
+}
+
 export function downloadAlgorithmPackageTemplate() {
   return apiClient
     .get('/research-engine/algorithm-packages/template', { responseType: 'blob' })
@@ -675,6 +679,10 @@ export function packAlgorithmPackage(formData) {
   return apiClient.post('/research-engine/algorithm-packages:pack', formData).then(unwrapResponse)
 }
 
+export function packAlgorithmVersionPackage(formData) {
+  return apiClient.post('/research-engine/algorithm-packages:pack-version', formData).then(unwrapResponse)
+}
+
 export function uploadAlgorithmPackage(formData) {
   return apiClient.post('/research-engine/algorithm-packages', formData).then(unwrapResponse)
 }
@@ -704,6 +712,11 @@ export function validateAlgorithmPackage(packageId, resourceBindings = []) {
 
 export function buildAlgorithmPackage(packageId) {
   return apiClient.post(`/research-engine/algorithm-packages/${packageId}:build`).then(unwrapResponse)
+}
+
+export function releaseAlgorithmPackage(packageId, resourceBindings = []) {
+  const payload = resourceBindings.length ? { resource_bindings: resourceBindings } : undefined
+  return apiClient.post(`/research-engine/algorithm-packages/${packageId}:release`, payload).then(unwrapResponse)
 }
 
 export function listAlgorithmVersions(algorithmId, params = {}) {

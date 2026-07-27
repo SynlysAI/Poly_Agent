@@ -1,6 +1,6 @@
 contract_version: "0.2"
 algorithm_id: raman_structure_analyzer
-name: Raman Structure Analyzer
+name: 拉曼官能团识别
 version: 0.1.0
 visibility: public
 algorithm_family: vertical_prediction
@@ -79,14 +79,14 @@ output_assets:
     data_kind: series
     artifact_type: series_json
     mime_type: application/json
-  - key: structure_candidates
-    label: Structure candidates
+  - key: functional_groups
+    label: Detected functional groups
     asset_role: output
     data_kind: json
-    artifact_type: structure_json
+    artifact_type: result_json
     mime_type: application/json
-  - key: candidate_table
-    label: Candidate table
+  - key: functional_group_table
+    label: Functional group table
     asset_role: output
     data_kind: table
     artifact_type: csv
@@ -112,7 +112,7 @@ resource_assets:
     description: Optional managed binding. If omitted, the package reads RAMAN_RESOURCES_ROOT or the service default Raman resource root. This function-group-only package does not require raman_generation.pth or tokenizer files.
 result_envelope: polyagent_run_result.v1
 sample_input_path: tests/sample_input.json
-description: Raman spectral functional group analysis packaged with generic file I/O assets.
+description: 对拉曼光谱进行预处理并识别可能存在的官能团；当前不输出完整分子结构或置信分数。
 developer: Raman Structure Analyzer 模型团队
 source_url: refer/raman
 method_attributions:

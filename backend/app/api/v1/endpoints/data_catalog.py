@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.core.auth import get_current_user
 from app.schemas.common import ApiResponse
@@ -65,7 +65,6 @@ def list_data_catalog_dataset_records(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[DataCatalogDatasetRecordListData]:
     """游标分页查询数据集记录。"""
-    _require_record_drilldown_access(current_user)
     data = DataCatalogService().list_dataset_records(
         dataset_id,
         cursor=cursor,
@@ -92,12 +91,6 @@ def get_data_catalog_relationships() -> ApiResponse[DataCatalogRelationshipsData
     return ApiResponse(data=DataCatalogService().get_relationships())
 
 
-def _require_record_drilldown_access(current_user: dict[str, str] | None) -> None:
-    """限制原始集合记录下钻为管理员只读能力。"""
-    if current_user is not None and current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="无管理员权限")
-
-
 @router.get(
     "/mongo-collections/{collection_name}/records",
     response_model=ApiResponse[DataCatalogCollectionRecordListData],
@@ -110,7 +103,6 @@ def list_data_catalog_mongo_collection_records(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[DataCatalogCollectionRecordListData]:
     """分页查询白名单 Mongo 集合的记录摘要。"""
-    _require_record_drilldown_access(current_user)
     data = DataCatalogService().list_mongo_collection_records(
         collection_name,
         page=page,
@@ -130,6 +122,5 @@ def get_data_catalog_mongo_collection_record(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[DataCatalogCollectionRecordDetailData]:
     """查询白名单 Mongo 集合的单条脱敏记录详情。"""
-    _require_record_drilldown_access(current_user)
     data = DataCatalogService().get_mongo_collection_record(collection_name, record_id)
     return ApiResponse(code=0, message="ok", data=data)

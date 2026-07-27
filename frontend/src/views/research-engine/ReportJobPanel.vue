@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { Document, Download, Refresh, RefreshRight } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+import { Document, Download, Histogram, Refresh, RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import { getApiErrorMessage, getReportPreview } from '../../api/polyAgentApi'
@@ -18,6 +19,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['refresh', 'retry', 'download'])
+const router = useRouter()
 
 const hasJobs = computed(() => props.jobs.length > 0)
 const previewReportId = ref('')
@@ -62,6 +64,43 @@ function elapsedText(job) {
 
 function downloadableArtifacts(job) {
   return (job.artifact_refs || []).filter(item => ['markdown', 'pdf', 'log'].includes(item.artifact_type))
+}
+
+function subjectModuleId(job) {
+  const subjectType = String(job?.subject_type || '').trim()
+  if (['algorithm_run', 'research_run', 'workflow_run'].includes(subjectType)) return 'research-engine'
+  if (subjectType === 'computation_run') return 'computation'
+  return ''
+}
+
+function subjectRoute(job) {
+  const subjectType = String(job?.subject_type || '').trim()
+  const subjectId = String(job?.subject_id || '').trim()
+  if (!subjectId) return null
+  if (subjectType === 'algorithm_run') return { path: '/research-engine', query: { run_id: subjectId } }
+  if (subjectType === 'research_run') return { path: '/research-engine', query: { research_run_id: subjectId } }
+  if (subjectType === 'workflow_run') return { path: '/research-engine', query: { workflow_id: subjectId } }
+  if (subjectType === 'computation_run') return { path: '/computations/runs', query: { run_id: subjectId } }
+  return null
+}
+
+function openSubject(job) {
+  const route = subjectRoute(job)
+  if (!route) return
+  router.push(route)
+}
+
+function openTaskCenter(job) {
+  const subjectId = String(job?.subject_id || '').trim()
+  if (!subjectId) return
+  const moduleId = subjectModuleId(job)
+  router.push({
+    path: '/tasks/center',
+    query: {
+      ...(moduleId ? { module_id: moduleId } : {}),
+      keyword: subjectId,
+    },
+  })
 }
 
 async function togglePreview(job) {
@@ -115,6 +154,22 @@ async function togglePreview(job) {
           <div v-if="job.error?.message" class="job-error">{{ job.error.message }}</div>
         </div>
         <div class="job-actions">
+          <el-button
+            size="small"
+            :icon="Document"
+            :disabled="!subjectRoute(job)"
+            @click="openSubject(job)"
+          >
+            来源
+          </el-button>
+          <el-button
+            size="small"
+            :icon="Histogram"
+            :disabled="!job.subject_id"
+            @click="openTaskCenter(job)"
+          >
+            任务中心
+          </el-button>
           <el-button
             v-if="job.status === 'completed' && (job.artifact_refs || []).some(item => item.artifact_type === 'markdown')"
             size="small"
@@ -241,7 +296,12 @@ async function togglePreview(job) {
 }
 
 .job-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   flex-shrink: 0;
+  justify-content: flex-end;
 }
 
 .report-preview {
