@@ -83,11 +83,11 @@ const hasSystems = computed(() => systems.value.length > 0)
 
 const graphNodes = computed(() => graph.value?.nodes || [])
 const graphEdges = computed(() => graph.value?.edges || [])
-const graphStats = computed(() => graph.value?.stats || { entity_count: 0, relation_count: 0, document_count: 0 })
+const graphStats = computed(() => graph.value?.stats || {})
 const graphSummaryStats = computed(() => graph.value?.stats || {
-  entity_count: selectedSystem.value?.entity_count || 0,
-  relation_count: selectedSystem.value?.relation_count || 0,
-  document_count: selectedSystem.value?.indexed_document_count || selectedSystem.value?.document_count || 0,
+  entity_count: firstDefinedNumber(selectedSystem.value?.entity_count),
+  relation_count: firstDefinedNumber(selectedSystem.value?.relation_count),
+  document_count: firstDefinedNumber(selectedSystem.value?.indexed_document_count, selectedSystem.value?.document_count),
 })
 const graphSummaryScope = computed(() => graph.value ? '当前子图' : '体系总量')
 const selectedNode = computed(() => graphNodes.value.find((item) => item.id === selectedNodeId.value) || graphNodes.value[0] || null)
@@ -103,12 +103,46 @@ const graphNodeDegreeMap = computed(() => {
   return degreeMap
 })
 const answerBlocks = computed(() => parseMarkdownBlocks(answer.value?.answer || ''))
-const systemMetricItems = computed(() => [
-  { label: '文档', value: selectedSystem.value?.indexed_document_count || selectedSystem.value?.document_count || graphStats.value.document_count || 0 },
-  { label: '实体', value: selectedSystem.value?.entity_count || graphStats.value.entity_count || 0 },
-  { label: '关系', value: selectedSystem.value?.relation_count || graphStats.value.relation_count || 0 },
-  { label: '图谱来源', value: sourceStatusLabel(selectedSystem.value || health.value) },
-])
+const graphSourceLabel = computed(() => sourceStatusLabel(graph.value || selectedSystem.value || health.value))
+const graphEnhancementStatus = computed(() => {
+  if (!graph.value) return ''
+  if (graph.value.graph_backend === 'weknora-wiki-graph') {
+    const returned = graph.value.provenance?.wiki_returned
+    const total = graph.value.provenance?.wiki_total
+    if (returned && total) return `WeKnora Wiki 页面链接图谱：已显示 ${returned}/${total} 个页面节点`
+    return 'WeKnora Wiki 页面链接图谱'
+  }
+  if (graph.value.graph_backend === 'weknora-neo4j') {
+    return '已根据 WeKnora 命中证据反查 Neo4j 实体邻域'
+  }
+  if (graph.value.graph_backend === 'search-synthesis') {
+    return '基于 WeKnora 命中证据生成检索子图'
+  }
+  return graph.value.message || ''
+})
+const graphSummaryItems = computed(() => [
+  { label: graph.value?.graph_backend === 'weknora-wiki-graph' ? '当前页面' : '实体', value: graphSummaryStats.value.entity_count, scope: graphSummaryScope.value },
+  { label: graph.value?.graph_backend === 'weknora-wiki-graph' ? '链接' : '关系', value: graphSummaryStats.value.relation_count, scope: graphSummaryScope.value },
+  { label: graph.value?.graph_backend === 'weknora-wiki-graph' ? '页面总量' : '文档', value: graphSummaryStats.value.document_count, scope: graphSummaryScope.value },
+].filter((item) => hasDisplayValue(item.value)))
+const systemMetricItems = computed(() => {
+  const isWikiGraph = graph.value?.graph_backend === 'weknora-wiki-graph'
+  const documentCount = firstDefinedNumber(
+    graphStats.value.document_count,
+    selectedSystem.value?.indexed_document_count,
+    selectedSystem.value?.document_count,
+  )
+  const entityCount = firstDefinedNumber(graphStats.value.entity_count, selectedSystem.value?.entity_count)
+  const relationCount = firstDefinedNumber(graphStats.value.relation_count, selectedSystem.value?.relation_count)
+  const sourceLabel = graphSourceLabel.value || sourceStatusLabel(selectedSystem.value || health.value)
+  return [
+    { label: isWikiGraph ? '页面' : '文档', value: documentCount },
+    { label: isWikiGraph ? '当前节点' : '实体', value: entityCount },
+    { label: isWikiGraph ? '链接' : '关系', value: relationCount },
+    { label: '图谱来源', value: sourceLabel },
+  ].filter((item) => hasDisplayValue(item.value))
+})
+const selectedSystemSubtitle = computed(() => systemSubtitle(selectedSystem.value))
 const currentStatus = computed(() => selectedSystem.value?.status || health.value?.status || 'unavailable')
 const currentStatusLabel = computed(() => sourceStatusLabel(selectedSystem.value || health.value) || systemStatusLabel(currentStatus.value))
 const currentStatusMessage = computed(() =>
@@ -148,9 +182,25 @@ const graphTypeCounts = computed(() => {
   return Object.entries(counts).map(([type, count]) => ({ type, count }))
 })
 const graphCategories = computed(() => graphTypeCounts.value.map((item) => ({
-  name: item.type,
+  name: nodeTypeLabel(item.type),
   itemStyle: { color: graphTypeColor(item.type) },
 })))
+const graphForceOptions = computed(() => {
+  if (graph.value?.graph_backend === 'weknora-wiki-graph') {
+    return {
+      repulsion: 1080,
+      edgeLength: [180, 320],
+      gravity: 0.015,
+      friction: 0.16,
+    }
+  }
+  return {
+    repulsion: 320,
+    edgeLength: [100, 180],
+    gravity: 0.06,
+    friction: 0.2,
+  }
+})
 const knowledgeGraphOption = computed(() => ({
   color: graphCategories.value.map((item) => item.itemStyle.color),
   legend: {
@@ -178,12 +228,12 @@ const knowledgeGraphOption = computed(() => ({
         id: node.id,
         name: node.label || node.id,
         value: Number(node.score || degree || 1),
-        category: node.type,
-        symbolSize: Math.max(28, Math.min(62, 30 + degree * 4)),
+        category: nodeTypeLabel(node.type),
+        symbolSize: graphSymbolSize(node, degree),
         draggable: true,
         raw: node,
         label: {
-          show: isSelected || degree > 1,
+          show: isSelected || shouldShowGraphNodeLabel(degree),
           position: 'right',
           color: '#0f172a',
           fontSize: 11,
@@ -220,15 +270,14 @@ const knowledgeGraphOption = computed(() => ({
     edgeSymbol: ['none', 'arrow'],
     edgeSymbolSize: 7,
     focusNodeAdjacency: true,
-    force: {
-      repulsion: 220,
-      edgeLength: [80, 150],
-      gravity: 0.08,
-    },
+    force: graphForceOptions.value,
     emphasis: {
       focus: 'adjacency',
       lineStyle: { width: 2.5 },
       label: { show: true },
+    },
+    labelLayout: {
+      hideOverlap: true,
     },
     animationDurationUpdate: 350,
   }],
@@ -244,19 +293,44 @@ const graphEmptyMessage = computed(() => {
   return '当前关键词未匹配到图谱节点。'
 })
 const graphLanes = computed(() => {
+  if (graph.value?.graph_backend === 'weknora-wiki-graph') {
+    const lanes = [
+      { key: 'summary', label: '摘要', types: ['Summary'], nodes: [] },
+      { key: 'entities', label: '实体', types: ['Entity'], nodes: [] },
+      { key: 'concepts', label: '概念', types: ['Concept'], nodes: [] },
+      { key: 'synthesis', label: '综合', types: ['Synthesis'], nodes: [] },
+      { key: 'comparison', label: '对比', types: ['Comparison', 'Index', 'WikiPage'], nodes: [] },
+    ]
+    graphNodes.value.forEach((node) => {
+      const lane = lanes.find((item) => item.types.includes(node.type)) || lanes[lanes.length - 1]
+      lane.nodes.push(node)
+    })
+    return lanes
+  }
   const lanes = [
-    { key: 'materials', label: 'Materials', types: ['Material', 'Polymer', 'Resin', 'Monomer', 'PhotoacidGenerator', 'Additive'], nodes: [] },
-    { key: 'strategies', label: 'Strategies', types: ['Strategy', 'Method', 'ProcessCondition'], nodes: [] },
-    { key: 'properties', label: 'Properties', types: ['Property', 'LithographyMetric', 'PerformanceMetric', 'Application'], nodes: [] },
-    { key: 'papers', label: 'Papers & Chunks', types: ['Paper', 'Dataset', 'Chunk'], nodes: [] },
+    { key: 'materials', label: '材料', types: ['Material', 'Polymer', 'Resin', 'Monomer', 'PhotoacidGenerator', 'Additive'], nodes: [] },
+    { key: 'strategies', label: '策略方法', types: ['Strategy', 'Method', 'ProcessCondition'], nodes: [] },
+    { key: 'properties', label: '性质指标', types: ['Property', 'LithographyMetric', 'PerformanceMetric', 'Application'], nodes: [] },
+    { key: 'entities', label: '实体', types: ['Entity'], nodes: [] },
+    { key: 'papers', label: '论文片段', types: ['Paper', 'Dataset', 'Chunk'], nodes: [] },
   ]
+  const fallbackLane = lanes.find((item) => item.key === 'entities') || lanes[lanes.length - 1]
   graphNodes.value.forEach((node) => {
-    const lane = lanes.find((item) => item.types.includes(node.type)) || lanes[lanes.length - 1]
+    const lane = lanes.find((item) => item.types.includes(node.type)) || fallbackLane
     lane.nodes.push(node)
   })
   return lanes
 })
 const selectedNodeSourceUrl = computed(() => selectedNode.value?.properties?.source_url || citationUrl(selectedNode.value?.properties || {}))
+const selectedNodeSnippet = computed(() => textProperty(selectedNode.value?.properties, ['snippet', 'content', 'text', 'abstract']))
+const selectedNodeAttributes = computed(() => arrayProperty(selectedNode.value?.properties?.attributes))
+const selectedNodeChunks = computed(() => arrayProperty(selectedNode.value?.properties?.chunks))
+const selectedNodeDetailRows = computed(() => buildNodeDetailRows(selectedNode.value))
+const selectedNodePropertyJson = computed(() => {
+  const properties = selectedNode.value?.properties || {}
+  if (!Object.keys(properties).length) return ''
+  return JSON.stringify(properties, null, 2)
+})
 
 function parseMarkdownLinks(text) {
   const segments = []
@@ -321,6 +395,94 @@ function citationMeta(item) {
   return parts.join(' · ')
 }
 
+function hasDisplayValue(value) {
+  if (value === null || value === undefined) return false
+  if (Array.isArray(value)) return value.length > 0
+  return String(value).trim() !== ''
+}
+
+function firstDefinedNumber(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue
+    const numberValue = Number(value)
+    if (!Number.isNaN(numberValue)) return numberValue
+  }
+  return null
+}
+
+function joinDisplayParts(parts) {
+  return parts.filter(hasDisplayValue).join(' · ')
+}
+
+function systemSubtitle(system) {
+  if (!system) return ''
+  return joinDisplayParts([
+    system.description,
+    system.data_source_id,
+    sourceStatusLabel(system),
+    system.system_id,
+  ])
+}
+
+function systemOptionMeta(system) {
+  const documentCount = firstDefinedNumber(system?.indexed_document_count, system?.document_count)
+  const identityParts = [system?.provider, system?.corpus_id || system?.system_id].filter(hasDisplayValue)
+  return joinDisplayParts([
+    identityParts.length ? identityParts.join(':') : '',
+    hasDisplayValue(documentCount) ? `${documentCount} docs` : '',
+    sourceStatusLabel(system) || system?.graph_backend,
+  ])
+}
+
+function textProperty(properties, keys) {
+  if (!properties) return ''
+  for (const key of keys) {
+    if (hasDisplayValue(properties[key])) return String(properties[key])
+  }
+  return ''
+}
+
+function arrayProperty(value) {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => String(item).trim()).filter(Boolean)
+}
+
+function formatScore(score) {
+  if (!hasDisplayValue(score)) return ''
+  const numberValue = Number(score)
+  if (Number.isNaN(numberValue)) return String(score)
+  return numberValue.toFixed(2)
+}
+
+function hitFooterText(hit) {
+  return joinDisplayParts([shortSource(hit), sourceLevel(hit)])
+}
+
+function buildNodeDetailRows(node) {
+  if (!node) return []
+  const properties = node.properties || {}
+  const scoreValue = node.type === 'Entity' && properties.graph_backend === 'weknora-neo4j'
+    ? ''
+    : formatScore(node.score)
+  const propertyRows = [
+    { label: 'Knowledge ID', value: properties.knowledge_id },
+    { label: 'Slug', value: properties.slug },
+    { label: 'Page Type', value: properties.page_type },
+    { label: 'Link Count', value: properties.link_count },
+    { label: '文件', value: properties.knowledge_filename || properties.filename || properties.file_name },
+    { label: 'Chunk ID', value: properties.chunk_id || properties.parent_chunk_id },
+    { label: 'Chunk Index', value: properties.chunk_index },
+    { label: 'DOI', value: properties.doi },
+    { label: '来源', value: properties.source },
+    { label: '年份', value: properties.year },
+  ]
+  return [
+    { label: 'ID', value: node.id },
+    { label: 'Score', value: scoreValue },
+    ...propertyRows,
+  ].filter((item) => hasDisplayValue(item.value))
+}
+
 function nodeLabelById(nodeId) {
   return graphNodes.value.find((item) => item.id === nodeId)?.label || nodeId
 }
@@ -332,6 +494,7 @@ function shortSource(hit) {
 
 function sourceLevel(hit) {
   const sourceKind = hit?.metadata?.source_kind
+  if (!sourceKind) return ''
   const labels = {
     authorized_upload: '授权全文',
     publisher_oa: '出版社 OA',
@@ -349,12 +512,10 @@ function linkSegments(segments) {
 
 function normalizeKnowledgeMessage(message) {
   return String(message || '')
+    .replace(/WeKnora\s*服务/gi, '知识库服务')
+    .replace(/WeKnora/gi, '知识库服务')
     .replace(/LightRAG\s*服务/gi, '知识库服务')
     .replace(/LightRAG/gi, '知识库服务')
-    .replace(/Literature RAG\s*服务/gi, '知识库服务')
-    .replace(/Literature RAG/gi, '知识库服务')
-    .replace(/文献 RAG\s*服务/g, '知识库服务')
-    .replace(/文献 RAG/g, '知识库服务')
     .replace(/知识库服务\s+/g, '知识库服务')
 }
 
@@ -434,6 +595,18 @@ function systemStatusLabel(status, system = null) {
 
 function sourceStatusLabel(source) {
   if (!source) return ''
+  if (source.graph_backend === 'weknora-wiki-graph') {
+    return 'WeKnora / Wiki 图谱'
+  }
+  if (source.graph_backend === 'weknora-neo4j') {
+    return 'WeKnora / Neo4j 图谱增强'
+  }
+  if (source.graph_backend === 'search-synthesis') {
+    return 'WeKnora / 检索子图'
+  }
+  if (source.provider === 'weknora' || source.backend === 'weknora') {
+    return 'WeKnora / 知识库检索'
+  }
   if (source.is_demo || source.backend === 'memory' || source.graph_backend === 'memory') {
     return 'Demo / Memory 数据，非 Neo4j'
   }
@@ -495,15 +668,67 @@ function nodeTypeTag(type) {
     Method: 'info',
     Strategy: 'warning',
     PerformanceMetric: 'danger',
+    Summary: 'success',
+    Entity: 'primary',
+    Concept: 'success',
+    Synthesis: 'warning',
+    Comparison: 'danger',
+    Index: 'info',
+    WikiPage: 'info',
     Paper: 'info',
+    Chunk: 'info',
     Dataset: 'success',
     Application: 'warning',
   }
   return map[type] || 'info'
 }
 
+function nodeTypeLabel(type) {
+  const map = {
+    Summary: '摘要',
+    Entity: '实体',
+    Concept: '概念',
+    Synthesis: '综合',
+    Comparison: '对比',
+    Index: '索引',
+    WikiPage: 'Wiki 页面',
+    Material: '材料',
+    Polymer: '聚合物',
+    Resin: '树脂',
+    Monomer: '单体',
+    PhotoacidGenerator: '光酸产生剂',
+    Additive: '添加剂',
+    Strategy: '策略',
+    Method: '方法',
+    ProcessCondition: '工艺条件',
+    Property: '性质',
+    LithographyMetric: '光刻指标',
+    PerformanceMetric: '性能指标',
+    Application: '应用',
+    Paper: '论文',
+    Dataset: '数据集',
+    Chunk: '片段',
+  }
+  return map[type] || type || '未知'
+}
+
+function graphSymbolSize(node, degree) {
+  if (graph.value?.graph_backend === 'weknora-wiki-graph') {
+    const linkCount = Number(node?.properties?.link_count || node?.score || degree || 1)
+    return Math.max(20, Math.min(42, 20 + Math.sqrt(linkCount) * 2.2))
+  }
+  return Math.max(24, Math.min(56, 28 + degree * 3.2))
+}
+
+function shouldShowGraphNodeLabel(degree) {
+  if (graph.value?.graph_backend === 'weknora-wiki-graph') {
+    return degree >= 4
+  }
+  return degree > 1
+}
+
 function graphNodeTitle(node) {
-  return `${node?.label || ''} · ${node?.type || ''}`
+  return `${node?.label || ''} · ${nodeTypeLabel(node?.type)}`
 }
 
 function graphTypeColor(type) {
@@ -520,9 +745,16 @@ function graphTypeColor(type) {
     Method: '#1d4ed8',
     Strategy: '#0f766e',
     ProcessCondition: '#ca8a04',
+    Summary: '#2563eb',
+    Concept: '#10b981',
+    Synthesis: '#f97316',
+    Comparison: '#ef4444',
+    Index: '#64748b',
+    WikiPage: '#64748b',
     Paper: '#64748b',
     Dataset: '#16a34a',
     Chunk: '#475569',
+    Entity: '#7c3aed',
     Application: '#ea580c',
   }
   return map[type] || '#64748b'
@@ -548,7 +780,7 @@ function graphTooltipFormatter(params) {
   const node = params.data?.raw || params.data || {}
   return [
     `<strong>${escapeHtml(node.label || params.name || node.id)}</strong>`,
-    `类型：${escapeHtml(node.type || 'unknown')}`,
+    `类型：${escapeHtml(nodeTypeLabel(node.type))}`,
     `ID：${escapeHtml(node.id || '')}`,
   ].join('<br/>')
 }
@@ -623,7 +855,12 @@ async function runLiteratureQueryForBatch(batchId, payload) {
       await streamKnowledgeQuery(payload, (event) => {
         if (batchId !== searchBatchId.value) return
         if (event.label) {
-          queryTrace.value.push({ event: event.event, label: event.label, elapsed_ms: event.elapsed_ms })
+          queryTrace.value.push({
+            id: `${Date.now()}-${queryTrace.value.length}`,
+            event: event.event,
+            label: event.label,
+            elapsed_ms: event.elapsed_ms,
+          })
         }
         if (event.event === 'evidence') {
           answer.value.hits = event.hits || []
@@ -819,7 +1056,7 @@ onMounted(loadBootstrap)
             <div class="system-option">
               <div class="system-option-meta">
                 <strong>{{ system.name }}</strong>
-                <small>{{ system.provider || 'unknown' }}:{{ system.corpus_id || system.system_id }} · {{ system.indexed_document_count || system.document_count || 0 }} docs · {{ sourceStatusLabel(system) || system.graph_backend || 'unknown' }}</small>
+                <small v-if="systemOptionMeta(system)">{{ systemOptionMeta(system) }}</small>
               </div>
               <el-tag size="small" :type="statusTagType(system.status)" effect="plain">{{ systemStatusLabel(system.status, system) }}</el-tag>
             </div>
@@ -840,7 +1077,7 @@ onMounted(loadBootstrap)
             <el-icon><Collection /></el-icon>
             <div>
               <strong>{{ selectedSystem.name }}</strong>
-              <small>{{ selectedSystem.description || selectedSystem.data_source_id || selectedSystem.system_id }} · {{ sourceStatusLabel(selectedSystem) || '来源未配置' }}</small>
+              <small v-if="selectedSystemSubtitle">{{ selectedSystemSubtitle }}</small>
             </div>
           </div>
           <div v-else class="system-meta">
@@ -902,24 +1139,14 @@ onMounted(loadBootstrap)
               </template>
               <div class="entry-advanced-grid">
                 <label>
-                  <span>模式</span>
-                  <el-segmented
-                    v-model="queryForm.mode"
-                    :disabled="!canRunQuery"
-                    :options="[
-                      { label: 'Hybrid', value: 'hybrid' },
-                      { label: 'Local', value: 'local' },
-                      { label: 'Global', value: 'global' },
-                      { label: 'Naive', value: 'naive' },
-                      { label: 'Mix', value: 'mix' },
-                    ]"
-                  />
-                </label>
-                <label>
-                  <span>Top K</span>
+                  <span>证据条数</span>
                   <el-input-number v-model="queryForm.top_k" :min="1" :max="20" :disabled="!canRunQuery" />
                 </label>
-                <el-checkbox v-model="queryForm.include_graph_context" :disabled="!canUseGraphContext">图谱上下文</el-checkbox>
+                <label>
+                  <span>图谱节点上限</span>
+                  <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canLoadGraph" />
+                </label>
+                <el-checkbox v-model="queryForm.include_graph_context" :disabled="!canUseGraphContext">回答携带图谱上下文</el-checkbox>
               </div>
             </el-collapse-item>
           </el-collapse>
@@ -956,31 +1183,17 @@ onMounted(loadBootstrap)
             </div>
             <el-form label-position="top">
               <div class="control-grid inline-control-grid">
-                <el-form-item label="模式">
-                  <el-segmented
-                    v-model="queryForm.mode"
-                    class="knowledge-mode-segmented"
-                    block
-                    :disabled="!canRunQuery"
-                    :options="[
-                      { label: 'Hybrid', value: 'hybrid' },
-                      { label: 'Local', value: 'local' },
-                      { label: 'Global', value: 'global' },
-                      { label: 'Naive', value: 'naive' },
-                      { label: 'Mix', value: 'mix' },
-                    ]"
-                  />
-                  <small class="control-help">
-                    naive 纯向量；local 局部实体；global 全局主题；hybrid 局部+全局；mix 图谱+向量。
-                  </small>
-                </el-form-item>
-                <el-form-item label="Top K">
+                <el-form-item label="证据条数">
                   <el-input-number v-model="queryForm.top_k" :min="1" :max="20" :disabled="!canRunQuery" />
-                  <small class="control-help">重排后最多送入回答阶段的证据条数，不等于最终引用数。</small>
+                  <small class="control-help">控制 PolyAgent 展示和传入回答上下文的 WeKnora 命中证据数量。</small>
                 </el-form-item>
-                <el-form-item label="图谱上下文">
+                <el-form-item label="图谱节点上限">
+                  <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canLoadGraph" />
+                  <small class="control-help">控制 Wiki 图谱或降级检索图谱返回的节点数量。</small>
+                </el-form-item>
+                <el-form-item label="回答上下文">
                   <el-checkbox v-model="queryForm.include_graph_context" :disabled="!canUseGraphContext">返回图谱上下文</el-checkbox>
-                  <small class="control-help">仅影响回答阶段；图谱 tab 会始终尝试加载子图。</small>
+                  <small class="control-help">开启后，联合检索会把图谱上下文随回答结果一起返回。</small>
                 </el-form-item>
               </div>
             </el-form>
@@ -990,10 +1203,10 @@ onMounted(loadBootstrap)
             <el-tab-pane label="文献检索" name="literature">
               <div class="rag-layout literature-results-layout" :class="{ 'citations-collapsed': citationPanelCollapsed }">
 
-          <section class="answer-pane" v-loading="queryLoading">
+          <section class="answer-pane" :class="{ 'answer-pane--streaming': queryLoading }">
             <div v-if="queryTrace.length" class="query-trace" aria-live="polite">
-              <span v-for="item in queryTrace" :key="`${item.event}-${item.elapsed_ms}`">
-                {{ item.label }} · {{ item.elapsed_ms }} ms
+              <span v-for="item in queryTrace" :key="item.id">
+                {{ item.label }}<template v-if="item.elapsed_ms !== undefined"> · {{ item.elapsed_ms }} ms</template>
               </span>
             </div>
             <div v-if="answer" class="answer-content">
@@ -1002,6 +1215,7 @@ onMounted(loadBootstrap)
                   {{ answer.configured ? '可用' : '降级' }}
                 </el-tag>
                 <span>{{ answer.message }}</span>
+                <span v-if="queryLoading" class="streaming-status">正在接收 WeKnora 流式结果</span>
               </div>
               <div class="answer-grid">
                 <article class="semantic-answer">
@@ -1016,7 +1230,7 @@ onMounted(loadBootstrap)
                       >
                         查看图谱上下文
                       </el-button>
-                      <span>{{ queryForm.mode }} · Top {{ queryForm.top_k }}</span>
+                      <span>证据 {{ queryForm.top_k }} 条</span>
                     </div>
                   </div>
                   <template v-for="(block, index) in answerBlocks" :key="`${block.type}-${index}`">
@@ -1036,6 +1250,10 @@ onMounted(loadBootstrap)
                       </li>
                     </ul>
                   </template>
+                  <div v-if="queryLoading && !answer.answer" class="inline-loading-state">
+                    命中证据可先查看，综合回答正在生成
+                  </div>
+                  <span v-else-if="queryLoading" class="streaming-cursor">正在生成...</span>
                 </article>
 
                 <aside v-if="!citationPanelCollapsed" class="citation-panel">
@@ -1071,7 +1289,6 @@ onMounted(loadBootstrap)
                   <span>引用</span>
                 </button>
               </div>
-
               <div class="section-title-row">
                 <h4>命中证据</h4>
                 <span>{{ answer.hits.length }} sources</span>
@@ -1079,15 +1296,18 @@ onMounted(loadBootstrap)
               <div class="hit-list">
                 <article v-for="hit in answer.hits" :key="hit.source_id" class="hit-item">
                   <div class="hit-title">
-                    <strong>{{ hit.title }}</strong>
-                    <el-tag size="small" effect="plain">{{ hit.score.toFixed ? hit.score.toFixed(2) : hit.score }}</el-tag>
+                    <strong>{{ hit.title || hit.source_id || '命中证据' }}</strong>
+                    <el-tag v-if="formatScore(hit.score)" size="small" effect="plain">{{ formatScore(hit.score) }}</el-tag>
                   </div>
-                  <p>{{ hit.snippet }}</p>
+                  <p v-if="hit.snippet">{{ hit.snippet }}</p>
                   <div class="hit-footer">
-                    <small>{{ shortSource(hit) }} · {{ sourceLevel(hit) }}</small>
+                    <small v-if="hitFooterText(hit)">{{ hitFooterText(hit) }}</small>
                     <a v-if="citationUrl(hit)" :href="citationUrl(hit)" target="_blank" rel="noreferrer">打开原文/PDF</a>
                   </div>
                 </article>
+                <div v-if="queryLoading && !answer.hits.length" class="inline-loading-state">
+                  WeKnora 正在返回命中证据
+                </div>
               </div>
             </div>
             <div v-else class="empty-state">
@@ -1103,35 +1323,31 @@ onMounted(loadBootstrap)
           <div class="graph-layout graph-tab-panel">
           <section class="graph-toolbar">
             <div class="pane-heading compact">
-              <span>Graph</span>
+              <span>图谱</span>
               <strong>子图检索</strong>
             </div>
             <div class="graph-controls">
-              <el-input v-model="graphForm.query" placeholder="检索实体、论文、性质或方法" clearable :disabled="!canLoadGraph" @keyup.enter="loadGraph">
+              <el-input v-model="graphForm.query" placeholder="检索 Wiki 页面、实体或概念" clearable :disabled="!canLoadGraph" @keyup.enter="loadGraph">
                 <template #prefix><el-icon><Search /></el-icon></template>
               </el-input>
-              <el-button :disabled="!queryForm.question.trim()" @click="useQuestionForGraphSearch">拆解当前问题</el-button>
+              <el-button :disabled="!queryForm.question.trim()" @click="useQuestionForGraphSearch">使用当前问题</el-button>
               <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canLoadGraph" />
-              <el-button type="primary" :loading="graphLoading" :disabled="!canLoadGraph || !graphForm.query.trim()" @click="loadGraph">加载子图</el-button>
+              <el-button type="primary" :loading="graphLoading" :disabled="!canLoadGraph || !graphForm.query.trim()" @click="loadGraph">检索图谱</el-button>
             </div>
           </section>
 
           <section class="graph-summary">
-            <div>
-              <span>Entities · {{ graphSummaryScope }}</span>
-              <strong>{{ graphSummaryStats.entity_count }}</strong>
+            <div v-for="item in graphSummaryItems" :key="item.label">
+              <span>{{ item.label }} · {{ item.scope }}</span>
+              <strong>{{ item.value }}</strong>
             </div>
-            <div>
-              <span>Relations · {{ graphSummaryScope }}</span>
-              <strong>{{ graphSummaryStats.relation_count }}</strong>
-            </div>
-            <div>
-              <span>Documents · {{ graphSummaryScope }}</span>
-              <strong>{{ graphSummaryStats.document_count }}</strong>
+            <div v-if="graphSourceLabel || graphEnhancementStatus" class="graph-source-status">
+              <el-tag v-if="graphSourceLabel" size="small" effect="plain" type="success">{{ graphSourceLabel }}</el-tag>
+              <span v-if="graphEnhancementStatus">{{ graphEnhancementStatus }}</span>
             </div>
             <div class="type-legend">
               <el-tag v-for="item in graphTypeCounts" :key="item.type" size="small" effect="plain" :type="nodeTypeTag(item.type)">
-                {{ item.type }} {{ item.count }}
+                {{ nodeTypeLabel(item.type) }} {{ item.count }}
               </el-tag>
             </div>
             <el-segmented
@@ -1179,7 +1395,7 @@ onMounted(loadBootstrap)
                         @click="selectNode(node.id)"
                       >
                         <span>{{ node.label }}</span>
-                        <small>{{ node.type }}</small>
+                        <small>{{ nodeTypeLabel(node.type) }}</small>
                       </button>
                       <span v-if="!lane.nodes.length" class="lane-empty">无节点</span>
                     </div>
@@ -1207,7 +1423,7 @@ onMounted(loadBootstrap)
               <div class="node-detail-header">
                 <h4>{{ selectedNode?.label || '节点详情' }}</h4>
                 <div class="node-detail-actions">
-                  <el-tag v-if="selectedNode" :type="nodeTypeTag(selectedNode.type)" effect="plain">{{ selectedNode.type }}</el-tag>
+                  <el-tag v-if="selectedNode" :type="nodeTypeTag(selectedNode.type)" effect="plain">{{ nodeTypeLabel(selectedNode.type) }}</el-tag>
                   <el-button text size="small" :icon="Fold" @click="nodeDetailCollapsed = true">收起</el-button>
                 </div>
               </div>
@@ -1220,13 +1436,29 @@ onMounted(loadBootstrap)
               >
                 打开原文/PDF
               </a>
-              <el-descriptions v-if="selectedNode" :column="1" size="small" border>
-                <el-descriptions-item label="ID">
-                  <span class="node-id-text" :title="selectedNode.id">{{ selectedNode.id }}</span>
+              <p v-if="selectedNodeSnippet" class="node-snippet">{{ selectedNodeSnippet }}</p>
+              <div v-if="selectedNodeAttributes.length" class="node-chip-block">
+                <span>属性</span>
+                <div>
+                  <el-tag v-for="item in selectedNodeAttributes" :key="item" size="small" effect="plain">{{ item }}</el-tag>
+                </div>
+              </div>
+              <div v-if="selectedNodeChunks.length" class="node-chip-block">
+                <span>片段</span>
+                <div>
+                  <el-tag v-for="item in selectedNodeChunks.slice(0, 8)" :key="item" size="small" effect="plain" type="info">{{ item }}</el-tag>
+                  <small v-if="selectedNodeChunks.length > 8">+{{ selectedNodeChunks.length - 8 }}</small>
+                </div>
+              </div>
+              <el-descriptions v-if="selectedNodeDetailRows.length" :column="1" size="small" border>
+                <el-descriptions-item v-for="item in selectedNodeDetailRows" :key="item.label" :label="item.label">
+                  <span class="node-id-text" :title="String(item.value)">{{ item.value }}</span>
                 </el-descriptions-item>
-                <el-descriptions-item label="Score">{{ selectedNode.score }}</el-descriptions-item>
               </el-descriptions>
-              <pre v-if="selectedNode" class="property-json">{{ JSON.stringify(selectedNode.properties, null, 2) }}</pre>
+              <details v-if="selectedNodePropertyJson" class="node-raw-block">
+                <summary>原始属性</summary>
+                <pre class="property-json">{{ selectedNodePropertyJson }}</pre>
+              </details>
 
               <div class="edge-list">
                 <h4>关联关系</h4>
@@ -1253,7 +1485,7 @@ onMounted(loadBootstrap)
           <div class="node-detail-header">
             <h4>{{ selectedNode.label || '节点详情' }}</h4>
             <div class="node-detail-actions">
-              <el-tag :type="nodeTypeTag(selectedNode.type)" effect="plain">{{ selectedNode.type }}</el-tag>
+              <el-tag :type="nodeTypeTag(selectedNode.type)" effect="plain">{{ nodeTypeLabel(selectedNode.type) }}</el-tag>
               <el-button text size="small" :icon="Close" @click="nodeDetailDrawerVisible = false">关闭</el-button>
             </div>
           </div>
@@ -1266,13 +1498,29 @@ onMounted(loadBootstrap)
           >
             打开原文/PDF
           </a>
-          <el-descriptions :column="1" size="small" border>
-            <el-descriptions-item label="ID">
-              <span class="node-id-text" :title="selectedNode.id">{{ selectedNode.id }}</span>
+          <p v-if="selectedNodeSnippet" class="node-snippet">{{ selectedNodeSnippet }}</p>
+          <div v-if="selectedNodeAttributes.length" class="node-chip-block">
+            <span>属性</span>
+            <div>
+              <el-tag v-for="item in selectedNodeAttributes" :key="item" size="small" effect="plain">{{ item }}</el-tag>
+            </div>
+          </div>
+          <div v-if="selectedNodeChunks.length" class="node-chip-block">
+            <span>片段</span>
+            <div>
+              <el-tag v-for="item in selectedNodeChunks.slice(0, 8)" :key="item" size="small" effect="plain" type="info">{{ item }}</el-tag>
+              <small v-if="selectedNodeChunks.length > 8">+{{ selectedNodeChunks.length - 8 }}</small>
+            </div>
+          </div>
+          <el-descriptions v-if="selectedNodeDetailRows.length" :column="1" size="small" border>
+            <el-descriptions-item v-for="item in selectedNodeDetailRows" :key="item.label" :label="item.label">
+              <span class="node-id-text" :title="String(item.value)">{{ item.value }}</span>
             </el-descriptions-item>
-            <el-descriptions-item label="Score">{{ selectedNode.score }}</el-descriptions-item>
           </el-descriptions>
-          <pre class="property-json">{{ JSON.stringify(selectedNode.properties, null, 2) }}</pre>
+          <details v-if="selectedNodePropertyJson" class="node-raw-block">
+            <summary>原始属性</summary>
+            <pre class="property-json">{{ selectedNodePropertyJson }}</pre>
+          </details>
 
           <div class="edge-list">
             <h4>关联关系</h4>
@@ -1700,6 +1948,11 @@ onMounted(loadBootstrap)
   padding: 16px;
 }
 
+.answer-pane--streaming {
+  border-color: rgba(59, 130, 246, 0.34);
+  box-shadow: inset 0 1px 0 rgba(59, 130, 246, 0.08);
+}
+
 .query-pane {
   position: sticky;
   top: 74px;
@@ -1754,25 +2007,6 @@ onMounted(loadBootstrap)
 
 .control-grid :deep(.el-form-item) {
   min-width: 0;
-}
-
-.knowledge-mode-segmented {
-  width: 100%;
-}
-
-.knowledge-mode-segmented :deep(.el-segmented__group) {
-  width: 100%;
-}
-
-.knowledge-mode-segmented :deep(.el-segmented__item) {
-  flex: 1 1 0;
-  min-width: 0;
-}
-
-.knowledge-mode-segmented :deep(.el-segmented__item-label) {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: nowrap;
 }
 
 .query-actions {
@@ -1852,6 +2086,33 @@ onMounted(loadBootstrap)
   gap: 8px;
   color: var(--app-ink-muted);
   font-size: 13px;
+}
+
+.streaming-status {
+  color: var(--app-primary-active);
+  font-weight: 700;
+}
+
+.inline-loading-state {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px dashed rgba(59, 130, 246, 0.28);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.streaming-cursor {
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: var(--app-radius-sm);
+  background: #eef5ff;
+  color: var(--app-primary-active);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .answer-grid {
@@ -2085,6 +2346,25 @@ onMounted(loadBootstrap)
   min-width: 86px;
 }
 
+.graph-summary .graph-source-status {
+  flex: 1 1 220px;
+  min-width: min(280px, 100%);
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #bbf7d0;
+  border-radius: var(--app-radius-sm);
+  background: #f0fdf4;
+}
+
+.graph-source-status span {
+  line-height: 1.4;
+  text-transform: none;
+}
+
 .graph-summary span {
   color: var(--app-ink-muted);
   font-size: 12px;
@@ -2153,6 +2433,10 @@ onMounted(loadBootstrap)
   min-height: clamp(420px, calc(100vh - 360px), 620px);
 }
 
+.graph-tab-panel .graph-chart-pane {
+  min-height: clamp(560px, calc(100vh - 300px), 760px);
+}
+
 .relationship-chart {
   width: 100%;
   height: clamp(620px, calc(100vh - 340px), 760px);
@@ -2163,10 +2447,14 @@ onMounted(loadBootstrap)
   height: clamp(420px, calc(100vh - 360px), 620px);
 }
 
+.graph-tab-panel .relationship-chart {
+  height: clamp(560px, calc(100vh - 300px), 760px);
+}
+
 .graph-board {
   min-height: clamp(620px, calc(100vh - 340px), 760px);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   padding: 10px;
   border: 1px solid var(--app-border-soft);
@@ -2177,7 +2465,7 @@ onMounted(loadBootstrap)
 .joint-graph-panel .graph-board,
 .graph-tab-panel .graph-board {
   min-height: clamp(420px, calc(100vh - 360px), 620px);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
 }
 
 .graph-lane {
@@ -2193,12 +2481,32 @@ onMounted(loadBootstrap)
   border-color: #bddfca;
 }
 
+.graph-lane--summary {
+  border-color: #bfdbfe;
+}
+
 .graph-lane--strategies {
   border-color: #bdd7ff;
 }
 
+.graph-lane--concepts {
+  border-color: #bbf7d0;
+}
+
 .graph-lane--properties {
   border-color: #ead1a0;
+}
+
+.graph-lane--entities {
+  border-color: #d9ccff;
+}
+
+.graph-lane--synthesis {
+  border-color: #fed7aa;
+}
+
+.graph-lane--comparison {
+  border-color: #fecaca;
 }
 
 .graph-lane--papers {
@@ -2225,9 +2533,19 @@ onMounted(loadBootstrap)
   color: #276749;
 }
 
+.graph-lane--summary .graph-lane-header {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .graph-lane--strategies .graph-lane-header {
   background: #f0f6ff;
   color: #1d4f91;
+}
+
+.graph-lane--concepts .graph-lane-header {
+  background: #ecfdf5;
+  color: #047857;
 }
 
 .graph-lane--properties .graph-lane-header {
@@ -2235,9 +2553,24 @@ onMounted(loadBootstrap)
   color: #8a5a00;
 }
 
+.graph-lane--entities .graph-lane-header {
+  background: #f5f1ff;
+  color: #6d28d9;
+}
+
 .graph-lane--papers .graph-lane-header {
   background: #f6f8fb;
   color: #64748b;
+}
+
+.graph-lane--synthesis .graph-lane-header {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.graph-lane--comparison .graph-lane-header {
+  background: #fef2f2;
+  color: #b91c1c;
 }
 
 .graph-lane-header strong {
@@ -2289,12 +2622,32 @@ onMounted(loadBootstrap)
   background: #2f855a;
 }
 
+.graph-node--summary::before {
+  background: #2563eb;
+}
+
 .graph-node--strategies::before {
   background: #2563eb;
 }
 
+.graph-node--concepts::before {
+  background: #10b981;
+}
+
 .graph-node--properties::before {
   background: #b7791f;
+}
+
+.graph-node--entities::before {
+  background: #7c3aed;
+}
+
+.graph-node--synthesis::before {
+  background: #f97316;
+}
+
+.graph-node--comparison::before {
+  background: #ef4444;
 }
 
 .graph-node--papers {
@@ -2411,6 +2764,60 @@ onMounted(loadBootstrap)
   min-width: 0;
   overflow: hidden;
   overflow-wrap: anywhere;
+}
+
+.node-snippet {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fafc;
+  color: var(--app-ink-body);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.node-chip-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.node-chip-block > span,
+.node-raw-block summary {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.node-chip-block > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.node-chip-block small {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.node-raw-block {
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.node-raw-block summary {
+  cursor: pointer;
+  padding: 9px 10px;
+}
+
+.node-raw-block .property-json {
+  border-radius: 0 0 var(--app-radius-sm) var(--app-radius-sm);
 }
 
 .property-json {

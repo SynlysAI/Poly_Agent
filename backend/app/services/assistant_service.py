@@ -212,7 +212,7 @@ class ProjectGroundingService:
         for item in algorithms:
             algorithm_id = item.get("algorithm_id", "")
             summary = self._algorithm_summary(item)
-            if algorithm_id in {"literature_rag_adapter", "vertical_predictor_adapter", "mobo_alchemist_adapter"}:
+            if algorithm_id in {"weknora_adapter", "vertical_predictor_adapter", "mobo_alchemist_adapter"}:
                 production_adapters.append(summary)
             elif algorithm_id in {"local_structure_adapter", "local_xtb_adapter", "orca_compute_engine_laser_adapter"}:
                 computation_adapters.append(summary)
@@ -1672,7 +1672,7 @@ class AssistantService:
             *self._format_algorithm_lines(demo),
             "",
             "可用性边界：",
-            f"- 文献 RAG 取决于本地索引；垂类预测取决于 VERTICAL_PREDICTOR_URL；Alchemist 取决于 alchemist-backend 状态（当前：{self._service_status(status, 'alchemist-backend')}）。",
+            f"- 知识库问答取决于 WeKnora 服务；垂类预测取决于 VERTICAL_PREDICTOR_URL；Alchemist 取决于 alchemist-backend 状态（当前：{self._service_status(status, 'alchemist-backend')}）。",
             f"- LOCAL_STRUCTURE 取决于 RDKit/OpenBabel（当前：RDKit {self._service_status(status, 'rdkit')}，OpenBabel {self._service_status(status, 'openbabel')}）。",
             f"- LOCAL_XTB 取决于 xTB/CREST（当前：xTB {self._service_status(status, 'xtb')}，CREST {self._service_status(status, 'crest')}）。",
             f"- ORCA DFT 取决于 ORCA 可执行文件和 license（当前：ORCA {self._service_status(status, 'orca')}）。",

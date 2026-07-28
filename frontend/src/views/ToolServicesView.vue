@@ -188,6 +188,7 @@ const serviceTypeOptions = [
   'worker',
   'artifact',
   'optimizer',
+  'knowledge',
 ]
 
 const currentConfig = computed(() => configs.value.find((item) => item.service_key === editingServiceKey.value))
@@ -197,8 +198,8 @@ const serviceCatalog = {
   'data-asset-mongodb': { name: '数据资产 MongoDB', group: '核心存储', hint: '只读材料数据资产库接入状态' },
   'computation-worker': { name: '计算 Worker', group: '运行组件', hint: '领取 queued run 并执行真实计算 workflow' },
   'artifact-store': { name: 'Artifact 存储', group: '核心存储', hint: '保存结构、日志、结果 JSON 和下载文件' },
-  'literature-rag': { name: 'Literature RAG', group: '知识服务', hint: '知识增强检索服务和 corpus 状态' },
-  'knowledge-graph': { name: 'Knowledge Graph', group: '知识服务', hint: '知识图谱子图检索能力状态' },
+  weknora: { name: 'WeKnora', group: '知识服务', hint: '知识库管理、检索问答和引用证据状态' },
+  'knowledge-graph': { name: 'Knowledge Graph', group: '知识服务', hint: '基于 WeKnora 检索结果的子图能力状态' },
   rdkit: { name: 'RDKit', group: '计算工具链', hint: 'SMILES 解析和三维结构初猜' },
   openbabel: { name: 'OpenBabel', group: '计算工具链', hint: '结构格式转换和备用三维结构生成' },
   xtb: { name: 'xTB', group: '计算工具链', hint: '低成本粗优化和单点计算' },
@@ -211,7 +212,7 @@ const serviceCatalog = {
 
 const serviceGroupMeta = {
   核心存储: { tone: 'blue', description: '数据库、数据资产与结果文件存储' },
-  知识服务: { tone: 'teal', description: '文献检索与知识图谱服务' },
+  知识服务: { tone: 'teal', description: 'WeKnora 知识库检索与证据服务' },
   计算工具链: { tone: 'amber', description: '结构处理、构象搜索与量子化学计算' },
   优化与实验: { tone: 'coral', description: '主动学习、实验设计与外部实验系统' },
   运行组件: { tone: 'violet', description: '任务执行和可选运行环境' },
@@ -231,7 +232,7 @@ const visibleServiceGroups = computed(() => serviceGroupFilter.value === 'all'
   : serviceGroups.value.filter((group) => group.name === serviceGroupFilter.value))
 
 const healthSummary = computed(() => {
-  const required = ['mongodb', 'artifact-store', 'literature-rag', 'rdkit', 'openbabel', 'xtb']
+  const required = ['mongodb', 'artifact-store', 'weknora', 'rdkit', 'openbabel', 'xtb']
   const items = services.value.filter((item) => required.includes(item.service))
   const ready = items.filter((item) => ['up', 'available', 'built_in'].includes(item.status)).length
   return { ready, total: items.length }

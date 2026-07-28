@@ -31,7 +31,7 @@ class IntegrationStatusService:
             self._mongodb_status(checked_at),
             self._data_asset_mongodb_status(checked_at),
             self._artifact_status(checked_at),
-            self._literature_rag_status(checked_at),
+            self._weknora_status(checked_at),
             self._knowledge_graph_status(checked_at),
             self._alchemist_status(checked_at),
             self._speclabos_status(checked_at),
@@ -138,14 +138,15 @@ class IntegrationStatusService:
             },
         }
 
-    def _literature_rag_status(self, checked_at: str) -> dict:
+    def _weknora_status(self, checked_at: str) -> dict:
+        """返回 WeKnora 知识服务状态。"""
         health = self._knowledge_health()
         if not health:
             return {
-                "service": "literature-rag",
+                "service": "weknora",
                 "status": "not_configured",
                 "checked_at": checked_at,
-                "details": {"reason": "Literature RAG service is not configured or not reachable"},
+                "details": {"reason": "WeKnora service is not configured or not reachable"},
             }
         raw_status = getattr(health, "status", "unavailable")
         configured = bool(getattr(health, "configured", False))
@@ -158,7 +159,7 @@ class IntegrationStatusService:
         else:
             status = "down"
         return {
-            "service": "literature-rag",
+            "service": "weknora",
             "status": status,
             "checked_at": checked_at,
             "details": {
@@ -174,19 +175,19 @@ class IntegrationStatusService:
         configured = bool(getattr(health, "configured", False)) if health else False
         if not configured:
             status = "not_configured"
-            reason = "Knowledge graph is unavailable until Literature RAG has a ready corpus"
+            reason = "Knowledge graph is unavailable until WeKnora has a ready knowledge base"
         elif systems:
             status = "up"
             reason = None
         else:
             status = "degraded"
-            reason = "Literature RAG is reachable but no graph-enabled corpus was reported"
+            reason = "WeKnora is reachable but no searchable knowledge base was reported"
         return {
             "service": "knowledge-graph",
             "status": status,
             "checked_at": checked_at,
             "details": {
-                "provider": "literature-rag",
+                "provider": "weknora",
                 "systems": systems,
                 "reason": reason,
             },

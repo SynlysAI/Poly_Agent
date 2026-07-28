@@ -136,6 +136,16 @@ class Settings:
         # Edison Scientific 文献搜索 API Key
         self.edison_api_key: str = os.getenv("EDISON_API_KEY", "")
 
+        # WeKnora 知识库服务配置
+        self.weknora_base_url: str = os.getenv("WEKNORA_BASE_URL", "").strip().rstrip("/")
+        self.weknora_api_key: str = os.getenv("WEKNORA_API_KEY", "").strip()
+        self.weknora_default_kb_id: str = os.getenv("WEKNORA_DEFAULT_KB_ID", "").strip()
+        self.weknora_neo4j_uri: str = os.getenv("WEKNORA_NEO4J_URI", "").strip()
+        self.weknora_neo4j_username: str = os.getenv("WEKNORA_NEO4J_USERNAME", "").strip()
+        self.weknora_neo4j_password: str = os.getenv("WEKNORA_NEO4J_PASSWORD", "").strip()
+        self.weknora_neo4j_database: str = os.getenv("WEKNORA_NEO4J_DATABASE", "neo4j").strip() or "neo4j"
+        self.weknora_neo4j_timeout_seconds: float = float(os.getenv("WEKNORA_NEO4J_TIMEOUT_SECONDS", "3"))
+
         # LLM 配置（provider 定义优先来自 backend/config/llm.providers.json）
         self.llm_api_key: str = os.getenv("LLM_API_KEY", "")
         self.llm_base_url: str = os.getenv("LLM_BASE_URL", "")

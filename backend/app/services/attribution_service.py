@@ -152,17 +152,18 @@ class AttributionService:
             ),
             ModuleAttribution(
                 module_id="knowledge",
-                title="知识库 RAG 与图谱",
+                title="WeKnora 知识库",
                 page_path="/knowledge",
-                summary="科学文献检索与知识图谱能力由知识服务提供。",
+                summary="知识库管理、检索问答和引用证据能力由 WeKnora 提供。",
                 implementation_boundary="页面仅展示主要服务来源；完整引用见项目文档。",
                 attributions=[
                     AttributionItem(
-                        name="知识服务",
+                        name="WeKnora",
                         role="implementation_source",
-                        organization="知识服务",
-                        description="提供文献检索、证据问答与图谱浏览能力。",
-                        logo_alt="知识服务",
+                        organization="Tencent",
+                        description="提供知识库管理、检索、会话问答和引用证据能力。",
+                        url="https://github.com/Tencent/WeKnora",
+                        logo_alt="Tencent WeKnora",
                         visibility="prominent",
                     )
                 ],

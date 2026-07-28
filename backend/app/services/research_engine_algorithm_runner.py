@@ -611,14 +611,14 @@ class ComputationSubmitAdapter(BaseMockRunner):
 
 
 # =============================================================================
-# 6. literature_rag_adapter / knowledge_graph_adapter：知识库服务适配器
+# 6. weknora_adapter / knowledge_graph_adapter：知识库服务适配器
 # =============================================================================
 
 
-class LiteratureRAGAdapter(BaseMockRunner):
-    """KnowledgeService-backed RAG adapter."""
+class WeKnoraAdapter(BaseMockRunner):
+    """KnowledgeService-backed WeKnora RAG adapter."""
 
-    algorithm_id = "literature_rag_adapter"
+    algorithm_id = "weknora_adapter"
 
     def run(self, input_snapshot: dict) -> dict:
         query = str(input_snapshot.get("query", "")).strip()
@@ -632,10 +632,10 @@ class LiteratureRAGAdapter(BaseMockRunner):
             include_graph_context=bool(input_snapshot.get("include_graph_context", True)),
         )
         output = knowledge_service.query(payload).model_dump()
-        # Backward-compatible aliases for existing ResearchEngine stage contracts.
+        # 兼容 ResearchEngine 阶段契约中的通用知识检索输出字段。
         output.setdefault("knowledge_cards", output.get("hits", []))
         output.setdefault("candidate_sources", output.get("citations", []))
-        output.setdefault("literature_summary", output.get("answer", ""))
+        output.setdefault("knowledge_summary", output.get("answer", ""))
         return output
 
     @staticmethod
@@ -649,17 +649,17 @@ class LiteratureRAGAdapter(BaseMockRunner):
             return preferred
         if systems:
             return systems[0].system_id
-        raise HTTPException(status_code=503, detail="Literature RAG 服务未配置或未发现可用知识库体系")
+        raise HTTPException(status_code=503, detail="WeKnora 服务未配置或未发现可用知识库")
 
 
 class KnowledgeGraphAdapter(BaseMockRunner):
-    """KnowledgeService-backed graph/subgraph adapter."""
+    """KnowledgeService-backed WeKnora search graph adapter."""
 
     algorithm_id = "knowledge_graph_adapter"
 
     def run(self, input_snapshot: dict) -> dict:
         knowledge_service = KnowledgeService()
-        system_id = LiteratureRAGAdapter._resolve_system_id(input_snapshot, knowledge_service)
+        system_id = WeKnoraAdapter._resolve_system_id(input_snapshot, knowledge_service)
         query = str(input_snapshot.get("query") or "").strip() or None
         limit = int(input_snapshot.get("limit", 30) or 30)
         return knowledge_service.get_subgraph(system_id, query=query, limit=limit).model_dump()
@@ -861,7 +861,7 @@ def _build_registry() -> dict[str, BaseMockRunner]:
         PropertyPredictorMockRunner(),
         MOBOMockRunner(),
         ComputationSubmitAdapter(),
-        LiteratureRAGAdapter(),
+        WeKnoraAdapter(),
         KnowledgeGraphAdapter(),
         VerticalPredictorAdapter(),
         MOBOAlchemistAdapter(),

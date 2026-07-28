@@ -27,6 +27,7 @@ SERVICE_DEFAULTS: dict[str, dict[str, str]] = {
     "alchemist-backend": {"display_name": "ALchemist backend", "service_type": "optimizer"},
     "computation-worker": {"display_name": "Computation worker", "service_type": "worker"},
     "artifact-store": {"display_name": "Artifact store", "service_type": "artifact"},
+    "weknora": {"display_name": "WeKnora", "service_type": "knowledge"},
 }
 
 

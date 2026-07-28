@@ -157,7 +157,7 @@ const readinessItemsByService = computed(() => {
 })
 
 const llmReadiness = computed(() => readinessItemsByService.value['research-llm'] || null)
-const ragReadiness = computed(() => readinessItemsByService.value['literature-rag'] || null)
+const ragReadiness = computed(() => readinessItemsByService.value.weknora || null)
 const autoResearchStageModes = computed(() => readiness.value?.stage_modes || [])
 
 const researchStages = computed(() =>

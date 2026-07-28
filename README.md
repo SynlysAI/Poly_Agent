@@ -12,7 +12,7 @@
 | ComputeEngine | `/computations/submit`、`/computations/runs`、`/optimization/campaigns` | 计算任务提交、worker 执行、artifact 管理、campaign 优化和集成状态 |
 | ResearchEngine | `/research-engine` | ProblemSpec、人工算法 Workflow、Pipeline Run、AutoResearch Gate、追溯和报告生成 |
 | 垂类预测 | `/vertical-prediction` | 算法包上传、治理、在线测试、运行历史、结果查看和 handoff |
-| Knowledge Base | `/knowledge` | 文献 RAG 问答、证据清单、知识图谱上下文和 KrF demo corpus |
+| Knowledge Base | `/knowledge` | WeKnora 知识库问答、证据清单和 Neo4j 增强检索子图 |
 | Data Catalog | `/database/data-catalog`、`/data-catalog` | 材料数据资产浏览、检索和外部数据源只读接入 |
 | 基础工作台 | `/dashboard`、`/tasks/submit`、`/tasks/center`、`/dialogue`、`/tools`、`/admin` | 统一任务中心、产品内助手、LLM 模型选择和工具服务配置 |
 
@@ -28,7 +28,7 @@ Poly Agent 在产品页面中维护统一的来源与引用标注。系统模块
 | 湿实验优化 / Alchemist | NatLabRockies / NREL / NLR ALchemist | 实验设计、GP 建模、采集优化方法标注 ALchemist；Poly Agent 负责认证、会话、中文工作台和平台集成 |
 | ComputeEngine | RDKit、OpenBabel、xTB、CREST、ORCA | Poly Agent 负责任务、worker、artifact、审计和 campaign 联动；具体计算能力来自本地依赖 |
 | 垂类预测模型 | 算法包开发者、开发机构、来源链接和引用 | 平台治理上传、校验、部署和运行记录；模型方法与开发者来源来自算法契约 |
-| 文献知识库 | PolyAgent KnowledgeService 与独立 literature-rag 服务 | 查询、证据、图谱上下文和语料来源按服务契约追溯 |
+| 文献知识库 | Tencent WeKnora 与 PolyAgent KnowledgeService | 查询、证据、图谱上下文和语料来源按 WeKnora 服务契约追溯 |
 
 完整矩阵见 [doc/polyagent-attribution-source-matrix.md](doc/polyagent-attribution-source-matrix.md)。
 
@@ -82,7 +82,7 @@ Poly Agent 在产品页面中维护统一的来源与引用标注。系统模块
 | 示例流程 | 支持一键实例化人工计算 Workflow 示例和 AutoResearch 审批示例 |
 | 追溯与审计 | 提供 ResearchRun / StageRun / AlgorithmRun traceability API，聚合运行记录、产物、关联计算任务和审计事件 |
 
-当前可直接复用现有 ComputationService 的 `LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER` workflow；文献 RAG 已通过 `services/literature-rag/` 独立服务接入，垂类预测和 MOBO Alchemist 适配器仍依赖外部服务配置。mock 算法仅用于演示和闭环验收，不代表真实生产模型。
+当前可直接复用现有 ComputationService 的 `LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER` workflow；知识库检索与问答已通过 WeKnora 服务接入，垂类预测和 MOBO Alchemist 适配器仍依赖外部服务配置。mock 算法仅用于演示和闭环验收，不代表真实生产模型。
 
 > 操作指南见 [doc/autoresearch-user-guide.md](doc/autoresearch-user-guide.md)，P0 进度与边界见 [doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md)，设计方案见 [doc/research-engine-and-auto-research-design.md](doc/research-engine-and-auto-research-design.md)
 
@@ -100,19 +100,19 @@ Poly Agent 在产品页面中维护统一的来源与引用标注。系统模块
 
 > 详见 [doc/algorithm-upload-user-guide.md](doc/algorithm-upload-user-guide.md) 和 [doc/algorithm-upload-p0-assessment-and-roadmap.md](doc/algorithm-upload-p0-assessment-and-roadmap.md)
 
-### 5. Knowledge Base — 文献 RAG + 知识图谱
+### 5. Knowledge Base — WeKnora 知识库问答 + Neo4j 增强检索子图
 
-知识库工作台通过 Poly Agent 后端统一接入 `services/literature-rag/` 独立服务，当前默认 KrF 248 nm 光刻胶文献库。
+知识库工作台通过 Poly Agent 后端统一接入 WeKnora 服务。前端和 ResearchEngine 继续调用本项目稳定的 `/api/v1/knowledge-bases/*` API，由 `KnowledgeService` 负责转发 WeKnora 知识库列表、知识问答、流式事件和无总结检索。
 
 | 能力 | 说明 |
 |------|------|
-| 文献问答 | 支持知识增强检索问答、流式返回证据和回答；无 LLM 时返回可追溯证据摘要 |
-| 中文检索 | 对 KrF、光刻胶、文献/论文/文档等中英文混合查询做领域词扩展 |
-| 文档清单 | 支持"列出全部文档/文献/论文"类问题，返回已索引文献清单 |
-| 知识图谱 | Neo4j 图存储，支持子图优先级排序和语料库统计；memory demo 返回论文-片段子图 |
+| 文献问答 | 通过 WeKnora `knowledge-chat` 会话接口执行知识增强问答，支持流式返回证据和回答 |
+| 知识库列表 | 通过 WeKnora `knowledge-bases` 接口获取可查询知识库，并映射为 Poly Agent 知识库体系 |
+| 证据检索 | 通过 WeKnora `knowledge-search` 获取命中文档和片段，保持前端证据卡片与引用结构稳定 |
+| 检索子图 | 基于 WeKnora 检索结果合成 Paper/Chunk 子图；配置 `WEKNORA_NEO4J_*` 后会从 WeKnora Neo4j 图库补充 Entity 与实体关系 |
 | 安全边界 | API 只返回安全元数据，不暴露 API key、object key、storage URI 或 embedding |
 
-> 独立服务说明见 [services/literature-rag/README.md](services/literature-rag/README.md)，产品设计见 [doc/knowledge-base-rag-kg-product-design.md](doc/knowledge-base-rag-kg-product-design.md)
+> 产品设计见 [doc/knowledge-base-rag-kg-product-design.md](doc/knowledge-base-rag-kg-product-design.md)，来源标注见 [doc/polyagent-attribution-source-matrix.md](doc/polyagent-attribution-source-matrix.md)
 
 ### 6. 数据管理 — Data Catalog
 
@@ -141,7 +141,7 @@ Poly Agent 在产品页面中维护统一的来源与引用标注。系统模块
 | ComputeEngine 计算智能 | ✅ MVP 基本完成 | ~92-95% |
 | ResearchEngine | ✅ P0 已完成 / ⚠️ 存在历史测试缺口 | 双通道闭环、前端工作台、追溯、报告生成和示例流程可用 |
 | 垂类预测 | ✅ 基础可用 | 算法包上传、测试、运行历史追踪已集成 |
-| Knowledge Base 文献 RAG + 图谱 | ✅ 独立服务已接入 | KrF memory demo 可用；production 接 MongoDB/MinIO/Neo4j |
+| Knowledge Base 知识库问答 + 检索子图 | ✅ WeKnora 已接入 | 通过 WeKnora API 获取知识库、证据和问答流；可选 Neo4j 图谱增强 |
 | 数据管理 Data Catalog | ✅ 基础可用 | 数据目录浏览和检索 |
 | 认证与基础功能 | ✅ 完成 | ~95% |
 | 产品内助手 | ✅ 基础可用 | 基于项目事实的入口引导、审批引导和算法说明 |
@@ -167,7 +167,7 @@ ResearchEngine/assistant 相关历史测试状态见 [doc/research-engine-progre
 | ResearchEngine / AutoResearch | [doc/autoresearch-user-guide.md](doc/autoresearch-user-guide.md)、[doc/research-engine-progress-and-plan.md](doc/research-engine-progress-and-plan.md) |
 | 算法包上传与垂类模型 | [doc/algorithm-upload-user-guide.md](doc/algorithm-upload-user-guide.md) |
 | Raman 结构分析算法包 | [doc/raman_algorithm_package_guide.md](doc/raman_algorithm_package_guide.md)、[doc/raman_structure_analyzer_requirements.md](doc/raman_structure_analyzer_requirements.md) |
-| 文献 RAG 和知识图谱 | [services/literature-rag/README.md](services/literature-rag/README.md)、[doc/literature-rag-service-design.md](doc/literature-rag-service-design.md) |
+| WeKnora 知识库和检索子图 | [doc/knowledge-base-rag-kg-product-design.md](doc/knowledge-base-rag-kg-product-design.md)、[doc/polyagent-attribution-source-matrix.md](doc/polyagent-attribution-source-matrix.md) |
 | 来源与引用标注 | [doc/polyagent-attribution-source-matrix.md](doc/polyagent-attribution-source-matrix.md) |
 
 ## 技术栈
@@ -177,7 +177,7 @@ ResearchEngine/assistant 相关历史测试状态见 [doc/research-engine-progre
 | 后端 | Python 3.12 + FastAPI + MongoDB |
 | 前端 | Vue 3 + Element Plus + Vite |
 | 计算引擎 | RDKit, OpenBabel, xTB, ORCA (fixture), BoTorch, scikit-learn |
-| 文献知识库 | FastAPI 独立服务；memory demo；production 支持 MongoDB + MinIO + Neo4j |
+| 文献知识库 | Tencent WeKnora API；PolyAgent 后端兼容 `/knowledge-bases/*` API |
 | 报告生成 | 多 LLM 提供商（OpenAI/Ollama/Edison/Codex/自定义 HTTP）+ 多格式渲染（HTML/LaTeX/Markdown/PDF） |
 | 认证 | HMAC-SHA256 令牌，与 AI4MS 门户共享账户体系 |
 | 设计系统 | Inter 字体族 + 深蓝侧边栏 + 浅蓝灰背景，详见 [DESIGN.md](DESIGN.md) |
@@ -277,7 +277,7 @@ Poly_Agent/
 │   │   │   ├── CampaignDetailView.vue         # Campaign 详情
 │   │   │   ├── ResearchEngineView.vue         # ResearchEngine 双通道工作台
 │   │   │   ├── VerticalPredictionView.vue     # 垂类预测模型管理
-│   │   │   ├── KnowledgeBaseView.vue          # 文献 RAG + 知识图谱工作台
+│   │   │   ├── KnowledgeBaseView.vue          # WeKnora 知识库问答 + 检索子图工作台
 │   │   │   ├── DataCatalogView.vue            # 数据目录管理
 │   │   │   ├── DialogueView.vue               # 问答对话
 │   │   │   ├── ToolServicesView.vue           # 工具服务集成管理
@@ -333,14 +333,14 @@ Poly_Agent/
 │   ├── research-report-generation-product-design.md     # 报告生成产品设计
 │   ├── knowledge-base-rag-kg-product-design.md          # 知识库 RAG + 图谱产品设计
 │   ├── knowledge-base-rag-kg-upgrade-plan.md            # 知识库升级计划
-│   ├── literature-rag-service-design.md                 # 文献 RAG 服务设计
+│   ├── literature-rag-service-design.md                 # 旧版文献 RAG 服务设计记录
 │   ├── algorithm-upload-user-guide.md                   # 算法包上传使用指南
 │   ├── algorithm-upload-p0-assessment-and-roadmap.md    # 算法包上传评估与路线图
 │   ├── raman_algorithm_package_guide.md                 # Raman 结构分析算法包指南
 │   ├── raman_structure_analyzer_requirements.md         # Raman 结构分析算法需求
 │   └── poly-agent-toolchain-deployment-pack.md          # 工具链部署包
 ├── services/
-│   └── literature-rag/                  # 独立文献 RAG / GraphRAG 服务
+│   └── literature-rag/                  # 旧版独立文献 RAG / GraphRAG 服务
 ├── examples/
 │   └── algorithm_upload/                # 垂类算法包示例
 ├── scripts/                             # 部署与运维脚本
@@ -398,15 +398,21 @@ bash scripts/stop_poly_agent_services.sh
 
 重启脚本会启动后端、前端和 computation worker；日志默认写入 `/tmp/poly_agent_backend.log`、`/tmp/poly_agent_frontend.log`、`/tmp/poly_agent_worker.log`。前端开发服务器会自动把 `/api` 和 `/static` 代理到后端。
 
-知识库功能需要独立 Literature RAG 服务。开发环境可单独启动 memory demo：
+知识库功能需要可访问的 WeKnora 服务，并在 `backend/.env` 配置连接信息：
 
 ```bash
-export LITERATURE_RAG_QUERY_API_KEY=query-demo
-export LITERATURE_RAG_ADMIN_API_KEY=admin-demo
-python -m uvicorn app.main:app --app-dir services/literature-rag --host 127.0.0.1 --port 8200
+WEKNORA_BASE_URL=http://<weknora-host>:8000/api/v1
+WEKNORA_API_KEY=<weknora-api-key>
+# 可选：指定默认知识库；未配置时前端使用列表中的可用知识库
+WEKNORA_DEFAULT_KB_ID=<knowledge-base-id>
+# 可选：启用 WeKnora Neo4j 图谱增强；不可用时自动回退检索子图
+WEKNORA_NEO4J_URI=bolt://<neo4j-host>:7687
+WEKNORA_NEO4J_USERNAME=neo4j
+WEKNORA_NEO4J_PASSWORD=<neo4j-password>
+WEKNORA_NEO4J_DATABASE=neo4j
 ```
 
-Poly Agent 后端在本地 `APP_ENV=dev` 时会自动探测 `127.0.0.1:8200`；生产环境请显式配置 `LITERATURE_RAG_BASE_URL` 和 `LITERATURE_RAG_QUERY_API_KEY`。
+Poly Agent 后端不再自动探测或启动本地 `services/literature-rag`。如果 `WEKNORA_BASE_URL` 未包含 `/api/v1`，适配层会自动补齐。
 
 ### 4. 常用命令
 
@@ -435,19 +441,17 @@ bash scripts/run_compute_engine.sh base
 ```bash
 # 准备环境文件
 cp deploy/toolchain/env/backend.env.template backend/.env
-cp deploy/toolchain/env/literature-rag.env.template services/literature-rag/.env
 
 # 构建前端
 npm --prefix frontend run build
 
-# 启动主后端和独立知识库实例
+# 启动主后端
 pm2 start ecosystem.config.js
-pm2 start services/literature-rag/ecosystem.config.js
 pm2 save
 ```
 
 生产模式下直接访问 `http://<host>:5201` 即可，后端自动提供前端 SPA 页面。  
-知识库服务独立运行，Poly Agent 只连接本次部署的专用 `literature-rag` 实例，不改动共享焊接/稀土/表面处理数据。
+知识库服务由 WeKnora 独立提供，Poly Agent 只通过 WeKnora API 读取知识库列表、问答流和检索结果。
 
 ## 配置要点
 
@@ -462,7 +466,7 @@ pm2 save
 | 计算工具链 | `XTB_EXECUTABLE`、`CREST_EXECUTABLE`、`ORCA_EXECUTABLE`、`ORCA_EXECUTION_MODE` | 本地 xTB/CREST/ORCA 真实执行依赖这些命令和许可证状态 |
 | 算法运行时 | `ALGORITHM_RUNTIME_BACKEND`、`ALGORITHM_RUNTIME_MAX_CONCURRENCY`、`ALGORITHM_RUNTIME_MAX_OUTPUT_BYTES` | 默认使用短生命周期 Python 子进程沙箱运行上传算法 |
 | LLM 与报告 | `LLM_*`、`REPORT_*` | 控制产品内助手、Alchemist LLM 辅助和自动报告生成 |
-| 文献 RAG | `LITERATURE_RAG_BASE_URL`、`LITERATURE_RAG_QUERY_API_KEY` | 连接独立 `services/literature-rag` 实例 |
+| 知识库 | `WEKNORA_BASE_URL`、`WEKNORA_API_KEY`、`WEKNORA_DEFAULT_KB_ID`、`WEKNORA_NEO4J_*` | 连接 Tencent WeKnora 知识库服务；可选启用 Neo4j 图谱增强 |
 | 数据资产 | `DATA_ASSET_MONGODB_URI`、`DATA_ASSET_MONGODB_DATABASE=poly_data`、`MINIO_*` | 数据目录只读资产库和对象存储接入 |
 
 ## 认证体系
