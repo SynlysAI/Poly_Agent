@@ -375,6 +375,20 @@ class RenameableCollection(FakeCollection):
         self.name = target_name
 
 
+class ExistingSourceRowIndexCollection(FakeCollection):
+    """Reject a conflicting reuse of an existing Mongo index name."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.indexes.append(([('source_file', 1), ('source_row_index', 1)], 'source_row', False))
+
+    def create_index(self, keys, name: str, unique: bool = False, **kwargs) -> None:
+        for existing_keys, existing_name, _ in self.indexes:
+            if existing_name == name and existing_keys != keys:
+                raise AssertionError(f"conflicting index definition for {name}")
+        super().create_index(keys, name, unique, **kwargs)
+
+
 class PyMongoLikeCollection:
     """Mimic PyMongo's dynamic collection attribute lookup."""
 
@@ -390,6 +404,13 @@ class PyMongoLikeCollection:
 
 
 class PolyDataMigrationScriptTest(unittest.TestCase):
+    def test_create_indexes_matches_existing_extra_source_row_schema(self) -> None:
+        target_db = FakeDatabase({'omg_polymers': ExistingSourceRowIndexCollection()})
+
+        migration_script.create_indexes(target_db)
+
+        self.assertIn(([('source_file', 1), ('source_row_index', 1)], 'source_row', False), target_db['omg_polymers'].indexes)
+
     def test_atomic_replace_uses_collection_rename_for_dynamic_database_attributes(self) -> None:
         target_db = DynamicAttributeDatabase(
             {"__staging_dataset_job": FakeCollection([{"record_id": "1"}])}
