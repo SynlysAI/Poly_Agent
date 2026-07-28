@@ -23,6 +23,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 
 import {
   getApiErrorMessage,
+  getApiBaseUrl,
   getKnowledgeHealth,
   getKnowledgeSubgraph,
   generateKnowledgeSuggestions,
@@ -60,6 +61,7 @@ const suggestedQuestions = ref([])
 const suggestionsLoading = ref(false)
 const topBarCollapsed = ref(false)
 const queryTrace = ref([])
+const failedAnswerImages = ref(new Set())
 const queryPaneCollapsed = ref(true)
 const citationPanelCollapsed = ref(true)
 const nodeDetailCollapsed = ref(false)
@@ -324,9 +326,16 @@ const graphLanes = computed(() => {
   return lanes
 })
 const selectedNodeSourceUrl = computed(() => selectedNode.value?.properties?.source_url || citationUrl(selectedNode.value?.properties || {}))
+const selectedNodeWikiSummary = computed(() => textProperty(selectedNode.value?.properties, ['summary']))
+const selectedNodeContentPreview = computed(() => textProperty(selectedNode.value?.properties, ['content_preview']))
 const selectedNodeSnippet = computed(() => textProperty(selectedNode.value?.properties, ['snippet', 'content', 'text', 'abstract']))
+const selectedNodeAliases = computed(() => arrayProperty(selectedNode.value?.properties?.aliases))
+const selectedNodeCategoryPath = computed(() => arrayProperty(selectedNode.value?.properties?.category_path))
 const selectedNodeAttributes = computed(() => arrayProperty(selectedNode.value?.properties?.attributes))
-const selectedNodeChunks = computed(() => arrayProperty(selectedNode.value?.properties?.chunks))
+const selectedNodeSourceRefs = computed(() => arrayProperty(selectedNode.value?.properties?.source_refs))
+const selectedNodeChunks = computed(() => arrayProperty(
+  selectedNode.value?.properties?.chunk_refs || selectedNode.value?.properties?.chunks,
+))
 const selectedNodeDetailRows = computed(() => buildNodeDetailRows(selectedNode.value))
 const selectedNodePropertyJson = computed(() => {
   const properties = selectedNode.value?.properties || {}
@@ -334,16 +343,71 @@ const selectedNodePropertyJson = computed(() => {
   return JSON.stringify(properties, null, 2)
 })
 
-function parseMarkdownLinks(text) {
+function parseTagAttributes(attrString) {
+  const attributes = {}
+  const pattern = /([\w-]+)\s*=\s*"([^"]*)"/g
+  let match = pattern.exec(attrString || '')
+  while (match) {
+    attributes[match[1]] = match[2]
+    match = pattern.exec(attrString || '')
+  }
+  return attributes
+}
+
+function citationTitleFromKbTag(attrs) {
+  const doc = attrs.doc || attrs.title || '知识引用'
+  const chunkId = attrs.chunk_id || attrs.chunkId || ''
+  if (!chunkId) return doc
+  const shortChunkId = chunkId.length > 10 ? `${chunkId.slice(0, 6)}...${chunkId.slice(-4)}` : chunkId
+  return `${doc} · ${shortChunkId}`
+}
+
+function resourceImageUrl(rawUrl) {
+  const value = String(rawUrl || '').trim()
+  if (!value) return ''
+  if (/^https?:\/\//i.test(value)) return value
+  if (!selectedSystemId.value) return ''
+  const protectedSchemes = /^(resource|storage|local|minio|s3|cos|tos|oss|obs|ks3):\/\//i
+  if (!protectedSchemes.test(value)) return ''
+  return `${getApiBaseUrl()}/knowledge-bases/${encodeURIComponent(selectedSystemId.value)}/files?file_path=${encodeURIComponent(value)}`
+}
+
+function hasAnswerImageFailed(rawSrc) {
+  return failedAnswerImages.value.has(rawSrc)
+}
+
+function markAnswerImageUnavailable(rawSrc) {
+  failedAnswerImages.value = new Set([...failedAnswerImages.value, rawSrc])
+}
+
+function parseWeKnoraImage(line) {
+  const match = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/)
+  if (!match) return null
+  const src = resourceImageUrl(match[2])
+  return src ? { type: 'image', alt: match[1] || '回答图片', src, rawSrc: match[2] } : null
+}
+
+function parseInlineSegments(text) {
   const segments = []
-  const pattern = /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g
+  const pattern = /<kb\b([^>]*?)\s*\/?>|\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g
   let lastIndex = 0
   let match = pattern.exec(text)
   while (match) {
     if (match.index > lastIndex) {
       segments.push({ type: 'text', text: text.slice(lastIndex, match.index) })
     }
-    segments.push({ type: 'link', text: match[1], href: match[2] })
+    if (match[0].startsWith('<kb')) {
+      const attrs = parseTagAttributes(match[1])
+      segments.push({
+        type: 'citation',
+        text: attrs.doc || '知识引用',
+        title: citationTitleFromKbTag(attrs),
+        chunkId: attrs.chunk_id || attrs.chunkId || '',
+        kbId: attrs.kb_id || attrs.kbId || '',
+      })
+    } else {
+      segments.push({ type: 'link', text: match[2], href: match[3] })
+    }
     lastIndex = pattern.lastIndex
     match = pattern.exec(text)
   }
@@ -359,7 +423,7 @@ function parseMarkdownBlocks(markdown) {
   let listItems = []
   const flushList = () => {
     if (listItems.length) {
-      blocks.push({ type: 'list', items: listItems.map((item) => parseMarkdownLinks(item)) })
+      blocks.push({ type: 'list', items: listItems.map((item) => parseInlineSegments(item)) })
       listItems = []
     }
   }
@@ -378,8 +442,14 @@ function parseMarkdownBlocks(markdown) {
       listItems.push(trimmed.slice(2))
       return
     }
+    const imageBlock = parseWeKnoraImage(trimmed)
+    if (imageBlock) {
+      flushList()
+      blocks.push(imageBlock)
+      return
+    }
     flushList()
-    blocks.push({ type: 'paragraph', segments: parseMarkdownLinks(trimmed) })
+    blocks.push({ type: 'paragraph', segments: parseInlineSegments(trimmed) })
   })
   flushList()
   return blocks
@@ -532,20 +602,23 @@ function buildNodeDetailRows(node) {
     ? ''
     : formatScore(node.score)
   const propertyRows = [
-    { label: 'Knowledge ID', value: properties.knowledge_id },
+    { label: '知识 ID', value: properties.knowledge_id },
     { label: 'Slug', value: properties.slug },
-    { label: 'Page Type', value: properties.page_type },
-    { label: 'Link Count', value: properties.link_count },
+    { label: '页面类型', value: properties.page_type },
+    { label: '链接数', value: properties.link_count },
+    { label: 'Wiki 路径', value: properties.wiki_path },
+    { label: '状态', value: properties.status },
+    { label: '更新时间', value: properties.updated_at },
     { label: '文件', value: properties.knowledge_filename || properties.filename || properties.file_name },
-    { label: 'Chunk ID', value: properties.chunk_id || properties.parent_chunk_id },
-    { label: 'Chunk Index', value: properties.chunk_index },
+    { label: '片段 ID', value: properties.chunk_id || properties.parent_chunk_id },
+    { label: '片段序号', value: properties.chunk_index },
     { label: 'DOI', value: properties.doi },
     { label: '来源', value: properties.source },
     { label: '年份', value: properties.year },
   ]
   return [
     { label: 'ID', value: node.id },
-    { label: 'Score', value: scoreValue },
+    { label: '分数', value: scoreValue },
     ...propertyRows,
   ].filter((item) => hasDisplayValue(item.value))
 }
@@ -859,7 +932,8 @@ function handleGraphChartClick(params) {
 }
 
 function shouldUseNodeDetailDrawer() {
-  return typeof window !== 'undefined' && window.matchMedia('(max-width: 1100px)').matches
+  return activeTab.value === 'graph'
+    || (typeof window !== 'undefined' && window.matchMedia('(max-width: 1100px)').matches)
 }
 
 function openNodeDetailPanel() {
@@ -899,6 +973,7 @@ async function runQuery() {
   graphLoading.value = canLoadGraph.value
   queryError.value = ''
   graphError.value = ''
+  failedAnswerImages.value = new Set()
   answer.value = { answer: '', hits: [], citations: [], configured: true, message: canStreamQuery.value ? '知识库流式检索' : '知识库检索' }
   graph.value = null
   setGraphQueryFromQuestion(question)
@@ -1036,6 +1111,7 @@ function resetWorkspace() {
   graph.value = null
   queryError.value = ''
   graphError.value = ''
+  failedAnswerImages.value = new Set()
   queryLoading.value = false
   graphLoading.value = false
   selectedNodeId.value = ''
@@ -1072,9 +1148,7 @@ async function loadSuggestedQuestions() {
 
 function selectNode(nodeId) {
   selectedNodeId.value = nodeId
-  if (nodeDetailCollapsed.value || shouldUseNodeDetailDrawer()) {
-    openNodeDetailPanel()
-  }
+  openNodeDetailPanel()
 }
 
 onMounted(loadBootstrap)
@@ -1302,6 +1376,15 @@ onMounted(loadBootstrap)
                     <p v-else-if="block.type === 'paragraph'" class="answer-text">
                       <template v-for="(segment, segIndex) in linkSegments(block.segments)" :key="segIndex">
                         <a v-if="segment.type === 'link'" :href="segment.href" target="_blank" rel="noreferrer">{{ segment.text }}</a>
+                        <el-tag
+                          v-else-if="segment.type === 'citation'"
+                          class="answer-citation-tag"
+                          size="small"
+                          effect="plain"
+                          :title="segment.title"
+                        >
+                          引用 {{ segment.text }}
+                        </el-tag>
                         <span v-else>{{ segment.text }}</span>
                       </template>
                     </p>
@@ -1309,10 +1392,29 @@ onMounted(loadBootstrap)
                       <li v-for="(item, itemIndex) in block.items" :key="itemIndex">
                         <template v-for="(segment, segIndex) in item" :key="segIndex">
                           <a v-if="segment.type === 'link'" :href="segment.href" target="_blank" rel="noreferrer">{{ segment.text }}</a>
+                          <el-tag
+                            v-else-if="segment.type === 'citation'"
+                            class="answer-citation-tag"
+                            size="small"
+                            effect="plain"
+                            :title="segment.title"
+                          >
+                            引用 {{ segment.text }}
+                          </el-tag>
                           <span v-else>{{ segment.text }}</span>
                         </template>
                       </li>
                     </ul>
+                    <figure v-else-if="block.type === 'image'" class="answer-image-block">
+                      <template v-if="!hasAnswerImageFailed(block.rawSrc)">
+                        <img :src="block.src" :alt="block.alt" loading="lazy" @error="markAnswerImageUnavailable(block.rawSrc)" />
+                        <figcaption>{{ block.alt }}</figcaption>
+                      </template>
+                      <div v-else class="answer-image-unavailable">
+                        <strong>{{ block.alt }}</strong>
+                        <span>图片资源暂不可用，当前 WeKnora 凭据没有文件读取权限或资源已失效。</span>
+                      </div>
+                    </figure>
                   </template>
                   <div
                     v-if="queryLoading"
@@ -1505,15 +1607,40 @@ onMounted(loadBootstrap)
               >
                 打开原文/PDF
               </a>
-              <p v-if="selectedNodeSnippet" class="node-snippet">{{ selectedNodeSnippet }}</p>
+              <section v-if="selectedNodeWikiSummary" class="node-text-block">
+                <span>Wiki 摘要</span>
+                <p>{{ selectedNodeWikiSummary }}</p>
+              </section>
+              <section v-if="selectedNodeContentPreview" class="node-text-block">
+                <span>关联内容</span>
+                <p>{{ selectedNodeContentPreview }}</p>
+              </section>
+              <section v-if="selectedNodeSnippet" class="node-text-block">
+                <span>原始片段</span>
+                <p>{{ selectedNodeSnippet }}</p>
+              </section>
+              <div v-if="selectedNodeAliases.length || selectedNodeCategoryPath.length" class="node-chip-block">
+                <span>别名与分类</span>
+                <div>
+                  <el-tag v-for="item in selectedNodeAliases" :key="`alias-${item}`" size="small" effect="plain">{{ item }}</el-tag>
+                  <el-tag v-for="item in selectedNodeCategoryPath" :key="`category-${item}`" size="small" effect="plain" type="success">{{ item }}</el-tag>
+                </div>
+              </div>
               <div v-if="selectedNodeAttributes.length" class="node-chip-block">
                 <span>属性</span>
                 <div>
                   <el-tag v-for="item in selectedNodeAttributes" :key="item" size="small" effect="plain">{{ item }}</el-tag>
                 </div>
               </div>
+              <div v-if="selectedNodeSourceRefs.length" class="node-chip-block">
+                <span>来源引用</span>
+                <div>
+                  <el-tag v-for="item in selectedNodeSourceRefs.slice(0, 6)" :key="item" size="small" effect="plain" type="success">{{ item }}</el-tag>
+                  <small v-if="selectedNodeSourceRefs.length > 6">+{{ selectedNodeSourceRefs.length - 6 }}</small>
+                </div>
+              </div>
               <div v-if="selectedNodeChunks.length" class="node-chip-block">
-                <span>片段</span>
+                <span>片段引用</span>
                 <div>
                   <el-tag v-for="item in selectedNodeChunks.slice(0, 8)" :key="item" size="small" effect="plain" type="info">{{ item }}</el-tag>
                   <small v-if="selectedNodeChunks.length > 8">+{{ selectedNodeChunks.length - 8 }}</small>
@@ -1567,15 +1694,40 @@ onMounted(loadBootstrap)
           >
             打开原文/PDF
           </a>
-          <p v-if="selectedNodeSnippet" class="node-snippet">{{ selectedNodeSnippet }}</p>
+          <section v-if="selectedNodeWikiSummary" class="node-text-block">
+            <span>Wiki 摘要</span>
+            <p>{{ selectedNodeWikiSummary }}</p>
+          </section>
+          <section v-if="selectedNodeContentPreview" class="node-text-block">
+            <span>关联内容</span>
+            <p>{{ selectedNodeContentPreview }}</p>
+          </section>
+          <section v-if="selectedNodeSnippet" class="node-text-block">
+            <span>原始片段</span>
+            <p>{{ selectedNodeSnippet }}</p>
+          </section>
+          <div v-if="selectedNodeAliases.length || selectedNodeCategoryPath.length" class="node-chip-block">
+            <span>别名与分类</span>
+            <div>
+              <el-tag v-for="item in selectedNodeAliases" :key="`drawer-alias-${item}`" size="small" effect="plain">{{ item }}</el-tag>
+              <el-tag v-for="item in selectedNodeCategoryPath" :key="`drawer-category-${item}`" size="small" effect="plain" type="success">{{ item }}</el-tag>
+            </div>
+          </div>
           <div v-if="selectedNodeAttributes.length" class="node-chip-block">
             <span>属性</span>
             <div>
               <el-tag v-for="item in selectedNodeAttributes" :key="item" size="small" effect="plain">{{ item }}</el-tag>
             </div>
           </div>
+          <div v-if="selectedNodeSourceRefs.length" class="node-chip-block">
+            <span>来源引用</span>
+            <div>
+              <el-tag v-for="item in selectedNodeSourceRefs.slice(0, 6)" :key="item" size="small" effect="plain" type="success">{{ item }}</el-tag>
+              <small v-if="selectedNodeSourceRefs.length > 6">+{{ selectedNodeSourceRefs.length - 6 }}</small>
+            </div>
+          </div>
           <div v-if="selectedNodeChunks.length" class="node-chip-block">
-            <span>片段</span>
+            <span>片段引用</span>
             <div>
               <el-tag v-for="item in selectedNodeChunks.slice(0, 8)" :key="item" size="small" effect="plain" type="info">{{ item }}</el-tag>
               <small v-if="selectedNodeChunks.length > 8">+{{ selectedNodeChunks.length - 8 }}</small>
@@ -2260,6 +2412,60 @@ onMounted(loadBootstrap)
   line-height: 1.75;
 }
 
+.answer-citation-tag {
+  margin: 0 3px;
+  max-width: 220px;
+  vertical-align: text-bottom;
+}
+
+.answer-citation-tag :deep(.el-tag__content) {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.answer-image-block {
+  margin: 4px 0;
+  padding: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.answer-image-block img {
+  display: block;
+  max-width: min(100%, 760px);
+  max-height: 420px;
+  object-fit: contain;
+  border-radius: var(--app-radius-sm);
+  background: #f8fafc;
+}
+
+.answer-image-block figcaption {
+  margin-top: 8px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.answer-image-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.7);
+  border-radius: var(--app-radius-sm);
+  background: #f8fafc;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.answer-image-unavailable strong {
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
 .semantic-answer a,
 .citation-card,
 .hit-footer a {
@@ -2864,15 +3070,28 @@ onMounted(loadBootstrap)
   overflow-wrap: anywhere;
 }
 
-.node-snippet {
+.node-text-block {
   margin: 0;
   padding: 10px;
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
   background: #f8fafc;
+}
+
+.node-text-block > span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.node-text-block > p {
+  margin: 0;
   color: var(--app-ink-body);
   font-size: 12px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .node-chip-block {

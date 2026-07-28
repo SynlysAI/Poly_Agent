@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.schemas.common import ApiResponse
 from app.schemas.knowledge import (
@@ -70,3 +70,13 @@ def get_knowledge_subgraph(
         message="ok",
         data=service.get_subgraph(system_id, query=query, limit=limit),
     )
+
+
+@router.get("/{system_id}/files")
+def get_knowledge_file_resource(
+    system_id: str,
+    file_path: str = Query(..., min_length=1, max_length=2000),
+) -> Response:
+    """Proxy WeKnora protected file resources used by answer Markdown."""
+    content, media_type = service.fetch_file_resource(system_id, file_path)
+    return Response(content=content, media_type=media_type)

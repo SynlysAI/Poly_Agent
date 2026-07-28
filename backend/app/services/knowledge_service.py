@@ -7,6 +7,7 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Iterator
+from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException
@@ -169,7 +170,7 @@ class KnowledgeService:
             raise HTTPException(status_code=exc.response.status_code, detail="WeKnora Wiki 图谱查询失败") from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"WeKnora Wiki 图谱查询失败：{type(exc).__name__}") from exc
-        return self._graph_from_wiki_graph(system_id, raw, query="", limit=500)
+        return self._graph_from_wiki_graph(base_url, system_id, raw, query="", limit=500)
 
     def get_subgraph(self, system_id: str, *, query: str | None = None, limit: int = 30) -> KnowledgeGraphData:
         """优先加载 WeKnora Wiki 图谱切片，失败时回退到检索实体子图。"""
@@ -189,6 +190,39 @@ class KnowledgeService:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"WeKnora 检索子图查询失败：{type(exc).__name__}") from exc
         return self._graph_from_search_results(system_id, results, query=normalized_query, limit=normalized_limit)
+
+    def fetch_file_resource(self, system_id: str, file_path: str) -> tuple[bytes, str]:
+        """代理读取 WeKnora 知识库内的受保护文件资源。
+
+        Args:
+            system_id: WeKnora 知识库 ID。
+            file_path: WeKnora 回答中的文件资源路径。
+
+        Returns:
+            文件内容字节与 Content-Type。
+        """
+        base_url = self._require_base_url()
+        self._ensure_known_system(system_id)
+        normalized_path = str(file_path or "").strip()
+        if not self._is_allowed_file_resource(normalized_path):
+            raise HTTPException(status_code=400, detail="不支持的知识库资源路径")
+        try:
+            with self._client(base_url) as client:
+                response = client.get(
+                    f"/knowledge-bases/{system_id}/files",
+                    params={"file_path": normalized_path},
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail="当前 WeKnora API Key 无文件资源读取权限，请使用租户级 full_access Key 或非知识库受限且具备 retrieve 能力的 Key。",
+                ) from exc
+            raise HTTPException(status_code=exc.response.status_code, detail="WeKnora 文件资源读取失败") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"WeKnora 文件资源读取失败：{type(exc).__name__}") from exc
+        return response.content, response.headers.get("content-type") or "application/octet-stream"
 
     def suggested_questions(self, system_id: str) -> KnowledgeSuggestedQuestions:
         """优先从 WeKnora 获取知识库推荐问题。"""
@@ -442,7 +476,7 @@ class KnowledgeService:
             )
         else:
             raw = self._get_wiki_graph(base_url, system_id, mode="overview", limit=limit)
-        return self._graph_from_wiki_graph(system_id, raw, query=query, limit=limit, center=center)
+        return self._graph_from_wiki_graph(base_url, system_id, raw, query=query, limit=limit, center=center)
 
     def _get_wiki_graph(
         self,
@@ -549,6 +583,7 @@ class KnowledgeService:
 
     def _graph_from_wiki_graph(
         self,
+        base_url: str,
         system_id: str,
         raw: dict[str, Any],
         *,
@@ -571,10 +606,12 @@ class KnowledgeService:
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         type_counts: dict[str, int] = {}
+        page_cache: dict[str, dict[str, Any]] = {}
         for item in raw.get("nodes") or []:
             slug = str(item.get("slug") or "").strip()
             if not slug:
                 continue
+            page = self._get_wiki_page_safe(base_url, system_id, slug, page_cache)
             page_type = str(item.get("page_type") or "wiki").strip()
             node_type = self._normalize_wiki_node_type(page_type)
             type_counts[node_type] = type_counts.get(node_type, 0) + 1
@@ -587,6 +624,7 @@ class KnowledgeService:
                     "slug": slug,
                     "page_type": page_type,
                     "link_count": int(item.get("link_count") or 0),
+                    **self._wiki_page_detail_properties(page),
                     "provider": WEKNORA_PROVIDER,
                     "graph_backend": WEKNORA_WIKI_GRAPH_BACKEND,
                 },
@@ -636,6 +674,45 @@ class KnowledgeService:
             "graph_backend": WEKNORA_WIKI_GRAPH_BACKEND,
         }
         return self._normalize_graph(system_id, graph_raw)
+
+    def _get_wiki_page_safe(
+        self,
+        base_url: str,
+        system_id: str,
+        slug: str,
+        cache: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """按 slug 获取 Wiki 页面详情，失败时返回空字典。"""
+        if slug in cache:
+            return cache[slug]
+        try:
+            with self._client(base_url) as client:
+                response = client.get(f"/knowledgebase/{system_id}/wiki/pages/{quote(slug, safe='')}")
+                response.raise_for_status()
+                page = self._unwrap(response.json())
+        except Exception:
+            page = {}
+        cache[slug] = page if isinstance(page, dict) else {}
+        return cache[slug]
+
+    @classmethod
+    def _wiki_page_detail_properties(cls, page: dict[str, Any]) -> dict[str, Any]:
+        """提取适合前端节点详情展示的 Wiki 页面字段。"""
+        if not page:
+            return {}
+        summary = str(page.get("summary") or "").strip()
+        content = str(page.get("content") or "").strip()
+        return {
+            "summary": summary,
+            "content_preview": cls._compact_wiki_content(content),
+            "source_refs": cls._safe_string_list(page.get("source_refs"))[:8],
+            "chunk_refs": cls._safe_string_list(page.get("chunk_refs"))[:12],
+            "aliases": cls._safe_string_list(page.get("aliases"))[:8],
+            "category_path": cls._safe_string_list(page.get("category_path"))[:8],
+            "wiki_path": str(page.get("wiki_path") or "").strip(),
+            "status": str(page.get("status") or "").strip(),
+            "updated_at": str(page.get("updated_at") or "").strip(),
+        }
 
     def _graph_from_search_results(
         self,
@@ -1359,6 +1436,15 @@ class KnowledgeService:
         return []
 
     @staticmethod
+    def _safe_string_list(value: Any) -> list[str]:
+        """规范字符串列表字段。"""
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item or "").strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    @staticmethod
     def _safe_int(value: Any) -> int | None:
         """将输入安全转换为整数。"""
         try:
@@ -1367,9 +1453,41 @@ class KnowledgeService:
             return None
 
     @staticmethod
+    def _is_allowed_file_resource(file_path: str) -> bool:
+        """判断文件资源路径是否属于 WeKnora 受保护资源协议。"""
+        allowed_prefixes = (
+            "resource://",
+            "storage://",
+            "local://",
+            "minio://",
+            "s3://",
+            "cos://",
+            "tos://",
+            "oss://",
+            "obs://",
+            "ks3://",
+        )
+        return bool(file_path) and file_path.startswith(allowed_prefixes) and ".." not in file_path
+
+    @staticmethod
     def _compact_label(value: str, *, limit: int = 48) -> str:
         """生成适合节点标题的短文本。"""
         text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
+
+    @staticmethod
+    def _compact_wiki_content(value: str, *, limit: int = 900) -> str:
+        """生成适合节点详情展示的 Wiki 正文预览。"""
+        text = str(value or "")
+        text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", text)
+        text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+        text = re.sub(r"\[\[([^|\]]+)\|([^\]]+)\]\]", r"\2", text)
+        text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
+        text = re.sub(r"[*_`>#|~-]+", " ", text)
+        text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+        text = " ".join(text.split())
         if len(text) <= limit:
             return text
         return text[:limit].rstrip() + "..."
