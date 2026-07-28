@@ -1368,6 +1368,26 @@ def migrate_sftp_md_allatom_objects(
     return records
 
 
+def ensure_index(collection: Any, keys: list[tuple[str, int]], *, name: str, unique: bool = False) -> None:
+    """Create an index only when its key pattern is not already present."""
+    try:
+        existing_indexes = list(collection.list_indexes())
+    except AttributeError:
+        existing_indexes = []
+    requested_keys = list(keys)
+    for existing in existing_indexes:
+        existing_keys = list(existing.get("key", {}).items())
+        if existing_keys == requested_keys:
+            return
+    existing_names = {str(existing.get("name")) for existing in existing_indexes}
+    index_name = name
+    suffix = 2
+    while index_name in existing_names:
+        index_name = f"{name}_v{suffix}"
+        suffix += 1
+    collection.create_index(keys, name=index_name, unique=unique)
+
+
 def create_indexes(target_db: Any) -> None:
     """Create Poly Data indexes."""
     target_db["datasets"].create_index([("dataset_id", 1)], name="dataset_id", unique=True)
@@ -1424,7 +1444,7 @@ def create_indexes(target_db: Any) -> None:
         collection = target_db[spec.collection_name]
         collection.create_index([("record_id", 1)], name="record_id", unique=True)
         collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
-        collection.create_index([("source_file", 1), ("source_row_index", 1)], name="source_row_index")
+        ensure_index(collection, [("source_file", 1), ("source_row_index", 1)], name="source_row_index")
         collection.create_index([("title", 1)], name="title")
     target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].create_index([("generated_at", -1)], name="generated_at")
     target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].create_index(
@@ -2873,7 +2893,7 @@ def import_extra_open_database_records(
                 )
             collection.create_index([("record_id", 1)], name="record_id", unique=True)
             collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
-            collection.create_index([("source_file", 1), ("source_row_index", 1)], name="source_row_index")
+            ensure_index(collection, [("source_file", 1), ("source_row_index", 1)], name="source_row_index")
             collection.create_index([("title", 1)], name="title")
             atomic_replace_collection(target_db, staging_name, dataset_spec.collection_name)
             verified_count = int(target_db[dataset_spec.collection_name].count_documents({}))

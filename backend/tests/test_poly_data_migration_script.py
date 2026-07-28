@@ -389,6 +389,16 @@ class ExistingSourceRowIndexCollection(FakeCollection):
         super().create_index(keys, name, unique, **kwargs)
 
 
+class ListedIndexCollection(FakeCollection):
+    """Collection fake exposing existing index metadata."""
+
+    def list_indexes(self):
+        return [
+            {"name": name, "key": dict(keys), "unique": unique}
+            for keys, name, unique in self.indexes
+        ]
+
+
 class PyMongoLikeCollection:
     """Mimic PyMongo's dynamic collection attribute lookup."""
 
@@ -413,6 +423,18 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
             ([('source_file', 1), ('source_row_index', 1)], 'source_row_index', False),
             target_db['omg_polymers'].indexes,
         )
+
+    def test_ensure_index_reuses_same_key_pattern_with_legacy_name(self) -> None:
+        collection = ListedIndexCollection()
+        collection.indexes.append(([('source_file', 1), ('source_row_index', 1)], 'source_row', False))
+
+        migration_script.ensure_index(
+            collection,
+            [('source_file', 1), ('source_row_index', 1)],
+            name='source_row_index',
+        )
+
+        self.assertEqual(len(collection.indexes), 1)
 
     def test_atomic_replace_uses_collection_rename_for_dynamic_database_attributes(self) -> None:
         target_db = DynamicAttributeDatabase(
