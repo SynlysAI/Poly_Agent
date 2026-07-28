@@ -12,6 +12,7 @@ import { formatApiDateTime } from '../../utils/datetime'
 const props = defineProps({
   visible: { type: Boolean, default: false },
   algorithmId: { type: String, default: '' },
+  refreshKey: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['update:visible'])
@@ -72,7 +73,7 @@ async function loadSummary() {
   }
 }
 
-watch(() => [props.visible, props.algorithmId], loadSummary)
+watch(() => [props.visible, props.algorithmId, props.refreshKey], loadSummary)
 </script>
 
 <template>

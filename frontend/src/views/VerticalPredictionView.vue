@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowRight, Box, Clock, Cpu, DataAnalysis, Document, Key, Refresh, Search, UploadFilled, VideoPlay,
+  ArrowRight, Box, Clock, Cpu, DataAnalysis, Document, Edit, Key, Refresh, Search, UploadFilled, VideoPlay,
 } from '@element-plus/icons-vue'
 
 import {
@@ -15,6 +15,7 @@ import {
 } from '../api/polyAgentApi'
 import AlgorithmManagementPanel from './vertical-prediction/AlgorithmManagementPanel.vue'
 import AlgorithmHandoffPanel from './vertical-prediction/AlgorithmHandoffPanel.vue'
+import AlgorithmMetadataEditor from './vertical-prediction/AlgorithmMetadataEditor.vue'
 import AlgorithmRunHistoryPanel from './vertical-prediction/AlgorithmRunHistoryPanel.vue'
 import AlgorithmTestPanel from './vertical-prediction/AlgorithmTestPanel.vue'
 import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue'
@@ -44,6 +45,7 @@ const selectedAlgorithmId = ref(normalizeQueryString(route.query.algorithm_id))
 const selectedHandoffId = ref(normalizeQueryString(route.query.handoff_id))
 const docEntryMode = ref(normalizeQueryString(route.query.doc_mode) === 'download' ? 'download' : 'upload')
 const uploadContextMode = ref(normalizeQueryString(route.query.upload_mode) === 'new_version' ? 'new_version' : 'new_algorithm')
+const metadataEditorVisible = ref(false)
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === selectedAlgorithmId.value) || null)
 const selectedVersions = computed(() => versionMap.value[selectedAlgorithmId.value] || [])
@@ -242,6 +244,18 @@ function openNewVersion() {
   activeMode.value = 'upload'
 }
 
+function openMetadataEditor() {
+  if (!canManageSelectedAlgorithm.value) return
+  metadataEditorVisible.value = true
+}
+
+function handleMetadataSaved(updated) {
+  const index = algorithms.value.findIndex((item) => item.algorithm_id === updated?.algorithm_id)
+  if (index >= 0) algorithms.value[index] = updated
+  refreshKey.value += 1
+  loadData()
+}
+
 function openDoc(mode = 'upload') {
   docEntryMode.value = mode
   selectedHandoffId.value = ''
@@ -409,6 +423,7 @@ onMounted(() => {
           </div>
         </div>
         <div class="detail-actions">
+          <el-button v-if="canManageSelectedAlgorithm" :icon="Edit" @click="openMetadataEditor">编辑信息</el-button>
           <el-button :icon="VideoPlay" type="primary" @click="detailActiveTab = 'experience'">立即体验</el-button>
           <el-button :icon="Key" @click="detailActiveTab = 'api'">版本治理</el-button>
         </div>
@@ -565,6 +580,13 @@ onMounted(() => {
         </main>
       </div>
     </template>
+
+    <AlgorithmMetadataEditor
+      v-model:visible="metadataEditorVisible"
+      :algorithm="selectedAlgorithm"
+      :active-version="activeVersion"
+      @saved="handleMetadataSaved"
+    />
   </div>
 </template>
 

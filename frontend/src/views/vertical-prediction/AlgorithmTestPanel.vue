@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { CopyDocument, Delete, Plus, Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Check, CopyDocument, Delete, Plus, Refresh, VideoPlay } from '@element-plus/icons-vue'
 
 import {
   createAlgorithmRun,
@@ -14,6 +14,13 @@ import {
 } from '../../api/polyAgentApi'
 import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
 import { predictionStepState } from '../../utils/verticalPredictionState.mjs'
+import {
+  addFieldToRecords,
+  inferValueKind,
+  recordTitleField,
+  removeFieldFromRecords,
+  renameFieldInRecords,
+} from '../../utils/verticalPredictionJson.mjs'
 import AlgorithmResultView from './AlgorithmResultView.vue'
 
 const props = defineProps({
@@ -38,6 +45,9 @@ const templateRuns = ref([])
 const templateRunId = ref('')
 const newNestedField = ref({})
 const newNestedValue = ref({})
+const newNestedKind = ref({})
+const renamedNestedField = ref({})
+const removedNestedFields = ref({})
 const lastRun = ref(null)
 const inputFiles = ref({})
 const runArtifacts = ref([])
@@ -214,8 +224,17 @@ function resetInputs() {
   runArtifacts.value = []
   jsonParseError.value = ''
   templateRunId.value = ''
+  resetNestedFieldState()
   syncFullJsonDraft()
   lastRun.value = null
+}
+
+function resetNestedFieldState() {
+  newNestedField.value = {}
+  newNestedValue.value = {}
+  newNestedKind.value = {}
+  renamedNestedField.value = {}
+  removedNestedFields.value = {}
 }
 
 function syncFullJsonDraft() {
@@ -232,6 +251,7 @@ function updateFullJson(value) {
       return
     }
     inputs.value = parsed
+    resetNestedFieldState()
     jsonParseError.value = ''
   } catch (error) {
     jsonParseError.value = error.message || 'JSON 解析失败'
@@ -255,6 +275,7 @@ function applyTemplate(snapshot) {
     ...buildDefaultInputs(),
     ...cloneJson(snapshot),
   }
+  resetNestedFieldState()
   jsonParseError.value = ''
   syncFullJsonDraft()
   ElMessage.success('已载入历史输入')
@@ -349,7 +370,8 @@ function arrayColumns(key) {
     if (isPlainObject(row)) Object.keys(row).forEach((column) => keys.add(column))
   })
   if (!keys.size) defaultArrayColumns(key).forEach((column) => keys.add(column))
-  return Array.from(keys)
+  const removed = new Set(removedNestedFields.value[key] || [])
+  return Array.from(keys).filter((column) => !removed.has(column))
 }
 
 function defaultArrayColumns(key) {
@@ -452,15 +474,65 @@ function removeArrayItem(key, index) {
 function addNestedFieldToArray(key) {
   const name = String(newNestedField.value[key] || '').trim()
   if (!name) return
-  const value = parseCustomFieldValue(newNestedValue.value[key])
   ensureArrayValue(key)
   if (!inputs.value[key].length) inputs.value[key].push({})
-  inputs.value[key].forEach((item) => {
-    if (isPlainObject(item) && !Object.prototype.hasOwnProperty.call(item, name)) item[name] = cloneJson(value)
-  })
-  newNestedField.value[key] = ''
-  newNestedValue.value[key] = ''
-  syncFullJsonDraft()
+  const parsed = parseCustomFieldValue(newNestedValue.value[key])
+  const kind = newNestedKind.value[key] || inferValueKind(name, [parsed])
+  try {
+    inputs.value[key] = addFieldToRecords(inputs.value[key], name, kind, newNestedValue.value[key])
+    removedNestedFields.value[key] = (removedNestedFields.value[key] || []).filter((item) => item !== name)
+    newNestedField.value[key] = ''
+    newNestedValue.value[key] = ''
+    delete newNestedKind.value[key]
+    syncFullJsonDraft()
+  } catch (error) {
+    ElMessage.warning(error.message)
+  }
+}
+
+function nestedFieldDraftKey(parentKey, field) {
+  return `${parentKey}.${field}`
+}
+
+function prepareNestedFieldRename(parentKey, field) {
+  renamedNestedField.value[nestedFieldDraftKey(parentKey, field)] = field
+}
+
+function renameNestedField(parentKey, field) {
+  const draftKey = nestedFieldDraftKey(parentKey, field)
+  const target = String(renamedNestedField.value[draftKey] || '').trim()
+  try {
+    inputs.value[parentKey] = renameFieldInRecords(inputs.value[parentKey] || [], field, target)
+    removedNestedFields.value[parentKey] = Array.from(new Set([
+      ...(removedNestedFields.value[parentKey] || []),
+      field,
+    ])).filter((item) => item !== target)
+    delete renamedNestedField.value[draftKey]
+    syncFullJsonDraft()
+  } catch (error) {
+    ElMessage.warning(error.message)
+  }
+}
+
+async function removeNestedField(parentKey, field) {
+  const records = inputs.value[parentKey] || []
+  const hasData = records.some((item) => !isEmptyValue(item?.[field]))
+  try {
+    if (hasData) {
+      await ElMessageBox.confirm(`字段 ${field} 已有数据，确认从全部记录中删除？`, '删除字段', {
+        type: 'warning',
+      })
+    }
+    inputs.value[parentKey] = removeFieldFromRecords(records, field)
+    removedNestedFields.value[parentKey] = Array.from(new Set([
+      ...(removedNestedFields.value[parentKey] || []),
+      field,
+    ]))
+    delete renamedNestedField.value[nestedFieldDraftKey(parentKey, field)]
+    syncFullJsonDraft()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '删除字段失败')
+  }
 }
 
 function addNestedFieldToObject(key) {
@@ -486,8 +558,13 @@ function addAdvancedField(key) {
 }
 
 function itemTitle(key, item, index) {
-  const titleKey = fieldHint(key).item_title_key || ['formula_id', 'id', 'name', 'title'].find((candidate) => item?.[candidate])
+  const titleKey = fieldHint(key).item_title_key || recordTitleField(item)
   return titleKey && item?.[titleKey] ? String(item[titleKey]) : `${fieldLabel(key)} ${index + 1}`
+}
+
+function itemTitleField(key, item) {
+  const hinted = fieldHint(key).item_title_key
+  return hinted && Object.prototype.hasOwnProperty.call(item || {}, hinted) ? hinted : recordTitleField(item)
 }
 
 function firstRecordButtonLabel(key) {
@@ -498,10 +575,18 @@ function addRecordButtonLabel(key) {
   return key === 'formulations' ? '新增配方' : '新增记录'
 }
 
-function valueKind(value) {
-  if (typeof value === 'number') return 'number'
-  if (typeof value === 'boolean') return 'boolean'
-  return 'string'
+function nestedValueKind(parentKey, field, item) {
+  const rows = Array.isArray(inputs.value[parentKey]) ? inputs.value[parentKey] : []
+  const historyRows = Array.isArray(historyValueFor(parentKey)) ? historyValueFor(parentKey) : []
+  return inferValueKind(field, [
+    item?.[field],
+    ...rows.map((row) => row?.[field]),
+    ...historyRows.map((row) => row?.[field]),
+  ])
+}
+
+function nestedNumberStep(field) {
+  return /(count|index|number)/i.test(String(field || '')) ? 1 : 0.1
 }
 
 function defaultValueFrom(value) {
@@ -511,26 +596,10 @@ function defaultValueFrom(value) {
 }
 
 function defaultValueForColumn(column, sourceValue) {
-  if (sourceValue !== undefined) return defaultValueFrom(sourceValue)
-  const normalized = String(column || '').toLowerCase()
-  if (['is_', 'has_', 'enable_', 'enabled_', 'use_'].some((prefix) => normalized.startsWith(prefix))) return false
-  if ([
-    'amount',
-    'concentration',
-    'count',
-    'density',
-    'fraction',
-    'mol',
-    'mol_l',
-    'molar',
-    'number',
-    'percent',
-    'percentage',
-    'ratio',
-    'temperature',
-    'value',
-    'weight',
-  ].some((token) => normalized.includes(token))) return 0
+  if (sourceValue !== undefined && sourceValue !== '') return defaultValueFrom(sourceValue)
+  const kind = inferValueKind(column, [sourceValue])
+  if (kind === 'boolean') return false
+  if (kind === 'number') return 0
   return ''
 }
 
@@ -903,10 +972,60 @@ onMounted(loadAlgorithms)
                 <div class="nested-count">{{ arrayRows(key).length }} 条记录</div>
                 <el-button type="primary" plain :icon="Plus" @click="addArrayItem(key)">{{ addRecordButtonLabel(key) }}</el-button>
               </div>
+              <el-collapse v-if="arrayRows(key).length" class="field-manager-collapse">
+                <el-collapse-item name="fields">
+                  <template #title>
+                    <span class="field-manager-title">字段管理 · {{ arrayColumns(key).length }} 个字段</span>
+                  </template>
+                  <div class="field-manager">
+                    <div class="field-manager-add">
+                      <el-input v-model="newNestedField[key]" placeholder="新字段名" clearable />
+                      <el-select v-model="newNestedKind[key]" placeholder="字段类型">
+                        <el-option label="文本" value="string" />
+                        <el-option label="数值" value="number" />
+                        <el-option label="布尔" value="boolean" />
+                      </el-select>
+                      <el-input v-model="newNestedValue[key]" placeholder="默认值（可选）" clearable @keyup.enter="addNestedFieldToArray(key)" />
+                      <el-button :icon="Plus" @click="addNestedFieldToArray(key)">新增字段</el-button>
+                    </div>
+                    <div class="field-manager-list">
+                      <div v-for="column in arrayColumns(key)" :key="column" class="field-manager-row">
+                        <el-input
+                          v-model="renamedNestedField[nestedFieldDraftKey(key, column)]"
+                          :placeholder="column"
+                          @focus="prepareNestedFieldRename(key, column)"
+                          @keyup.enter="renameNestedField(key, column)"
+                        />
+                        <el-tag size="small" effect="plain">{{ nestedValueKind(key, column, arrayRows(key)[0]) }}</el-tag>
+                        <el-button
+                          text
+                          :icon="Check"
+                          aria-label="确认字段改名"
+                          @click="renameNestedField(key, column)"
+                        />
+                        <el-button
+                          text
+                          type="danger"
+                          :icon="Delete"
+                          aria-label="删除字段"
+                          @click="removeNestedField(key, column)"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
               <div v-if="arrayRows(key).length" class="record-list">
                 <article v-for="(item, index) in arrayRows(key)" :key="index" class="record-card">
                   <header class="record-head">
-                    <strong>{{ itemTitle(key, item, index) }}</strong>
+                    <el-input
+                      v-if="itemTitleField(key, item)"
+                      :model-value="item[itemTitleField(key, item)]"
+                      class="record-title-input"
+                      :aria-label="`编辑${itemTitleField(key, item)}`"
+                      @update:model-value="setNestedValue(item, itemTitleField(key, item), $event)"
+                    />
+                    <strong v-else>{{ itemTitle(key, item, index) }}</strong>
                     <div class="record-actions">
                       <el-button text :icon="CopyDocument" aria-label="复制记录" @click="copyArrayItem(key, index)" />
                       <el-button text :icon="Delete" aria-label="删除记录" @click="removeArrayItem(key, index)" />
@@ -916,14 +1035,14 @@ onMounted(loadAlgorithms)
                     <label v-for="column in coreArrayColumns(key)" :key="column" class="nested-field">
                       <span>{{ nestedFieldLabel(key, column) }}</span>
                       <el-input-number
-                        v-if="valueKind(item[column]) === 'number'"
+                        v-if="nestedValueKind(key, column, item) === 'number'"
                         :model-value="item[column]"
-                        :step="1"
+                        :step="nestedNumberStep(column)"
                         class="full-control"
                         @update:model-value="setNestedValue(item, column, $event)"
                       />
                       <el-switch
-                        v-else-if="valueKind(item[column]) === 'boolean'"
+                        v-else-if="nestedValueKind(key, column, item) === 'boolean'"
                         :model-value="item[column]"
                         @update:model-value="setNestedValue(item, column, $event)"
                       />
@@ -940,7 +1059,19 @@ onMounted(loadAlgorithms)
                       <div class="record-fields">
                         <label v-for="column in collapsedArrayColumns(key)" :key="column" class="nested-field">
                           <span>{{ nestedFieldLabel(key, column) }}</span>
-                          <el-input :model-value="item[column]" @update:model-value="setNestedValue(item, column, $event)" />
+                          <el-input-number
+                            v-if="nestedValueKind(key, column, item) === 'number'"
+                            :model-value="item[column]"
+                            :step="nestedNumberStep(column)"
+                            class="full-control"
+                            @update:model-value="setNestedValue(item, column, $event)"
+                          />
+                          <el-switch
+                            v-else-if="nestedValueKind(key, column, item) === 'boolean'"
+                            :model-value="item[column]"
+                            @update:model-value="setNestedValue(item, column, $event)"
+                          />
+                          <el-input v-else :model-value="item[column]" @update:model-value="setNestedValue(item, column, $event)" />
                         </label>
                       </div>
                     </el-collapse-item>
@@ -972,7 +1103,19 @@ onMounted(loadAlgorithms)
                 <label v-for="column in objectColumns(key)" :key="column" class="nested-field">
                   <span>{{ nestedFieldLabel(key, column) }}</span>
                   <div class="object-field-row">
-                    <el-input :model-value="inputs[key]?.[column]" @update:model-value="setNestedValue(inputs[key], column, $event)" />
+                    <el-input-number
+                      v-if="nestedValueKind(key, column, inputs[key]) === 'number'"
+                      :model-value="inputs[key]?.[column]"
+                      :step="nestedNumberStep(column)"
+                      class="full-control"
+                      @update:model-value="setNestedValue(inputs[key], column, $event)"
+                    />
+                    <el-switch
+                      v-else-if="nestedValueKind(key, column, inputs[key]) === 'boolean'"
+                      :model-value="inputs[key]?.[column]"
+                      @update:model-value="setNestedValue(inputs[key], column, $event)"
+                    />
+                    <el-input v-else :model-value="inputs[key]?.[column]" @update:model-value="setNestedValue(inputs[key], column, $event)" />
                     <el-button text :icon="Delete" aria-label="删除字段" @click="removeObjectField(key, column)" />
                   </div>
                 </label>
@@ -1285,6 +1428,50 @@ onMounted(loadAlgorithms)
   font-size: 12px;
   font-weight: 700;
 }
+.field-manager-collapse {
+  margin-bottom: 12px;
+  border-top: 1px solid var(--app-border-soft);
+  border-bottom: 1px solid var(--app-border-soft);
+}
+.field-manager-collapse :deep(.el-collapse-item__header) {
+  min-height: 42px;
+  height: auto;
+  color: var(--app-ink-body);
+  font-size: 12px;
+  font-weight: 700;
+}
+.field-manager-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: 0;
+}
+.field-manager-title {
+  overflow-wrap: anywhere;
+}
+.field-manager {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 10px;
+}
+.field-manager-add {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 110px minmax(140px, 1fr) auto;
+  gap: 8px;
+}
+.field-manager-list {
+  display: grid;
+  gap: 6px;
+}
+.field-manager-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 32px 32px;
+  align-items: center;
+  gap: 6px;
+}
+.field-manager-row :deep(.el-tag__content) {
+  width: 100%;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+}
 .nested-actions {
   flex: 1 1 260px;
   justify-content: flex-end;
@@ -1316,6 +1503,14 @@ onMounted(loadAlgorithms)
   color: var(--app-ink);
   font-size: 14px;
   overflow-wrap: anywhere;
+}
+.record-title-input {
+  width: min(320px, 100%);
+}
+.record-title-input :deep(.el-input__inner) {
+  color: var(--app-ink);
+  font-size: 14px;
+  font-weight: 700;
 }
 .record-actions {
   flex: 0 0 auto;
@@ -1473,6 +1668,13 @@ onMounted(loadAlgorithms)
   }
   .record-fields {
     grid-template-columns: 1fr;
+  }
+  .field-manager-add,
+  .field-manager-row {
+    grid-template-columns: 1fr;
+  }
+  .field-manager-row :deep(.el-button) {
+    width: 100%;
   }
   .run-overview {
     grid-template-columns: 1fr;

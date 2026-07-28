@@ -23,6 +23,7 @@ except ImportError:
 
 from app.services.research_engine_service import ResearchEngineService
 from app.services.algorithm_resource_service import AlgorithmManagedResourceService
+from app.infra.research_engine_repositories import AlgorithmRegistryRepository, AlgorithmVersionRepository
 from app.core.auth import get_current_user
 from app.core.config import settings
 from app.main import app
@@ -850,6 +851,132 @@ sample_input:
         self.assertEqual(audit_resp.status_code, 200, audit_resp.text)
         event_types = {item["event_type"] for item in audit_resp.json()["data"]["items"]}
         self.assertIn("credit_corrected", event_types)
+
+    def test_owner_can_update_algorithm_metadata_and_reactivation_preserves_it(self) -> None:
+        """上传者可维护展示信息，后续激活不会恢复旧包元数据。"""
+        self._login_as("metadata-owner")
+        version_id = self._pack_activate_simple_algorithm("metadata_update_demo", visibility="private")
+
+        patch_resp = self.client.patch(
+            f"{self.base_url}/algorithms/metadata_update_demo/metadata",
+            json={
+                "name": "在线修订模型名称",
+                "description": "在线修订后的算法介绍",
+                "visibility": "public",
+                "developer": "在线修订作者",
+                "developer_organization": "在线修订机构",
+                "mentor_team": "在线修订导师课题组",
+                "source_url": "https://example.org/model",
+                "citation": "Online metadata citation",
+                "contributors": [
+                    {
+                        "name": "在线修订作者",
+                        "role": "developer",
+                        "organization": "在线修订机构",
+                    }
+                ],
+                "reason": "部署后补充展示信息",
+            },
+        )
+        self.assertEqual(patch_resp.status_code, 200, patch_resp.text)
+        updated = patch_resp.json()["data"]
+        self.assertEqual(updated["name"], "在线修订模型名称")
+        self.assertEqual(updated["description"], "在线修订后的算法介绍")
+        self.assertEqual(updated["visibility"], "public")
+        self.assertEqual(updated["developer_attribution"]["name"], "在线修订作者")
+        self.assertEqual(updated["developer_attribution"]["organization"], "在线修订机构")
+        self.assertEqual(updated["developer_attribution"]["url"], "https://example.org/model")
+        self.assertEqual(updated["developer_attribution"]["citation_text"], "Online metadata citation")
+        self.assertEqual(updated["mentor_team"], "在线修订导师课题组")
+
+        self._login_as("metadata-viewer")
+        public_detail_resp = self.client.get(f"{self.base_url}/algorithms/metadata_update_demo")
+        self.assertEqual(public_detail_resp.status_code, 200, public_detail_resp.text)
+        self._login_as("metadata-owner")
+
+        audit_resp = self.client.get(
+            f"{self.base_url}/audit",
+            params={"entity_type": "algorithm", "entity_id": "metadata_update_demo"},
+        )
+        self.assertEqual(audit_resp.status_code, 200, audit_resp.text)
+        events = audit_resp.json()["data"]["items"]
+        metadata_event = next(item for item in events if item["event_type"] == "algorithm_metadata_updated")
+        self.assertEqual(metadata_event["actor_user_id"], "metadata-owner")
+        self.assertEqual(metadata_event["reason"], "部署后补充展示信息")
+        self.assertEqual(metadata_event["after"]["name"], "在线修订模型名称")
+        self.assertIn("name", metadata_event["before"])
+
+        AlgorithmVersionRepository.update_fields(version_id, {"status": "deployed_staging"})
+        reactivate_resp = self.client.post(
+            f"{self.base_url}/algorithms/metadata_update_demo/versions/{version_id}:activate"
+        )
+        self.assertEqual(reactivate_resp.status_code, 200, reactivate_resp.text)
+        detail_resp = self.client.get(f"{self.base_url}/algorithms/metadata_update_demo")
+        persisted = detail_resp.json()["data"]
+        self.assertEqual(persisted["name"], "在线修订模型名称")
+        self.assertEqual(persisted["description"], "在线修订后的算法介绍")
+        self.assertEqual(persisted["visibility"], "public")
+        self.assertEqual(persisted["developer_attribution"]["name"], "在线修订作者")
+
+        clear_resp = self.client.patch(
+            f"{self.base_url}/algorithms/metadata_update_demo/metadata",
+            json={
+                "description": None,
+                "developer": None,
+                "developer_organization": None,
+                "mentor_team": None,
+                "source_url": None,
+                "citation": None,
+                "contributors": [],
+                "reason": "清空不再适用的展示信息",
+            },
+        )
+        self.assertEqual(clear_resp.status_code, 200, clear_resp.text)
+        cleared = clear_resp.json()["data"]
+        self.assertIsNone(cleared["description"])
+        self.assertIsNone(cleared["developer_attribution"])
+        self.assertIsNone(cleared["mentor_team"])
+        self.assertEqual(cleared["contributors"], [])
+
+    def test_algorithm_metadata_update_requires_owner_or_admin(self) -> None:
+        """公开可见不等于可编辑；管理员仍可代管上传算法。"""
+        self._login_as("metadata-owner")
+        self._pack_activate_simple_algorithm("metadata_permission_demo", visibility="public")
+
+        self._login_as("other-user")
+        forbidden_resp = self.client.patch(
+            f"{self.base_url}/algorithms/metadata_permission_demo/metadata",
+            json={"description": "无权修改"},
+        )
+        self.assertEqual(forbidden_resp.status_code, 403, forbidden_resp.text)
+
+        self._login_as("admin-user", role="admin")
+        admin_resp = self.client.patch(
+            f"{self.base_url}/algorithms/metadata_permission_demo/metadata",
+            json={"description": "管理员修订"},
+        )
+        self.assertEqual(admin_resp.status_code, 200, admin_resp.text)
+        self.assertEqual(admin_resp.json()["data"]["description"], "管理员修订")
+
+        null_visibility_resp = self.client.patch(
+            f"{self.base_url}/algorithms/metadata_permission_demo/metadata",
+            json={"visibility": None},
+        )
+        self.assertEqual(null_visibility_resp.status_code, 422, null_visibility_resp.text)
+
+        AlgorithmRegistryRepository.save(
+            "algorithm_id",
+            {
+                "algorithm_id": "builtin_metadata_demo",
+                "name": "Builtin Metadata Demo",
+                "source": "builtin",
+            },
+        )
+        builtin_resp = self.client.patch(
+            f"{self.base_url}/algorithms/builtin_metadata_demo/metadata",
+            json={"description": "不应允许"},
+        )
+        self.assertEqual(builtin_resp.status_code, 409, builtin_resp.text)
 
     def test_pack_algorithm_package_persists_developer_attribution(self) -> None:
         """网页打包入口会把开发者来源写入 AlgorithmVersion。"""

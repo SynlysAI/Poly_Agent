@@ -1,9 +1,15 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Connection, Document, Histogram } from '@element-plus/icons-vue'
 
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
+import JsonTreeView from '../../components/json/JsonTreeView.vue'
+import {
+  buildArrayObjectSection,
+  buildBatchHighlights as buildAllBatchHighlights,
+  paginateRows,
+} from '../../utils/verticalPredictionJson.mjs'
 
 const props = defineProps({
   outputSummary: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
@@ -17,6 +23,7 @@ const props = defineProps({
 })
 
 const router = useRouter()
+const tablePagination = ref({})
 
 const priorityValueKeys = ['value', 'predicted_value', 'prediction', 'score']
 const uncertaintyKeys = ['uncertainty', 'std', 'stddev', 'confidence', 'probability']
@@ -43,7 +50,7 @@ const batchResultSections = computed(() => buildBatchResultSections(
   outputObject.value,
   isRamanFunctionalGroupModel.value ? new Set(['candidates']) : new Set(),
 ))
-const batchHighlights = computed(() => buildBatchHighlights(batchResultSections.value))
+const batchHighlights = computed(() => buildAllBatchHighlights(batchResultSections.value))
 const mainPrediction = computed(() => buildMainPrediction(predictionObject.value, outputObject.value))
 const evidence = computed(() => buildEvidence(
   outputObject.value,
@@ -126,29 +133,7 @@ function buildBatchResultSections(output, hiddenKeys = new Set()) {
   return Object.entries(output)
     .filter(([key]) => !hiddenKeys.has(key))
     .filter(([, value]) => Array.isArray(value) && value.length && value.every(isPlainObject))
-    .map(([key, rows]) => buildFlatTableSection(key, rows, { preferredNestedKey: 'predictions', limitColumns: 14 }))
-}
-
-function buildBatchHighlights(sections) {
-  const section = sections[0]
-  if (!section) return []
-  const numericColumns = section.columns.filter((column) =>
-    section.rows.some((row) => typeof row[column] === 'number'),
-  )
-  const metricCards = numericColumns.slice(0, 5).map((column) => {
-    const values = section.rows.map((row) => row[column]).filter((value) => typeof value === 'number')
-    const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
-    return {
-      key: column,
-      label: formatLabel(column),
-      value: average,
-      caption: values.length > 1 ? '平均值' : '预测值',
-    }
-  })
-  return [
-    { key: `${section.key}.count`, label: '结果数量', value: section.totalRows, caption: section.title },
-    ...metricCards,
-  ]
+    .map(([key, rows]) => buildArrayObjectSection(key, rows))
 }
 
 function buildMainPrediction(prediction, output) {
@@ -195,20 +180,26 @@ function buildEvidence(output, prediction, main, hiddenKeys = new Set()) {
     main.key,
   ].filter(Boolean))
 
-  const predictionMetrics = []
-  for (const [key, value] of Object.entries(prediction)) {
-    if (hiddenKeys.has(key)) continue
-    if (skippedPredictionKeys.has(key)) continue
-    routeEvidenceValue(key, value, predictionMetrics, listSections, tableSections, otherSections)
-  }
-  if (predictionMetrics.length) {
-    metricSections.push({ title: '预测附加信息', entries: predictionMetrics })
+  if (prediction !== output) {
+    const predictionMetrics = []
+    for (const [key, value] of Object.entries(prediction)) {
+      if (hiddenKeys.has(key)) continue
+      if (skippedPredictionKeys.has(key)) continue
+      routeEvidenceValue(key, value, predictionMetrics, listSections, tableSections, otherSections)
+    }
+    if (predictionMetrics.length) {
+      metricSections.push({ title: '预测附加信息', entries: predictionMetrics })
+    }
   }
 
   for (const key of semanticObjectKeys) {
     const value = output[key]
     if (isPlainObject(value)) {
-      metricSections.push({ title: formatLabel(key), entries: objectEntries(value) })
+      if (Object.keys(value).length && Object.values(value).every((item) => isScalar(item))) {
+        metricSections.push({ title: formatLabel(key), entries: objectEntries(value) })
+      } else {
+        otherSections.push({ title: formatLabel(key), data: value })
+      }
     }
   }
 
@@ -231,7 +222,7 @@ function routeEvidenceValue(key, value, metricEntries, listSections, tableSectio
   }
   if (Array.isArray(value)) {
     if (value.every(isScalar)) {
-      listSections.push({ title: formatLabel(key), items: value.map(formatScalar), total: value.length })
+      listSections.push({ key, title: formatLabel(key), items: value.map(formatScalar), total: value.length })
       return
     }
     if (value.every(isPlainObject)) {
@@ -239,49 +230,40 @@ function routeEvidenceValue(key, value, metricEntries, listSections, tableSectio
       return
     }
   }
-  if (isPlainObject(value) && Object.values(value).every((item) => isScalar(item))) {
+  if (isPlainObject(value) && Object.keys(value).length && Object.values(value).every((item) => isScalar(item))) {
     metricEntries.push(...objectEntries(value, key))
     return
   }
-  if (!isEmptyValue(value)) {
+  if (isComplexValue(value) || !isEmptyValue(value)) {
     otherSections.push({ title: formatLabel(key), data: value })
   }
 }
 
 function buildTableSection(key, rows) {
-  return buildFlatTableSection(key, rows, { limitColumns: 8 })
+  const section = buildArrayObjectSection(key, rows)
+  return { ...section, title: formatLabel(key) }
 }
 
-function buildFlatTableSection(key, rows, { preferredNestedKey = '', limitColumns = 8 } = {}) {
-  const flatRows = rows.slice(0, 20).map((row) => flattenRow(row, preferredNestedKey))
-  const allColumns = Array.from(new Set(rows.flatMap((row) => Object.keys(flattenRow(row, preferredNestedKey)))))
-  return {
-    key,
-    title: formatLabel(key),
-    rows: flatRows,
-    columns: allColumns.slice(0, limitColumns),
-    totalRows: rows.length,
-    totalColumns: allColumns.length,
-    limitColumns,
-  }
+function paginationFor(key) {
+  return tablePagination.value[key] || { page: 1, pageSize: 20 }
 }
 
-function flattenRow(row, preferredNestedKey = '') {
-  const result = {}
-  for (const [key, value] of Object.entries(row)) {
-    if (key === preferredNestedKey && isPlainObject(value)) {
-      Object.entries(value).forEach(([nestedKey, nestedValue]) => {
-        result[nestedKey] = nestedValue
-      })
-    } else if (isPlainObject(value)) {
-      Object.entries(value).forEach(([nestedKey, nestedValue]) => {
-        result[`${key}.${nestedKey}`] = nestedValue
-      })
-    } else {
-      result[key] = value
-    }
-  }
-  return result
+function pagedRows(section) {
+  const pagination = paginationFor(section.key)
+  return paginateRows(section.rows, pagination.page, pagination.pageSize).rows
+}
+
+function pagedItems(section) {
+  const pagination = paginationFor(`list.${section.key}`)
+  return paginateRows(section.items, pagination.page, pagination.pageSize).rows
+}
+
+function setPage(key, page) {
+  tablePagination.value[key] = { ...paginationFor(key), page }
+}
+
+function setPageSize(key, pageSize) {
+  tablePagination.value[key] = { page: 1, pageSize }
 }
 
 function findFirstKey(source, keys) {
@@ -363,6 +345,10 @@ function summarizeValue(value) {
   if (Array.isArray(value)) return `${value.length} items`
   if (isPlainObject(value)) return `${Object.keys(value).length} fields`
   return String(value)
+}
+
+function isComplexValue(value) {
+  return Array.isArray(value) || isPlainObject(value)
 }
 
 function stringifyJson(value) {
@@ -458,11 +444,9 @@ function openJump(route) {
       <section v-for="section in batchResultSections" :key="section.key" class="result-section featured-table-section">
         <div class="section-heading">
           <h4>{{ section.title }}</h4>
-          <span v-if="section.totalRows > 20 || section.totalColumns > section.limitColumns">
-            已显示前 20 行 / {{ section.limitColumns }} 列
-          </span>
+          <span>{{ section.totalRows }} 行 / {{ section.totalColumns }} 列，全部字段可横向滚动查看</span>
         </div>
-        <el-table :data="section.rows" border size="small" class="result-table featured-table">
+        <el-table :data="pagedRows(section)" border size="small" class="result-table featured-table">
           <el-table-column
             v-for="column in section.columns"
             :key="column"
@@ -471,9 +455,30 @@ function openJump(route) {
             min-width="128"
             show-overflow-tooltip
           >
-            <template #default="{ row }">{{ summarizeValue(row[column]) }}</template>
+            <template #default="{ row }">
+              <el-popover v-if="isComplexValue(row[column])" trigger="click" width="min(560px, 88vw)">
+                <template #reference>
+                  <el-button text :icon="Document" :aria-label="`展开 ${column}`">
+                    {{ summarizeValue(row[column]) }}
+                  </el-button>
+                </template>
+                <JsonTreeView :value="row[column]" />
+              </el-popover>
+              <span v-else>{{ summarizeValue(row[column]) }}</span>
+            </template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="section.totalRows > 10"
+          class="result-pagination"
+          :current-page="paginationFor(section.key).page"
+          :page-size="paginationFor(section.key).pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="section.totalRows"
+          layout="total, sizes, prev, pager, next"
+          @current-change="setPage(section.key, $event)"
+          @size-change="setPageSize(section.key, $event)"
+        />
       </section>
 
       <section v-if="inputHighlights.length" class="result-section">
@@ -497,23 +502,34 @@ function openJump(route) {
       </section>
 
       <section v-for="section in evidence.listSections" :key="section.title" class="result-section">
-        <h4>{{ section.title }}</h4>
+        <div class="section-heading">
+          <h4>{{ section.title }}</h4>
+          <span>{{ section.total }} 项</span>
+        </div>
         <div class="tag-list">
-          <el-tag v-for="(item, index) in section.items.slice(0, 24)" :key="`${section.title}-${index}`" effect="plain">
+          <el-tag v-for="(item, index) in pagedItems(section)" :key="`${section.title}-${index}`" effect="plain">
             {{ item }}
           </el-tag>
-          <span v-if="section.total > 24" class="truncate-note">还有 {{ section.total - 24 }} 项在原始 JSON 中</span>
         </div>
+        <el-pagination
+          v-if="section.total > 10"
+          class="result-pagination"
+          :current-page="paginationFor(`list.${section.key}`).page"
+          :page-size="paginationFor(`list.${section.key}`).pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="section.total"
+          layout="total, sizes, prev, pager, next"
+          @current-change="setPage(`list.${section.key}`, $event)"
+          @size-change="setPageSize(`list.${section.key}`, $event)"
+        />
       </section>
 
       <section v-for="section in evidence.tableSections" :key="section.title" class="result-section">
         <div class="section-heading">
           <h4>{{ section.title }}</h4>
-          <span v-if="section.totalRows > 20 || section.totalColumns > section.limitColumns">
-            已显示前 20 行 / {{ section.limitColumns }} 列
-          </span>
+          <span>{{ section.totalRows }} 行 / {{ section.totalColumns }} 列，全部字段可横向滚动查看</span>
         </div>
-        <el-table :data="section.rows" border size="small" class="result-table">
+        <el-table :data="pagedRows(section)" border size="small" class="result-table">
           <el-table-column
             v-for="column in section.columns"
             :key="column"
@@ -522,16 +538,37 @@ function openJump(route) {
             min-width="120"
             show-overflow-tooltip
           >
-            <template #default="{ row }">{{ summarizeValue(row[column]) }}</template>
+            <template #default="{ row }">
+              <el-popover v-if="isComplexValue(row[column])" trigger="click" width="min(560px, 88vw)">
+                <template #reference>
+                  <el-button text :icon="Document" :aria-label="`展开 ${column}`">
+                    {{ summarizeValue(row[column]) }}
+                  </el-button>
+                </template>
+                <JsonTreeView :value="row[column]" />
+              </el-popover>
+              <span v-else>{{ summarizeValue(row[column]) }}</span>
+            </template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="section.totalRows > 10"
+          class="result-pagination"
+          :current-page="paginationFor(section.key).page"
+          :page-size="paginationFor(section.key).pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="section.totalRows"
+          layout="total, sizes, prev, pager, next"
+          @current-change="setPage(section.key, $event)"
+          @size-change="setPageSize(section.key, $event)"
+        />
       </section>
 
       <section v-if="evidence.otherSections.length" class="result-section">
         <h4>其他输出</h4>
         <el-collapse>
           <el-collapse-item v-for="section in evidence.otherSections" :key="section.title" :title="section.title" :name="section.title">
-            <pre class="json-block">{{ stringifyJson(section.data) }}</pre>
+            <div class="json-tree-panel"><JsonTreeView :value="section.data" /></div>
           </el-collapse-item>
         </el-collapse>
       </section>
@@ -682,8 +719,7 @@ function openJump(route) {
 .summary-key,
 .summary-chip span,
 .metric-item span,
-.section-heading span,
-.truncate-note {
+.section-heading span {
   color: var(--app-ink-muted);
   font-size: 12px;
 }
@@ -806,6 +842,14 @@ function openJump(route) {
   width: 100%;
 }
 
+.result-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
 .featured-table-section {
   padding: 12px;
   border: 1px solid var(--app-stat-border);
@@ -838,6 +882,12 @@ function openJump(route) {
   overflow-wrap: anywhere;
 }
 
+.json-tree-panel {
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px 2px;
+}
+
 .empty-result {
   min-height: 120px;
   display: grid;
@@ -858,6 +908,10 @@ function openJump(route) {
   .section-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .result-pagination {
+    justify-content: flex-start;
   }
 }
 </style>

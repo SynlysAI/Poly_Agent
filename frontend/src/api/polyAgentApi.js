@@ -591,6 +591,10 @@ export function getAlgorithm(algorithmId) {
   return apiClient.get(`/research-engine/algorithms/${algorithmId}`).then(unwrapResponse)
 }
 
+export function updateAlgorithmMetadata(algorithmId, payload) {
+  return apiClient.patch(`/research-engine/algorithms/${algorithmId}/metadata`, payload).then(unwrapResponse)
+}
+
 export function getAlgorithmCreditSummary(algorithmId) {
   return apiClient.get(`/research-engine/algorithms/${algorithmId}/credit-summary`).then(unwrapResponse)
 }
