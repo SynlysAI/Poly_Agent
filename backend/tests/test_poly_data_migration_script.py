@@ -380,7 +380,7 @@ class ExistingSourceRowIndexCollection(FakeCollection):
 
     def __init__(self) -> None:
         super().__init__()
-        self.indexes.append(([('source_file', 1), ('source_row_index', 1)], 'source_row', False))
+        self.indexes.append(([('source_file', 1), ('row_index', 1)], 'source_row', False))
 
     def create_index(self, keys, name: str, unique: bool = False, **kwargs) -> None:
         for existing_keys, existing_name, _ in self.indexes:
@@ -409,7 +409,10 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
 
         migration_script.create_indexes(target_db)
 
-        self.assertIn(([('source_file', 1), ('source_row_index', 1)], 'source_row', False), target_db['omg_polymers'].indexes)
+        self.assertIn(
+            ([('source_file', 1), ('source_row_index', 1)], 'source_row_index', False),
+            target_db['omg_polymers'].indexes,
+        )
 
     def test_atomic_replace_uses_collection_rename_for_dynamic_database_attributes(self) -> None:
         target_db = DynamicAttributeDatabase(

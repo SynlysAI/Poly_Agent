@@ -1424,7 +1424,7 @@ def create_indexes(target_db: Any) -> None:
         collection = target_db[spec.collection_name]
         collection.create_index([("record_id", 1)], name="record_id", unique=True)
         collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
-        collection.create_index([("source_file", 1), ("source_row_index", 1)], name="source_row")
+        collection.create_index([("source_file", 1), ("source_row_index", 1)], name="source_row_index")
         collection.create_index([("title", 1)], name="title")
     target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].create_index([("generated_at", -1)], name="generated_at")
     target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].create_index(
@@ -2873,7 +2873,7 @@ def import_extra_open_database_records(
                 )
             collection.create_index([("record_id", 1)], name="record_id", unique=True)
             collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
-            collection.create_index([("source_file", 1), ("source_row_index", 1)], name="source_row")
+            collection.create_index([("source_file", 1), ("source_row_index", 1)], name="source_row_index")
             collection.create_index([("title", 1)], name="title")
             atomic_replace_collection(target_db, staging_name, dataset_spec.collection_name)
             verified_count = int(target_db[dataset_spec.collection_name].count_documents({}))
