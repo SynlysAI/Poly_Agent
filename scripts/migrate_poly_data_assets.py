@@ -2039,9 +2039,9 @@ def staging_collection_name(dataset_id: str, job_id: str) -> str:
 
 def atomic_replace_collection(target_db: Any, staging_name: str, target_name: str) -> None:
     """Replace a canonical collection only after staging verification succeeds."""
-    replace_collection = getattr(target_db, "replace_collection", None)
+    replace_collection = getattr(type(target_db), "replace_collection", None)
     if callable(replace_collection):
-        replace_collection(staging_name, target_name)
+        replace_collection(target_db, staging_name, target_name)
         return
     target_db[staging_name].rename(target_name, dropTarget=True)
 
