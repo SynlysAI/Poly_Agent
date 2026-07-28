@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ChatLineRound, Loading, Promotion, Setting } from '@element-plus/icons-vue'
@@ -17,6 +17,8 @@ const modelLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
 const llmCatalog = ref({ providers: [], routing: {} })
 const selectedModelKey = ref('')
+const useWebSearch = ref(loadWebSearchPreference())
+const WEB_SEARCH_STORAGE_KEY = 'poly-agent-dialogue-use-web-search'
 
 const messages = ref([
   {
@@ -73,6 +75,17 @@ function normalizeMode(value) {
   return ['qa', 'deep', 'model'].includes(mode) ? mode : 'qa'
 }
 
+function loadWebSearchPreference() {
+  const raw = window.localStorage.getItem(WEB_SEARCH_STORAGE_KEY)
+  if (raw === '1') return true
+  if (raw === '0') return false
+  return false
+}
+
+watch(useWebSearch, (value) => {
+  window.localStorage.setItem(WEB_SEARCH_STORAGE_KEY, value ? '1' : '0')
+})
+
 function cleanInitialQuery() {
   if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId) return
   const query = { ...route.query }
@@ -88,6 +101,14 @@ function routePurpose() {
 }
 
 function selectDefaultModelForMode(preferred = {}) {
+  if (selectedModelKey.value && selectableModels.value.some((item) => item.key === selectedModelKey.value)) {
+    return
+  }
+  const safeDefaultModel = selectableModels.value.find((item) => item.providerId === 'default_openai')
+  if (safeDefaultModel) {
+    selectedModelKey.value = safeDefaultModel.key
+    return
+  }
   const preferredKey = preferred.providerId && preferred.modelId ? `${preferred.providerId}::${preferred.modelId}` : ''
   if (preferredKey && selectableModels.value.some((item) => item.key === preferredKey)) {
     selectedModelKey.value = preferredKey
@@ -153,6 +174,7 @@ async function sendPrompt(prompt) {
           current_route: router.currentRoute.value.fullPath,
           page: 'dialogue',
           mode: chatMode.value,
+          use_web_search: useWebSearch.value,
           model: selectedModelContext(),
         },
       },
@@ -437,6 +459,10 @@ onMounted(() => {
         <h1>科研任务交互问答</h1>
       </div>
       <div class="dialogue-controls">
+        <div class="dialogue-web-search-toggle">
+          <span>联网搜索</span>
+          <el-switch v-model="useWebSearch" inline-prompt active-text="开" inactive-text="关" />
+        </div>
         <LlmModelSelect
           v-model="selectedModelKey"
           :models="selectableModels"
@@ -609,6 +635,15 @@ onMounted(() => {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.dialogue-web-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-ink-muted);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .dialogue-kicker {

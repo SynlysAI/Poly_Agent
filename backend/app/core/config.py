@@ -136,10 +136,11 @@ class Settings:
         # Edison Scientific 文献搜索 API Key
         self.edison_api_key: str = os.getenv("EDISON_API_KEY", "")
 
-        # LLM 配置（仅从环境变量读取，无默认值）
+        # LLM 配置（provider 定义优先来自 backend/config/llm.providers.json）
         self.llm_api_key: str = os.getenv("LLM_API_KEY", "")
         self.llm_base_url: str = os.getenv("LLM_BASE_URL", "")
         self.llm_model: str = os.getenv("LLM_MODEL", "")
+        self.llm_provider_configs_file: str = os.getenv("LLM_PROVIDER_CONFIGS_FILE", "").strip()
         self.llm_default_provider: str = os.getenv("LLM_DEFAULT_PROVIDER", "").strip()
         self.llm_default_model: str = os.getenv("LLM_DEFAULT_MODEL", "").strip()
         self.llm_reasoning_provider: str = os.getenv("LLM_REASONING_PROVIDER", "").strip()

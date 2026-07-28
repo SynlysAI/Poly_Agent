@@ -202,7 +202,7 @@ class ResearchEngineReadinessService:
                 model=model_id or None,
                 execution_mode="llm" if configured else "demo_fallback",
                 fallback_reason=None if configured else "LLM provider/model 未配置",
-                next_action=None if configured else "配置 LLM_MODEL/LLM_BASE_URL/LLM_API_KEY 或 LLM_PROVIDER_CONFIGS_JSON。",
+                next_action=None if configured else "配置 `backend/config/llm.providers.json`、`LLM_PROVIDER_CONFIGS_FILE` 或旧版 `LLM_PROVIDER_CONFIGS_JSON`。",
                 message="AI 模型已配置，连通性待模型检查确认。" if configured else "AI 模型未配置，AutoResearch 将保留 demo/mock 路径提示。",
                 details={
                     "provider_status": provider.status if provider else "not_configured",

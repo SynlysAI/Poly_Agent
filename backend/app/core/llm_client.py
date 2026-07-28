@@ -42,13 +42,7 @@ def chat(messages: list[dict], **kwargs) -> str:
             model=model,
             **kwargs,
         )
-    client = get_client()
-    response = client.chat.completions.create(
-        model=settings.llm_model,
-        messages=messages,
-        **kwargs,
-    )
-    return response.choices[0].message.content
+    return LLMModelService().complete_text(messages=messages, purpose=purpose, **kwargs)
 
 
 def chat_stream(messages: list[dict], **kwargs) -> Iterator[str]:
@@ -65,17 +59,4 @@ def chat_stream(messages: list[dict], **kwargs) -> Iterator[str]:
             **kwargs,
         )
         return
-    client = get_client()
-    response = client.chat.completions.create(
-        model=settings.llm_model,
-        messages=messages,
-        stream=True,
-        **kwargs,
-    )
-    for chunk in response:
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
-        content = getattr(delta, "content", None)
-        if content:
-            yield content
+    yield from LLMModelService().stream_text(messages=messages, purpose=purpose, **kwargs)

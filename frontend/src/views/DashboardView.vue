@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -42,6 +42,8 @@ const chatInput = ref('')
 const modelLoading = ref(false)
 const llmCatalog = ref({ providers: [], routing: {} })
 const selectedModelKey = ref('')
+const useWebSearch = ref(loadWebSearchPreference())
+const WEB_SEARCH_STORAGE_KEY = 'poly-agent-dialogue-use-web-search'
 
 const dashboardViewOptions = [
   { label: '问答', value: 'chat' },
@@ -230,6 +232,17 @@ function routePurpose() {
   return chatMode.value === 'deep' ? 'deep' : 'qa'
 }
 
+function loadWebSearchPreference() {
+  const raw = window.localStorage.getItem(WEB_SEARCH_STORAGE_KEY)
+  if (raw === '1') return true
+  if (raw === '0') return false
+  return false
+}
+
+watch(useWebSearch, (value) => {
+  window.localStorage.setItem(WEB_SEARCH_STORAGE_KEY, value ? '1' : '0')
+})
+
 function selectDefaultModelForMode() {
   if (chatMode.value === 'model') return
   const purpose = routePurpose()
@@ -342,7 +355,11 @@ onMounted(() => {
         </div>
         <div class="composer-toolbar">
           <el-segmented v-model="chatMode" :options="chatModeOptions" @change="selectDefaultModelForMode" />
-          <div class="composer-actions">
+        <div class="composer-actions">
+            <div class="dashboard-web-search-toggle">
+              <span>联网搜索</span>
+              <el-switch v-model="useWebSearch" inline-prompt active-text="开" inactive-text="关" />
+            </div>
             <LlmModelSelect
               v-model="selectedModelKey"
               :models="selectableModels"
@@ -465,6 +482,7 @@ h2 { font-size: 16px; line-height: 1.35; }
 .composer-input :deep(.el-textarea__inner) { min-height: 116px !important; border: 0; box-shadow: none; font-size: 15px; line-height: 1.7; }
 .composer-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 10px; border-top: 1px solid var(--app-border-soft); }
 .composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
+.dashboard-web-search-toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--app-ink-muted); font-size: 13px; font-weight: 600; }
 .suggestion-row { width: min(820px, 100%); display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .suggestion-row button { max-width: 100%; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-pill); background: rgba(255, 255, 255, 0.86); color: var(--app-ink-body); padding: 8px 12px; font: inherit; font-size: 13px; cursor: pointer; }
 .suggestion-row button:hover { border-color: #bfdbfe; color: var(--app-primary-active); }

@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -159,27 +160,13 @@ class LLMModelService:
                 yield content
 
     def _build_providers(self) -> list[LLMProviderInfo]:
-        providers: list[LLMProviderInfo] = []
-        if settings.llm_model or settings.llm_base_url:
-            default_model = settings.llm_default_model or settings.llm_model
-            providers.append(
-                self._provider_from_config(
-                    {
-                        "provider_id": settings.llm_default_provider or "default_openai",
-                        "display_name": "Default chat model",
-                        "provider_type": "openai_compatible",
-                        "base_url": settings.llm_base_url,
-                        "api_key_configured": bool(settings.llm_api_key),
-                        "api_key_ref": "LLM_API_KEY" if settings.llm_api_key else None,
-                        "models": [default_model] if default_model else [],
-                        "capabilities": ["chat", "structured_json"],
-                        "recommended_for": ["qa"],
-                    }
-                )
-            )
+        providers: list[LLMProviderInfo] = [
+            self._provider_from_config(config.model_dump(mode="python"))
+            for config in self._configured_provider_configs()
+        ]
 
-        for config in self._extra_provider_configs():
-            providers.append(self._provider_from_config(config.model_dump(mode="python")))
+        if not providers and (settings.llm_model or settings.llm_base_url):
+            providers.append(self._legacy_default_provider())
 
         if settings.report_ollama_base_url or settings.report_ollama_model:
             models = [settings.report_ollama_model] if settings.report_ollama_model else []
@@ -201,17 +188,102 @@ class LLMModelService:
 
         return self._dedupe_providers(providers)
 
-    def _extra_provider_configs(self) -> list[LLMProviderConfigInput]:
+    def _configured_provider_configs(self) -> list[LLMProviderConfigInput]:
+        """加载文件和环境变量中的 LLM provider 定义。
+
+        Returns:
+            按优先级排序的 provider 配置列表，文件配置优先于 legacy env JSON。
+        """
+        configs = self._provider_configs_from_file()
+        configs.extend(self._provider_configs_from_env_json())
+        return self._dedupe_provider_configs(configs)
+
+    def _provider_configs_from_file(self) -> list[LLMProviderConfigInput]:
+        """从 providers.json 加载 provider 定义。
+
+        Returns:
+            文件中的 provider 配置列表；文件不存在或为空时返回空列表。
+        """
+        raw_path = str(getattr(settings, "llm_provider_configs_file", "") or "").strip()
+        if not raw_path:
+            return []
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = settings.project_root / path
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return []
+        if not raw:
+            return []
+        payload = self._parse_provider_config_payload(raw, source=f"LLM_PROVIDER_CONFIGS_FILE({path})")
+        return payload
+
+    def _provider_configs_from_env_json(self) -> list[LLMProviderConfigInput]:
+        """从 legacy 环境变量 JSON 加载 provider 定义。
+
+        Returns:
+            环境变量中的 provider 配置列表；未配置时返回空列表。
+        """
         raw = str(getattr(settings, "llm_provider_configs_json", "") or "").strip()
         if not raw:
             return []
+        return self._parse_provider_config_payload(raw, source="LLM_PROVIDER_CONFIGS_JSON")
+
+    def _parse_provider_config_payload(
+        self,
+        raw: str,
+        *,
+        source: str,
+    ) -> list[LLMProviderConfigInput]:
+        """解析 provider 配置 JSON。
+
+        Args:
+            raw: JSON 文本。
+            source: 配置来源标识，用于错误提示。
+
+        Returns:
+            解析后的 provider 配置列表。
+        """
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=500, detail=f"LLM_PROVIDER_CONFIGS_JSON 格式错误: {exc.msg}") from exc
+            raise HTTPException(status_code=500, detail=f"{source} 格式错误: {exc.msg}") from exc
         if not isinstance(payload, list):
-            raise HTTPException(status_code=500, detail="LLM_PROVIDER_CONFIGS_JSON 必须是数组")
+            raise HTTPException(status_code=500, detail=f"{source} 必须是数组")
         return [LLMProviderConfigInput.model_validate(item) for item in payload if isinstance(item, dict)]
+
+    def _dedupe_provider_configs(self, configs: list[LLMProviderConfigInput]) -> list[LLMProviderConfigInput]:
+        """按 provider_id 去重 provider 配置，保留前面的定义。
+
+        Args:
+            configs: 待去重的 provider 配置列表。
+
+        Returns:
+            去重后的 provider 配置列表。
+        """
+        deduped: dict[str, LLMProviderConfigInput] = {}
+        for config in configs:
+            if config.provider_id not in deduped:
+                deduped[config.provider_id] = config
+        return list(deduped.values())
+
+    def _legacy_default_provider(self) -> LLMProviderInfo:
+        """构建 legacy 单一默认 provider。"""
+        default_model = settings.llm_default_model or settings.llm_model
+        return self._provider_from_config(
+            {
+                "provider_id": settings.llm_default_provider or "default_openai",
+                "display_name": "Default chat model",
+                "provider_type": "openai_compatible",
+                "base_url": settings.llm_base_url,
+                "api_key_configured": bool(settings.llm_api_key),
+                "api_key_ref": "LLM_API_KEY" if settings.llm_api_key else None,
+                "models": [default_model] if default_model else [],
+                "capabilities": ["chat", "structured_json"],
+                "recommended_for": ["qa", "deep"],
+            }
+        )
 
     def _provider_from_config(self, config: dict[str, Any]) -> LLMProviderInfo:
         provider_id = str(config.get("provider_id") or "").strip()
@@ -340,18 +412,21 @@ class LLMModelService:
             provider_id=settings.llm_default_provider or "default_openai",
             model_id=settings.llm_default_model or settings.llm_model,
             capability="chat",
+            preferred_for="qa",
         )
         deep = self._selection_from_env_or_first(
             providers,
             provider_id=settings.llm_reasoning_provider,
             model_id=settings.llm_reasoning_model,
             capability="reasoning",
+            preferred_for="deep",
         )
         report = self._selection_from_env_or_first(
             providers,
             provider_id=settings.report_llm_provider if settings.report_llm_provider != "openai_compatible" else (settings.llm_default_provider or "default_openai"),
             model_id=settings.report_llm_model or settings.llm_model,
             capability="structured_json",
+            preferred_for="report",
         )
         return LLMRoutingData(qa=qa, deep=deep or qa, report=report or qa)
 
@@ -362,11 +437,17 @@ class LLMModelService:
         provider_id: str,
         model_id: str,
         capability: str,
+        preferred_for: str | None = None,
     ) -> LLMRouteSelection | None:
         if provider_id and model_id:
             for provider in providers:
                 if provider.provider_id == provider_id and any(model.model_id == model_id for model in provider.models):
                     return LLMRouteSelection(provider_id=provider_id, model_id=model_id)
+        if preferred_for:
+            for provider in providers:
+                for model in provider.models:
+                    if preferred_for in model.recommended_for and capability in model.capabilities:
+                        return LLMRouteSelection(provider_id=provider.provider_id, model_id=model.model_id)
         for provider in providers:
             for model in provider.models:
                 if capability in model.capabilities:
@@ -429,24 +510,24 @@ class LLMModelService:
         }
 
     def _provider_runtime_config(self, provider_id: str) -> dict[str, Any]:
-        if provider_id == (settings.llm_default_provider or "default_openai"):
-            return {
-                "provider_id": provider_id,
-                "provider_type": "openai_compatible",
-                "base_url": settings.llm_base_url,
-                "api_key": settings.llm_api_key,
-            }
+        for config in self._configured_provider_configs():
+            if config.provider_id == provider_id:
+                data = config.model_dump(mode="python")
+                data["api_key"] = os.getenv(config.api_key_env or "") if config.api_key_env else ""
+                return data
         if provider_id == "local_ollama":
             return {
                 "provider_id": provider_id,
                 "provider_type": "ollama",
                 "base_url": settings.report_ollama_base_url,
             }
-        for config in self._extra_provider_configs():
-            if config.provider_id == provider_id:
-                data = config.model_dump(mode="python")
-                data["api_key"] = os.getenv(config.api_key_env or "") if config.api_key_env else ""
-                return data
+        if provider_id == (settings.llm_default_provider or "default_openai") and (settings.llm_model or settings.llm_base_url):
+            return {
+                "provider_id": provider_id,
+                "provider_type": "openai_compatible",
+                "base_url": settings.llm_base_url,
+                "api_key": settings.llm_api_key,
+            }
         return {"provider_id": provider_id, "provider_type": "openai_compatible"}
 
     def _provider_api_key(self, config: dict[str, Any]) -> str:

@@ -114,6 +114,28 @@ class AssistantApiTest(ComputationTestCase):
         self.assertIn("web_search", data["grounding_facts"])
         self.assertEqual(data["grounding_facts"]["web_search"]["result_count"], 1)
 
+    def test_assistant_chat_can_disable_web_search(self) -> None:
+        with patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=AssertionError("web search should be skipped when disabled"),
+        ), patch("app.core.llm_client.chat", return_value="离线回答"):
+            resp = self.client.post(
+                "/api/v1/assistant/chat",
+                json={
+                    "messages": [
+                        {"role": "user", "content": "Poly Agent 怎么结合 Agentic RAG 做项目外问答？"},
+                    ],
+                    "context": {"mode": "deep", "use_web_search": False},
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        self.assertEqual(data["content"], "离线回答")
+        self.assertEqual(data["answer_mode"], "llm_project_grounded")
+        self.assertEqual(data["answer_scope"], "project")
+        self.assertEqual(data["retrieval_status"], "not_needed")
+
     def test_assistant_deep_returns_structured_reasoning_summary(self) -> None:
         with patch(
             "app.core.llm_client.chat",
@@ -203,12 +225,14 @@ class AssistantApiTest(ComputationTestCase):
         original_llm_api_key = settings.llm_api_key
         original_llm_default_provider = settings.llm_default_provider
         original_llm_default_model = settings.llm_default_model
+        original_llm_provider_configs_file = getattr(settings, "llm_provider_configs_file", "")
         original_llm_provider_configs_json = settings.llm_provider_configs_json
         settings.llm_model = "DeepSeek-V4-Flash-w8a8-mtp"
         settings.llm_base_url = "https://fast.example.test/v1"
         settings.llm_api_key = "fast-secret-key"
         settings.llm_default_provider = "default_openai"
         settings.llm_default_model = "DeepSeek-V4-Flash-w8a8-mtp"
+        settings.llm_provider_configs_file = ""
         settings.llm_provider_configs_json = "[]"
 
         def fake_stream(messages, **kwargs):  # noqa: ANN001
@@ -238,6 +262,7 @@ class AssistantApiTest(ComputationTestCase):
             settings.llm_api_key = original_llm_api_key
             settings.llm_default_provider = original_llm_default_provider
             settings.llm_default_model = original_llm_default_model
+            settings.llm_provider_configs_file = original_llm_provider_configs_file
             settings.llm_provider_configs_json = original_llm_provider_configs_json
 
         self.assertEqual(events[-1]["type"], "final")

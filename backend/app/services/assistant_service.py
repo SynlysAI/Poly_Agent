@@ -1217,6 +1217,7 @@ class AssistantService:
         user_text = self._latest_user_text(request.messages)
         mode = self._normalize_mode(request.context.get("mode"))
         intent = self.intent_router.route(user_text, mode=mode)
+        intent = self._apply_web_search_preference(intent, request.context.get("use_web_search"))
         facts = self.project_service.build_facts(intent=intent)
         project_refs = self.project_service.build_project_references(user_text)
         actions = self.project_service.build_actions(user_text)
@@ -1300,6 +1301,7 @@ class AssistantService:
             user_text = self._latest_user_text(request.messages)
             mode = self._normalize_mode(request.context.get("mode"))
             intent = self.intent_router.route(user_text, mode=mode)
+            intent = self._apply_web_search_preference(intent, request.context.get("use_web_search"))
 
             yield {"type": "status", "stage": "facts", "message": "正在收集项目事实..."}
             facts = self.project_service.build_facts(intent=intent)
@@ -1562,6 +1564,56 @@ class AssistantService:
         if normalized not in {"qa", "deep", "model"}:
             return "qa"
         return normalized
+
+    def _apply_web_search_preference(
+        self,
+        intent: AssistantIntent,
+        use_web_search: object,
+    ) -> AssistantIntent:
+        """根据前端联网开关调整回答范围。
+
+        Args:
+            intent: 路由器根据问题意图生成的回答意图。
+            use_web_search: 前端传入的联网开关，支持布尔值与字符串。
+
+        Returns:
+            调整后的回答意图。
+        """
+        preference = self._normalize_web_search_preference(use_web_search)
+        if preference is None:
+            return intent
+        if preference:
+            if intent.scope == "model":
+                return intent
+            if intent.scope == "project":
+                return AssistantIntent(scope="hybrid", use_web=True, deep=intent.deep)
+            return AssistantIntent(scope=intent.scope, use_web=True, deep=intent.deep)
+        if intent.scope == "model":
+            return intent
+        return AssistantIntent(scope="project", use_web=False, deep=intent.deep)
+
+    def _normalize_web_search_preference(self, use_web_search: object) -> bool | None:
+        """规范化联网搜索开关。
+
+        Args:
+            use_web_search: 前端传入的联网搜索开关。
+
+        Returns:
+            解析后的布尔值；未提供时返回 ``None``。
+        """
+        if use_web_search is None:
+            return None
+        if isinstance(use_web_search, bool):
+            return use_web_search
+        if isinstance(use_web_search, (int, float)):
+            return bool(use_web_search)
+        if isinstance(use_web_search, str):
+            normalized = use_web_search.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return None
 
     def _latest_user_text(self, messages) -> str:
         for msg in reversed(messages):
