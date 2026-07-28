@@ -10,6 +10,7 @@ import {
   DataAnalysis,
   Expand,
   Fold,
+  Loading,
   Refresh,
   Search,
   Setting,
@@ -151,6 +152,7 @@ const currentStatusMessage = computed(() =>
 const canRunQuery = computed(() => hasCapability(selectedSystem.value, 'query') && selectedSystem.value?.status === 'ready')
 const canStreamQuery = computed(() => canRunQuery.value && hasCapability(selectedSystem.value, 'streaming'))
 const canLoadGraph = computed(() => hasCapability(selectedSystem.value, 'graph') && selectedSystem.value?.status === 'ready')
+const canUseGraphSearchControls = computed(() => canLoadGraph.value && !queryLoading.value && !graphLoading.value)
 const canUseGraphContext = computed(() => canRunQuery.value && canLoadGraph.value)
 const canLoadSuggestions = computed(() => hasCapability(selectedSystem.value, 'suggestions') && selectedSystem.value?.status === 'ready')
 const hasJointResults = computed(() => Boolean(
@@ -458,6 +460,71 @@ function hitFooterText(hit) {
   return joinDisplayParts([shortSource(hit), sourceLevel(hit)])
 }
 
+function evidenceItemKey(item) {
+  const metadata = item?.metadata || {}
+  return [
+    metadata.chunk_id,
+    metadata.parent_chunk_id,
+    item?.chunk_id,
+    item?.source_id,
+    item?.title,
+    item?.snippet,
+  ].map((part) => String(part || '').trim()).filter(Boolean).join('|')
+}
+
+function evidenceRenderKey(hit, index) {
+  return evidenceItemKey(hit) || `hit-${index}`
+}
+
+function mergeEvidenceItem(existing, incoming) {
+  return {
+    ...existing,
+    ...incoming,
+    metadata: {
+      ...(existing?.metadata || {}),
+      ...(incoming?.metadata || {}),
+    },
+  }
+}
+
+function mergeEvidenceItems(currentItems = [], incomingItems = []) {
+  const merged = []
+  const itemByKey = new Map()
+  const append = (item) => {
+    if (!item) return
+    const key = evidenceItemKey(item)
+    if (!key) {
+      merged.push(item)
+      return
+    }
+    const existing = itemByKey.get(key)
+    if (existing) {
+      Object.assign(existing, mergeEvidenceItem(existing, item))
+      return
+    }
+    const nextItem = { ...item, metadata: { ...(item.metadata || {}) } }
+    itemByKey.set(key, nextItem)
+    merged.push(nextItem)
+  }
+  currentItems.forEach(append)
+  incomingItems.forEach(append)
+  return merged.slice(0, queryForm.top_k)
+}
+
+function appendQueryTrace(event) {
+  if (!event?.label) return
+  const traceKey = `${event.event || 'progress'}:${event.label}`
+  const hasSameStage = queryTrace.value.some((item) => item.traceKey === traceKey)
+  if (hasSameStage) return
+  queryTrace.value.push({
+    id: `${Date.now()}-${queryTrace.value.length}`,
+    traceKey,
+    event: event.event,
+    label: event.label,
+    elapsed_ms: event.elapsed_ms,
+  })
+}
+
 function buildNodeDetailRows(node) {
   if (!node) return []
   const properties = node.properties || {}
@@ -531,7 +598,7 @@ function setGraphQueryFromQuestion(question) {
 }
 
 function useQuestionForGraphSearch() {
-  if (!queryForm.question.trim()) return
+  if (queryLoading.value || graphLoading.value || !queryForm.question.trim()) return
   setGraphQueryFromQuestion(queryForm.question)
   activeTab.value = 'graph'
 }
@@ -854,18 +921,11 @@ async function runLiteratureQueryForBatch(batchId, payload) {
     if (canStreamQuery.value) {
       await streamKnowledgeQuery(payload, (event) => {
         if (batchId !== searchBatchId.value) return
-        if (event.label) {
-          queryTrace.value.push({
-            id: `${Date.now()}-${queryTrace.value.length}`,
-            event: event.event,
-            label: event.label,
-            elapsed_ms: event.elapsed_ms,
-          })
-        }
+        appendQueryTrace(event)
         if (event.event === 'evidence') {
-          answer.value.hits = event.hits || []
-          answer.value.citations = event.citations || []
-          answer.value.graph_context = event.graph_context || null
+          answer.value.hits = mergeEvidenceItems(answer.value.hits || [], event.hits || [])
+          answer.value.citations = mergeEvidenceItems(answer.value.citations || [], event.citations || [])
+          answer.value.graph_context = event.graph_context || answer.value.graph_context || null
           if (!graph.value && graphError.value && (event.graph_context?.nodes || []).length) {
             graph.value = event.graph_context
             selectedNodeId.value = event.graph_context.nodes?.[0]?.id || ''
@@ -945,6 +1005,10 @@ async function runGraphQueryForBatch(batchId, question) {
 }
 
 async function loadGraph({ silent = false } = {}) {
+  if (queryLoading.value || graphLoading.value) {
+    if (!silent) ElMessage.warning('联合检索正在进行，请稍后再检索图谱')
+    return
+  }
   if (!canLoadGraph.value) {
     if (!silent) ElMessage.warning('当前知识库体系未提供可用图谱能力')
     return
@@ -1144,7 +1208,7 @@ onMounted(loadBootstrap)
                 </label>
                 <label>
                   <span>图谱节点上限</span>
-                  <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canLoadGraph" />
+                  <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canUseGraphSearchControls" />
                 </label>
                 <el-checkbox v-model="queryForm.include_graph_context" :disabled="!canUseGraphContext">回答携带图谱上下文</el-checkbox>
               </div>
@@ -1188,7 +1252,7 @@ onMounted(loadBootstrap)
                   <small class="control-help">控制 PolyAgent 展示和传入回答上下文的 WeKnora 命中证据数量。</small>
                 </el-form-item>
                 <el-form-item label="图谱节点上限">
-                  <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canLoadGraph" />
+                  <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canUseGraphSearchControls" />
                   <small class="control-help">控制 Wiki 图谱或降级检索图谱返回的节点数量。</small>
                 </el-form-item>
                 <el-form-item label="回答上下文">
@@ -1250,10 +1314,15 @@ onMounted(loadBootstrap)
                       </li>
                     </ul>
                   </template>
-                  <div v-if="queryLoading && !answer.answer" class="inline-loading-state">
-                    命中证据可先查看，综合回答正在生成
+                  <div
+                    v-if="queryLoading"
+                    class="answer-generation-indicator"
+                    :class="{ 'answer-generation-indicator--centered': !answer.answer }"
+                    aria-live="polite"
+                  >
+                    <el-icon class="answer-loading-icon"><Loading /></el-icon>
+                    <span>{{ answer.answer ? '综合回答持续生成中' : '综合回答正在生成，命中证据可先查看' }}</span>
                   </div>
-                  <span v-else-if="queryLoading" class="streaming-cursor">正在生成...</span>
                 </article>
 
                 <aside v-if="!citationPanelCollapsed" class="citation-panel">
@@ -1294,7 +1363,7 @@ onMounted(loadBootstrap)
                 <span>{{ answer.hits.length }} sources</span>
               </div>
               <div class="hit-list">
-                <article v-for="hit in answer.hits" :key="hit.source_id" class="hit-item">
+                <article v-for="(hit, index) in answer.hits" :key="evidenceRenderKey(hit, index)" class="hit-item">
                   <div class="hit-title">
                     <strong>{{ hit.title || hit.source_id || '命中证据' }}</strong>
                     <el-tag v-if="formatScore(hit.score)" size="small" effect="plain">{{ formatScore(hit.score) }}</el-tag>
@@ -1327,12 +1396,12 @@ onMounted(loadBootstrap)
               <strong>子图检索</strong>
             </div>
             <div class="graph-controls">
-              <el-input v-model="graphForm.query" placeholder="检索 Wiki 页面、实体或概念" clearable :disabled="!canLoadGraph" @keyup.enter="loadGraph">
+              <el-input v-model="graphForm.query" placeholder="检索 Wiki 页面、实体或概念" clearable :disabled="!canUseGraphSearchControls" @keyup.enter="loadGraph">
                 <template #prefix><el-icon><Search /></el-icon></template>
               </el-input>
-              <el-button :disabled="!queryForm.question.trim()" @click="useQuestionForGraphSearch">使用当前问题</el-button>
-              <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canLoadGraph" />
-              <el-button type="primary" :loading="graphLoading" :disabled="!canLoadGraph || !graphForm.query.trim()" @click="loadGraph">检索图谱</el-button>
+              <el-button :disabled="queryLoading || graphLoading || !queryForm.question.trim()" @click="useQuestionForGraphSearch">使用当前问题</el-button>
+              <el-input-number v-model="graphForm.limit" :min="1" :max="100" :disabled="!canUseGraphSearchControls" />
+              <el-button type="primary" :loading="graphLoading" :disabled="!canUseGraphSearchControls || !graphForm.query.trim()" @click="loadGraph">检索图谱</el-button>
             </div>
           </section>
 
@@ -2105,14 +2174,43 @@ onMounted(loadBootstrap)
   font-size: 12px;
 }
 
-.streaming-cursor {
+.answer-generation-indicator {
   width: fit-content;
-  padding: 5px 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  align-self: center;
+  padding: 7px 11px;
+  border: 1px solid rgba(59, 130, 246, 0.26);
   border-radius: var(--app-radius-sm);
   background: #eef5ff;
   color: var(--app-primary-active);
   font-size: 12px;
   font-weight: 700;
+}
+
+.answer-generation-indicator--centered {
+  width: 100%;
+  min-height: 150px;
+  flex: 1 1 auto;
+  border-style: dashed;
+  background: #f8fbff;
+}
+
+.answer-loading-icon {
+  font-size: 18px;
+  animation: answer-loading-spin 0.9s linear infinite;
+}
+
+@keyframes answer-loading-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .answer-grid {

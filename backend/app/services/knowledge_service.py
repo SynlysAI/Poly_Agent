@@ -245,6 +245,7 @@ class KnowledgeService:
                 "session_id": session_id,
             })
             references: list[dict[str, Any]] = []
+            done_emitted = False
             try:
                 references = self._search_knowledge(
                     base_url,
@@ -274,7 +275,10 @@ class KnowledgeService:
             for event in self._iter_chat_stream(base_url, session_id, payload):
                 event_type = str(event.get("response_type") or "")
                 if event_type == "references":
-                    references = list(event.get("knowledge_references") or [])
+                    references = self._merge_reference_items(
+                        references,
+                        list(event.get("knowledge_references") or []),
+                    )
                     graph_context = (
                         self._graph_from_search_results(
                             payload.system_id,
@@ -297,9 +301,11 @@ class KnowledgeService:
                         "event": "answer_delta",
                         "content": str(event.get("content") or ""),
                     })
-                    if bool(event.get("done")):
+                    if bool(event.get("done")) and not done_emitted:
+                        done_emitted = True
                         yield self._ndjson({"event": "done", "label": "WeKnora 回答完成"})
-                elif event_type == "complete":
+                elif event_type == "complete" and not done_emitted:
+                    done_emitted = True
                     yield self._ndjson({"event": "done", "label": "WeKnora 回答完成"})
                 elif event_type == "error":
                     yield self._ndjson({
@@ -1177,6 +1183,44 @@ class KnowledgeService:
         if not references:
             references = self._search_knowledge(base_url, payload.system_id, payload.question, limit=payload.top_k)
         return "".join(answer_parts), references
+
+    @classmethod
+    def _merge_reference_items(cls, *groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """按知识片段身份合并 WeKnora 引用，保留先返回证据的展示顺序。"""
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for group in groups:
+            for item in group:
+                if not isinstance(item, dict):
+                    continue
+                key = cls._reference_item_key(item)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+        return merged
+
+    @staticmethod
+    def _reference_item_key(item: dict[str, Any]) -> str:
+        """生成 WeKnora 引用去重键。"""
+        metadata = item.get("metadata") or {}
+        parts = [
+            item.get("knowledge_id"),
+            item.get("source_id"),
+            item.get("document_id"),
+            item.get("id"),
+            item.get("chunk_id"),
+            item.get("parent_chunk_id"),
+            metadata.get("chunk_id") if isinstance(metadata, dict) else None,
+            metadata.get("parent_chunk_id") if isinstance(metadata, dict) else None,
+        ]
+        identity = "|".join(str(part).strip() for part in parts if str(part or "").strip())
+        if identity:
+            return identity
+        return "|".join([
+            str(item.get("knowledge_filename") or item.get("title") or "").strip(),
+            str(item.get("content") or item.get("snippet") or item.get("text") or "").strip()[:160],
+        ])
 
     def _iter_chat_stream(
         self,
