@@ -867,8 +867,6 @@ watch(
       </div>
       <div class="topbar-right">
         <el-button :icon="Collection" @click="openExamples">示例流程</el-button>
-        <el-button @click="$router.push('/knowledge')">知识库</el-button>
-        <el-button @click="$router.push({ path: '/tasks/center', query: { module_id: 'research-engine' } })">任务中心</el-button>
         <span v-if="problemSpec" class="topbar-badge">
           <el-icon><Check /></el-icon>
           {{ problemSpec.name }}

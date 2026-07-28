@@ -1,7 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { Connection, Document, Histogram } from '@element-plus/icons-vue'
+import { Document } from '@element-plus/icons-vue'
 
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
 import JsonTreeView from '../../components/json/JsonTreeView.vue'
@@ -22,7 +21,6 @@ const props = defineProps({
   runId: { type: String, default: '' },
 })
 
-const router = useRouter()
 const tablePagination = ref({})
 
 const priorityValueKeys = ['value', 'predicted_value', 'prediction', 'score']
@@ -106,21 +104,6 @@ const hasStructuredContent = computed(() => Boolean(
   artifactRows.value.length,
 ))
 const inputHighlights = computed(() => scalarEntries(inputObject.value).slice(0, 4))
-const jumpActions = computed(() => {
-  const runId = String(props.runId || '').trim()
-  const algorithmId = String(props.algorithmId || '').trim()
-  const taskKeyword = runId || algorithmId
-  return [
-    { label: '知识库', icon: Connection, route: { path: '/knowledge', query: { tab: 'literature' } } },
-    {
-      label: '任务中心',
-      icon: Histogram,
-      route: { path: '/tasks/center', query: taskKeyword ? { module_id: 'research-engine', keyword: taskKeyword } : { module_id: 'research-engine' } },
-    },
-    ...(runId ? [{ label: '报告', icon: Document, route: { path: '/research-engine', query: { run_id: runId, action: 'report' } } }] : []),
-  ]
-})
-
 function artifactGroup(item) {
   const stepKey = item.step_key || item.stepKey || ''
   const type = item.artifact_type || item.type || ''
@@ -354,30 +337,10 @@ function isComplexValue(value) {
 function stringifyJson(value) {
   return JSON.stringify(value ?? null, null, 2)
 }
-
-function openJump(route) {
-  if (!route) return
-  router.push(route)
-}
 </script>
 
 <template>
   <div class="algorithm-result-view">
-    <div v-if="jumpActions.length" class="result-jumpbar">
-      <span>快捷跳转</span>
-      <div class="jump-actions">
-        <el-button
-          v-for="action in jumpActions"
-          :key="action.label"
-          size="small"
-          :icon="action.icon"
-          @click="openJump(action.route)"
-        >
-          {{ action.label }}
-        </el-button>
-      </div>
-    </div>
-
     <section v-if="attributions.length" class="result-attribution">
       <span>模型开发者来源</span>
       <AttributionBadges :attributions="attributions" :limit="3" />
@@ -616,31 +579,6 @@ function openJump(route) {
   display: grid;
   gap: 14px;
   min-width: 0;
-}
-
-.result-jumpbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 10px 12px;
-  border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius-sm);
-  background: #f8fbff;
-}
-
-.result-jumpbar > span {
-  color: var(--app-ink-muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.jump-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .result-error {

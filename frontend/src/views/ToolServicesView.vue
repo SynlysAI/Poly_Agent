@@ -2,7 +2,10 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Check, Edit, Refresh, View as ViewIcon } from '@element-plus/icons-vue'
+import {
+  Check, DataAnalysis, Edit, Files, Refresh, SetUp, View as ViewIcon, Warning,
+} from '@element-plus/icons-vue'
+import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
 import {
   checkLlmModels,
@@ -35,6 +38,7 @@ const editingServiceKey = ref('')
 const activeTab = ref(normalizeTab(route.query.tab))
 const statusDetailVisible = ref(false)
 const selectedServiceStatus = ref(null)
+const serviceGroupFilter = ref('all')
 
 // ── ResearchEngine 算法清单 ──
 const algorithms = ref([])
@@ -111,10 +115,10 @@ function triggerModeLabel(modes) {
 }
 
 const algorithmGroupDefs = [
-  { key: 'real', label: '真实能力', hint: '已接入真实服务、SDK 或本地计算链路' },
-  { key: 'builtin', label: '内置能力', hint: '平台内置能力或待封装能力' },
-  { key: 'simulated', label: '模拟演示', hint: '仅用于演示、流程占位或 mock 输出' },
-  { key: 'vertical', label: '垂类算法', hint: '材料性质等垂类模型服务与上传算法' },
+  { key: 'real', label: '真实能力', hint: '已接入真实服务、SDK 或本地计算链路', tone: 'teal' },
+  { key: 'builtin', label: '内置能力', hint: '平台内置能力或待封装能力', tone: 'blue' },
+  { key: 'simulated', label: '模拟演示', hint: '仅用于演示、流程占位或 mock 输出', tone: 'amber' },
+  { key: 'vertical', label: '垂类算法', hint: '材料性质等垂类模型服务与上传算法', tone: 'violet' },
 ]
 
 const filteredAlgos = computed(() => {
@@ -205,19 +209,26 @@ const serviceCatalog = {
   docker: { name: 'Docker', group: '运行组件', hint: '可选容器运行能力' },
 }
 
+const serviceGroupMeta = {
+  核心存储: { tone: 'blue', description: '数据库、数据资产与结果文件存储' },
+  知识服务: { tone: 'teal', description: '文献检索与知识图谱服务' },
+  计算工具链: { tone: 'amber', description: '结构处理、构象搜索与量子化学计算' },
+  优化与实验: { tone: 'coral', description: '主动学习、实验设计与外部实验系统' },
+  运行组件: { tone: 'violet', description: '任务执行和可选运行环境' },
+}
+
 const serviceGroups = computed(() => {
   const groups = ['核心存储', '知识服务', '计算工具链', '优化与实验', '运行组件']
   return groups.map((group) => ({
     name: group,
+    ...(serviceGroupMeta[group] || { tone: 'slate', description: '平台运行服务' }),
     items: services.value.filter((item) => (serviceCatalog[item.service]?.group || '运行组件') === group),
   })).filter((group) => group.items.length)
 })
 
-const activeServiceGroups = ref([])
-
-watch(serviceGroups, (groups) => {
-  activeServiceGroups.value = groups.map((group) => group.name)
-}, { immediate: true })
+const visibleServiceGroups = computed(() => serviceGroupFilter.value === 'all'
+  ? serviceGroups.value
+  : serviceGroups.value.filter((group) => group.name === serviceGroupFilter.value))
 
 const healthSummary = computed(() => {
   const required = ['mongodb', 'artifact-store', 'literature-rag', 'rdkit', 'openbabel', 'xtb']
@@ -235,10 +246,10 @@ const serviceHealthStats = computed(() => {
   const setupRequired = services.value.filter((item) => setupStatuses.has(item.status)).length
   const coreReady = healthSummary.value.total > 0 && healthSummary.value.ready === healthSummary.value.total
   return [
-    { label: '核心服务', value: `${healthSummary.value.ready}/${healthSummary.value.total}`, hint: '关键链路', tone: coreReady ? 'success' : 'warning' },
-    { label: '可用服务', value: String(ready), hint: '在线 / 内置', tone: 'success' },
-    { label: '异常服务', value: String(issues), hint: '需排查', tone: issues ? 'danger' : 'neutral' },
-    { label: '待配置', value: String(setupRequired), hint: '未安装 / 未配置', tone: setupRequired ? 'warning' : 'neutral' },
+    { label: '核心服务', value: `${healthSummary.value.ready}/${healthSummary.value.total}`, hint: '关键链路', tone: coreReady ? 'success' : 'warning', icon: DataAnalysis },
+    { label: '可用服务', value: String(ready), hint: '在线 / 内置', tone: 'success', icon: Files },
+    { label: '异常服务', value: String(issues), hint: '需排查', tone: issues ? 'danger' : 'neutral', icon: Warning },
+    { label: '待配置', value: String(setupRequired), hint: '未安装 / 未配置', tone: setupRequired ? 'warning' : 'neutral', icon: SetUp },
   ]
 })
 
@@ -357,6 +368,10 @@ function servicePrimaryDetail(row) {
 function serviceReason(row) {
   const details = row.details || {}
   return details.reason || details.last_error_summary || details.stderr || ''
+}
+
+function serviceStatusNote(row) {
+  return serviceReason(row) || (['up', 'available', 'built_in'].includes(row.status) ? '运行正常' : statusLabel(row.status))
 }
 
 function serviceVersion(row) {
@@ -590,204 +605,152 @@ watch(activeTab, (tab) => {
 
 <template>
   <div class="tools-view">
-    <section class="panel">
-      <div class="panel-header tools-header">
-        <div>
-          <h3 class="panel-title">工具服务</h3>
-          <p class="panel-subtitle">真实计算工具链、Mongo/artifact、SpecLabOS 和优化服务状态。</p>
-        </div>
+    <header class="tools-page-header">
+      <div>
+        <h1>工具服务</h1>
+        <p>真实计算工具链、Mongo/artifact、SpecLabOS 和优化服务状态。</p>
+      </div>
+      <div class="header-actions">
         <el-tag size="large" :type="healthSummary.total > 0 && healthSummary.ready === healthSummary.total ? 'success' : 'warning'">
           核心服务 {{ healthSummary.ready }}/{{ healthSummary.total }}
         </el-tag>
         <el-button :icon="Refresh" :loading="loadingStatus || loadingConfigs" @click="loadAll">刷新</el-button>
       </div>
+    </header>
+
+    <AttributionBanner module-id="computation" label="工具支持" compact />
+
+    <section class="metric-grid" aria-label="工具服务关键指标">
+      <article v-for="stat in serviceHealthStats" :key="stat.label" class="metric-panel" :class="`metric-panel--${stat.tone}`">
+        <el-icon><component :is="stat.icon" /></el-icon>
+        <div>
+          <span>{{ stat.label }}</span>
+          <strong>{{ stat.value }}</strong>
+          <small>{{ stat.hint }}</small>
+        </div>
+      </article>
     </section>
 
-    <section class="panel">
-      <div class="panel-body">
-        <el-tabs v-model="activeTab">
-          <el-tab-pane label="状态" name="status">
-            <div v-loading="loadingStatus" class="service-status-panel">
-              <div class="service-health-strip" aria-label="服务健康概览">
-                <article v-for="stat in serviceHealthStats" :key="stat.label" class="service-health-stat" :class="`service-health-stat--${stat.tone}`">
-                  <span>{{ stat.label }}</span>
-                  <strong>{{ stat.value }}</strong>
-                  <small>{{ stat.hint }}</small>
+    <el-tabs v-model="activeTab" class="tools-tabs">
+      <el-tab-pane label="状态" name="status">
+        <section class="tools-section" v-loading="loadingStatus">
+          <div class="section-heading">
+            <div>
+              <h2>服务状态</h2>
+              <p class="section-description">按服务类型分组查看位置、版本和异常原因。</p>
+            </div>
+            <span>{{ services.length }} 项服务</span>
+          </div>
+          <div class="tools-browser-layout">
+            <nav class="tools-rail" aria-label="服务分类">
+              <div class="tools-rail-label">服务分类</div>
+              <button type="button" class="tools-filter" :class="{ active: serviceGroupFilter === 'all' }" @click="serviceGroupFilter = 'all'">
+                <span>全部服务</span><strong>{{ services.length }}</strong>
+              </button>
+              <button
+                v-for="group in serviceGroups"
+                :key="group.name"
+                type="button"
+                class="tools-filter"
+                :class="[`tone-${group.tone}`, { active: serviceGroupFilter === group.name }]"
+                @click="serviceGroupFilter = group.name"
+              >
+                <span>{{ group.name }}</span><strong>{{ group.items.length }}</strong>
+              </button>
+            </nav>
+
+            <div class="tools-group-stack">
+              <section v-for="group in visibleServiceGroups" :key="group.name" class="tools-group" :class="`tone-${group.tone}`">
+                <header class="tools-group-header">
+                  <div class="tools-group-title">
+                    <span class="tools-group-marker" aria-hidden="true"></span>
+                    <div><h3>{{ group.name }}</h3><p>{{ group.description }}</p></div>
+                  </div>
+                  <span class="tools-group-count">{{ group.items.length }} 项</span>
+                </header>
+                <div class="service-list" role="list">
+                  <article v-for="row in group.items" :key="row.service" class="service-list-row" role="listitem">
+                    <div class="service-list-main">
+                      <strong>{{ serviceName(row.service) }}</strong>
+                      <small>{{ serviceHint(row.service) }}</small>
+                    </div>
+                    <div class="service-list-status">
+                      <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+                      <small>{{ serviceStatusNote(row) }}</small>
+                    </div>
+                    <div class="service-list-fact">
+                      <strong>{{ servicePrimaryDetail(row) }}</strong>
+                      <small>位置</small>
+                    </div>
+                    <div class="service-list-fact">
+                      <strong>{{ serviceVersion(row) }}</strong>
+                      <small>版本 / 信息</small>
+                    </div>
+                    <el-button text type="primary" size="small" :icon="ViewIcon" @click="showServiceDetail(row)">详情</el-button>
+                  </article>
+                </div>
+              </section>
+              <el-empty v-if="!visibleServiceGroups.length && !loadingStatus" description="暂无服务数据" />
+            </div>
+          </div>
+        </section>
+      </el-tab-pane>
+
+      <el-tab-pane label="算法清单" name="algorithms">
+        <section class="tools-section">
+          <div class="section-heading">
+            <div><h2>算法清单</h2><p class="section-description">按接入类型浏览算法、调用方式和适用材料范围。</p></div>
+            <span>{{ filteredAlgos.length }} 项算法</span>
+          </div>
+          <div class="algo-filter-bar">
+            <el-select v-model="algoFilters.type" placeholder="算法类型" clearable style="width:130px">
+              <el-option v-for="item in algoTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+            <el-select v-model="algoFilters.material_scope" placeholder="材料体系" clearable style="width:130px">
+              <el-option label="氟基" value="fluoropolymer" /><el-option label="碳基" value="carbon_polymer" /><el-option label="硅基" value="silicon_polymer" /><el-option label="通用" value="universal" />
+            </el-select>
+            <el-input v-model="algoFilters.keyword" placeholder="搜索算法" clearable style="width:220px" />
+            <el-button text @click="algoFilters.type = ''; algoFilters.material_scope = ''; algoFilters.keyword = ''">重置</el-button>
+            <el-button :icon="Refresh" :loading="algoLoading" @click="loadAlgos">刷新</el-button>
+          </div>
+          <div class="algo-summary-strip" aria-label="算法接入概览">
+            <span v-for="stat in algorithmStats" :key="stat.key"><strong>{{ stat.count }}</strong>{{ stat.label }}</span>
+          </div>
+          <div v-if="filteredAlgos.length" v-loading="algoLoading" class="algo-group-stack">
+            <section v-for="group in groupedAlgos.filter((item) => item.items.length)" :key="group.key" class="tools-group" :class="`tone-${group.tone}`">
+              <header class="tools-group-header"><div class="tools-group-title"><span class="tools-group-marker" aria-hidden="true"></span><div><h3>{{ group.label }}</h3><p>{{ group.hint }}</p></div></div><span class="tools-group-count">{{ group.items.length }} 项</span></header>
+              <div class="algo-list" role="list">
+                <article v-for="row in group.items" :key="row.algorithm_id" class="algo-list-row" role="listitem">
+                  <div class="algo-list-main"><strong>{{ row.name }}</strong><small>{{ row.algorithm_id }}</small><p>{{ row.description || '暂无描述' }}</p><div class="compact-tag-list"><el-tag size="small" :type="algoTypeTag(row.type)">{{ algoTypeLabel(row.type) }}</el-tag><el-tag v-for="item in materialScopeLabel(row.material_scope)" :key="item" size="small" effect="plain">{{ item }}</el-tag></div></div>
+                  <div class="algo-list-status"><el-tag size="small" :type="algoIntegrationTag(algoIntegrationKind(row))" effect="plain">{{ algoIntegrationLabel(algoIntegrationKind(row)) }}</el-tag><el-tag size="small" :type="algoStatusTag(row.status)" effect="plain">{{ algoStatusLabel(row.status) }}</el-tag><small>{{ row.call_method || '未标注调用方式' }}</small></div>
+                  <div class="algo-list-meta"><span>触发方式</span><div class="compact-tag-list"><el-tag v-for="item in triggerModeLabel(row.trigger_modes)" :key="item" size="small" effect="plain">{{ item }}</el-tag></div></div>
+                  <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(row)">详情</el-button>
                 </article>
               </div>
-              <el-collapse v-model="activeServiceGroups" class="service-group-collapse">
-                <el-collapse-item v-for="group in serviceGroups" :key="group.name" :name="group.name">
-                  <template #title>
-                    <div class="service-group-title">
-                      <h4>{{ group.name }}</h4>
-                      <span>{{ group.items.length }} 项</span>
-                    </div>
-                  </template>
-                  <el-table :data="group.items" stripe class="service-status-table">
-                    <el-table-column label="服务" min-width="210">
-                      <template #default="{ row }">
-                        <div class="service-name-cell">
-                          <strong>{{ serviceName(row.service) }}</strong>
-                          <small>{{ serviceHint(row.service) }}</small>
-                        </div>
-                      </template>
-                    </el-table-column>
-                    <el-table-column label="状态" width="110">
-                      <template #default="{ row }">
-                        <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
-                      </template>
-                    </el-table-column>
-                    <el-table-column label="位置" min-width="220" show-overflow-tooltip>
-                      <template #default="{ row }">{{ servicePrimaryDetail(row) }}</template>
-                    </el-table-column>
-                    <el-table-column label="版本 / 信息" min-width="180" show-overflow-tooltip>
-                      <template #default="{ row }">{{ serviceVersion(row) }}</template>
-                    </el-table-column>
-                    <el-table-column label="原因" min-width="180" show-overflow-tooltip>
-                      <template #default="{ row }">{{ serviceReason(row) || '-' }}</template>
-                    </el-table-column>
-                    <el-table-column label="操作" width="96" align="right">
-                      <template #default="{ row }">
-                        <el-button text type="primary" size="small" :icon="ViewIcon" @click="showServiceDetail(row)">详情</el-button>
-                      </template>
-                    </el-table-column>
-                  </el-table>
-                </el-collapse-item>
-              </el-collapse>
-            </div>
-          </el-tab-pane>
+            </section>
+          </div>
+          <el-empty v-else-if="!algoLoading" description="暂无算法数据" />
+        </section>
+      </el-tab-pane>
 
-          <el-tab-pane label="算法清单" name="algorithms">
-            <div class="algo-filter-bar">
-              <el-select v-model="algoFilters.type" placeholder="算法类型" clearable style="width:130px">
-                <el-option v-for="item in algoTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
-              </el-select>
-              <el-select v-model="algoFilters.material_scope" placeholder="材料体系" clearable style="width:130px">
-                <el-option label="氟基" value="fluoropolymer" />
-                <el-option label="碳基" value="carbon_polymer" />
-                <el-option label="硅基" value="silicon_polymer" />
-                <el-option label="通用" value="universal" />
-              </el-select>
-              <el-input v-model="algoFilters.keyword" placeholder="搜索算法" clearable style="width:200px" />
-              <el-button text @click="algoFilters.type = ''; algoFilters.material_scope = ''; algoFilters.keyword = ''">重置</el-button>
-              <el-button :icon="Refresh" :loading="algoLoading" @click="loadAlgos">刷新</el-button>
-            </div>
-            <div v-if="filteredAlgos.length" v-loading="algoLoading" class="algo-table-panel">
-              <div class="algo-summary-strip" aria-label="算法接入概览">
-                <span v-for="stat in algorithmStats" :key="stat.key">
-                  <strong>{{ stat.count }}</strong>
-                  {{ stat.label }}
-                </span>
-              </div>
-              <el-table :data="filteredAlgos" stripe class="algo-table">
-                <el-table-column label="算法 / ID" min-width="260">
-                  <template #default="{ row }">
-                    <div class="algo-name-cell">
-                      <strong :title="row.name">{{ row.name }}</strong>
-                      <small :title="row.algorithm_id">{{ row.algorithm_id }}</small>
-                      <span :title="row.description">{{ row.description || '暂无描述' }}</span>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="类型" width="110">
-                  <template #default="{ row }">
-                    <el-tag size="small" :type="algoTypeTag(row.type)">{{ algoTypeLabel(row.type) }}</el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="接入状态" width="140">
-                  <template #default="{ row }">
-                    <div class="algo-status-cell">
-                      <el-tag size="small" :type="algoIntegrationTag(algoIntegrationKind(row))" effect="plain">
-                        {{ algoIntegrationLabel(algoIntegrationKind(row)) }}
-                      </el-tag>
-                      <el-tag size="small" :type="algoStatusTag(row.status)" effect="plain">{{ algoStatusLabel(row.status) }}</el-tag>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="调用方式" min-width="150" show-overflow-tooltip>
-                  <template #default="{ row }">{{ row.call_method }}</template>
-                </el-table-column>
-                <el-table-column label="材料范围" min-width="180">
-                  <template #default="{ row }">
-                    <div class="compact-tag-list">
-                      <el-tag v-for="item in materialScopeLabel(row.material_scope)" :key="item" size="small" effect="plain">
-                        {{ item }}
-                      </el-tag>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="触发方式" min-width="180">
-                  <template #default="{ row }">
-                    <div class="compact-tag-list">
-                      <el-tag v-for="item in triggerModeLabel(row.trigger_modes)" :key="item" size="small" effect="plain">
-                        {{ item }}
-                      </el-tag>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="操作" width="96" align="right">
-                  <template #default="{ row }">
-                    <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(row)">详情</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
-            <div v-else-if="!algoLoading" class="empty-inline" style="min-height:100px;justify-content:center">
-              暂无算法数据
-            </div>
-          </el-tab-pane>
-          <el-tab-pane label="配置" name="configs">
-            <el-alert v-if="configError" :title="configError" type="warning" :closable="false" class="config-alert" />
-            <el-table v-else :data="configs" v-loading="loadingConfigs" stripe class="config-table">
-              <el-table-column prop="service_key" label="Service" min-width="150" />
-              <el-table-column prop="display_name" label="名称" min-width="180" />
-              <el-table-column prop="service_type" label="类型" width="130" />
-              <el-table-column label="启用" width="96">
-                <template #default="{ row }">
-                  <el-switch
-                    :model-value="row.enabled"
-                    :loading="actionLoading === `${row.service_key}:toggle`"
-                    @change="(value) => toggleEnabled(row, value)"
-                  />
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="130">
-                <template #default="{ row }">
-                  <el-tag size="small" :type="statusTag(row.last_status)">{{ statusLabel(row.last_status) }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="配置摘要" min-width="220" show-overflow-tooltip>
-                <template #default="{ row }">
-                  <span class="config-summary-line">{{ compactConfigSummary(row) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="最后检查" width="180">
-                <template #default="{ row }">
-                  <span>{{ formatDate(row.last_checked_at) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="last_error_summary" label="错误" min-width="180" show-overflow-tooltip />
-              <el-table-column label="操作" width="230" fixed="right">
-                <template #default="{ row }">
-                  <div class="config-actions">
-                    <el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-                    <el-button
-                      text
-                      type="primary"
-                      size="small"
-                      :icon="Check"
-                      :loading="actionLoading === `${row.service_key}:check`"
-                      @click="handleCheck(row)"
-                    >
-                      检查
-                    </el-button>
-                    <el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button>
-                  </div>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
-          <el-tab-pane label="LLM 模型" name="llm-models">
+      <el-tab-pane label="配置" name="configs">
+        <section class="tools-section">
+          <div class="section-heading"><div><h2>服务配置</h2><p class="section-description">管理服务启用状态、连接地址和配置摘要。</p></div><span>{{ configs.length }} 项配置</span></div>
+          <el-alert v-if="configError" :title="configError" type="warning" :closable="false" class="config-alert" />
+          <div v-else v-loading="loadingConfigs" class="config-list">
+            <article v-for="row in configs" :key="row.service_key" class="config-list-row">
+              <div class="config-list-main"><strong>{{ row.display_name || row.service_key }}</strong><small>{{ row.service_key }} · {{ row.service_type }}</small></div>
+              <div class="config-list-status"><el-tag size="small" :type="statusTag(row.last_status)">{{ statusLabel(row.last_status) }}</el-tag><small>最后检查 {{ formatDate(row.last_checked_at) }}</small></div>
+              <div class="config-list-summary"><span>{{ compactConfigSummary(row) }}</span><small v-if="row.last_error_summary">{{ row.last_error_summary }}</small></div>
+              <div class="config-list-enabled"><span>启用</span><el-switch :model-value="row.enabled" :loading="actionLoading === `${row.service_key}:toggle`" @change="(value) => toggleEnabled(row, value)" /></div>
+              <div class="config-actions"><el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button><el-button text type="primary" size="small" :icon="Check" :loading="actionLoading === `${row.service_key}:check`" @click="handleCheck(row)">检查</el-button><el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button></div>
+            </article>
+          </div>
+        </section>
+      </el-tab-pane>
+
+      <el-tab-pane label="LLM 模型" name="llm-models">
+        <section class="tools-section">
             <div class="llm-toolbar">
               <div>
                 <h4>LLM 模型选择</h4>
@@ -876,10 +839,9 @@ watch(activeTab, (tab) => {
               </div>
               <el-empty v-if="!(llmCatalog.providers || []).length && !loadingLlm" description="暂无 LLM provider 配置" :image-size="80" />
             </div>
-          </el-tab-pane>
-        </el-tabs>
-      </div>
-    </section>
+        </section>
+      </el-tab-pane>
+    </el-tabs>
 
     <el-dialog v-model="editVisible" :title="currentConfig?.display_name || editingServiceKey" width="680px">
       <el-form label-position="top">
@@ -975,7 +937,171 @@ watch(activeTab, (tab) => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: calc(100vh - 96px);
 }
+
+.tools-page-header,
+.section-heading,
+.tools-group-title,
+.service-list-row,
+.algo-list-row,
+.config-list-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.tools-page-header h1,
+.tools-section h2,
+.tools-group-header h3 {
+  margin: 0;
+  color: var(--app-ink);
+  letter-spacing: 0;
+}
+
+.tools-page-header h1 {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.tools-page-header p,
+.section-description,
+.tools-group-header p {
+  margin: 6px 0 0;
+  color: var(--app-ink-muted);
+  font-size: 13px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric-panel {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 86px;
+  overflow: hidden;
+  padding: 14px;
+  border: 1px solid var(--app-card-border);
+  border-radius: var(--app-radius-sm);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--app-card-shadow);
+}
+
+.metric-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--app-primary);
+}
+
+.metric-panel--success::before { background: #22c55e; }
+.metric-panel--warning::before { background: #f59e0b; }
+.metric-panel--danger::before { background: #ef4444; }
+.metric-panel .el-icon { width: 34px; height: 34px; border-radius: var(--app-radius-sm); color: var(--app-primary); background: var(--app-primary-light); }
+.metric-panel span, .metric-panel small { display: block; color: var(--app-ink-muted); font-size: 12px; }
+.metric-panel strong { display: block; margin: 3px 0; color: var(--app-ink); font-size: 22px; line-height: 1.1; }
+
+.tools-tabs :deep(.el-tabs__header) { margin: 0 0 16px; }
+.tools-tabs :deep(.el-tabs__nav-wrap::after) { background: var(--app-border-soft); }
+.tools-tabs :deep(.el-tabs__item) { color: var(--app-ink-body); font-size: 14px; }
+.tools-tabs :deep(.el-tabs__item.is-active) { color: var(--app-primary); font-weight: 600; }
+.tools-tabs :deep(.el-tabs__active-bar) { height: 2px; }
+
+.tools-section {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--app-card-border);
+  border-radius: var(--app-radius-sm);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--app-card-shadow);
+}
+
+.tools-section h2 { font-size: 20px; }
+.section-heading { align-items: center; margin-bottom: 14px; }
+.section-heading > span { color: var(--app-ink-muted); font-size: 14px; white-space: nowrap; }
+
+.tools-browser-layout { display: grid; grid-template-columns: 188px minmax(0, 1fr); gap: 18px; align-items: start; }
+.tools-rail { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 4px; padding-right: 14px; border-right: 1px solid var(--app-border-soft); }
+.tools-rail-label { margin: 2px 10px 8px; color: var(--app-ink-subtle); font-size: 14px; font-weight: 700; letter-spacing: 0.08em; }
+.tools-filter { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 48px; padding: 10px 14px; border: 1px solid transparent; border-radius: var(--app-radius-sm); background: transparent; color: var(--app-ink-body); text-align: left; font-size: 15px; cursor: pointer; }
+.tools-filter strong { min-width: 26px; color: var(--app-ink-subtle); font-size: 14px; font-weight: 600; text-align: right; }
+.tools-filter:hover, .tools-filter.active { border-color: var(--app-border-soft); background: #f5f8fd; color: var(--app-sidebar-from); font-weight: 600; }
+.tools-filter.active strong { color: var(--app-primary); }
+.tools-filter.tone-blue.active { border-left: 3px solid #2563eb; }
+.tools-filter.tone-teal.active { border-left: 3px solid #0f766e; }
+.tools-filter.tone-amber.active { border-left: 3px solid #d97706; }
+.tools-filter.tone-coral.active { border-left: 3px solid #be5a35; }
+.tools-filter.tone-violet.active { border-left: 3px solid #7c3aed; }
+.tools-group-stack, .algo-group-stack { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.tools-group { overflow: hidden; border: 1px solid var(--app-border-soft); border-left: 3px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
+.tools-group.tone-blue { border-left-color: #2563eb; }
+.tools-group.tone-teal { border-left-color: #0f766e; }
+.tools-group.tone-amber { border-left-color: #d97706; }
+.tools-group.tone-coral { border-left-color: #be5a35; }
+.tools-group.tone-violet { border-left-color: #7c3aed; }
+.tools-group-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 15px 11px; border-bottom: 1px solid var(--app-border-soft); background: #fbfcfe; }
+.tools-group-title { align-items: center; gap: 10px; min-width: 0; }
+.tools-group-title > div { min-width: 0; }
+.tools-group-title h3 { font-size: 18px; }
+.tools-group-title p { margin-top: 3px; }
+.tools-group-marker { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--app-border); }
+.tone-blue .tools-group-marker { background: #2563eb; }
+.tone-teal .tools-group-marker { background: #0f766e; }
+.tone-amber .tools-group-marker { background: #d97706; }
+.tone-coral .tools-group-marker { background: #be5a35; }
+.tone-violet .tools-group-marker { background: #7c3aed; }
+.tools-group-count { color: var(--app-ink-muted); font-size: 14px; white-space: nowrap; }
+
+.service-list, .algo-list, .config-list { display: flex; flex-direction: column; }
+.service-list-row, .algo-list-row, .config-list-row { align-items: center; min-width: 0; padding: 14px 16px; border-bottom: 1px solid #eef2f7; background: #fff; }
+.service-list-row:last-child, .algo-list-row:last-child, .config-list-row:last-child { border-bottom: 0; }
+.service-list-row:hover, .algo-list-row:hover, .config-list-row:hover { background: #f7faff; }
+.service-list-main, .algo-list-main, .config-list-main, .config-list-summary { min-width: 0; }
+.service-list-main { flex: 1.8 1 240px; }
+.service-list-status { flex: 0 0 130px; min-width: 0; }
+.service-list-fact { flex: 0.9 1 150px; min-width: 0; }
+.service-list-main strong, .algo-list-main > strong, .config-list-main strong { display: block; overflow: hidden; color: var(--app-ink); font-size: 16px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.service-list-main small, .algo-list-main small, .config-list-main small, .service-list-status small, .service-list-fact small, .config-list-status small, .config-list-summary small, .config-list-enabled span { display: block; margin-top: 4px; color: var(--app-ink-muted); font-size: 12px; line-height: 1.45; }
+.service-list-status small, .config-list-summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.service-list-fact strong { display: block; overflow: hidden; color: var(--app-sidebar-from); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.service-list-row > .el-button, .algo-list-row > .el-button { flex: 0 0 auto; }
+
+.algo-filter-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.algo-summary-strip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.algo-summary-strip span { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #fff; color: var(--app-ink-muted); font-size: 12px; }
+.algo-summary-strip strong { color: var(--app-ink); font-size: 14px; }
+.algo-list-row { align-items: center; }
+.algo-list-main { flex: 1.8 1 280px; }
+.algo-list-main p { display: -webkit-box; overflow: hidden; margin: 4px 0 7px; color: var(--app-ink-muted); font-size: 12px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.algo-list-status { flex: 0 0 150px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.algo-list-meta { flex: 1 1 190px; min-width: 0; }
+.algo-list-meta > span { display: block; margin-bottom: 5px; color: var(--app-ink-muted); font-size: 12px; }
+.compact-tag-list { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+
+.config-list-row { gap: 14px; }
+.config-list-main { flex: 1.2 1 200px; }
+.config-list-status { flex: 0 0 150px; min-width: 0; }
+.config-list-summary { flex: 2 1 260px; }
+.config-list-summary span { display: block; overflow: hidden; color: var(--app-ink-body); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.config-list-enabled { flex: 0 0 60px; text-align: center; }
+.config-list-enabled span { margin-top: 0; margin-bottom: 4px; }
+.config-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; flex-wrap: nowrap; white-space: nowrap; }
+.config-actions :deep(.el-button) { margin-left: 0; }
 
 .algo-filter-bar {
   display: flex;
@@ -1762,5 +1888,31 @@ summary {
   .llm-routing-grid {
     grid-template-columns: 1fr;
   }
+}
+
+@media (max-width: 1180px) {
+  .service-list-row { flex-wrap: wrap; }
+  .service-list-main { flex-basis: calc(100% - 58px); }
+  .service-list-status, .service-list-fact { flex: 1 1 145px; }
+  .algo-list-row, .config-list-row { flex-wrap: wrap; }
+  .algo-list-main { flex-basis: calc(100% - 58px); }
+  .algo-list-status, .algo-list-meta { flex: 1 1 180px; }
+  .config-list-main { flex-basis: calc(100% - 58px); }
+  .config-list-status, .config-list-summary, .config-list-enabled { flex: 1 1 160px; }
+}
+
+@media (max-width: 760px) {
+  .tools-page-header, .section-heading { align-items: flex-start; flex-direction: column; }
+  .header-actions { justify-content: flex-start; }
+  .metric-grid { grid-template-columns: 1fr; }
+  .tools-browser-layout { grid-template-columns: 1fr; }
+  .tools-rail { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 0 10px; border-right: 0; border-bottom: 1px solid var(--app-border-soft); }
+  .tools-rail-label { grid-column: 1 / -1; margin: 0 0 2px; }
+  .tools-group-title h3 { font-size: 16px; }
+  .service-list-row, .algo-list-row, .config-list-row { align-items: flex-start; padding: 13px 12px; }
+  .service-list-main, .algo-list-main, .config-list-main { flex-basis: 100%; }
+  .service-list-status, .service-list-fact, .algo-list-status, .algo-list-meta, .config-list-status, .config-list-summary, .config-list-enabled { flex: 1 1 calc(50% - 8px); }
+  .config-actions { width: 100%; justify-content: flex-start; }
+  .algo-filter-bar .el-input { width: 100% !important; }
 }
 </style>
