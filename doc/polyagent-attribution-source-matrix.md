@@ -10,7 +10,28 @@
 | ComputeEngine | `/computations/submit` | RDKit、OpenBabel、xTB、CREST、ORCA | 对应第三方项目；PolyAgent | 无授权图片时使用文字来源牌 | https://www.rdkit.org/；https://openbabel.org/；https://xtb-docs.readthedocs.io/；https://orcaforum.kofo.mpg.de/ | PolyAgent 负责任务、worker、artifact、审计和 campaign 联动；计算能力来自本地依赖 |
 | 垂类预测模型 | `/vertical-prediction` | 算法包契约中的方法来源 | 算法开发者、开发机构、导师课题组 | 优先使用算法包提交且授权的 Logo；否则文字来源牌 | 来自 `source_url` / `citation` | 平台治理上传、校验、部署和运行；模型方法不归属 PolyAgent 除非明确标注 |
 | 文献知识库 | `/knowledge` | RAG、知识图谱和语料服务契约 | PolyAgent KnowledgeService / literature-rag | 无授权图片时使用文字来源牌 | 服务和语料库配置记录 | 查询、证据、图谱上下文和语料来源按服务契约追溯 |
-| 数据管理 | `/database/data-catalog`、`/database/data-analysis` | OpenPoly、RadonPy PI1070、PI1M v2、SMiPoly、PolyUniverse、MD-AllAtom 数据来源 | 对应数据集/项目开发者；MD-AllAtom 数据提供方；PolyAgent | 无授权图片时使用文字来源牌 | OpenPoly DOI: https://doi.org/10.1007/s10118-025-3402-y；RadonPy: https://github.com/RadonPy/RadonPy；PI1M DOI: https://doi.org/10.1021/acs.jcim.0c00726；SMiPoly: https://github.com/PEJpOhno/SMiPoly；DOI: https://doi.org/10.1021/acs.jcim.3c00329；PolyUniverse: https://github.com/ytl0410/PolyUniverse；Zenodo: https://zenodo.org/records/12585902；DOI: https://doi.org/10.1039/D4DD00196F | PolyAgent 负责 MinIO/MongoDB 迁移、目录展示、记录下钻、分析视图和来源追溯；不声明拥有原始数据集 |
+| 数据管理 | `/database/data-catalog`、`/database/data-analysis` | 16 个目录数据集，详见下表 | 对应数据集/项目开发者与数据提供方；PolyAgent | 无授权图片时使用文字来源牌 | 仅登记可由上游材料核验的链接 | PolyAgent 负责 MinIO/MongoDB 迁移、目录展示、记录下钻、分析视图和来源追溯；不声明拥有原始数据集 |
+
+### 数据目录来源矩阵
+
+| 数据集 | 权威来源/引用 | 许可或展示规则 |
+|--------|---------------|----------------|
+| OpenPoly | https://doi.org/10.1007/s10118-025-3402-y | 文字来源牌 |
+| RadonPy PI1070 | https://github.com/RadonPy/RadonPy | 文字来源牌 |
+| PI1M v2 | https://doi.org/10.1021/acs.jcim.0c00726 | 文字来源牌 |
+| SMiPoly | https://github.com/PEJpOhno/SMiPoly；https://doi.org/10.1021/acs.jcim.3c00329 | 文字来源牌 |
+| PolyUniverse | https://github.com/ytl0410/PolyUniverse；https://doi.org/10.1039/D4DD00196F | 文字来源牌 |
+| MD-AllAtom | 当前内部数据说明 | 来源不明确，不展示外链或 Logo |
+| OMG | https://github.com/TheJacksonLab/OpenMacromolecularGenome | 仓库代码为 GPL-3.0；数据集条款仍以其上游说明为准 |
+| OMG Physical Properties | https://doi.org/10.5281/zenodo.13863778；https://doi.org/10.1039/D4SC08617A | 文字来源牌 |
+| polyOne | https://doi.org/10.5281/zenodo.7124188；https://doi.org/10.1038/s41467-023-39868-6 | 文字来源牌 |
+| ToPoRg | https://doi.org/10.5281/zenodo.10672434；https://doi.org/10.1038/s41524-024-01328-0 | CC BY 4.0 |
+| PolySol | 当前数据目录说明 | 来源不明确，不展示外链或 Logo |
+| PolyOmics | 当前数据目录说明 | 来源不明确，不展示外链或 Logo |
+| PPPDB | 当前数据目录说明 | 来源不明确，不展示外链或 Logo |
+| PolyID | 当前数据目录说明 | 来源不明确，不展示外链或 Logo |
+| TROPIC | https://polytropic.org/；https://doi.org/10.1039/D5FD00098J | 文字来源牌 |
+| NanoMine | 当前数据目录说明 | 来源不明确，不展示外链或 Logo |
 
 ## 维护规则
 
