@@ -340,6 +340,41 @@ class FakeDatabase:
         self.collections[target_name] = self.collections.pop(staging_name)
 
 
+class DynamicAttributeDatabase:
+    """Mimic PyMongo Database's dynamic collection attribute lookup."""
+
+    def __init__(self, collections: dict[str, FakeCollection] | None = None) -> None:
+        self.collections = collections or {}
+
+    def __getitem__(self, name: str) -> FakeCollection:
+        collection = self.collections.setdefault(name, RenameableCollection(self, name))
+        if not isinstance(collection, RenameableCollection):
+            replacement = RenameableCollection(self, name, collection.rows)
+            self.collections[name] = replacement
+            collection = replacement
+
+        return self.collections[name]
+
+    def __getattr__(self, name: str) -> FakeCollection:
+        return self[name]
+
+
+class RenameableCollection(FakeCollection):
+    """Collection fake with the PyMongo rename operation used by the fallback."""
+
+    def __init__(self, database: DynamicAttributeDatabase, name: str, rows: list[dict] | None = None) -> None:
+        super().__init__(rows)
+        self.database = database
+        self.name = name
+
+    def rename(self, target_name: str, dropTarget: bool = False) -> None:
+        if dropTarget:
+            self.database.collections.pop(target_name, None)
+        self.database.collections[target_name] = self
+        self.database.collections.pop(self.name, None)
+        self.name = target_name
+
+
 class PyMongoLikeCollection:
     """Mimic PyMongo's dynamic collection attribute lookup."""
 
@@ -355,6 +390,20 @@ class PyMongoLikeCollection:
 
 
 class PolyDataMigrationScriptTest(unittest.TestCase):
+    def test_atomic_replace_uses_collection_rename_for_dynamic_database_attributes(self) -> None:
+        target_db = DynamicAttributeDatabase(
+            {"__staging_dataset_job": FakeCollection([{"record_id": "1"}])}
+        )
+
+        migration_script.atomic_replace_collection(
+            target_db,
+            "__staging_dataset_job",
+            "dataset_records",
+        )
+
+        self.assertEqual(target_db["dataset_records"].count_documents({}), 1)
+        self.assertNotIn("__staging_dataset_job", target_db.collections)
+
     """Test dry-run and apply behavior without network or MongoDB I/O."""
 
     def test_dry_run_does_not_mutate_minio_objects(self) -> None:
