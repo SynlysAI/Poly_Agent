@@ -24,8 +24,25 @@ class TestAttributionApi:
         data = response.json()["data"]
         sources = {item["name"]: item for item in data["attributions"]}
 
-        assert len(sources) == 6
-        for source_name in ["OpenPoly", "RadonPy PI1070", "PI1M v2", "SMiPoly", "PolyUniverse", "MD-AllAtom 数据集"]:
+        assert len(sources) == 16
+        for source_name in [
+            "OpenPoly",
+            "RadonPy PI1070",
+            "PI1M v2",
+            "SMiPoly",
+            "PolyUniverse",
+            "MD-AllAtom 数据集",
+            "OMG",
+            "OMG Physical Properties",
+            "polyOne",
+            "ToPoRg",
+            "PolySol",
+            "PolyOmics",
+            "PPPDB",
+            "PolyID",
+            "TROPIC",
+            "NanoMine",
+        ]:
             assert source_name in sources
             assert sources[source_name]["visibility"] == "prominent"
 
@@ -34,3 +51,11 @@ class TestAttributionApi:
         assert sources["RadonPy PI1070"]["url"] == "https://github.com/RadonPy/RadonPy"
         assert sources["PI1M v2"]["url"] == "https://doi.org/10.1021/acs.jcim.0c00726"
         assert "10.1021/acs.jcim.0c00726" in sources["PI1M v2"]["citation_text"]
+        assert sources["OMG"]["url"] == "https://github.com/TheJacksonLab/OpenMacromolecularGenome"
+        assert sources["OMG Physical Properties"]["url"] == "https://doi.org/10.5281/zenodo.13863778"
+        assert sources["polyOne"]["url"] == "https://doi.org/10.5281/zenodo.7124188"
+        assert sources["ToPoRg"]["license"] == "CC BY 4.0"
+        assert sources["TROPIC"]["url"] == "https://polytropic.org/"
+        for source_name in ["PolySol", "PolyOmics", "PPPDB", "PolyID", "NanoMine"]:
+            assert sources[source_name]["url"] is None
+            assert sources[source_name]["logo_asset"] is None

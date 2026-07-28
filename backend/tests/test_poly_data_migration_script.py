@@ -29,7 +29,12 @@ class FakeS3Client:
     def __init__(self) -> None:
         self.objects = {
             "poly_agent/datasets/radonpy_pi1070/docs/readme.md": {"size_bytes": 10, "etag": "a"},
+            "datasets/radonpy_pi1070/raw/pi1070.xlsx": {"size_bytes": 15, "etag": "radonpy"},
             "datasets/pi1m_v2/raw/pi1m_v2.csv": {"size_bytes": 20, "etag": "b"},
+            "datasets/smipoly/raw/202207_smip_monset.csv": {"size_bytes": 25, "etag": "smipoly"},
+            "datasets/polyuniverse/raw/diCOOH.csv": {"size_bytes": 30, "etag": "dicooh"},
+            "datasets/polyuniverse/raw/epoxy_diE.csv": {"size_bytes": 31, "etag": "die"},
+            "datasets/polyuniverse/raw/epoxy_diN.csv": {"size_bytes": 32, "etag": "din"},
         }
         self.deleted: list[str] = []
         self.uploads: dict[str, bytes] = {}
@@ -57,6 +62,20 @@ class FakeS3Client:
             for key, metadata in self.objects.items()
             if key.startswith(prefix)
         }
+
+
+class ChangingHeadS3Client(FakeS3Client):
+    def __init__(self, object_key: str) -> None:
+        super().__init__()
+        self.object_key = object_key
+        self.calls = 0
+
+    def head_object(self, bucket: str, object_key: str):
+        metadata = super().head_object(bucket, object_key)
+        if object_key == self.object_key and metadata:
+            self.calls += 1
+            return {**metadata, "etag": f"version-{self.calls}"}
+        return metadata
 
 
 class FakeSftpClient:
@@ -236,7 +255,17 @@ class FakeCollection:
         return sum(1 for row in self.rows if all(self._nested_value(row, key) == value for key, value in filters.items()))
 
     def find(self, filters: dict, projection: dict | None = None):
-        return [dict(row) for row in self.rows]
+        return [
+            dict(row)
+            for row in self.rows
+            if all(self._nested_value(row, key) == value for key, value in filters.items())
+        ]
+
+    def find_one(self, filters: dict, projection: dict | None = None, **kwargs):
+        for row in self.rows:
+            if all(self._nested_value(row, key) == value for key, value in filters.items()):
+                return dict(row)
+        return None
 
     def update_one(self, filters: dict, update: dict, upsert: bool = False) -> None:
         payload = dict(update.get("$set", {}))
@@ -264,7 +293,7 @@ class FakeCollection:
 
         return Result()
 
-    def create_index(self, keys, name: str, unique: bool = False) -> None:
+    def create_index(self, keys, name: str, unique: bool = False, **kwargs) -> None:
         self.indexes.append((keys, name, unique))
 
     def insert_one(self, document: dict) -> None:
@@ -283,6 +312,20 @@ class FakeCollection:
         return value
 
 
+class SizeLimitedCollection(FakeCollection):
+    """Fake Mongo collection that rejects oversized inserted documents."""
+
+    def __init__(self, rows: list[dict] | None = None, *, max_json_bytes: int = 4096) -> None:
+        super().__init__(rows)
+        self.max_json_bytes = max_json_bytes
+
+    def insert_one(self, document: dict) -> None:
+        payload = migration_script.json.dumps(document, default=str).encode("utf-8")
+        if len(payload) > self.max_json_bytes:
+            raise RuntimeError(f"document too large: {len(payload)} bytes")
+        super().insert_one(document)
+
+
 class FakeDatabase:
     """Collection factory fake."""
 
@@ -292,6 +335,9 @@ class FakeDatabase:
     def __getitem__(self, name: str) -> FakeCollection:
         self.collections.setdefault(name, FakeCollection())
         return self.collections[name]
+
+    def replace_collection(self, staging_name: str, target_name: str) -> None:
+        self.collections[target_name] = self.collections.pop(staging_name)
 
 
 class PyMongoLikeCollection:
@@ -376,6 +422,48 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(target_db["material_records"].count_documents({}), 1)
         self.assertEqual(target_db["datasets"].count_documents({}), 16)
         self.assertIn(migration_script.MANIFEST_KEY, client.uploads)
+
+    def test_persist_manifest_chunks_large_record_lists_for_mongo(self) -> None:
+        client = FakeS3Client()
+        target_db = FakeDatabase(
+            {
+                migration_script.TARGET_MIGRATION_MANIFESTS_COLLECTION: SizeLimitedCollection(max_json_bytes=4096),
+                migration_script.TARGET_MIGRATION_MANIFEST_RECORDS_COLLECTION: SizeLimitedCollection(max_json_bytes=4096),
+            }
+        )
+        sftp_records = [
+            {
+                "dataset_id": "md_allatom",
+                "role": "raw_file",
+                "status": "uploaded",
+                "object_key": f"datasets/md_allatom/raw/C/{index:06d}/large-output-file-with-long-name.out",
+                "remote": {"size_bytes": 1024 + index, "mtime": "2026-07-27T00:00:00+00:00"},
+            }
+            for index in range(200)
+        ]
+        manifest = migration_script.build_manifest(
+            bucket="polymer-data",
+            apply=True,
+            minio_records=[],
+            sftp_records=sftp_records,
+            mongo_summary={"status": "skipped"},
+            import_summaries=[],
+        )
+
+        with (
+            patch.object(migration_script, "LOCAL_MANIFEST_PATH", Path("/tmp/poly-data-large-manifest-test.json")),
+            patch.object(migration_script, "MONGO_MANIFEST_RECORD_CHUNK_BYTES", 1000),
+        ):
+            migration_script.persist_manifest(target_db=target_db, client=client, bucket="polymer-data", manifest=manifest)
+
+        mongo_manifest = target_db[migration_script.TARGET_MIGRATION_MANIFESTS_COLLECTION].rows[0]
+        self.assertNotIn("records", mongo_manifest["sftp"])
+        self.assertEqual(mongo_manifest["sftp"]["record_count"], 200)
+        self.assertEqual(mongo_manifest["sftp"]["status_counts"], {"uploaded": 200})
+        self.assertGreater(mongo_manifest["sftp"]["record_chunk_count"], 1)
+        self.assertGreater(target_db[migration_script.TARGET_MIGRATION_MANIFEST_RECORDS_COLLECTION].count_documents({}), 1)
+        uploaded_manifest = migration_script.json.loads(client.uploads[migration_script.MANIFEST_KEY].decode("utf-8"))
+        self.assertEqual(len(uploaded_manifest["sftp"]["records"]), 200)
 
     def test_sftp_dry_run_does_not_upload_objects(self) -> None:
         client = FakeS3Client()
@@ -673,11 +761,58 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
 
         self.assertTrue(client.aborted)
 
+    def test_cancelled_upload_skips_checkpoint_and_job_persistence(self) -> None:
+        target_db = FakeDatabase()
+        record = {
+            "dataset_id": "md_allatom",
+            "role": "raw_file",
+            "family": "C",
+            "remote_path": "/remote-md/C/polymer_1_1_32npt.data",
+            "object_key": "datasets/md_allatom/raw/C/polymer_1_1_32npt.data",
+            "bucket": "polymer-data",
+            "remote": {"size_bytes": 11},
+            "target": None,
+            "target_exists": False,
+            "status": "planned",
+            "error": None,
+            "content_type": "application/octet-stream",
+        }
+
+        with (
+            patch.object(migration_script, "_upload_one_record", side_effect=migration_script.MigrationCancelled("cancelled")),
+            patch.object(migration_script, "_persist_upload_checkpoint", side_effect=AssertionError("checkpoint write must be skipped")),
+            patch.object(migration_script, "_persist_dataset_object", side_effect=AssertionError("dataset write must be skipped")),
+            patch.object(migration_script, "_update_upload_job", side_effect=AssertionError("job write must be skipped")),
+            patch.object(migration_script, "_finish_upload_job", side_effect=AssertionError("finish write must be skipped")),
+        ):
+            records = migration_script.upload_records_concurrently(
+                [record],
+                sftp_client=FakeSftpClient(),
+                sftp_client_factory=None,
+                s3_client=FakeS3Client(),
+                target_db=target_db,
+                bucket="polymer-data",
+                job_type="md-allatom",
+                upload_workers=1,
+                upload_retries=0,
+                target_inventory=None,
+                cancel_event=threading.Event(),
+            )
+
+        self.assertEqual(records[0]["status"], "cancelled")
+        self.assertEqual(target_db["upload_checkpoints"].count_documents({}), 0)
+
     def test_apply_sftp_migration_requires_credentials_before_connecting(self) -> None:
         args = migration_script.parse_args(["--apply", "--migrate-sftp-md-allatom"])
 
         with self.assertRaises(migration_script.MigrationConfigurationError):
             migration_script.validate_runtime_configuration(args, sftp_password="")
+
+    def test_row_import_defaults_to_full_mode(self) -> None:
+        args = migration_script.parse_args([])
+
+        self.assertIsNone(args.pi1m_sample_size)
+        self.assertIsNone(args.extra_sample_size)
 
     def test_apply_can_drop_source_after_count_verification(self) -> None:
         source_collection = FakeCollection([{"polymer_record_id": "OPENPOLY-1"}])
@@ -740,7 +875,9 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
     def test_pi1m_import_streams_chunks_and_marks_full_import(self) -> None:
         import pandas as pd
 
-        target_db = FakeDatabase()
+        target_db = FakeDatabase(
+            {"pi1m_samples": FakeCollection([{"pi1m_record_id": "PI1M-STALE", "row_index": 99}])}
+        )
         chunks = [
             pd.DataFrame([{"SMILES": "*CC*", "SA Score": 3.1}, {"SMILES": "*CCC*", "SA Score": 4.2}]),
             pd.DataFrame([{"SMILES": "*CCCC*", "SA Score": 5.3}]),
@@ -768,7 +905,8 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(first["status"], "imported")
         self.assertEqual(second["records_upserted"], 3)
         self.assertEqual(target_db["pi1m_samples"].count_documents({}), 3)
-        self.assertEqual(target_db["pi1m_samples"].bulk_batches, [2, 1, 2, 1])
+        self.assertEqual(target_db["pi1m_samples"].bulk_batches, [2, 1])
+        self.assertNotIn("PI1M-STALE", {row["pi1m_record_id"] for row in target_db["pi1m_samples"].rows})
         self.assertEqual(target_db["pi1m_samples"].rows[0]["pi1m_record_id"], "PI1M_V2-000001")
         self.assertEqual(target_db["pi1m_samples"].rows[0]["sa_score"], 3.1)
         self.assertEqual(target_db["pi1m_samples"].rows[0]["row_index"], 1)
@@ -777,8 +915,35 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(dataset["dataset_id"], "pi1m_v2")
         self.assertEqual(dataset["record_count"], 3)
         self.assertEqual(dataset["record_mode"], "full")
+        self.assertEqual(dataset["verification_status"], "verified")
+        self.assertEqual(dataset["row_count"], 3)
         self.assertEqual(target_db["dataset_stats"].rows[0]["dataset_id"], "pi1m_v2")
         self.assertEqual(target_db["import_checkpoints"].rows[-1]["status"], "completed")
+        self.assertFalse(any(name.startswith("__staging_") for name in target_db.collections))
+
+    def test_pi1m_source_change_keeps_canonical_collection_untouched(self) -> None:
+        import pandas as pd
+
+        client = ChangingHeadS3Client("datasets/pi1m_v2/raw/pi1m_v2.csv")
+        target_db = FakeDatabase(
+            {"pi1m_samples": FakeCollection([{"pi1m_record_id": "PI1M-CANONICAL", "row_index": 1}])}
+        )
+        chunks = [pd.DataFrame([{"SMILES": "*CC*", "SA Score": 3.1}])]
+
+        with patch("pandas.read_csv", return_value=iter(chunks)):
+            summary = migration_script.import_pi1m_samples(
+                target_db,
+                s3_client=client,
+                bucket="polymer-data",
+                sample_size=None,
+                chunk_size=2,
+                apply=True,
+            )
+
+        self.assertEqual(summary["status"], "failed")
+        self.assertEqual(target_db["pi1m_samples"].count_documents({}), 1)
+        self.assertEqual(target_db["pi1m_samples"].rows[0]["pi1m_record_id"], "PI1M-CANONICAL")
+        self.assertTrue(any(name.startswith("__staging_pi1m_v2_") for name in target_db.collections))
 
     def test_smipoly_import_maps_csv_rows_and_is_idempotent(self) -> None:
         import pandas as pd
@@ -814,7 +979,7 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(second["records_upserted"], 1)
         self.assertEqual(target_db["smipoly_monomers"].count_documents({}), 1)
         row = target_db["smipoly_monomers"].rows[0]
-        self.assertEqual(row["smipoly_record_id"], "SMIPOLY-CID174")
+        self.assertEqual(row["smipoly_record_id"], "SMIPOLY-000001")
         self.assertEqual(row["molecular_formula"], "C2H6O2")
         self.assertEqual(row["smiles"], "C(CO)O")
         dataset = target_db["datasets"].rows[0]
@@ -868,7 +1033,13 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
             b"date\tNew York\tSan Francisco\tAustin\n2026-01-01\t1\t2\t3\n2026-01-02\t4\t5\t6\n",
             "text/tab-separated-values; charset=utf-8",
         )
-        target_db = FakeDatabase()
+        target_db = FakeDatabase(
+            {
+                "nanomine_records": FakeCollection(
+                    [{"record_id": "NANOMINE-STALE", "title": "stale row"}]
+                )
+            }
+        )
 
         summaries = migration_script.import_extra_open_database_records(
             target_db,
@@ -882,6 +1053,7 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(summaries[0]["status"], "imported")
         self.assertEqual(summaries[0]["records_upserted"], 2)
         self.assertEqual(target_db["nanomine_records"].count_documents({}), 2)
+        self.assertNotIn("NANOMINE-STALE", {item["record_id"] for item in target_db["nanomine_records"].rows})
         row = target_db["nanomine_records"].rows[0]
         self.assertEqual(row["record_id"], "NANOMINE-00000001")
         self.assertEqual(row["title"], "2026-01-01")
@@ -889,10 +1061,84 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         dataset = target_db["datasets"].rows[0]
         self.assertEqual(dataset["dataset_id"], "nanomine")
         self.assertEqual(dataset["record_collection_key"], "poly_data.nanomine_records")
+        self.assertEqual(dataset["row_count"], 2)
+        self.assertEqual(dataset["record_count"], 2)
+        self.assertEqual(dataset["record_mode"], "full")
+        self.assertEqual(dataset["verification_status"], "verified")
+        self.assertEqual(dataset["source_objects"][0]["object_key"], "datasets/nanomine/raw/data.tsv")
         stats = target_db["dataset_stats"].rows[0]
         self.assertEqual(stats["dataset_id"], "nanomine")
         self.assertEqual(stats["record_count"], 2)
         self.assertEqual(stats["category_counts"]["source_file"]["data.tsv"], 2)
+        self.assertEqual(stats["sampling"]["analysis_sample_count"], 2)
+        self.assertFalse(any(name.startswith("__staging_") for name in target_db.collections))
+
+    def test_extra_open_database_import_resumes_completed_staging_chunks(self) -> None:
+        import pandas as pd
+
+        client = FakeS3Client()
+        object_key = "datasets/nanomine/raw/data.tsv"
+        client.put_object(
+            "polymer-data",
+            object_key,
+            b"date\tNew York\tSan Francisco\tAustin\n2026-01-01\t1\t2\t3\n2026-01-02\t4\t5\t6\n",
+            "text/tab-separated-values; charset=utf-8",
+        )
+        job_id = "nanomine-resume-job"
+        staging_name = migration_script.staging_collection_name("nanomine", job_id)
+        first_document = migration_script.build_extra_dataset_documents(
+            pd.DataFrame([{"date": "2026-01-01", "New York": 1, "San Francisco": 2, "Austin": 3}]),
+            dataset_spec=next(spec for spec in migration_script.EXTRA_DATASET_SPECS if spec.dataset_id == "nanomine"),
+            file_spec=next(
+                file_spec
+                for spec in migration_script.EXTRA_DATASET_SPECS
+                if spec.dataset_id == "nanomine"
+                for file_spec in spec.files
+                if file_spec.importable
+            ),
+        )[0]
+        source_objects = migration_script.source_object_snapshots(client, "polymer-data", [object_key])
+        target_db = FakeDatabase(
+            {
+                staging_name: FakeCollection([first_document]),
+                "import_jobs": FakeCollection(
+                    [{"job_id": job_id, "dataset_id": "nanomine", "source_objects": source_objects, "status": "failed"}]
+                ),
+                "import_checkpoints": FakeCollection(
+                    [
+                        {
+                            "job_id": job_id,
+                            "dataset_id": "nanomine",
+                            "source_file": "data.tsv",
+                            "chunk_index": 1,
+                            "row_start": 1,
+                            "row_end": 1,
+                            "records": 1,
+                            "status": "completed",
+                        }
+                    ]
+                ),
+            }
+        )
+        frames = [
+            pd.DataFrame([{"date": "2026-01-01", "New York": 1, "San Francisco": 2, "Austin": 3}]),
+            pd.DataFrame([{"date": "2026-01-02", "New York": 4, "San Francisco": 5, "Austin": 6}]),
+        ]
+
+        with patch.object(migration_script, "iter_extra_dataset_frames", return_value=iter(frames)):
+            summaries = migration_script.import_extra_open_database_records(
+                target_db,
+                s3_client=client,
+                bucket="polymer-data",
+                dataset_ids=["nanomine"],
+                sample_size=None,
+                apply=True,
+                resume_job_id=job_id,
+            )
+
+        self.assertEqual(summaries[0]["status"], "imported")
+        self.assertEqual(target_db["nanomine_records"].count_documents({}), 2)
+        self.assertEqual(target_db["nanomine_records"].bulk_batches, [1])
 
     def test_md_allatom_sftp_apply_uploads_recursive_files_and_indexes_mongo(self) -> None:
         client = FakeS3Client()
@@ -1019,7 +1265,13 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(manifest["mongo_index_count"], 2)
 
     def test_md_allatom_structured_import_uploads_csvs_and_preserves_duplicate_natural_keys(self) -> None:
-        target_db = FakeDatabase()
+        target_db = FakeDatabase(
+            {
+                "md_allatom_diamines": FakeCollection([{"md_allatom_diamine_id": "STALE-DIAMINE"}]),
+                "md_allatom_dianhydrides": FakeCollection([{"md_allatom_dianhydride_id": "STALE-DIANHYDRIDE"}]),
+                "md_allatom_carbon_results": FakeCollection([{"md_allatom_carbon_result_id": "STALE-CARBON"}]),
+            }
+        )
         client = FakeS3Client()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1057,6 +1309,8 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         self.assertEqual(summary["dianhydride_records_upserted"], 1)
         self.assertEqual(summary["carbon_records_upserted"], 2)
         self.assertEqual(target_db["md_allatom_carbon_results"].count_documents({}), 2)
+        self.assertEqual(target_db["md_allatom_diamines"].count_documents({}), 1)
+        self.assertEqual(target_db["md_allatom_dianhydrides"].count_documents({}), 1)
         self.assertEqual(
             [row["md_allatom_carbon_result_id"] for row in target_db["md_allatom_carbon_results"].rows],
             ["MDALLATOM-C-000001", "MDALLATOM-C-000002"],
@@ -1065,6 +1319,11 @@ class PolyDataMigrationScriptTest(unittest.TestCase):
         stats = target_db["dataset_stats"].rows[0]
         self.assertEqual(stats["dataset_id"], "md_allatom")
         self.assertEqual(stats["category_counts"]["temperature"]["250"], 2)
+        dataset = target_db["datasets"].rows[0]
+        self.assertEqual(dataset["row_count"], 2)
+        self.assertEqual(dataset["record_count"], 2)
+        self.assertEqual(dataset["verification_status"], "verified")
+        self.assertFalse(any(name.startswith("__staging_md_allatom_") for name in target_db.collections))
 
     def test_load_md_allatom_file_documents_uses_find_for_pymongo_like_collection(self) -> None:
         collection = PyMongoLikeCollection()

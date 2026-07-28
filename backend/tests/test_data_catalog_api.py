@@ -193,9 +193,84 @@ class DataCatalogServiceTest(unittest.TestCase):
         self.assertEqual(openpoly.description, "从 poly_data.datasets 读取的数据集说明。")
         self.assertEqual(openpoly.record_collection_key, "poly_data.material_records")
         self.assertEqual(openpoly.record_count, 1)
-        self.assertEqual(openpoly.record_mode, "full")
+        self.assertEqual(openpoly.record_mode, "sample")
+        self.assertEqual(openpoly.coverage_percent, 10.0)
         self.assertEqual(openpoly.field_summaries[0].label, "Mongo 字段说明")
         self.assertIn("smipoly", {item.dataset_id for item in data.items})
+
+    def test_dataset_catalog_marks_every_incomplete_collection_as_sample(self) -> None:
+        service = DataCatalogService(s3_client=FakeS3Client(configured=False))
+        fake_db = FakeMongoDatabase(
+            {
+                "datasets": [
+                    {
+                        "dataset_id": "omg",
+                        "display_name": "OMG",
+                        "source_category": "reaction data",
+                        "confidence_label": "source table",
+                        "description": "partial import",
+                        "row_count": 5,
+                        "column_count": 4,
+                        "storage_prefix": "datasets/omg/",
+                    }
+                ],
+                "dataset_fields": [],
+                "omg_polymers": [
+                    {"record_id": "OMG-00000001"},
+                    {"record_id": "OMG-00000002"},
+                ],
+            }
+        )
+
+        with (
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+        ):
+            data = service.list_datasets()
+
+        omg = next(item for item in data.items if item.dataset_id == "omg")
+        self.assertEqual(omg.record_count, 2)
+        self.assertEqual(omg.record_mode, "sample")
+        self.assertEqual(omg.coverage_percent, 40.0)
+        self.assertEqual(omg.verification_status, "partial")
+
+    def test_dataset_catalog_exposes_verified_coverage_for_exact_count(self) -> None:
+        service = DataCatalogService(s3_client=FakeS3Client(configured=False))
+        fake_db = FakeMongoDatabase(
+            {
+                "datasets": [
+                    {
+                        "dataset_id": "nanomine",
+                        "display_name": "NanoMine",
+                        "source_category": "table",
+                        "confidence_label": "source table",
+                        "description": "complete import",
+                        "row_count": 2,
+                        "column_count": 4,
+                        "storage_prefix": "datasets/nanomine/",
+                        "verification_status": "verified",
+                    }
+                ],
+                "dataset_fields": [],
+                "nanomine_records": [
+                    {"record_id": "NANOMINE-00000001"},
+                    {"record_id": "NANOMINE-00000002"},
+                ],
+            }
+        )
+
+        with (
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+        ):
+            data = service.list_datasets()
+
+        nanomine = next(item for item in data.items if item.dataset_id == "nanomine")
+        self.assertEqual(nanomine.record_mode, "full")
+        self.assertEqual(nanomine.coverage_percent, 100.0)
+        self.assertEqual(nanomine.verification_status, "verified")
 
     def test_overview_material_record_count_sums_poly_data_collections(self) -> None:
         original = demo_store.load()
@@ -665,6 +740,77 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         self.assertEqual(data["items"][0]["title"], "run-001")
         self.assertEqual(data["items"][0]["status"], "completed")
         self.assertIn("workflow_type", data["items"][0]["preview_fields"])
+
+    def test_list_collection_records_supports_cursor_pagination(self) -> None:
+        original = demo_store.load()
+        try:
+            demo_store.save(
+                {
+                    **original,
+                    "poly_data.nanomine_records": [
+                        {"record_id": "NANOMINE-00000001", "title": "row 1", "row_index": 1},
+                        {"record_id": "NANOMINE-00000002", "title": "row 2", "row_index": 2},
+                        {"record_id": "NANOMINE-00000003", "title": "row 3", "row_index": 3},
+                    ],
+                }
+            )
+            self._login_as("admin-user")
+            with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+                first = self.client.get(
+                    "/api/v1/data-catalog/mongo-collections/poly_data.nanomine_records/records",
+                    params={"page_size": 2, "use_cursor": "true"},
+                )
+                cursor = first.json()["data"]["next_cursor"]
+                second = self.client.get(
+                    "/api/v1/data-catalog/mongo-collections/poly_data.nanomine_records/records",
+                    params={"page_size": 2, "use_cursor": "true", "cursor": cursor},
+                )
+        finally:
+            demo_store.save(original)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertIsNotNone(cursor)
+        self.assertEqual([item["record_id"] for item in first.json()["data"]["items"]], [
+            "NANOMINE-00000003",
+            "NANOMINE-00000002",
+        ])
+        self.assertEqual([item["record_id"] for item in second.json()["data"]["items"]], ["NANOMINE-00000001"])
+        self.assertIsNone(second.json()["data"]["next_cursor"])
+
+    def test_list_collection_records_rejects_cursor_from_another_collection(self) -> None:
+        original = demo_store.load()
+        try:
+            demo_store.save(
+                {
+                    **original,
+                    "poly_data.nanomine_records": [
+                        {"record_id": "NANOMINE-00000001", "row_index": 1},
+                        {"record_id": "NANOMINE-00000002", "row_index": 2},
+                    ],
+                    "poly_data.tropic_records": [
+                        {"record_id": "TROPIC-00000001", "row_index": 1},
+                    ],
+                }
+            )
+            self._login_as("admin-user")
+            with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+                first = self.client.get(
+                    "/api/v1/data-catalog/mongo-collections/poly_data.nanomine_records/records",
+                    params={"page_size": 1, "use_cursor": "true"},
+                )
+                response = self.client.get(
+                    "/api/v1/data-catalog/mongo-collections/poly_data.tropic_records/records",
+                    params={
+                        "page_size": 1,
+                        "use_cursor": "true",
+                        "cursor": first.json()["data"]["next_cursor"],
+                    },
+                )
+        finally:
+            demo_store.save(original)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["data"]["detail"], "游标与当前集合不匹配")
 
     def test_get_collection_record_returns_sanitized_document(self) -> None:
         self._seed_demo_records()

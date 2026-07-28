@@ -55,6 +55,8 @@ TARGET_IMPORT_JOBS_COLLECTION = "import_jobs"
 TARGET_IMPORT_CHECKPOINTS_COLLECTION = "import_checkpoints"
 TARGET_UPLOAD_JOBS_COLLECTION = "upload_jobs"
 TARGET_UPLOAD_CHECKPOINTS_COLLECTION = "upload_checkpoints"
+TARGET_MIGRATION_MANIFESTS_COLLECTION = "migration_manifests"
+TARGET_MIGRATION_MANIFEST_RECORDS_COLLECTION = "migration_manifest_records"
 RADONPY_OBJECT_KEY = "datasets/radonpy_pi1070/raw/pi1070.xlsx"
 PI1M_OBJECT_KEY = "datasets/pi1m_v2/raw/pi1m_v2.csv"
 SMIPOLY_OBJECT_KEY = "datasets/smipoly/raw/202207_smip_monset.csv"
@@ -67,9 +69,9 @@ SFTP_DEFAULT_HOST = "10.26.15.53"
 SFTP_DEFAULT_ROOT = "/polymer-multi-modal/open-databases/Processed_data"
 MD_ALLATOM_DEFAULT_ROOT = "/polymer-multi-modal/MD-AllAtom"
 MD_ALLATOM_DEFAULT_FAMILIES = ("C", "F", "Si")
-DEFAULT_PI1M_SAMPLE_SIZE = 10000
+DEFAULT_PI1M_SAMPLE_SIZE: int | None = None
 DEFAULT_PI1M_CHUNK_SIZE = 50000
-DEFAULT_EXTRA_SAMPLE_SIZE = 10000
+DEFAULT_EXTRA_SAMPLE_SIZE: int | None = None
 DEFAULT_UPLOAD_WORKERS = 8
 DEFAULT_UPLOAD_RETRIES = 3
 UPLOAD_MULTIPART_THRESHOLD = 64 * 1024 * 1024
@@ -77,6 +79,7 @@ UPLOAD_PART_SIZE = 64 * 1024 * 1024
 UPLOAD_READ_CHUNK_SIZE = 8 * 1024 * 1024
 MANIFEST_KEY = "manifests/poly_data_manifest.json"
 LOCAL_MANIFEST_PATH = Path(".runtime/data_catalog/poly_data_manifest.json")
+MONGO_MANIFEST_RECORD_CHUNK_BYTES = 8 * 1024 * 1024
 MD_ALLATOM_STRUCTURED_OBJECT_KEYS = {
     "diamine": "datasets/md_allatom/structured/diamine.csv",
     "dianhydride": "datasets/md_allatom/structured/dianhydride.csv",
@@ -866,11 +869,12 @@ def upload_records_concurrently(
                 "attempts": int(record.get("attempts") or 0),
                 "error": _describe_upload_error(exc),
             }
-        _persist_upload_checkpoint(target_db, result, job_id=job_id)
-        _persist_dataset_object(target_db, result)
-        if on_record_complete is not None:
-            on_record_complete(result)
-        _update_upload_job(target_db, job_id=job_id, record=result)
+        if result.get("status") != "cancelled" and not cancel_event.is_set():
+            _persist_upload_checkpoint(target_db, result, job_id=job_id)
+            _persist_dataset_object(target_db, result)
+            if on_record_complete is not None:
+                on_record_complete(result)
+            _update_upload_job(target_db, job_id=job_id, record=result)
         report_progress(result)
         return index, result
 
@@ -899,7 +903,9 @@ def upload_records_concurrently(
                         result_index, result = future.result()
                         results[result_index] = result
         finalized = [result for result in results if result is not None]
-        _finish_upload_job(target_db, job_id=job_id, records=finalized, cancelled=cancel_event.is_set())
+        cancelled = cancel_event.is_set() or any(result.get("status") == "cancelled" for result in finalized)
+        if not cancelled:
+            _finish_upload_job(target_db, job_id=job_id, records=finalized, cancelled=False)
         return finalized
     finally:
         for client in owned_clients:
@@ -948,39 +954,32 @@ def dataset_record_metadata(dataset_id: str) -> dict[str, Any]:
     if dataset_id in EXTRA_TARGET_COLLECTIONS:
         return {
             "record_collection_key": f"poly_data.{EXTRA_TARGET_COLLECTIONS[dataset_id]}",
-            "record_mode": "full",
         }
     if dataset_id == "openpoly":
         return {
             "record_collection_key": "poly_data.material_records",
-            "record_mode": "full",
         }
     if dataset_id == "radonpy_pi1070":
         return {
             "record_collection_key": "poly_data.radonpy_records",
-            "record_mode": "full",
         }
     if dataset_id == "pi1m_v2":
         return {
             "record_collection_key": "poly_data.pi1m_samples",
-            "record_mode": "full",
         }
     if dataset_id == "smipoly":
         return {
             "record_collection_key": "poly_data.smipoly_monomers",
-            "record_mode": "full",
         }
     if dataset_id == "polyuniverse":
         return {
             "record_collection_key": "poly_data.polyuniverse_monomers",
-            "record_mode": "full",
         }
     if dataset_id == "md_allatom":
         return {
             "record_collection_key": "poly_data.md_allatom_carbon_results",
-            "record_mode": "full",
         }
-    return {"record_collection_key": None, "record_mode": "metadata_only"}
+    return {"record_collection_key": None}
 
 
 def field_documents() -> list[dict[str, Any]]:
@@ -1427,7 +1426,16 @@ def create_indexes(target_db: Any) -> None:
         collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
         collection.create_index([("source_file", 1), ("row_index", 1)], name="source_row")
         collection.create_index([("title", 1)], name="title")
-    target_db["migration_manifests"].create_index([("generated_at", -1)], name="generated_at")
+    target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].create_index([("generated_at", -1)], name="generated_at")
+    target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].create_index(
+        [("manifest_id", 1)],
+        name="manifest_id",
+        unique=True,
+        partialFilterExpression={"manifest_id": {"$type": "string"}},
+    )
+    target_db[TARGET_MIGRATION_MANIFEST_RECORDS_COLLECTION].create_index(
+        [("manifest_id", 1), ("section", 1), ("chunk_index", 1)], name="manifest_section_chunk", unique=True
+    )
     target_db[TARGET_DATASET_STATS_COLLECTION].create_index([("dataset_id", 1)], name="dataset_id", unique=True)
     target_db[TARGET_IMPORT_JOBS_COLLECTION].create_index([("job_id", 1)], name="job_id", unique=True)
     target_db[TARGET_IMPORT_JOBS_COLLECTION].create_index([("dataset_id", 1), ("started_at", -1)], name="dataset_started")
@@ -1599,7 +1607,7 @@ def build_smipoly_documents(dataframe: Any) -> list[dict[str, Any]]:
         com_id = first_present(row, ["comID", "com_id"]) or f"ROW-{index:06d}"
         docs.append(
             {
-                "smipoly_record_id": f"SMIPOLY-{com_id}",
+                "smipoly_record_id": f"SMIPOLY-{index:06d}",
                 "dataset": {"dataset_id": "smipoly", "dataset_name": "SMiPoly"},
                 "com_id": com_id,
                 "molecular_formula": first_present(row, ["MolecularFormula", "molecular_formula"]),
@@ -1607,6 +1615,8 @@ def build_smipoly_documents(dataframe: Any) -> list[dict[str, Any]]:
                 "smiles": first_present(row, ["SMILES", "smiles"]),
                 "iupac_name": first_present(row, ["IUPACName", "iupac_name"]),
                 "source_file": "202207_smip_monset.csv",
+                "source_row_index": index,
+                "row_index": index,
                 "raw": row,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
@@ -2003,18 +2013,235 @@ def upsert_documents(collection: Any, key_field: str, documents: list[dict[str, 
     return len(documents)
 
 
-def update_dataset_record_count(target_db: Any, dataset_id: str, *, count: int, record_mode: str, collection_key: str) -> None:
+def source_object_snapshots(s3_client: Any, bucket: str, object_keys: list[str]) -> list[dict[str, Any]]:
+    """Capture immutable source metadata used to verify one import run."""
+    snapshots: list[dict[str, Any]] = []
+    for object_key in object_keys:
+        metadata = s3_client.head_object(bucket, object_key) if hasattr(s3_client, "head_object") else None
+        if metadata is None:
+            raise FileNotFoundError(f"source object is missing: {object_key}")
+        snapshots.append(
+            {
+                "object_key": object_key,
+                "size_bytes": int(metadata.get("size_bytes") or 0),
+                "etag": metadata.get("etag"),
+                "last_modified": metadata.get("last_modified"),
+            }
+        )
+    return snapshots
+
+
+def staging_collection_name(dataset_id: str, job_id: str) -> str:
+    """Return a Mongo-safe staging collection name for one dataset import."""
+    safe_job_id = "".join(char if char.isalnum() else "_" for char in job_id)[-48:]
+    return f"__staging_{dataset_id}_{safe_job_id}"
+
+
+def atomic_replace_collection(target_db: Any, staging_name: str, target_name: str) -> None:
+    """Replace a canonical collection only after staging verification succeeds."""
+    if hasattr(target_db, "replace_collection"):
+        target_db.replace_collection(staging_name, target_name)
+        return
+    target_db[staging_name].rename(target_name, dropTarget=True)
+
+
+def import_verified_small_dataset(
+    target_db: Any,
+    *,
+    s3_client: Any,
+    bucket: str,
+    dataset_id: str,
+    object_keys: list[str],
+    target_collection: str,
+    collection_key: str,
+    key_field: str,
+    load_document_groups: Any,
+    indexes: list[tuple[list[tuple[str, int]], str, bool]],
+) -> dict[str, Any]:
+    """Load a bounded dataset through a fingerprinted, auditable staging collection."""
+    job_id = f"{dataset_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    staging_name = staging_collection_name(dataset_id, job_id)
+    summary = {
+        "dataset_id": dataset_id,
+        "source_object_keys": list(object_keys),
+        "target_collection": target_collection,
+        "staging_collection": staging_name,
+        "job_id": job_id,
+        "records_upserted": 0,
+        "checkpoint_count": 0,
+        "status": "planned",
+        "error": None,
+    }
+    started_at = datetime.now(timezone.utc)
+    try:
+        source_objects = source_object_snapshots(s3_client, bucket, object_keys)
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {
+                "$set": {
+                    "job_id": job_id,
+                    "dataset_id": dataset_id,
+                    "source_objects": source_objects,
+                    "target_collection": target_collection,
+                    "staging_collection": staging_name,
+                    "status": "running",
+                    "started_at": started_at,
+                    "updated_at": started_at,
+                }
+            },
+            upsert=True,
+        )
+        staging = target_db[staging_name]
+        staging.drop()
+        document_groups = list(load_document_groups())
+        file_counts: list[dict[str, Any]] = []
+        row_start = 1
+        for chunk_index, (object_key, documents) in enumerate(document_groups, start=1):
+            if object_key not in object_keys:
+                raise RuntimeError(f"unexpected source object: {object_key}")
+            imported = upsert_documents_bulk(staging, key_field, documents)
+            summary["records_upserted"] += imported
+            summary["checkpoint_count"] += 1
+            file_counts.append({"object_key": object_key, "record_count": len(documents)})
+            target_db[TARGET_IMPORT_CHECKPOINTS_COLLECTION].update_one(
+                {"job_id": job_id, "chunk_index": chunk_index},
+                {
+                    "$set": {
+                        "job_id": job_id,
+                        "dataset_id": dataset_id,
+                        "source_file": Path(object_key).name,
+                        "chunk_index": chunk_index,
+                        "row_start": row_start,
+                        "row_end": row_start + len(documents) - 1,
+                        "records": len(documents),
+                        "status": "completed",
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
+                upsert=True,
+            )
+            row_start += len(documents)
+        if {item["object_key"] for item in file_counts} != set(object_keys):
+            raise RuntimeError("not all source objects were parsed")
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "verifying", "expected_count": summary["records_upserted"]}},
+            upsert=True,
+        )
+        if source_objects != source_object_snapshots(s3_client, bucket, object_keys):
+            raise RuntimeError("source objects changed during import")
+        staging_count = int(staging.count_documents({}))
+        if staging_count != summary["records_upserted"]:
+            raise RuntimeError(
+                f"staging count mismatch: parsed={summary['records_upserted']} stored={staging_count}"
+            )
+        for keys, name, unique in indexes:
+            staging.create_index(keys, name=name, unique=unique)
+        atomic_replace_collection(target_db, staging_name, target_collection)
+        verified_count = int(target_db[target_collection].count_documents({}))
+        if verified_count != summary["records_upserted"]:
+            raise RuntimeError(
+                f"canonical count mismatch: parsed={summary['records_upserted']} stored={verified_count}"
+            )
+        record_mode = "full" if verified_count else "metadata_only"
+        update_dataset_record_count(
+            target_db,
+            dataset_id,
+            count=verified_count,
+            source_count=summary["records_upserted"],
+            record_mode=record_mode,
+            verification_status="verified" if verified_count else "metadata_only",
+            source_objects=source_objects,
+            collection_key=collection_key,
+        )
+        finished_at = datetime.now(timezone.utc)
+        target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
+            {"dataset_id": dataset_id},
+            {
+                "$set": {
+                    "dataset_id": dataset_id,
+                    "record_count": verified_count,
+                    "source_file_counts": file_counts,
+                    "source_objects": source_objects,
+                    "sampling": {"strategy": "none", "analysis_sample_count": 0},
+                    "updated_at": finished_at,
+                }
+            },
+            upsert=True,
+        )
+        elapsed = max((finished_at - started_at).total_seconds(), 0.001)
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {
+                "$set": {
+                    "status": "completed",
+                    "processed_count": summary["records_upserted"],
+                    "expected_count": summary["records_upserted"],
+                    "verified_count": verified_count,
+                    "checkpoint_count": summary["checkpoint_count"],
+                    "source_file_counts": file_counts,
+                    "finished_at": finished_at,
+                    "updated_at": finished_at,
+                    "duration_seconds": round(elapsed, 3),
+                    "throughput_rows_per_second": round(verified_count / elapsed, 2),
+                }
+            },
+            upsert=True,
+        )
+        summary["status"] = "imported"
+    except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
+        summary["status"] = "failed"
+        summary["error"] = f"{exc.__class__.__name__}: {exc}"
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {
+                "$set": {
+                    "status": "failed",
+                    "error": summary["error"],
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+        target_db["datasets"].update_one(
+            {"dataset_id": dataset_id},
+            {"$set": {"verification_status": "failed", "updated_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+    return summary
+
+
+def update_dataset_record_count(
+    target_db: Any,
+    dataset_id: str,
+    *,
+    count: int,
+    record_mode: str,
+    collection_key: str,
+    source_count: int | None = None,
+    verification_status: str | None = None,
+    source_objects: list[dict[str, Any]] | None = None,
+) -> None:
     """Persist dataset import status."""
+    payload: dict[str, Any] = {
+        "record_collection_key": collection_key,
+        "record_count": count,
+        "record_mode": record_mode if count else "metadata_only",
+        "verification_status": verification_status
+        or ("verified" if record_mode == "full" and count else "partial" if count else "metadata_only"),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if source_count is not None:
+        payload["source_record_count"] = source_count
+        if record_mode == "full":
+            payload["row_count"] = source_count
+    if source_objects is not None:
+        payload["source_objects"] = source_objects
+    if payload["verification_status"] == "verified":
+        payload["verified_at"] = datetime.now(timezone.utc)
     target_db["datasets"].update_one(
         {"dataset_id": dataset_id},
-        {
-            "$set": {
-                "record_collection_key": collection_key,
-                "record_count": count,
-                "record_mode": record_mode if count else "metadata_only",
-                "updated_at": datetime.now(timezone.utc),
-            }
-        },
+        {"$set": payload},
         upsert=True,
     )
 
@@ -2026,6 +2253,13 @@ def upsert_catalog_metadata(target_db: Any, *, object_records: list[dict[str, An
     metadata_upserted = 0
     create_indexes(target_db)
     for doc in dataset_documents():
+        existing = target_db["datasets"].find_one({"dataset_id": doc["dataset_id"]}, {"_id": 0})
+        if existing:
+            doc = {
+                key: value
+                for key, value in doc.items()
+                if key not in {"row_count", "record_count", "record_mode", "verification_status", "source_objects", "verified_at"}
+            }
         target_db["datasets"].update_one({"dataset_id": doc["dataset_id"]}, {"$set": doc}, upsert=True)
         metadata_upserted += 1
     for doc in field_documents():
@@ -2064,26 +2298,28 @@ def import_radonpy_records(target_db: Any, *, s3_client: Any, bucket: str, apply
         summary["status"] = "skipped"
         summary["error"] = "MinIO client is not configured"
         return summary
-    try:
+    def load_document_groups() -> list[tuple[str, list[dict[str, Any]]]]:
         import pandas as pd
 
         content = s3_client.get_object(bucket, RADONPY_OBJECT_KEY)
         dataframe = pd.read_excel(BytesIO(content), engine="openpyxl")
-        documents = build_radonpy_documents(dataframe)
-        create_indexes(target_db)
-        summary["records_upserted"] = upsert_documents(target_db[TARGET_RADONPY_COLLECTION], "radonpy_record_id", documents)
-        update_dataset_record_count(
-            target_db,
-            "radonpy_pi1070",
-            count=summary["records_upserted"],
-            record_mode="full",
-            collection_key="poly_data.radonpy_records",
-        )
-        summary["status"] = "imported"
-    except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
-        summary["status"] = "failed"
-        summary["error"] = f"{exc.__class__.__name__}: {exc}"
-    return summary
+        return [(RADONPY_OBJECT_KEY, build_radonpy_documents(dataframe))]
+
+    return import_verified_small_dataset(
+        target_db,
+        s3_client=s3_client,
+        bucket=bucket,
+        dataset_id="radonpy_pi1070",
+        object_keys=[RADONPY_OBJECT_KEY],
+        target_collection=TARGET_RADONPY_COLLECTION,
+        collection_key="poly_data.radonpy_records",
+        key_field="radonpy_record_id",
+        load_document_groups=load_document_groups,
+        indexes=[
+            ([("radonpy_record_id", 1)], "radonpy_record_id", True),
+            ([("smiles", 1)], "smiles", False),
+        ],
+    )
 
 
 def import_pi1m_samples(
@@ -2094,13 +2330,16 @@ def import_pi1m_samples(
     sample_size: int | None,
     chunk_size: int = DEFAULT_PI1M_CHUNK_SIZE,
     apply: bool,
+    resume_job_id: str | None = None,
 ) -> dict[str, Any]:
     """Import PI1M v2 rows from MinIO into MongoDB with chunked bulk upserts."""
-    job_id = f"pi1m_v2-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    job_id = resume_job_id or f"pi1m_v2-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    staging_name = staging_collection_name("pi1m_v2", job_id)
     summary = {
         "dataset_id": "pi1m_v2",
         "source_object_key": PI1M_OBJECT_KEY,
         "target_collection": TARGET_PI1M_COLLECTION,
+        "staging_collection": staging_name,
         "sample_size": sample_size,
         "chunk_size": chunk_size,
         "job_id": job_id,
@@ -2116,11 +2355,24 @@ def import_pi1m_samples(
         summary["status"] = "skipped"
         summary["error"] = "MinIO client is not configured"
         return summary
+    source_stream: Any | None = None
     try:
         import pandas as pd
 
-        create_indexes(target_db)
-        source = s3_client.head_object(bucket, PI1M_OBJECT_KEY) if hasattr(s3_client, "head_object") else None
+        source_objects = source_object_snapshots(s3_client, bucket, [PI1M_OBJECT_KEY])
+        existing_job = target_db[TARGET_IMPORT_JOBS_COLLECTION].find_one({"job_id": job_id}, {"_id": 0})
+        if resume_job_id:
+            if not existing_job or existing_job.get("dataset_id") != "pi1m_v2":
+                raise RuntimeError("resume job does not match PI1M v2")
+            if existing_job.get("source_objects") != source_objects:
+                raise RuntimeError("source objects changed since the failed import")
+        completed_checkpoints = {
+            int(item.get("chunk_index") or 0): item
+            for item in target_db[TARGET_IMPORT_CHECKPOINTS_COLLECTION].find(
+                {"job_id": job_id, "status": "completed"},
+                {"_id": 0},
+            )
+        } if resume_job_id else {}
         started_at = datetime.now(timezone.utc)
         target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
             {"job_id": job_id},
@@ -2129,7 +2381,10 @@ def import_pi1m_samples(
                     "job_id": job_id,
                     "dataset_id": "pi1m_v2",
                     "source_object_key": PI1M_OBJECT_KEY,
-                    "source": source,
+                    "source": source_objects[0],
+                    "source_objects": source_objects,
+                    "target_collection": TARGET_PI1M_COLLECTION,
+                    "staging_collection": staging_name,
                     "status": "running",
                     "sample_size": sample_size,
                     "chunk_size": chunk_size,
@@ -2140,11 +2395,14 @@ def import_pi1m_samples(
             upsert=True,
         )
         start_time = monotonic()
-        content = s3_client.get_object(bucket, PI1M_OBJECT_KEY)
+        collection = target_db[staging_name]
+        if not resume_job_id:
+            collection.drop()
+        source_stream = source_object_stream_or_bytes(s3_client, bucket, PI1M_OBJECT_KEY)
         read_csv_kwargs: dict[str, Any] = {"chunksize": max(int(chunk_size), 1)}
         if sample_size is not None:
             read_csv_kwargs["nrows"] = max(int(sample_size), 0)
-        reader = pd.read_csv(BytesIO(content), **read_csv_kwargs)
+        reader = pd.read_csv(source_stream, **read_csv_kwargs)
         row_index = 1
         scores: list[float] = []
         smiles_seen: set[str] = set()
@@ -2172,9 +2430,18 @@ def import_pi1m_samples(
                 },
                 upsert=True,
             )
-            summary["records_upserted"] += upsert_documents_bulk(
-                target_db[TARGET_PI1M_COLLECTION], "pi1m_record_id", documents
-            )
+            checkpoint = completed_checkpoints.get(chunk_index)
+            if (
+                checkpoint
+                and int(checkpoint.get("row_start") or 0) == row_index
+                and int(checkpoint.get("row_end") or 0) == row_index + records_in_chunk - 1
+                and int(checkpoint.get("records") or 0) == records_in_chunk
+            ):
+                summary["records_upserted"] += records_in_chunk
+            else:
+                summary["records_upserted"] += upsert_documents_bulk(
+                    collection, "pi1m_record_id", documents
+                )
             for doc in documents:
                 score = as_float(doc.get("sa_score"))
                 if score is not None:
@@ -2210,12 +2477,51 @@ def import_pi1m_samples(
             )
             summary["checkpoint_count"] += 1
             row_index += records_in_chunk
+            target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+                {"job_id": job_id},
+                {
+                    "$set": {
+                        "processed_count": summary["records_upserted"],
+                        "checkpoint_count": summary["checkpoint_count"],
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
+                upsert=True,
+            )
         elapsed = max(monotonic() - start_time, 0.001)
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "verifying", "expected_count": summary["records_upserted"]}},
+            upsert=True,
+        )
+        if source_objects != source_object_snapshots(s3_client, bucket, [PI1M_OBJECT_KEY]):
+            raise RuntimeError("source objects changed during import")
+        staging_count = int(collection.count_documents({}))
+        if staging_count != summary["records_upserted"]:
+            raise RuntimeError(
+                f"staging count mismatch: parsed={summary['records_upserted']} stored={staging_count}"
+            )
+        collection.create_index([("pi1m_record_id", 1)], name="pi1m_record_id", unique=True)
+        collection.create_index([("smiles", 1)], name="smiles")
+        collection.create_index([("smiles_hash", 1)], name="smiles_hash")
+        collection.create_index([("row_index", 1)], name="row_index")
+        collection.create_index([("sa_score", 1), ("row_index", 1)], name="sa_score_row")
+        collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
+        atomic_replace_collection(target_db, staging_name, TARGET_PI1M_COLLECTION)
+        verified_count = int(target_db[TARGET_PI1M_COLLECTION].count_documents({}))
+        if verified_count != summary["records_upserted"]:
+            raise RuntimeError(
+                f"canonical count mismatch: parsed={summary['records_upserted']} stored={verified_count}"
+            )
+        record_mode = "full" if sample_size is None else "sample"
         update_dataset_record_count(
             target_db,
             "pi1m_v2",
-            count=summary["records_upserted"],
-            record_mode="full" if sample_size is None else "sample",
+            count=verified_count,
+            source_count=summary["records_upserted"] if sample_size is None else None,
+            record_mode=record_mode,
+            verification_status="verified" if record_mode == "full" else "partial",
+            source_objects=source_objects,
             collection_key="poly_data.pi1m_samples",
         )
         target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
@@ -2223,11 +2529,16 @@ def import_pi1m_samples(
             {
                 "$set": {
                     "dataset_id": "pi1m_v2",
-                    "record_count": summary["records_upserted"],
+                    "record_count": verified_count,
                     "sa_score_histogram": histogram(scores),
                     "unique_smiles_count": len(smiles_seen),
                     "duplicate_smiles_count": duplicate_smiles_count,
                     "visual_samples": visual_samples,
+                    "source_objects": source_objects,
+                    "sampling": {
+                        "strategy": "bounded_row_stride",
+                        "analysis_sample_count": len(visual_samples),
+                    },
                     "updated_at": datetime.now(timezone.utc),
                 }
             },
@@ -2238,14 +2549,17 @@ def import_pi1m_samples(
             {"job_id": job_id},
             {
                 "$set": {
-                    "status": "imported",
-                    "imported_count": summary["records_upserted"],
+                    "status": "completed",
+                    "imported_count": verified_count,
+                    "processed_count": summary["records_upserted"],
+                    "expected_count": summary["records_upserted"],
+                    "verified_count": verified_count,
                     "failed_count": summary["failed_count"],
                     "checkpoint_count": summary["checkpoint_count"],
                     "finished_at": finished_at,
                     "updated_at": finished_at,
                     "duration_seconds": round(elapsed, 3),
-                    "throughput_rows_per_second": round(summary["records_upserted"] / elapsed, 2),
+                    "throughput_rows_per_second": round(verified_count / elapsed, 2),
                 }
             },
             upsert=True,
@@ -2266,8 +2580,17 @@ def import_pi1m_samples(
                 },
                 upsert=True,
             )
+            target_db["datasets"].update_one(
+                {"dataset_id": "pi1m_v2"},
+                {"$set": {"verification_status": "failed", "updated_at": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
         except Exception:
             pass
+    finally:
+        close_source = getattr(source_stream, "close", None)
+        if callable(close_source):
+            close_source()
     return summary
 
 
@@ -2287,28 +2610,29 @@ def import_smipoly_records(target_db: Any, *, s3_client: Any, bucket: str, apply
         summary["status"] = "skipped"
         summary["error"] = "MinIO client is not configured"
         return summary
-    try:
+    def load_document_groups() -> list[tuple[str, list[dict[str, Any]]]]:
         import pandas as pd
 
         content = s3_client.get_object(bucket, SMIPOLY_OBJECT_KEY)
         dataframe = pd.read_csv(BytesIO(content))
-        documents = build_smipoly_documents(dataframe)
-        create_indexes(target_db)
-        summary["records_upserted"] = upsert_documents(
-            target_db[TARGET_SMIPOLY_COLLECTION], "smipoly_record_id", documents
-        )
-        update_dataset_record_count(
-            target_db,
-            "smipoly",
-            count=summary["records_upserted"],
-            record_mode="full",
-            collection_key="poly_data.smipoly_monomers",
-        )
-        summary["status"] = "imported"
-    except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
-        summary["status"] = "failed"
-        summary["error"] = f"{exc.__class__.__name__}: {exc}"
-    return summary
+        return [(SMIPOLY_OBJECT_KEY, build_smipoly_documents(dataframe))]
+
+    return import_verified_small_dataset(
+        target_db,
+        s3_client=s3_client,
+        bucket=bucket,
+        dataset_id="smipoly",
+        object_keys=[SMIPOLY_OBJECT_KEY],
+        target_collection=TARGET_SMIPOLY_COLLECTION,
+        collection_key="poly_data.smipoly_monomers",
+        key_field="smipoly_record_id",
+        load_document_groups=load_document_groups,
+        indexes=[
+            ([("smipoly_record_id", 1)], "smipoly_record_id", True),
+            ([("com_id", 1)], "com_id", False),
+            ([("smiles", 1)], "smiles", False),
+        ],
+    )
 
 
 def import_polyuniverse_records(target_db: Any, *, s3_client: Any, bucket: str, apply: bool) -> dict[str, Any]:
@@ -2327,30 +2651,33 @@ def import_polyuniverse_records(target_db: Any, *, s3_client: Any, bucket: str, 
         summary["status"] = "skipped"
         summary["error"] = "MinIO client is not configured"
         return summary
-    try:
+    def load_document_groups() -> list[tuple[str, list[dict[str, Any]]]]:
         import pandas as pd
 
-        documents: list[dict[str, Any]] = []
+        groups: list[tuple[str, list[dict[str, Any]]]] = []
         for source_file, object_key in POLYUNIVERSE_OBJECT_KEYS.items():
             content = s3_client.get_object(bucket, object_key)
             dataframe = pd.read_csv(BytesIO(content))
-            documents.extend(build_polyuniverse_documents(dataframe, source_file=source_file))
-        create_indexes(target_db)
-        summary["records_upserted"] = upsert_documents(
-            target_db[TARGET_POLYUNIVERSE_COLLECTION], "polyuniverse_record_id", documents
-        )
-        update_dataset_record_count(
-            target_db,
-            "polyuniverse",
-            count=summary["records_upserted"],
-            record_mode="full",
-            collection_key="poly_data.polyuniverse_monomers",
-        )
-        summary["status"] = "imported"
-    except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
-        summary["status"] = "failed"
-        summary["error"] = f"{exc.__class__.__name__}: {exc}"
-    return summary
+            groups.append((object_key, build_polyuniverse_documents(dataframe, source_file=source_file)))
+        return groups
+
+    return import_verified_small_dataset(
+        target_db,
+        s3_client=s3_client,
+        bucket=bucket,
+        dataset_id="polyuniverse",
+        object_keys=list(POLYUNIVERSE_OBJECT_KEYS.values()),
+        target_collection=TARGET_POLYUNIVERSE_COLLECTION,
+        collection_key="poly_data.polyuniverse_monomers",
+        key_field="polyuniverse_record_id",
+        load_document_groups=load_document_groups,
+        indexes=[
+            ([("polyuniverse_record_id", 1)], "polyuniverse_record_id", True),
+            ([("source_file", 1), ("row_index", 1)], "source_row", False),
+            ([("monomer_class", 1)], "monomer_class", False),
+            ([("smiles", 1)], "smiles", False),
+        ],
+    )
 
 
 def import_extra_open_database_records(
@@ -2361,17 +2688,24 @@ def import_extra_open_database_records(
     dataset_ids: list[str],
     sample_size: int | None,
     apply: bool,
+    resume_job_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Import selected processed 05–16 dataset rows into generic Mongo collections."""
     requested = {item.strip() for item in dataset_ids if item.strip()}
     selected_specs = [spec for spec in EXTRA_DATASET_SPECS if not requested or spec.dataset_id in requested]
+    if resume_job_id and len(selected_specs) != 1:
+        raise ValueError("resume_job_id requires exactly one extra dataset id")
     summaries: list[dict[str, Any]] = []
     for dataset_spec in selected_specs:
+        job_id = resume_job_id or f"{dataset_spec.dataset_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        staging_name = staging_collection_name(dataset_spec.dataset_id, job_id)
         summary = {
             "dataset_id": dataset_spec.dataset_id,
             "source_object_keys": [file_spec.object_key for file_spec in dataset_spec.files if file_spec.importable],
             "target_collection": dataset_spec.collection_name,
+            "staging_collection": staging_name,
             "sample_size": sample_size,
+            "job_id": job_id,
             "records_upserted": 0,
             "failed_count": 0,
             "checkpoint_count": 0,
@@ -2387,9 +2721,53 @@ def import_extra_open_database_records(
             summaries.append(summary)
             continue
         try:
-            create_indexes(target_db)
-            collection = target_db[dataset_spec.collection_name]
+            source_objects = source_object_snapshots(
+                s3_client,
+                bucket,
+                list(summary["source_object_keys"]),
+            )
+            existing_job = target_db[TARGET_IMPORT_JOBS_COLLECTION].find_one(
+                {"job_id": job_id},
+                {"_id": 0},
+            )
+            if resume_job_id:
+                if not existing_job or existing_job.get("dataset_id") != dataset_spec.dataset_id:
+                    raise RuntimeError(f"resume job does not match dataset {dataset_spec.dataset_id}")
+                if existing_job.get("source_objects") != source_objects:
+                    raise RuntimeError("source objects changed since the failed import")
+            completed_checkpoints = {
+                int(item.get("chunk_index") or 0): item
+                for item in target_db[TARGET_IMPORT_CHECKPOINTS_COLLECTION].find(
+                    {"job_id": job_id, "status": "completed"},
+                    {"_id": 0},
+                )
+            } if resume_job_id else {}
+            started_at = datetime.now(timezone.utc)
+            target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+                {"job_id": job_id},
+                {
+                    "$set": {
+                        "job_id": job_id,
+                        "dataset_id": dataset_spec.dataset_id,
+                        "target_collection": dataset_spec.collection_name,
+                        "staging_collection": staging_name,
+                        "source_objects": source_objects,
+                        "sample_size": sample_size,
+                        "status": "running",
+                        "processed_count": 0,
+                        "checkpoint_count": 0,
+                        "started_at": started_at,
+                        "updated_at": started_at,
+                    }
+                },
+                upsert=True,
+            )
+            collection = target_db[staging_name]
+            if not resume_job_id:
+                collection.drop()
             row_index = 1
+            global_chunk_index = 0
+            file_counts: list[dict[str, Any]] = []
             stats: dict[str, Any] = {
                 "dataset_id": dataset_spec.dataset_id,
                 "record_count": 0,
@@ -2403,56 +2781,167 @@ def import_extra_open_database_records(
                 if not file_spec.importable:
                     continue
                 source_row_index = 1
-                while sample_size is None or summary["records_upserted"] < sample_size:
-                    remaining = None if sample_size is None else sample_size - summary["records_upserted"]
-                    if remaining is not None and remaining <= 0:
-                        break
-                    frames = iter_extra_dataset_frames(
-                        s3_client=s3_client,
-                        bucket=bucket,
-                        file_spec=file_spec,
-                        remaining=remaining,
-                    )
-                    any_frame = False
-                    for dataframe in frames:
-                        any_frame = True
-                        documents = build_extra_dataset_documents(
-                            dataframe,
-                            dataset_spec=dataset_spec,
-                            file_spec=file_spec,
-                            start_index=row_index,
-                            source_start_index=source_row_index,
-                        )
-                        if not documents:
-                            continue
-                        imported = upsert_documents_bulk(collection, "record_id", documents)
-                        summary["records_upserted"] += imported
-                        summary["checkpoint_count"] += 1
-                        row_index += len(documents)
-                        source_row_index += len(documents)
-                        stats["record_count"] = summary["records_upserted"]
-                        update_extra_dataset_stats(stats, documents=documents, file_spec=file_spec)
-                        if sample_size is not None and summary["records_upserted"] >= sample_size:
-                            break
-                    if not any_frame or sample_size is not None:
-                        break
+                remaining = None if sample_size is None else sample_size - summary["records_upserted"]
+                if remaining is not None and remaining <= 0:
                     break
+                for dataframe in iter_extra_dataset_frames(
+                    s3_client=s3_client,
+                    bucket=bucket,
+                    file_spec=file_spec,
+                    remaining=remaining,
+                ):
+                    documents = build_extra_dataset_documents(
+                        dataframe,
+                        dataset_spec=dataset_spec,
+                        file_spec=file_spec,
+                        start_index=row_index,
+                        source_start_index=source_row_index,
+                    )
+                    if not documents:
+                        continue
+                    global_chunk_index += 1
+                    checkpoint = completed_checkpoints.get(global_chunk_index)
+                    expected_row_start = row_index
+                    expected_row_end = row_index + len(documents) - 1
+                    if (
+                        checkpoint
+                        and checkpoint.get("source_file") == Path(file_spec.remote_relative_path).name
+                        and int(checkpoint.get("row_start") or 0) == expected_row_start
+                        and int(checkpoint.get("row_end") or 0) == expected_row_end
+                        and int(checkpoint.get("records") or 0) == len(documents)
+                    ):
+                        imported = len(documents)
+                    else:
+                        imported = upsert_documents_bulk(collection, "record_id", documents)
+                    summary["records_upserted"] += imported
+                    summary["checkpoint_count"] += 1
+                    row_index += len(documents)
+                    source_row_index += len(documents)
+                    stats["record_count"] = summary["records_upserted"]
+                    update_extra_dataset_stats(stats, documents=documents, file_spec=file_spec)
+                    target_db[TARGET_IMPORT_CHECKPOINTS_COLLECTION].update_one(
+                        {"job_id": job_id, "chunk_index": global_chunk_index},
+                        {
+                            "$set": {
+                                "job_id": job_id,
+                                "dataset_id": dataset_spec.dataset_id,
+                                "source_file": Path(file_spec.remote_relative_path).name,
+                                "chunk_index": global_chunk_index,
+                                "row_start": row_index - len(documents),
+                                "row_end": row_index - 1,
+                                "records": len(documents),
+                                "status": "completed",
+                                "updated_at": datetime.now(timezone.utc),
+                            }
+                        },
+                        upsert=True,
+                    )
+                    target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+                        {"job_id": job_id},
+                        {
+                            "$set": {
+                                "processed_count": summary["records_upserted"],
+                                "checkpoint_count": summary["checkpoint_count"],
+                                "updated_at": datetime.now(timezone.utc),
+                            }
+                        },
+                        upsert=True,
+                    )
+                    if sample_size is not None and summary["records_upserted"] >= sample_size:
+                        break
+                file_counts.append(
+                    {
+                        "object_key": file_spec.object_key,
+                        "record_count": source_row_index - 1,
+                    }
+                )
+                if sample_size is not None and summary["records_upserted"] >= sample_size:
+                    break
+
+            target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+                {"job_id": job_id},
+                {"$set": {"status": "verifying", "expected_count": summary["records_upserted"]}},
+                upsert=True,
+            )
+            if source_objects != source_object_snapshots(s3_client, bucket, list(summary["source_object_keys"])):
+                raise RuntimeError("source objects changed during import")
+            staging_count = int(collection.count_documents({}))
+            if staging_count != summary["records_upserted"]:
+                raise RuntimeError(
+                    f"staging count mismatch: parsed={summary['records_upserted']} stored={staging_count}"
+                )
+            collection.create_index([("record_id", 1)], name="record_id", unique=True)
+            collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
+            collection.create_index([("source_file", 1), ("source_row_index", 1)], name="source_row")
+            collection.create_index([("title", 1)], name="title")
+            atomic_replace_collection(target_db, staging_name, dataset_spec.collection_name)
+            verified_count = int(target_db[dataset_spec.collection_name].count_documents({}))
+            if verified_count != summary["records_upserted"]:
+                raise RuntimeError(
+                    f"canonical count mismatch: parsed={summary['records_upserted']} stored={verified_count}"
+                )
+            record_mode = "full" if sample_size is None else "sample"
             update_dataset_record_count(
                 target_db,
                 dataset_spec.dataset_id,
-                count=summary["records_upserted"],
-                record_mode="full" if sample_size is None else "sample",
+                count=verified_count,
+                source_count=summary["records_upserted"] if sample_size is None else None,
+                record_mode=record_mode,
+                verification_status="verified" if record_mode == "full" else "partial",
+                source_objects=source_objects,
                 collection_key=f"poly_data.{dataset_spec.collection_name}",
             )
+            stats["source_file_counts"] = file_counts
+            stats["source_objects"] = source_objects
+            stats["sampling"] = {
+                "strategy": "bounded_first_rows",
+                "analysis_sample_count": len(stats.get("analysis_samples", [])),
+                "numeric_value_limit": 50_000,
+            }
             target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
                 {"dataset_id": dataset_spec.dataset_id},
                 {"$set": {**finalize_extra_dataset_stats(stats), "updated_at": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
+            finished_at = datetime.now(timezone.utc)
+            elapsed = max((finished_at - started_at).total_seconds(), 0.001)
+            target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+                {"job_id": job_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "imported_count": verified_count,
+                        "verified_count": verified_count,
+                        "expected_count": summary["records_upserted"],
+                        "source_file_counts": file_counts,
+                        "finished_at": finished_at,
+                        "updated_at": finished_at,
+                        "duration_seconds": round(elapsed, 3),
+                        "throughput_rows_per_second": round(verified_count / elapsed, 2),
+                    }
+                },
                 upsert=True,
             )
             summary["status"] = "imported"
         except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
             summary["status"] = "failed"
             summary["error"] = f"{exc.__class__.__name__}: {exc}"
+            target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+                {"job_id": job_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error": summary["error"],
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
+                upsert=True,
+            )
+            target_db["datasets"].update_one(
+                {"dataset_id": dataset_spec.dataset_id},
+                {"$set": {"verification_status": "failed", "updated_at": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
         summaries.append(summary)
     return summaries
 
@@ -2516,6 +3005,15 @@ def import_md_allatom_structured_records(
     apply: bool,
 ) -> dict[str, Any]:
     """Upload and import MD-AllAtom structured CSV dictionaries and carbon results."""
+    job_id = f"md_allatom-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    staging_names = {
+        target_name: staging_collection_name(f"md_allatom_{target_name}", job_id)
+        for target_name in [
+            TARGET_MD_ALLATOM_DIAMINES_COLLECTION,
+            TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION,
+            TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION,
+        ]
+    }
     summary = {
         "dataset_id": "md_allatom",
         "source_object_keys": MD_ALLATOM_STRUCTURED_OBJECT_KEYS,
@@ -2528,6 +3026,8 @@ def import_md_allatom_structured_records(
         "dianhydride_records_upserted": 0,
         "carbon_records_upserted": 0,
         "uploaded_objects": [],
+        "job_id": job_id,
+        "staging_collections": staging_names,
         "status": "planned",
         "error": None,
     }
@@ -2540,29 +3040,95 @@ def import_md_allatom_structured_records(
     try:
         import pandas as pd
 
-        create_indexes(target_db)
         summary["uploaded_objects"] = upload_md_allatom_structured_assets(
             s3_client=s3_client,
             bucket=bucket,
             structured_data_root=structured_data_root,
             requirements_doc=requirements_doc,
         )
+        source_keys = list(MD_ALLATOM_STRUCTURED_OBJECT_KEYS.values())
+        source_objects = source_object_snapshots(s3_client, bucket, source_keys)
+        started_at = datetime.now(timezone.utc)
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {
+                "$set": {
+                    "job_id": job_id,
+                    "dataset_id": "md_allatom",
+                    "status": "running",
+                    "source_objects": source_objects,
+                    "staging_collections": staging_names,
+                    "started_at": started_at,
+                    "updated_at": started_at,
+                }
+            },
+            upsert=True,
+        )
         diamines = build_md_allatom_diamine_documents(pd.read_csv(structured_data_root / "二胺.csv", encoding="utf-8-sig"))
         dianhydrides = build_md_allatom_dianhydride_documents(
             pd.read_csv(structured_data_root / "二酐.csv", encoding="utf-8-sig")
         )
         carbon_results = build_md_allatom_carbon_documents(pd.read_csv(structured_data_root / "碳基.csv", encoding="utf-8-sig"))
+        for staging_name in staging_names.values():
+            target_db[staging_name].drop()
         summary["diamine_records_upserted"] = upsert_documents(
-            target_db[TARGET_MD_ALLATOM_DIAMINES_COLLECTION], "md_allatom_diamine_id", diamines
+            target_db[staging_names[TARGET_MD_ALLATOM_DIAMINES_COLLECTION]], "md_allatom_diamine_id", diamines
         )
         summary["dianhydride_records_upserted"] = upsert_documents(
-            target_db[TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION], "md_allatom_dianhydride_id", dianhydrides
+            target_db[staging_names[TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION]], "md_allatom_dianhydride_id", dianhydrides
         )
         summary["carbon_records_upserted"] = upsert_documents_bulk(
-            target_db[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION],
+            target_db[staging_names[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION]],
             "md_allatom_carbon_result_id",
             carbon_results,
         )
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {
+                "$set": {
+                    "status": "verifying",
+                    "processed_count": summary["carbon_records_upserted"],
+                    "expected_count": summary["carbon_records_upserted"],
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+        if source_objects != source_object_snapshots(s3_client, bucket, source_keys):
+            raise RuntimeError("source objects changed during import")
+        expected_counts = {
+            TARGET_MD_ALLATOM_DIAMINES_COLLECTION: len(diamines),
+            TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION: len(dianhydrides),
+            TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION: len(carbon_results),
+        }
+        for target_name, expected_count in expected_counts.items():
+            stored_count = int(target_db[staging_names[target_name]].count_documents({}))
+            if stored_count != expected_count:
+                raise RuntimeError(
+                    f"staging count mismatch for {target_name}: parsed={expected_count} stored={stored_count}"
+                )
+        diamine_collection = target_db[staging_names[TARGET_MD_ALLATOM_DIAMINES_COLLECTION]]
+        diamine_collection.create_index([("md_allatom_diamine_id", 1)], name="md_allatom_diamine_id", unique=True)
+        diamine_collection.create_index([("diamine_id", 1)], name="diamine_id", unique=True)
+        diamine_collection.create_index([("smiles", 1)], name="smiles")
+        dianhydride_collection = target_db[staging_names[TARGET_MD_ALLATOM_DIANHYDRIDES_COLLECTION]]
+        dianhydride_collection.create_index(
+            [("md_allatom_dianhydride_id", 1)], name="md_allatom_dianhydride_id", unique=True
+        )
+        dianhydride_collection.create_index([("dianhydride_id", 1)], name="dianhydride_id", unique=True)
+        dianhydride_collection.create_index([("smiles", 1)], name="smiles")
+        carbon_collection = target_db[staging_names[TARGET_MD_ALLATOM_CARBON_RESULTS_COLLECTION]]
+        carbon_collection.create_index(
+            [("md_allatom_carbon_result_id", 1)], name="md_allatom_carbon_result_id", unique=True
+        )
+        carbon_collection.create_index(
+            [("diamine_id", 1), ("dianhydride_id", 1), ("dp", 1), ("temperature", 1)],
+            name="carbon_natural_fields",
+        )
+        carbon_collection.create_index([("temperature", 1)], name="temperature")
+        carbon_collection.create_index([("dp", 1)], name="dp")
+        for target_name, staging_name in staging_names.items():
+            atomic_replace_collection(target_db, staging_name, target_name)
         file_docs = load_md_allatom_file_documents(target_db)
         stats = md_allatom_stats(carbon_results, file_documents=file_docs)
         target_db[TARGET_DATASET_STATS_COLLECTION].update_one(
@@ -2571,6 +3137,11 @@ def import_md_allatom_structured_records(
                 "$set": {
                     "dataset_id": "md_allatom",
                     "record_count": summary["carbon_records_upserted"],
+                    "source_objects": source_objects,
+                    "sampling": {
+                        "strategy": "bounded_row_stride",
+                        "analysis_sample_count": len(stats.get("analysis_samples", [])),
+                    },
                     **stats,
                     "updated_at": datetime.now(timezone.utc),
                 }
@@ -2581,13 +3152,42 @@ def import_md_allatom_structured_records(
             target_db,
             "md_allatom",
             count=summary["carbon_records_upserted"],
+            source_count=summary["carbon_records_upserted"],
             record_mode="full",
+            verification_status="verified",
+            source_objects=source_objects,
             collection_key="poly_data.md_allatom_carbon_results",
+        )
+        finished_at = datetime.now(timezone.utc)
+        elapsed = max((finished_at - started_at).total_seconds(), 0.001)
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {
+                "$set": {
+                    "status": "completed",
+                    "imported_count": summary["carbon_records_upserted"],
+                    "verified_count": summary["carbon_records_upserted"],
+                    "finished_at": finished_at,
+                    "updated_at": finished_at,
+                    "duration_seconds": round(elapsed, 3),
+                }
+            },
+            upsert=True,
         )
         summary["status"] = "imported"
     except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
         summary["status"] = "failed"
         summary["error"] = f"{exc.__class__.__name__}: {exc}"
+        target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "failed", "error": summary["error"], "updated_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+        target_db["datasets"].update_one(
+            {"dataset_id": "md_allatom"},
+            {"$set": {"verification_status": "failed", "updated_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
     return summary
 
 
@@ -2689,9 +3289,133 @@ def build_manifest(
     }
 
 
+def json_safe(value: Any) -> Any:
+    """Return a JSON-compatible copy for Mongo persistence."""
+    return json.loads(json.dumps(value, default=str))
+
+
+def manifest_status_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Count object statuses without storing every object in the parent manifest."""
+    counts: dict[str, int] = {}
+    for record in records:
+        status = str(record.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def chunk_manifest_records(
+    *,
+    manifest_id: str,
+    section: str,
+    records: list[dict[str, Any]],
+    generated_at: Any,
+    max_chunk_bytes: int | None = None,
+) -> list[dict[str, Any]]:
+    """Build Mongo-safe chunk documents for large manifest record lists."""
+    max_bytes = max(int(max_chunk_bytes or MONGO_MANIFEST_RECORD_CHUNK_BYTES), 1)
+    chunks: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    current_bytes = 2
+    start_index = 0
+
+    for index, record in enumerate(records):
+        safe_record = json_safe(record)
+        record_bytes = len(json.dumps(safe_record, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1
+        if current and current_bytes + record_bytes > max_bytes:
+            chunks.append(
+                {
+                    "manifest_id": manifest_id,
+                    "section": section,
+                    "chunk_index": len(chunks),
+                    "record_start": start_index,
+                    "record_end": index - 1,
+                    "record_count": len(current),
+                    "generated_at": generated_at,
+                    "records": current,
+                }
+            )
+            current = []
+            current_bytes = 2
+            start_index = index
+        current.append(safe_record)
+        current_bytes += record_bytes
+
+    if current:
+        chunks.append(
+            {
+                "manifest_id": manifest_id,
+                "section": section,
+                "chunk_index": len(chunks),
+                "record_start": start_index,
+                "record_end": start_index + len(current) - 1,
+                "record_count": len(current),
+                "generated_at": generated_at,
+                "records": current,
+            }
+        )
+    return chunks
+
+
+def mongo_manifest_document(
+    *,
+    manifest_id: str,
+    manifest: dict[str, Any],
+    record_chunks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a compact parent manifest document that stays below MongoDB's BSON limit."""
+    document = json_safe(manifest)
+    document["manifest_id"] = manifest_id
+    document["full_manifest"] = {
+        "bucket": manifest.get("bucket"),
+        "object_key": manifest.get("manifest_key", MANIFEST_KEY),
+        "local_path": str(LOCAL_MANIFEST_PATH),
+    }
+    chunks_by_section: dict[str, list[dict[str, Any]]] = {}
+    for chunk in record_chunks:
+        chunks_by_section.setdefault(str(chunk["section"]), []).append(chunk)
+
+    for section in ("minio", "sftp"):
+        section_payload = document.get(section)
+        if not isinstance(section_payload, dict):
+            continue
+        records = section_payload.pop("records", [])
+        if not isinstance(records, list):
+            records = []
+        section_chunks = chunks_by_section.get(section, [])
+        section_payload.update(
+            {
+                "record_count": len(records),
+                "status_counts": manifest_status_counts(records),
+                "records_collection": TARGET_MIGRATION_MANIFEST_RECORDS_COLLECTION,
+                "record_chunk_count": len(section_chunks),
+            }
+        )
+    return document
+
+
 def persist_manifest(*, target_db: Any, client: Any, bucket: str, manifest: dict[str, Any]) -> None:
     """Persist migration manifest to MongoDB and MinIO."""
-    target_db["migration_manifests"].insert_one(json.loads(json.dumps(manifest, default=str)))
+    manifest_id = str(
+        manifest.get("manifest_id")
+        or f"poly-data-migration-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    )
+    generated_at = manifest.get("generated_at") or datetime.now(timezone.utc).isoformat()
+    record_chunks = [
+        chunk
+        for section in ("minio", "sftp")
+        if isinstance(manifest.get(section), dict)
+        for chunk in chunk_manifest_records(
+            manifest_id=manifest_id,
+            section=section,
+            records=list((manifest[section].get("records") or [])),
+            generated_at=generated_at,
+        )
+    ]
+    for chunk in record_chunks:
+        target_db[TARGET_MIGRATION_MANIFEST_RECORDS_COLLECTION].insert_one(chunk)
+    target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].insert_one(
+        mongo_manifest_document(manifest_id=manifest_id, manifest=manifest, record_chunks=record_chunks)
+    )
     manifest_bytes = json.dumps(manifest, ensure_ascii=False, indent=2, default=str).encode("utf-8")
     LOCAL_MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     LOCAL_MANIFEST_PATH.write_bytes(manifest_bytes)
@@ -2770,6 +3494,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--pi1m-sample-size", type=int, default=DEFAULT_PI1M_SAMPLE_SIZE)
     parser.add_argument("--pi1m-chunk-size", type=int, default=DEFAULT_PI1M_CHUNK_SIZE)
+    parser.add_argument("--pi1m-resume-job-id", default="", help="resume one interrupted PI1M staging import")
+    parser.add_argument("--extra-resume-job-id", default="", help="resume one interrupted extra-dataset staging import")
     parser.add_argument(
         "--upload-workers",
         type=int,
@@ -2824,7 +3550,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     minio_records = []
-    if not args.skip_legacy_poly_agent:
+    if not args.skip_legacy_poly_agent and not CANCEL_EVENT.is_set():
         minio_records = migrate_minio_objects(
             s3_client,
             bucket=args.bucket,
@@ -2833,7 +3559,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     sftp_records: list[dict[str, Any]] = []
-    if args.migrate_sftp_open_databases:
+    if args.migrate_sftp_open_databases and not CANCEL_EVENT.is_set():
         sftp_client = None
 
         def open_sftp_client() -> SftpClient:
@@ -2869,7 +3595,7 @@ def main(argv: list[str] | None = None) -> int:
             if sftp_client is not None:
                 sftp_client.close()
 
-    if args.migrate_sftp_md_allatom:
+    if args.migrate_sftp_md_allatom and not CANCEL_EVENT.is_set():
         sftp_client = None
 
         def open_md_sftp_client() -> SftpClient:
@@ -2906,7 +3632,21 @@ def main(argv: list[str] | None = None) -> int:
         *minio_records,
         *[record for record in sftp_records if "attempts" not in record],
     ]
-    if args.skip_legacy_poly_agent:
+    if CANCEL_EVENT.is_set():
+        mongo_summary = {
+            "source_database": args.source_database,
+            "source_collection": SOURCE_COLLECTION,
+            "target_database": args.target_database,
+            "target_collection": TARGET_MATERIAL_COLLECTION,
+            "source_count": 0,
+            "target_count_before": 0,
+            "target_count_after": 0,
+            "records_upserted": 0,
+            "metadata_upserted": 0,
+            "source_dropped": False,
+            "status": "cancelled",
+        }
+    elif args.skip_legacy_poly_agent:
         mongo_summary = {
             "source_database": args.source_database,
             "source_collection": SOURCE_COLLECTION,
@@ -2942,6 +3682,7 @@ def main(argv: list[str] | None = None) -> int:
                 sample_size=None if args.pi1m_full_import else args.pi1m_sample_size,
                 chunk_size=args.pi1m_chunk_size,
                 apply=args.apply,
+                resume_job_id=args.pi1m_resume_job_id or None,
             )
         )
     if not CANCEL_EVENT.is_set() and args.import_smipoly_records:
@@ -2972,6 +3713,7 @@ def main(argv: list[str] | None = None) -> int:
                 dataset_ids=[item.strip() for item in str(args.extra_dataset_ids).split(",") if item.strip()],
                 sample_size=None if args.extra_full_import else args.extra_sample_size,
                 apply=args.apply,
+                resume_job_id=args.extra_resume_job_id or None,
             )
         )
     manifest = build_manifest(
@@ -2982,7 +3724,7 @@ def main(argv: list[str] | None = None) -> int:
         mongo_summary=mongo_summary,
         import_summaries=import_summaries,
     )
-    if args.apply:
+    if args.apply and not CANCEL_EVENT.is_set():
         persist_manifest(target_db=target_db, client=s3_client, bucket=args.bucket, manifest=manifest)
 
     mode = "APPLY" if args.apply else "DRY-RUN"

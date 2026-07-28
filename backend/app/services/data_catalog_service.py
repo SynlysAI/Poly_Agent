@@ -775,7 +775,13 @@ class DataCatalogService:
         legacy_objects: list[str] = []
         for dataset_id, definition in definitions.items():
             objects = object_status.get(dataset_id, [])
-            record_info = self._dataset_record_info(dataset_id, row_count=int(definition["row_count"]))
+            import_status = self._load_dataset_import_status(dataset_id)
+            record_info = self._dataset_record_info(
+                dataset_id,
+                row_count=int(definition["row_count"]),
+                configured_verification_status=definition.get("verification_status"),
+                import_status=import_status,
+            )
             legacy_objects.extend(item.legacy_object_key for item in objects if item.legacy_exists and item.legacy_object_key)
             datasets.append(
                 DataCatalogDataset(
@@ -790,6 +796,9 @@ class DataCatalogService:
                     record_collection_key=record_info["record_collection_key"],
                     record_count=record_info["record_count"],
                     record_mode=record_info["record_mode"],
+                    coverage_percent=record_info["coverage_percent"],
+                    verification_status=record_info["verification_status"],
+                    import_status=import_status,
                     objects=objects,
                     field_summaries=[
                         DataCatalogFieldSummary(
@@ -831,6 +840,7 @@ class DataCatalogService:
             record_count=record_count,
             coverage_percent=coverage,
             record_mode=dataset.record_mode,
+            verification_status=dataset.verification_status,
             field_completeness=dataset.field_summaries,
             sa_score_histogram=histogram,
             duplicate_smiles_count=stats.get("duplicate_smiles_count"),
@@ -1100,13 +1110,17 @@ class DataCatalogService:
                 job_id=doc.get("job_id"),
                 status=str(doc.get("status") or "unknown"),
                 imported_count=doc.get("imported_count"),
+                processed_count=doc.get("processed_count"),
+                expected_count=doc.get("expected_count"),
+                verified_count=doc.get("verified_count"),
                 failed_count=doc.get("failed_count"),
+                checkpoint_count=doc.get("checkpoint_count"),
                 started_at=doc.get("started_at"),
                 finished_at=doc.get("finished_at"),
                 throughput_rows_per_second=doc.get("throughput_rows_per_second"),
                 error=doc.get("error"),
             )
-        except PyMongoError:
+        except (PyMongoError, AttributeError, TypeError):
             return DataCatalogDatasetImportStatus(status="degraded")
 
     def _demo_dataset_stats(self, dataset_id: str) -> dict[str, Any]:
@@ -1356,14 +1370,33 @@ class DataCatalogService:
             for index, count in enumerate(counts)
         ]
 
-    def _dataset_record_info(self, dataset_id: str, *, row_count: int | None = None) -> dict[str, Any]:
+    def _dataset_record_info(
+        self,
+        dataset_id: str,
+        *,
+        row_count: int | None = None,
+        configured_verification_status: str | None = None,
+        import_status: DataCatalogDatasetImportStatus | None = None,
+    ) -> dict[str, Any]:
         collection_info = DATASET_RECORD_COLLECTIONS.get(dataset_id)
         if not collection_info:
-            return {"record_collection_key": None, "record_count": None, "record_mode": "metadata_only"}
-        collection_key, configured_mode = collection_info
+            return {
+                "record_collection_key": None,
+                "record_count": None,
+                "record_mode": "metadata_only",
+                "coverage_percent": 0,
+                "verification_status": "metadata_only",
+            }
+        collection_key, _configured_mode = collection_info
         definition = COLLECTION_DEFINITION_BY_NAME.get(collection_key)
         if not definition:
-            return {"record_collection_key": None, "record_count": None, "record_mode": "metadata_only"}
+            return {
+                "record_collection_key": None,
+                "record_count": None,
+                "record_mode": "metadata_only",
+                "coverage_percent": 0,
+                "verification_status": "unavailable",
+            }
         count: int | None = None
         if not settings.require_mongodb:
             count = len(demo_store.load().get(collection_key, []))
@@ -1376,10 +1409,36 @@ class DataCatalogService:
                     count = int(db[definition.collection_name].estimated_document_count())
             except PyMongoError:
                 count = None
-        mode = configured_mode if count else "metadata_only"
-        if dataset_id == "pi1m_v2" and count is not None and row_count and count < row_count:
+        coverage = round((count / row_count) * 100, 4) if count is not None and row_count else 0
+        latest_status = str(import_status.status if import_status else "unknown")
+        if count is None:
+            mode = "metadata_only"
+            verification_status = "unavailable"
+        elif count == 0:
+            mode = "metadata_only"
+            verification_status = "metadata_only"
+        elif latest_status in {"running", "verifying", "queued"}:
             mode = "sample"
-        return {"record_collection_key": collection_key, "record_count": count, "record_mode": mode}
+            verification_status = "running"
+        elif latest_status == "failed":
+            mode = "sample"
+            verification_status = "failed"
+        elif row_count and count == row_count:
+            mode = "full"
+            verification_status = "verified"
+        else:
+            mode = "sample"
+            verification_status = "partial"
+        if configured_verification_status in {"running", "failed"}:
+            mode = "sample" if count else "metadata_only"
+            verification_status = configured_verification_status
+        return {
+            "record_collection_key": collection_key,
+            "record_count": count,
+            "record_mode": mode,
+            "coverage_percent": coverage,
+            "verification_status": verification_status,
+        }
 
     def _load_dataset_definitions(self) -> dict[str, dict[str, Any]]:
         """Load dataset metadata from poly_data, falling back to built-in definitions."""
@@ -1427,6 +1486,7 @@ class DataCatalogService:
                 "row_count": doc.get("row_count") if doc.get("row_count") is not None else fallback.get("row_count", 0),
                 "column_count": doc.get("column_count") if doc.get("column_count") is not None else fallback.get("column_count", 0),
                 "storage_prefix": doc.get("storage_prefix") or fallback.get("storage_prefix") or f"{CANONICAL_ROOT}{dataset_id}/",
+                "verification_status": doc.get("verification_status"),
                 "field_summaries": fields_by_dataset.get(dataset_id) or fallback.get("field_summaries", []),
             }
         return loaded or DATASET_DEFINITIONS
@@ -1627,10 +1687,21 @@ class DataCatalogService:
         page: int = 1,
         page_size: int = 20,
         keyword: str | None = None,
+        use_cursor: bool = False,
+        cursor: str | None = None,
     ) -> DataCatalogCollectionRecordListData:
         """Return paginated record summaries for a whitelisted Mongo collection."""
         definition = self._require_collection_definition(collection_name)
-        rows, total = self._load_collection_rows(definition, page=page, page_size=page_size, keyword=keyword)
+        next_cursor = None
+        if use_cursor:
+            rows, total, next_cursor = self._load_collection_rows_by_cursor(
+                definition,
+                cursor=cursor,
+                page_size=page_size,
+                keyword=keyword,
+            )
+        else:
+            rows, total = self._load_collection_rows(definition, page=page, page_size=page_size, keyword=keyword)
         return DataCatalogCollectionRecordListData(
             collection_key=definition.collection_key,
             collection_name=definition.collection_name,
@@ -1641,7 +1712,72 @@ class DataCatalogService:
             page=page,
             page_size=page_size,
             total=total,
+            next_cursor=next_cursor,
         )
+
+    def _load_collection_rows_by_cursor(
+        self,
+        definition: MongoCollectionDefinition,
+        *,
+        cursor: str | None,
+        page_size: int,
+        keyword: str | None,
+    ) -> tuple[list[dict[str, Any]], int, str | None]:
+        """Return one keyset-paginated page without Mongo skip scans."""
+        sort_field = self._preferred_sort_field(definition)
+        cursor_data = self._decode_cursor(cursor)
+        cursor_collection_key = cursor_data.get("collection_key")
+        if cursor_collection_key is not None and cursor_collection_key != definition.collection_key:
+            raise HTTPException(status_code=400, detail="游标与当前集合不匹配")
+        cursor_sort_field = cursor_data.get("collection_sort_field")
+        if cursor_sort_field is not None and cursor_sort_field != sort_field:
+            raise HTTPException(status_code=400, detail="游标与当前集合不匹配")
+        after_value = cursor_data.get("collection_sort_value")
+        if not settings.require_mongodb:
+            rows = [dict(item) for item in demo_store.load().get(definition.collection_key, [])]
+            normalized_keyword = (keyword or "").strip().lower()
+            if normalized_keyword:
+                rows = [row for row in rows if normalized_keyword in str(row).lower()]
+            rows.sort(key=lambda item: str(self._nested_value(item, sort_field) or ""), reverse=True)
+            if after_value is not None:
+                rows = [
+                    row
+                    for row in rows
+                    if str(self._nested_value(row, sort_field) or "") < str(after_value)
+                ]
+            total = len([
+                row
+                for row in demo_store.load().get(definition.collection_key, [])
+                if not normalized_keyword or normalized_keyword in str(row).lower()
+            ])
+        else:
+            if definition.source_id == MATERIAL_SOURCE_ID and not settings.data_asset_mongodb_uri:
+                return [], 0, None
+            db = self._database_for_definition(definition)
+            collection = db[definition.collection_name]
+            filters = self._build_keyword_filter(definition, keyword)
+            if after_value is not None:
+                cursor_filter = {sort_field: {"$lt": after_value}}
+                filters = {"$and": [filters, cursor_filter]} if filters else cursor_filter
+            total = int(collection.count_documents(self._build_keyword_filter(definition, keyword)))
+            rows = [
+                dict(item)
+                for item in collection.find(filters, {"_id": 0})
+                .sort([(sort_field, -1)])
+                .limit(page_size + 1)
+            ]
+        has_more = len(rows) > page_size
+        visible_rows = rows[:page_size]
+        next_cursor = None
+        if has_more and visible_rows:
+            payload = {
+                "collection_key": definition.collection_key,
+                "collection_sort_value": self._nested_value(visible_rows[-1], sort_field),
+                "collection_sort_field": sort_field,
+            }
+            raw = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
+            next_cursor = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return visible_rows, total, next_cursor
 
     def get_mongo_collection_record(
         self,

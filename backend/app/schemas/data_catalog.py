@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 CatalogStatus = Literal["ready", "degraded", "not_configured"]
 DatasetRecordMode = Literal["full", "sample", "metadata_only"]
+DatasetVerificationStatus = Literal["verified", "partial", "metadata_only", "running", "failed", "unavailable"]
 DatasetRecordSortBy = Literal["row_index", "sa_score"]
 
 
@@ -36,6 +37,23 @@ class DataCatalogFieldSummary(BaseModel):
     example: str | None = None
 
 
+class DataCatalogDatasetImportStatus(BaseModel):
+    """数据集最近一次导入状态。"""
+
+    job_id: str | None = None
+    status: str = "unknown"
+    imported_count: int | None = None
+    processed_count: int | None = None
+    expected_count: int | None = None
+    verified_count: int | None = None
+    failed_count: int | None = None
+    checkpoint_count: int | None = None
+    started_at: datetime | str | None = None
+    finished_at: datetime | str | None = None
+    throughput_rows_per_second: float | None = None
+    error: str | None = None
+
+
 class DataCatalogDataset(BaseModel):
     """数据集目录项。"""
 
@@ -50,6 +68,9 @@ class DataCatalogDataset(BaseModel):
     record_collection_key: str | None = None
     record_count: int | None = None
     record_mode: DatasetRecordMode = "metadata_only"
+    coverage_percent: float = 0
+    verification_status: DatasetVerificationStatus = "metadata_only"
+    import_status: DataCatalogDatasetImportStatus = Field(default_factory=DataCatalogDatasetImportStatus)
     objects: list[DataCatalogObjectInfo] = Field(default_factory=list)
     field_summaries: list[DataCatalogFieldSummary] = Field(default_factory=list)
 
@@ -160,6 +181,7 @@ class DataCatalogCollectionRecordListData(BaseModel):
     page: int
     page_size: int
     total: int
+    next_cursor: str | None = None
 
 
 class DataCatalogCollectionRecordDetailData(BaseModel):
@@ -179,19 +201,6 @@ class DataCatalogCollectionRecordDetailData(BaseModel):
     document: dict[str, Any] = Field(default_factory=dict)
 
 
-class DataCatalogDatasetImportStatus(BaseModel):
-    """数据集最近一次导入状态。"""
-
-    job_id: str | None = None
-    status: str = "unknown"
-    imported_count: int | None = None
-    failed_count: int | None = None
-    started_at: datetime | str | None = None
-    finished_at: datetime | str | None = None
-    throughput_rows_per_second: float | None = None
-    error: str | None = None
-
-
 class DataCatalogHistogramBin(BaseModel):
     """数值字段直方图区间。"""
 
@@ -208,6 +217,7 @@ class DataCatalogDatasetProfileData(BaseModel):
     record_count: int
     coverage_percent: float
     record_mode: DatasetRecordMode
+    verification_status: DatasetVerificationStatus = "metadata_only"
     field_completeness: list[DataCatalogFieldSummary] = Field(default_factory=list)
     sa_score_histogram: list[DataCatalogHistogramBin] = Field(default_factory=list)
     duplicate_smiles_count: int | None = None

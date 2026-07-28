@@ -100,6 +100,8 @@ def list_data_catalog_mongo_collection_records(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     keyword: str | None = Query(default=None, max_length=120),
+    use_cursor: bool = Query(default=False),
+    cursor: str | None = Query(default=None, max_length=512),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[DataCatalogCollectionRecordListData]:
     """分页查询白名单 Mongo 集合的记录摘要。"""
@@ -108,6 +110,8 @@ def list_data_catalog_mongo_collection_records(
         page=page,
         page_size=page_size,
         keyword=keyword,
+        use_cursor=use_cursor,
+        cursor=cursor,
     )
     return ApiResponse(code=0, message="ok", data=data)
 

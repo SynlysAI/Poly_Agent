@@ -3,11 +3,11 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  DataAnalysis, Files, FolderOpened, Refresh, Search, TrendCharts, View, Warning,
+  ArrowRight, Back, DataAnalysis, Files, FolderOpened, Refresh, Right, Search, TrendCharts, View, Warning,
 } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
-import { BarChart, LineChart, PieChart, ScatterChart } from 'echarts/charts'
+import { BarChart, LineChart, PieChart, SankeyChart, ScatterChart } from 'echarts/charts'
 import {
   GridComponent, LegendComponent, TitleComponent, TooltipComponent, VisualMapComponent,
 } from 'echarts/components'
@@ -31,6 +31,7 @@ use([
   BarChart,
   LineChart,
   PieChart,
+  SankeyChart,
   ScatterChart,
   GridComponent,
   LegendComponent,
@@ -47,6 +48,7 @@ const loading = ref(false)
 const recordsLoading = ref(false)
 const detailLoading = ref(false)
 const activeTab = ref(['datasets', 'mongo', 'relations'].includes(String(route.query.tab)) ? String(route.query.tab) : 'datasets')
+const datasetGroupFilter = ref('all')
 const overview = ref(null)
 const relationships = ref({ nodes: [], edges: [], notes: [] })
 const datasets = ref([])
@@ -61,6 +63,9 @@ const datasetCoverageVisible = ref(false)
 const selectedCollectionName = ref('')
 const collectionRecords = ref([])
 const collectionTotal = ref(0)
+const collectionCursor = ref(null)
+const collectionNextCursor = ref(null)
+const collectionCursorHistory = ref([])
 const selectedRecord = ref(null)
 const recordDrawerVisible = ref(false)
 const pi1mProfile = ref(null)
@@ -88,11 +93,51 @@ const pi1mFilters = reactive({
 const sourceReadyCount = computed(() => (overview.value?.sources || []).filter((item) => item.status === 'ready').length)
 const sourceTotalCount = computed(() => (overview.value?.sources || []).length)
 const selectedCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === selectedCollectionName.value) || null)
+const collectionUsesCursor = computed(() => (
+  selectedCollection.value?.source_id === 'poly_data'
+  && selectedCollectionName.value !== 'poly_data.pi1m_samples'
+  && Number(selectedCollection.value?.count || 0) >= 100000
+))
 const polyDataSource = computed(() => (overview.value?.sources || []).find((item) => item.source === 'mongodb.poly_data') || null)
 const materialCollection = computed(() => mongoCollections.value.find((item) => item.data_domain === 'materials') || null)
 const computationRunCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === 'computation_runs') || null)
 const computationArtifactCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === 'computation_artifacts') || null)
 const pi1mDataset = computed(() => datasets.value.find((item) => item.dataset_id === 'pi1m_v2') || null)
+
+const datasetGroupMeta = {
+  structure: { label: '结构与分子', description: '分子、单体与聚合物结构描述', tone: 'blue' },
+  simulation: { label: '模拟与计算', description: '分子动力学、量化计算与轨迹结果', tone: 'teal' },
+  properties: { label: '物性与表征', description: '热学、电学、溶解性与多性质数据', tone: 'amber' },
+  synthesis: { label: '合成与反应', description: '反应条件、产物与结构映射', tone: 'coral' },
+  generated: { label: '生成与候选', description: '模型生成的候选单体与聚合物结构', tone: 'violet' },
+  other: { label: '其他数据', description: '尚未归入上述分类的数据资产', tone: 'slate' },
+}
+
+function datasetGroupKey(dataset) {
+  const text = `${dataset?.dataset_id || ''} ${dataset?.source_category || ''} ${dataset?.description || ''}`.toLowerCase()
+  if (/生成|候选|virtual|generation|polyone|polyuniverse/.test(text)) return 'generated'
+  if (/反应|合成|mapping/.test(text)) return 'synthesis'
+  if (/模拟|动力学|量化|md-|md_allatom|radonpy/.test(text)) return 'simulation'
+  if (/物性|性质|溶解|热学|电学|相行为|表征|property|polyomics|polysol|pppdb|tropic/.test(text)) return 'properties'
+  if (/结构|分子|单体|smiles|标识|openpoly|smipoly|polyid|nanomine/.test(text)) return 'structure'
+  return 'other'
+}
+
+const datasetGroups = computed(() => {
+  const grouped = Object.fromEntries(Object.keys(datasetGroupMeta).map((key) => [key, []]))
+  for (const dataset of datasets.value) grouped[datasetGroupKey(dataset)].push(dataset)
+  return Object.entries(grouped)
+    .map(([key, items]) => ({ key, ...datasetGroupMeta[key], items }))
+    .filter((group) => group.items.length)
+})
+
+const visibleDatasetGroups = computed(() => datasetGroupFilter.value === 'all'
+  ? datasetGroups.value
+  : datasetGroups.value.filter((group) => group.key === datasetGroupFilter.value))
+
+const datasetGroupCount = (key) => key === 'all'
+  ? datasets.value.length
+  : datasetGroups.value.find((group) => group.key === key)?.items.length || 0
 
 const collectionGroups = computed(() => {
   const grouped = {}
@@ -136,10 +181,10 @@ const keyMetrics = computed(() => [
 
 const collectionGroupColors = {
   材料数据资产: '#3b82f6',
-  计算任务与产物: '#16a34a',
-  研发流程与算法: '#d97706',
-  优化闭环: '#0891b2',
-  报告产物: '#64748b',
+  计算任务与产物: '#22c55e',
+  研发流程与算法: '#f59e0b',
+  优化闭环: '#06b6d4',
+  报告产物: '#8b5cf6',
 }
 
 const PI1M_SA_COLOR_SCALE = ['#15803d', '#84cc16', '#facc15', '#f97316', '#dc2626']
@@ -160,7 +205,7 @@ const collectionVolumeRows = computed(() => mongoCollections.value
   .sort((a, b) => b.rawCount - a.rawCount || a.name.localeCompare(b.name)))
 
 const collectionVolumeOption = computed(() => ({
-  grid: { left: 136, right: 104, top: 18, bottom: 36 },
+  grid: { left: 164, right: 122, top: 24, bottom: 46 },
   tooltip: {
     trigger: 'item',
     formatter: (item) => {
@@ -188,7 +233,7 @@ const collectionVolumeOption = computed(() => ({
     type: 'category',
     inverse: true,
     data: collectionVolumeRows.value.map((row) => row.name),
-    axisLabel: { color: '#334155', width: 124, overflow: 'truncate' },
+    axisLabel: { color: '#475569', width: 150, overflow: 'truncate', fontSize: 14 },
     axisTick: { show: false },
   },
   series: [{
@@ -199,16 +244,22 @@ const collectionVolumeOption = computed(() => ({
       itemStyle: { color: row.color, borderRadius: [0, 4, 4, 0] },
     })),
     barWidth: 16,
-    barMinWidth: 4,
+    barMinWidth: 6,
+    barMaxWidth: 20,
+    barCategoryGap: '34%',
     label: {
       show: true,
       position: 'right',
-      color: '#0f172a',
-      fontSize: 12,
+      color: '#1e293b',
+      fontSize: 13,
+      distance: 8,
       formatter: (item) => formatNumber(item.data.rawCount),
     },
   }],
 }))
+
+// Keep the complete volume chart inside the viewport so the x-axis remains visible.
+const collectionVolumeChartHeight = computed(() => 'min(900px, max(520px, calc(100vh - 280px)))')
 
 const relationshipRows = computed(() => {
   const nodeMap = Object.fromEntries((relationships.value.nodes || []).map((item) => [item.node_id, item]))
@@ -236,6 +287,62 @@ const relationshipRows = computed(() => {
       }
     })
     .sort((a, b) => b.linkedCount - a.linkedCount || a.sourceLabel.localeCompare(b.sourceLabel)))
+})
+
+const relationSummary = computed(() => ({
+  nodes: (relationships.value.nodes || []).length,
+  links: relationshipRows.value.length,
+  linked: relationshipRows.value.reduce((sum, row) => sum + row.linkedCount, 0),
+}))
+
+const relationshipSankeyOption = computed(() => {
+  const nodeMap = Object.fromEntries((relationships.value.nodes || []).map((node) => [node.node_id, node]))
+  const links = relationshipRows.value.map((row) => ({
+    source: row.sourceLabel,
+    target: row.targetLabel,
+    value: row.linkedCount,
+    sourceField: row.sourceField,
+    targetField: row.targetField,
+    coveragePercent: row.coveragePercent,
+  }))
+  const connectedIds = new Set((relationships.value.edges || [])
+    .filter((edge) => Number(edge.linked_count || 0) > 0)
+    .flatMap((edge) => [edge.source, edge.target]))
+  const colors = ['#2563eb', '#0f766e', '#d97706', '#be5a35', '#7c3aed', '#64748b', '#0e7490']
+  return {
+    tooltip: {
+      trigger: 'item',
+      formatter: (params) => {
+        if (params.dataType === 'edge') {
+          return `${params.data.source} → ${params.data.target}<br/>已验证关联：${formatNumber(params.data.value)} 条<br/>覆盖率：${params.data.coveragePercent}%<br/><span style="color:#64748b">${params.data.sourceField} → ${params.data.targetField}</span>`
+        }
+        const node = Object.values(nodeMap).find((item) => item.label === params.name)
+        return `${params.name}<br/>记录量：${formatNumber(node?.record_count || 0)} 条`
+      },
+    },
+    series: [{
+      type: 'sankey',
+      left: 12,
+      right: 96,
+      top: 18,
+      bottom: 18,
+      nodeWidth: 18,
+      nodeGap: 18,
+      draggable: true,
+      emphasis: { focus: 'adjacency' },
+      layoutIterations: 32,
+      data: (relationships.value.nodes || [])
+        .filter((node) => connectedIds.has(node.node_id))
+        .map((node, index) => ({
+          name: node.label,
+          itemStyle: { color: colors[index % colors.length], borderColor: '#ffffff', borderWidth: 1, shadowBlur: 8, shadowColor: 'rgba(37, 99, 235, 0.22)' },
+          recordCount: node.record_count,
+        })),
+      links,
+      lineStyle: { color: 'gradient', curveness: 0.56, opacity: 0.5 },
+      label: { color: '#1e293b', fontSize: 14, fontWeight: 600, distance: 10 },
+    }],
+  }
 })
 
 const materialDatasetOption = computed(() => {
@@ -468,12 +575,12 @@ function formatPercent(value) {
 }
 
 function statusTag(status) {
-  const map = { ready: 'success', degraded: 'warning', not_configured: 'info', completed: 'success', running: 'warning', failed: 'danger', queued: 'info', cancelled: 'info', active: 'success', disabled: 'danger' }
+  const map = { ready: 'success', degraded: 'warning', not_configured: 'info', imported: 'success', completed: 'success', verifying: 'warning', running: 'warning', failed: 'danger', queued: 'info', cancelled: 'info', active: 'success', disabled: 'danger' }
   return map[status] || 'info'
 }
 
 function statusLabel(status) {
-  const map = { ready: '正常', degraded: '部分可用', not_configured: '未配置', completed: '完成', running: '运行中', failed: '失败', queued: '排队', cancelled: '取消', active: '正常', disabled: '禁用' }
+  const map = { ready: '正常', degraded: '部分可用', not_configured: '未配置', imported: '完成', completed: '完成', verifying: '校验中', running: '运行中', failed: '失败', queued: '排队', cancelled: '取消', active: '正常', disabled: '禁用' }
   return map[status] || status || '-'
 }
 
@@ -508,7 +615,31 @@ function datasetObjectSummary(dataset) {
 function datasetRecordCountText(dataset) {
   if (!dataset?.record_collection_key) return '未导入'
   if (dataset.record_count === null || dataset.record_count === undefined) return '未配置'
-  return `${formatNumber(dataset.record_count)} 条`
+  const coverage = Number(dataset.coverage_percent || 0)
+  return `${formatNumber(dataset.record_count)} / ${formatNumber(dataset.row_count)} · ${formatPercent(coverage)}`
+}
+
+function verificationStatusLabel(status) {
+  const map = { verified: '已校验', partial: '未完整', metadata_only: '未导入', running: '导入中', failed: '校验失败', unavailable: '不可用' }
+  return map[status] || '待校验'
+}
+
+function verificationStatusType(status) {
+  const map = { verified: 'success', partial: 'warning', metadata_only: 'info', running: 'warning', failed: 'danger', unavailable: 'danger' }
+  return map[status] || 'info'
+}
+
+function datasetStatusLabel(dataset) {
+  if (dataset?.verification_status === 'verified') return datasetRecordModeLabel(dataset.record_mode)
+  return verificationStatusLabel(dataset?.verification_status)
+}
+
+function datasetImportPercent(dataset) {
+  const status = dataset?.import_status || {}
+  const current = Number(status.processed_count ?? status.imported_count ?? dataset?.record_count ?? 0)
+  const expected = Number(status.expected_count ?? dataset?.row_count ?? 0)
+  if (!expected) return 0
+  return Math.min(100, Math.max(0, Number(((current / expected) * 100).toFixed(2))))
 }
 
 function countBy(items, field) {
@@ -718,6 +849,7 @@ async function openDatasetRecords(dataset) {
   selectedCollectionName.value = dataset.record_collection_key
   recordFilters.page = 1
   recordFilters.keyword = ''
+  resetCollectionCursor()
   syncRouteQuery({ tab: 'mongo', collection: selectedCollectionName.value, page: 1, keyword: undefined })
   await loadCollectionRecords()
 }
@@ -726,8 +858,15 @@ async function openCollection(collection) {
   activeTab.value = 'mongo'
   selectedCollectionName.value = collectionIdentity(collection)
   recordFilters.page = 1
+  resetCollectionCursor()
   syncRouteQuery({ collection: selectedCollectionName.value, page: 1 })
   await loadCollectionRecords()
+}
+
+function resetCollectionCursor() {
+  collectionCursor.value = null
+  collectionNextCursor.value = null
+  collectionCursorHistory.value = []
 }
 
 async function loadCollectionRecords() {
@@ -742,9 +881,12 @@ async function loadCollectionRecords() {
       page: recordFilters.page,
       page_size: recordFilters.page_size,
       keyword: recordFilters.keyword || undefined,
+      use_cursor: collectionUsesCursor.value || undefined,
+      cursor: collectionUsesCursor.value ? (collectionCursor.value || undefined) : undefined,
     })
     collectionRecords.value = data.items || []
     collectionTotal.value = data.total || 0
+    collectionNextCursor.value = data.next_cursor || null
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -792,6 +934,7 @@ async function handleRecordSearch() {
     return
   }
   recordFilters.page = 1
+  resetCollectionCursor()
   syncRouteQuery({ collection: selectedCollectionName.value, keyword: recordFilters.keyword, page: 1 })
   await loadCollectionRecords()
 }
@@ -800,6 +943,19 @@ async function handleRecordPageChange(page) {
   if (selectedCollectionName.value === 'poly_data.pi1m_samples') return
   recordFilters.page = page
   syncRouteQuery({ collection: selectedCollectionName.value, keyword: recordFilters.keyword, page })
+  await loadCollectionRecords()
+}
+
+async function loadNextCollectionCursor() {
+  if (!collectionNextCursor.value) return
+  collectionCursorHistory.value.push(collectionCursor.value)
+  collectionCursor.value = collectionNextCursor.value
+  await loadCollectionRecords()
+}
+
+async function loadPreviousCollectionCursor() {
+  if (!collectionCursorHistory.value.length) return
+  collectionCursor.value = collectionCursorHistory.value.pop() || null
   await loadCollectionRecords()
 }
 
@@ -892,37 +1048,69 @@ onMounted(async () => {
         <div class="analysis-layout">
           <section class="catalog-section dataset-section">
             <div class="section-heading">
-              <h2>Poly Data 数据集</h2>
+              <div>
+                <h2>Poly Data 数据集</h2>
+                <p class="section-description">按数据用途分组管理，点击数据行查看字段、对象和入库状态。</p>
+              </div>
               <span>{{ datasets.length }} 个数据集</span>
             </div>
-            <div class="dataset-grid">
-              <button
-                v-for="dataset in datasets"
-                :key="dataset.dataset_id"
-                type="button"
-                class="dataset-card dataset-card-button"
-                @click="openDataset(dataset)"
-              >
-                <div class="dataset-card-main">
-                  <div>
-                    <h3>{{ dataset.display_name }}</h3>
-                    <p>{{ dataset.description }}</p>
+            <div class="dataset-browser-layout">
+              <nav class="dataset-rail" aria-label="数据集分类">
+                <div class="dataset-rail-label">数据分类</div>
+                <button
+                  type="button"
+                  class="dataset-filter"
+                  :class="{ active: datasetGroupFilter === 'all' }"
+                  @click="datasetGroupFilter = 'all'"
+                >
+                  <span>全部数据集</span><strong>{{ datasetGroupCount('all') }}</strong>
+                </button>
+                <button
+                  v-for="group in datasetGroups"
+                  :key="group.key"
+                  type="button"
+                  class="dataset-filter"
+                  :class="[`tone-${group.tone}`, { active: datasetGroupFilter === group.key }]"
+                  @click="datasetGroupFilter = group.key"
+                >
+                  <span>{{ group.label }}</span><strong>{{ group.items.length }}</strong>
+                </button>
+              </nav>
+
+              <div class="dataset-group-stack">
+                <section v-for="group in visibleDatasetGroups" :key="group.key" class="dataset-group" :class="`tone-${group.tone}`">
+                  <header class="dataset-group-header">
+                    <div class="dataset-group-title">
+                      <span class="dataset-group-marker" aria-hidden="true"></span>
+                      <div>
+                        <h3>{{ group.label }}</h3>
+                        <p>{{ group.description }}</p>
+                      </div>
+                    </div>
+                    <span class="dataset-group-count">{{ group.items.length }} 个</span>
+                  </header>
+                  <div class="dataset-list" role="list">
+                    <button v-for="dataset in group.items" :key="dataset.dataset_id" type="button" class="dataset-list-row" @click="openDataset(dataset)">
+                      <span class="dataset-list-main">
+                        <span class="dataset-list-name">{{ dataset.display_name }}</span>
+                        <span class="dataset-list-description">{{ dataset.description }}</span>
+                        <span class="dataset-list-tags">
+                          <el-tag size="small" effect="plain">{{ dataset.source_category }}</el-tag>
+                          <el-tag size="small" effect="plain">{{ dataset.confidence_label }}</el-tag>
+                        </span>
+                      </span>
+                      <span class="dataset-list-stat"><strong>{{ formatNumber(dataset.row_count) }}</strong><small>原始行</small></span>
+                      <span class="dataset-list-stat"><strong>{{ formatNumber(dataset.column_count) }}</strong><small>字段</small></span>
+                      <span class="dataset-list-status">
+                        <el-tag size="small" :type="verificationStatusType(dataset.verification_status)">{{ datasetStatusLabel(dataset) }}</el-tag>
+                        <small>{{ datasetRecordCountText(dataset) }}</small>
+                      </span>
+                      <el-icon class="dataset-list-arrow" aria-hidden="true"><ArrowRight /></el-icon>
+                    </button>
                   </div>
-                  <el-tag size="small" :type="datasetRecordModeTag(dataset.record_mode)">
-                    {{ datasetRecordModeLabel(dataset.record_mode) }}
-                  </el-tag>
-                </div>
-                <div class="dataset-meta">
-                  <el-tag size="small" effect="plain">{{ dataset.source_category }}</el-tag>
-                  <el-tag size="small" effect="plain">{{ dataset.confidence_label }}</el-tag>
-                  <el-tag size="small" effect="plain">{{ datasetObjectSummary(dataset) }}</el-tag>
-                </div>
-                <div class="dataset-stats">
-                  <span><strong>{{ formatNumber(dataset.row_count) }}</strong>原始行数</span>
-                  <span><strong>{{ formatNumber(dataset.column_count) }}</strong>字段数</span>
-                  <span><strong>{{ datasetRecordCountText(dataset) }}</strong>已入库记录</span>
-                </div>
-              </button>
+                </section>
+                <el-empty v-if="!visibleDatasetGroups.length" description="暂无数据集" />
+              </div>
             </div>
           </section>
         </div>
@@ -1026,7 +1214,7 @@ onMounted(async () => {
               </el-table>
 
               <el-pagination
-                v-if="selectedCollectionName !== 'poly_data.pi1m_samples'"
+                v-if="selectedCollectionName !== 'poly_data.pi1m_samples' && !collectionUsesCursor"
                 class="record-pagination"
                 background
                 layout="prev, pager, next, total"
@@ -1039,6 +1227,13 @@ onMounted(async () => {
                 <span>已加载 {{ formatNumber(collectionRecords.length) }} 条，游标分页避免千万级 skip 扫描。</span>
                 <el-button :disabled="!pi1mNextCursor" :loading="pi1mLoading" @click="loadPi1mRecords()">加载下一页</el-button>
               </div>
+              <div v-else-if="collectionUsesCursor" class="collection-cursor-actions">
+                <span>共 {{ formatNumber(collectionTotal) }} 条</span>
+                <div>
+                  <el-button :icon="Back" :disabled="!collectionCursorHistory.length" @click="loadPreviousCollectionCursor">上一页</el-button>
+                  <el-button type="primary" :icon="Right" :disabled="!collectionNextCursor" @click="loadNextCollectionCursor">下一页</el-button>
+                </div>
+              </div>
             </template>
             <div v-else class="empty-state">
               <el-icon><FolderOpened /></el-icon>
@@ -1050,44 +1245,48 @@ onMounted(async () => {
       </el-tab-pane>
 
       <el-tab-pane label="数据关系" name="relations" lazy>
-        <div class="relation-grid">
-          <section class="catalog-section relation-main">
-            <div class="section-heading">
-              <h2>集合记录量（条）</h2>
-            </div>
-            <v-chart class="collection-volume-chart" :option="collectionVolumeOption" autoresize />
-            <p class="relationship-note">柱长为对数尺度，数值为真实记录量。</p>
+        <div class="relation-page">
+          <section class="relation-summary" aria-label="关系概览">
+            <div><span>关系节点</span><strong>{{ relationSummary.nodes }}</strong><small>已登记集合</small></div>
+            <div><span>有效链路</span><strong>{{ relationSummary.links }}</strong><small>有真实外键记录</small></div>
+            <div><span>关联记录</span><strong>{{ formatNumber(relationSummary.linked) }}</strong><small>跨集合关联总量</small></div>
+            <div class="relation-summary-note"><span>数据口径</span><p>{{ relationships.notes?.[0] || '仅展示数据库中可验证的外键关系。' }}</p></div>
           </section>
-          <section class="catalog-section">
+
+          <section class="catalog-section relation-volume relation-volume-main">
             <div class="section-heading">
-              <h2>已验证跨集合关联（条）</h2>
+              <div>
+                <h2>集合记录量</h2>
+                <p class="section-description">柱长按对数尺度，标签显示真实记录量；不同颜色对应数据域。</p>
+              </div>
+              <span>{{ mongoCollections.length }} 张表</span>
             </div>
-            <div v-if="relationshipRows.length" class="relationship-list">
-              <div v-for="row in relationshipRows" :key="row.key" class="relationship-row">
-                <div class="relationship-endpoint">
-                  <span>来源</span>
-                  <strong>{{ row.sourceLabel }}</strong>
-                  <small>{{ formatNumber(row.sourceRecordCount) }} 条记录</small>
+            <v-chart class="collection-volume-chart" :style="{ height: collectionVolumeChartHeight }" :option="collectionVolumeOption" autoresize />
+          </section>
+
+          <section class="relation-lower-grid">
+            <section class="catalog-section relation-sankey">
+              <div class="section-heading">
+                <div>
+                  <h2>数据流向</h2>
+                  <p class="section-description">桑基图展示材料、任务、产物和报告之间的真实依赖关系。</p>
                 </div>
-                <div class="relationship-metric">
-                  <div class="relationship-count">
-                    <strong>{{ formatNumber(row.linkedCount) }}</strong>
-                    <span>条已验证关联</span>
-                  </div>
-                  <div class="relationship-bar" aria-hidden="true">
-                    <span :style="{ width: `${row.barWidth}%` }"></span>
-                  </div>
-                  <code>{{ row.sourceField }} -> {{ row.targetField }}</code>
-                </div>
-                <div class="relationship-endpoint target">
-                  <span>目标</span>
-                  <strong>{{ row.targetLabel }}</strong>
-                  <small>覆盖 {{ row.coveragePercent }}% · {{ formatNumber(row.targetRecordCount) }} 条记录</small>
+                <span>{{ relationshipRows.length }} 条有效链路</span>
+              </div>
+              <v-chart v-if="relationshipRows.length" class="relationship-sankey-chart" :option="relationshipSankeyOption" autoresize />
+              <div v-else class="relation-empty"><el-empty description="暂无可验证的跨集合关联" /></div>
+            </section>
+            <section class="catalog-section relation-index">
+              <div class="section-heading"><div><h2>关系索引</h2><p class="section-description">按关联数量排序，快速定位高价值链路。</p></div><span>{{ relationshipRows.length }} 条链路</span></div>
+              <div v-if="relationshipRows.length" class="relation-index-list">
+                <div v-for="row in relationshipRows" :key="row.key" class="relation-index-row">
+                  <span class="relation-index-flow"><strong>{{ row.sourceLabel }}</strong><el-icon><ArrowRight /></el-icon><strong>{{ row.targetLabel }}</strong></span>
+                  <span class="relation-index-value"><b>{{ formatNumber(row.linkedCount) }}</b> 条</span>
+                  <small>{{ row.sourceField }} → {{ row.targetField }}</small>
                 </div>
               </div>
-            </div>
-            <el-empty v-else description="暂无可验证的跨集合关联" />
-            <p class="relationship-note">{{ relationships.notes?.[0] || '仅展示数据库中可验证的外键关系。' }}</p>
+              <el-empty v-else description="暂无链路" />
+            </section>
           </section>
         </div>
       </el-tab-pane>
@@ -1108,6 +1307,9 @@ onMounted(async () => {
             <p>{{ selectedDataset.description }}</p>
           </div>
           <div class="drawer-actions">
+            <el-tag :type="verificationStatusType(selectedDataset.verification_status)" effect="plain">
+              {{ verificationStatusLabel(selectedDataset.verification_status) }}
+            </el-tag>
             <el-tag :type="datasetRecordModeTag(selectedDataset.record_mode)" effect="plain">
               {{ datasetRecordModeLabel(selectedDataset.record_mode) }}
             </el-tag>
@@ -1127,6 +1329,23 @@ onMounted(async () => {
           <span>{{ datasetRecordCountText(selectedDataset) }}</span>
           <code>{{ selectedDataset.storage_prefix }}</code>
         </div>
+        <div
+          v-if="['running', 'verifying', 'queued'].includes(selectedDataset.import_status?.status)"
+          class="dataset-import-progress"
+        >
+          <div>
+            <strong>{{ statusLabel(selectedDataset.import_status.status) }}</strong>
+            <span>{{ formatNumber(selectedDataset.import_status.processed_count || 0) }} / {{ formatNumber(selectedDataset.import_status.expected_count || selectedDataset.row_count) }}</span>
+          </div>
+          <el-progress :percentage="datasetImportPercent(selectedDataset)" :stroke-width="8" />
+        </div>
+        <el-alert
+          v-if="selectedDataset.verification_status === 'failed'"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="selectedDataset.import_status?.error || '最近一次导入未通过校验'"
+        />
 
         <h3 class="drawer-section-title">字段覆盖率</h3>
         <v-chart v-if="datasetCoverageVisible" class="coverage-chart" :option="datasetCoverageOption" autoresize />
@@ -1313,12 +1532,12 @@ onMounted(async () => {
 
 .section-heading h2,
 .record-header h2 {
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .section-heading span {
   color: var(--app-ink-muted);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .asset-layout,
@@ -1415,11 +1634,189 @@ onMounted(async () => {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
 }
 
+.relation-page { display: flex; flex-direction: column; gap: 14px; }
+
+.relation-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 0.75fr)) minmax(260px, 1.5fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--app-card-border);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-border-soft);
+}
+
+.relation-summary > div { min-height: 88px; padding: 14px 16px; background: #fff; }
+.relation-summary span { display: block; color: var(--app-ink-muted); font-size: 12px; }
+.relation-summary strong { display: block; margin-top: 3px; color: var(--app-sidebar-from); font-size: 23px; line-height: 1.1; }
+.relation-summary small { display: block; margin-top: 4px; color: var(--app-ink-subtle); font-size: 11px; }
+.relation-summary-note p { margin: 6px 0 0; color: var(--app-ink-body); font-size: 12px; line-height: 1.45; }
+
+.relation-heading { align-items: center; }
+.relationship-sankey-chart { width: 100%; height: 460px; }
+.relation-empty { min-height: 360px; display: grid; place-items: center; }
+
+.relation-volume-main { min-width: 0; }
+.relation-lower-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(340px, 0.8fr); gap: 14px; align-items: stretch; }
+.relation-sankey, .relation-index, .relation-volume { min-width: 0; }
+.relation-index-list { display: flex; flex-direction: column; }
+.relation-index-row { display: grid; grid-template-columns: minmax(0, 1fr) 86px; gap: 8px 12px; align-items: center; width: 100%; padding: 13px 0; border-bottom: 1px solid var(--app-border-soft); background: transparent; color: inherit; text-align: left; }
+.relation-index-row:last-child { border-bottom: 0; }
+.relation-index-flow { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--app-ink-body); font-size: 14px; }
+.relation-index-flow strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relation-index-flow .el-icon { flex: 0 0 auto; color: var(--app-primary); }
+.relation-index-value { color: var(--app-primary); text-align: right; white-space: nowrap; }
+.relation-index-value b { font-size: 17px; }
+.relation-index-row small { grid-column: 1 / -1; color: var(--app-ink-muted); font-family: var(--app-mono-font); font-size: 12px; }
+
 .dataset-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+
+.section-description {
+  margin: 5px 0 0;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.dataset-browser-layout {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.dataset-rail {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 14px;
+  border-right: 1px solid var(--app-border-soft);
+}
+
+.dataset-rail-label {
+  margin: 2px 10px 8px;
+  color: var(--app-ink-subtle);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.dataset-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--app-ink-body);
+  text-align: left;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.dataset-filter strong {
+  min-width: 26px;
+  color: var(--app-ink-subtle);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.dataset-filter:hover,
+.dataset-filter.active {
+  border-color: var(--app-border-soft);
+  background: #f5f8fd;
+  color: var(--app-sidebar-from);
+  font-weight: 600;
+}
+
+.dataset-filter.active strong { color: var(--app-primary); }
+
+.dataset-filter.tone-blue.active { border-left: 3px solid #2563eb; }
+.dataset-filter.tone-teal.active { border-left: 3px solid #0f766e; }
+.dataset-filter.tone-amber.active { border-left: 3px solid #d97706; }
+.dataset-filter.tone-coral.active { border-left: 3px solid #be5a35; }
+.dataset-filter.tone-violet.active { border-left: 3px solid #7c3aed; }
+.dataset-filter.tone-slate.active { border-left: 3px solid #64748b; }
+
+.dataset-group-stack { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+
+.dataset-group {
+  overflow: hidden;
+  border: 1px solid var(--app-border-soft);
+  border-left: 3px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  background: #fff;
+}
+
+.dataset-group.tone-blue { border-left-color: #2563eb; }
+.dataset-group.tone-teal { border-left-color: #0f766e; }
+.dataset-group.tone-amber { border-left-color: #d97706; }
+.dataset-group.tone-coral { border-left-color: #be5a35; }
+.dataset-group.tone-violet { border-left-color: #7c3aed; }
+.dataset-group.tone-slate { border-left-color: #64748b; }
+
+.dataset-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 15px 11px;
+  background: #fbfcfe;
+  border-bottom: 1px solid var(--app-border-soft);
+}
+
+.dataset-group-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.dataset-group-marker { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--app-border); }
+.tone-blue .dataset-group-marker { background: #2563eb; }
+.tone-teal .dataset-group-marker { background: #0f766e; }
+.tone-amber .dataset-group-marker { background: #d97706; }
+.tone-coral .dataset-group-marker { background: #be5a35; }
+.tone-violet .dataset-group-marker { background: #7c3aed; }
+.tone-slate .dataset-group-marker { background: #64748b; }
+.dataset-group-header h3 { margin: 0; color: var(--app-ink); font-size: 18px; }
+.dataset-group-header p { margin: 3px 0 0; color: var(--app-ink-muted); font-size: 13px; }
+.dataset-group-count { color: var(--app-ink-muted); font-size: 14px; white-space: nowrap; }
+
+.dataset-list { display: flex; flex-direction: column; }
+
+.dataset-list-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.8fr) 86px 72px 130px 22px;
+  gap: 14px;
+  align-items: center;
+  width: 100%;
+  min-height: 104px;
+  padding: 15px 16px;
+  border: 0;
+  border-bottom: 1px solid #eef2f7;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dataset-list-row:last-child { border-bottom: 0; }
+.dataset-list-row:hover, .dataset-list-row:focus-visible { background: #f7faff; outline: none; }
+.dataset-list-main { min-width: 0; }
+.dataset-list-name { display: block; overflow: hidden; color: var(--app-ink); font-size: 16px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.dataset-list-description { display: block; overflow: hidden; margin-top: 4px; color: var(--app-ink-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.dataset-list-tags { display: flex; gap: 5px; margin-top: 7px; overflow: hidden; }
+.dataset-list-tags .el-tag { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dataset-list-stat strong { display: block; color: var(--app-sidebar-from); font-size: 18px; line-height: 1.1; }
+.dataset-list-stat small, .dataset-list-status small { display: block; margin-top: 5px; color: var(--app-ink-muted); font-size: 12px; }
+.dataset-list-status { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.dataset-list-arrow { color: var(--app-ink-subtle); }
+.dataset-list-row:hover .dataset-list-arrow { color: var(--app-primary); }
 
 .dataset-card {
   padding: 14px;
@@ -1443,7 +1840,7 @@ onMounted(async () => {
 
 .dataset-card h3,
 .collection-group h3 {
-  font-size: 15px;
+  font-size: 18px;
 }
 
 .dataset-card-main {
@@ -1474,7 +1871,7 @@ onMounted(async () => {
 
 .collection-volume-chart {
   width: 100%;
-  height: 420px;
+  height: 560px;
 }
 
 .relationship-list {
@@ -1590,8 +1987,8 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 10px;
   width: 100%;
-  min-height: 58px;
-  padding: 10px 12px;
+  min-height: 70px;
+  padding: 12px 14px;
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
   background: #ffffff;
@@ -1610,6 +2007,9 @@ onMounted(async () => {
 .collection-row code {
   display: block;
 }
+
+.collection-row strong { font-size: 16px; }
+.collection-row code { margin-top: 3px; font-size: 14px; }
 
 .collection-row code,
 code {
@@ -1673,6 +2073,22 @@ code {
   margin-top: 14px;
 }
 
+.collection-cursor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  margin-top: 14px;
+  color: var(--app-ink-muted);
+  font-size: 13px;
+}
+
+.collection-cursor-actions > div {
+  display: flex;
+  gap: 8px;
+}
+
 .empty-state {
   min-height: 360px;
   display: grid;
@@ -1717,6 +2133,23 @@ code {
   padding: 6px 8px;
   border-radius: var(--app-radius-sm);
   background: #f8fbff;
+}
+
+.dataset-import-progress {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.dataset-import-progress > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--app-ink-body);
+  font-size: 13px;
 }
 
 .drawer-section-title {
@@ -1766,6 +2199,12 @@ code {
   .pi1m-filter-panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .dataset-browser-layout { grid-template-columns: 160px minmax(0, 1fr); }
+  .dataset-list-row { grid-template-columns: minmax(190px, 1.6fr) 76px 62px 120px 20px; gap: 10px; }
+  .relation-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .relation-summary-note { grid-column: 1 / -1; min-height: auto !important; }
+  .relation-lower-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
@@ -1789,6 +2228,17 @@ code {
     grid-template-columns: 1fr;
   }
 
+  .dataset-browser-layout { grid-template-columns: 1fr; }
+  .dataset-rail { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 0 10px; border-right: 0; border-bottom: 1px solid var(--app-border-soft); }
+  .dataset-rail-label { grid-column: 1 / -1; margin: 0 0 2px; }
+  .dataset-list-row { grid-template-columns: minmax(0, 1fr) 20px; gap: 6px 10px; }
+  .dataset-list-stat, .dataset-list-status { display: none; }
+  .dataset-list-description { white-space: normal; }
+  .relation-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .relation-summary-note { grid-column: 1 / -1; }
+  .relation-heading { align-items: flex-start; flex-direction: column; }
+  .relationship-sankey-chart { height: 340px; }
+
   .record-tools {
     flex-direction: column;
   }
@@ -1798,10 +2248,16 @@ code {
   }
 
   .pi1m-filter-panel,
-  .pi1m-cursor-actions {
+  .pi1m-cursor-actions,
+  .collection-cursor-actions {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .collection-cursor-actions > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .relationship-row {
