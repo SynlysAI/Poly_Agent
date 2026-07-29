@@ -19,8 +19,6 @@ const value = computed({
   },
 })
 
-const selectedModel = computed(() => props.models.find((item) => item.key === props.modelValue) || null)
-
 function capabilityLabels(item) {
   const capabilities = item?.capabilities || []
   const labels = []
@@ -36,24 +34,6 @@ function selectedLabel(item) {
   if (!item) return props.placeholder
   return item.label
 }
-
-function statusClass(status) {
-  if (status === 'available') return 'is-available'
-  if (status === 'down' || status === 'not_configured') return 'is-down'
-  if (status === 'degraded') return 'is-degraded'
-  return 'is-unknown'
-}
-
-function statusText(status) {
-  const map = {
-    available: '可用',
-    degraded: '降级',
-    down: '不可用',
-    not_configured: '未配置',
-    unknown: '未探测',
-  }
-  return map[status] || '未探测'
-}
 </script>
 
 <template>
@@ -66,9 +46,6 @@ function statusText(status) {
     :placeholder="loading ? '加载模型...' : models.length ? placeholder : '未配置模型'"
     aria-label="选择 LLM 模型"
   >
-    <template #prefix>
-      <span class="model-status-dot" :class="statusClass(selectedModel?.status)" aria-hidden="true" />
-    </template>
     <el-option
       v-for="item in models"
       :key="item.key"
@@ -78,10 +55,8 @@ function statusText(status) {
       <div class="llm-model-option">
         <div class="llm-model-option-main">
           <div class="llm-model-option-title">
-            <span class="model-status-dot" :class="statusClass(item.status)" aria-hidden="true" />
             <strong>{{ item.label }}</strong>
           </div>
-          <span>{{ item.providerName }} · {{ statusText(item.status) }}</span>
         </div>
         <div class="llm-model-option-tags">
           <span
@@ -130,33 +105,9 @@ function statusText(status) {
   white-space: nowrap;
 }
 
-.model-status-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: #94a3b8;
-  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.15);
-}
-
-.model-status-dot.is-available {
-  background: #16a34a;
-  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.14);
-}
-
-.model-status-dot.is-degraded {
-  background: #d97706;
-  box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.14);
-}
-
-.model-status-dot.is-down {
-  background: #dc2626;
-  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.14);
-}
-
 :global(.llm-model-select-popper .el-select-dropdown__item) {
   height: auto;
-  min-height: 64px;
+  min-height: 46px;
   padding: 8px 10px;
 }
 
@@ -174,12 +125,6 @@ function statusText(status) {
   gap: 12px;
 }
 
-.llm-model-option-main {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
 .llm-model-option-title {
   min-width: 0;
   display: flex;
@@ -187,8 +132,7 @@ function statusText(status) {
   gap: 8px;
 }
 
-.llm-model-option-title strong,
-.llm-model-option-main span {
+.llm-model-option-title strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -197,11 +141,6 @@ function statusText(status) {
 .llm-model-option-title strong {
   color: var(--app-ink);
   font-size: 13px;
-}
-
-.llm-model-option-main span {
-  color: var(--app-ink-muted);
-  font-size: 12px;
 }
 
 .llm-model-option-tags {

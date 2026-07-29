@@ -2,9 +2,10 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, ChatLineRound, Connection, Promotion, Reading } from '@element-plus/icons-vue'
+import { ArrowDown, ChatLineRound, Promotion, Reading } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, getLlmModels, listKnowledgeSystems, streamAssistantChat } from '../api/polyAgentApi'
+import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import { buildSelectableLlmModels } from '../utils/llmModels'
 
@@ -19,7 +20,7 @@ const chatMode = ref(normalizeMode(route.query.mode))
 const llmCatalog = ref({ providers: [], routing: {} })
 const knowledgeSystems = ref([])
 const selectedModelKey = ref('')
-const selectedKnowledgeBaseId = ref(loadKnowledgePreference())
+const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
 const useWebSearch = ref(loadWebSearchPreference())
 const WEB_SEARCH_STORAGE_KEY = 'poly-agent-dialogue-use-web-search'
 const KNOWLEDGE_STORAGE_KEY = 'poly-agent-dialogue-knowledge-base-id'
@@ -47,10 +48,12 @@ const selectableModels = computed(() =>
 )
 
 const selectedModel = computed(() => selectableModels.value.find((item) => item.key === selectedModelKey.value) || null)
-const selectedKnowledgeBase = computed(() =>
-  knowledgeSystems.value.find((item) => item.system_id === selectedKnowledgeBaseId.value) || null,
+const selectedKnowledgeBases = computed(() =>
+  selectedKnowledgeBaseIds.value
+    .map((systemId) => knowledgeSystems.value.find((item) => item.system_id === systemId))
+    .filter(Boolean),
 )
-const hasKnowledgeBase = computed(() => Boolean(selectedKnowledgeBase.value))
+const hasKnowledgeBase = computed(() => Boolean(selectedKnowledgeBases.value.length))
 const conversationStarted = computed(() => messages.value.some((item) => item.role === 'user'))
 
 const currentSuggestions = computed(() => {
@@ -92,20 +95,33 @@ function loadWebSearchPreference() {
 }
 
 function loadKnowledgePreference() {
-  return window.localStorage.getItem(KNOWLEDGE_STORAGE_KEY) || ''
+  const raw = window.localStorage.getItem(KNOWLEDGE_STORAGE_KEY) || ''
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed.map((item) => String(item || '').trim()).filter(Boolean)
+  } catch {
+    return [raw].filter(Boolean)
+  }
+  return [raw].filter(Boolean)
 }
 
 watch(useWebSearch, (value) => {
   window.localStorage.setItem(WEB_SEARCH_STORAGE_KEY, value ? '1' : '0')
 })
 
-watch(selectedKnowledgeBaseId, (value) => {
-  if (value) {
-    window.localStorage.setItem(KNOWLEDGE_STORAGE_KEY, value)
-  } else {
-    window.localStorage.removeItem(KNOWLEDGE_STORAGE_KEY)
-  }
-})
+watch(
+  selectedKnowledgeBaseIds,
+  (value) => {
+    const ids = Array.isArray(value) ? value.filter(Boolean) : []
+    if (ids.length) {
+      window.localStorage.setItem(KNOWLEDGE_STORAGE_KEY, JSON.stringify(ids))
+    } else {
+      window.localStorage.removeItem(KNOWLEDGE_STORAGE_KEY)
+    }
+  },
+  { flush: 'sync' },
+)
 
 function cleanInitialQuery() {
   if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId) return
@@ -162,11 +178,9 @@ async function loadKnowledgeBases() {
   try {
     const data = await listKnowledgeSystems()
     knowledgeSystems.value = data?.items || []
-    if (
-      selectedKnowledgeBaseId.value &&
-      !knowledgeSystems.value.some((item) => item.system_id === selectedKnowledgeBaseId.value)
-    ) {
-      selectedKnowledgeBaseId.value = ''
+    if (selectedKnowledgeBaseIds.value.length) {
+      const validIds = new Set(knowledgeSystems.value.map((item) => item.system_id))
+      selectedKnowledgeBaseIds.value = selectedKnowledgeBaseIds.value.filter((systemId) => validIds.has(systemId))
     }
   } catch (error) {
     knowledgeSystems.value = []
@@ -216,8 +230,10 @@ async function sendPrompt(prompt) {
           mode: chatMode.value,
           use_web_search: useWebSearch.value,
           use_knowledge_base: hasKnowledgeBase.value,
-          knowledge_base_id: selectedKnowledgeBase.value?.system_id || '',
-          knowledge_base_name: selectedKnowledgeBase.value?.name || '',
+          knowledge_base_ids: selectedKnowledgeBases.value.map((item) => item.system_id),
+          knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
+          knowledge_base_id: selectedKnowledgeBases.value[0]?.system_id || '',
+          knowledge_base_name: selectedKnowledgeBases.value[0]?.name || '',
           model: selectedModelContext(),
         },
       },
@@ -343,12 +359,23 @@ function selectChatMode(mode) {
   selectDefaultModelForMode()
 }
 
-function selectKnowledgeBase(systemId) {
-  selectedKnowledgeBaseId.value = systemId
+function isKnowledgeBaseSelected(systemId) {
+  return selectedKnowledgeBaseIds.value.includes(systemId)
 }
 
-function clearKnowledgeBase() {
-  selectedKnowledgeBaseId.value = ''
+function toggleKnowledgeBase(systemId) {
+  if (!systemId) return
+  selectedKnowledgeBaseIds.value = isKnowledgeBaseSelected(systemId)
+    ? selectedKnowledgeBaseIds.value.filter((item) => item !== systemId)
+    : [...selectedKnowledgeBaseIds.value, systemId]
+}
+
+function removeKnowledgeBase(systemId) {
+  selectedKnowledgeBaseIds.value = selectedKnowledgeBaseIds.value.filter((item) => item !== systemId)
+}
+
+function clearKnowledgeBases() {
+  selectedKnowledgeBaseIds.value = []
 }
 
 function mergeAssistantReferences(current = [], incoming = []) {
@@ -646,11 +673,11 @@ onMounted(() => {
         </button>
       </div>
       <div class="composer-box">
-        <div v-if="selectedKnowledgeBase" class="selected-tags-inline">
-          <span class="mention-chip mention-chip--kb">
+        <div v-if="selectedKnowledgeBases.length" class="selected-tags-inline">
+          <span v-for="system in selectedKnowledgeBases" :key="system.system_id" class="mention-chip mention-chip--kb">
             <el-icon><Reading /></el-icon>
-            <span class="mention-chip-name" :title="selectedKnowledgeBase.name">{{ selectedKnowledgeBase.name }}</span>
-            <button type="button" aria-label="移除知识库" @click="clearKnowledgeBase">×</button>
+            <span class="mention-chip-name" :title="system.name">{{ system.name }}</span>
+            <button type="button" aria-label="移除知识库" @click="removeKnowledgeBase(system.system_id)">×</button>
           </span>
         </div>
         <div class="composer-input-row">
@@ -694,7 +721,7 @@ onMounted(() => {
                 aria-label="联网搜索"
                 @click="useWebSearch = !useWebSearch"
               >
-                <el-icon><Connection /></el-icon>
+                <el-icon><GlobeIcon /></el-icon>
               </button>
             </el-tooltip>
             <el-popover
@@ -712,7 +739,7 @@ onMounted(() => {
                   aria-label="选择知识库"
                 >
                   <el-icon><Reading /></el-icon>
-                  <span v-if="hasKnowledgeBase" class="tool-count">1</span>
+                  <span v-if="hasKnowledgeBase" class="tool-count">{{ selectedKnowledgeBases.length }}</span>
                 </button>
               </template>
               <div class="kb-picker">
@@ -721,8 +748,9 @@ onMounted(() => {
                   :key="system.system_id"
                   type="button"
                   class="kb-picker-item"
-                  :class="{ selected: system.system_id === selectedKnowledgeBaseId }"
-                  @click="selectKnowledgeBase(system.system_id)"
+                  :class="{ selected: isKnowledgeBaseSelected(system.system_id) }"
+                  :aria-pressed="isKnowledgeBaseSelected(system.system_id)"
+                  @click="toggleKnowledgeBase(system.system_id)"
                 >
                   <el-icon><Reading /></el-icon>
                   <span>
@@ -730,8 +758,8 @@ onMounted(() => {
                     <small>{{ system.document_count || 0 }} 文档 · {{ system.status || 'unknown' }}</small>
                   </span>
                 </button>
-                <button v-if="selectedKnowledgeBaseId" type="button" class="kb-picker-clear" @click="clearKnowledgeBase">
-                  清除选择
+                <button v-if="selectedKnowledgeBases.length" type="button" class="kb-picker-clear" @click="clearKnowledgeBases">
+                  清除全部
                 </button>
                 <p v-if="!knowledgeSystems.length" class="kb-picker-empty">暂无可用知识库</p>
               </div>
@@ -1012,15 +1040,6 @@ h1 {
   box-shadow: 0 12px 28px rgba(22, 59, 110, 0.08);
 }
 
-.dialogue-top-toolbar {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .composer-input-row {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
@@ -1115,14 +1134,14 @@ h1 {
 }
 
 .icon-tool-btn.active {
-  background: rgba(16, 185, 129, 0.12);
-  color: #059669;
-  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.22);
+  background: var(--app-primary-light);
+  color: var(--app-primary-active);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
 }
 
 .icon-tool-btn.active:hover:not(:disabled) {
-  background: rgba(16, 185, 129, 0.18);
-  color: #047857;
+  background: #dbeafe;
+  color: var(--app-primary);
 }
 
 .icon-tool-btn:disabled {
@@ -1171,7 +1190,7 @@ h1 {
 }
 
 .mention-chip--kb .el-icon {
-  color: #16a34a;
+  color: var(--app-primary-active);
 }
 
 .mention-chip-name {
@@ -1233,7 +1252,7 @@ h1 {
 }
 
 .kb-picker-item .el-icon {
-  color: #16a34a;
+  color: var(--app-primary-active);
 }
 
 .kb-picker-item span {
@@ -1279,10 +1298,6 @@ h1 {
   .dialogue-header {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .dialogue-top-toolbar {
-    justify-content: stretch;
   }
 
   .chat-bubble,

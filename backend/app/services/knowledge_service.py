@@ -184,6 +184,33 @@ class KnowledgeService:
         )
         return [KnowledgeHit(**self._safe_hit(item)) for item in results[:limit]]
 
+    def search_hits_many(self, system_ids: list[str], query: str, *, limit: int = 5) -> list[KnowledgeHit]:
+        """调用 WeKnora 多知识库检索接口并返回归一化命中片段。
+
+        Args:
+            system_ids: WeKnora 知识库 ID 列表。
+            query: 用户检索问题。
+            limit: 最大返回命中数。
+
+        Returns:
+            归一化后的知识库命中片段列表。
+        """
+        normalized_query = str(query or "").strip()
+        normalized_ids = self._normalize_system_ids(system_ids)
+        if not normalized_query or not normalized_ids:
+            return []
+        base_url = self._require_base_url()
+        for system_id in normalized_ids:
+            self._ensure_known_system(system_id)
+        results = self._search_knowledge_many(
+            base_url,
+            normalized_ids,
+            normalized_query,
+            limit=max(1, min(limit, 20)),
+        )
+        hits = [KnowledgeHit(**self._safe_hit(item)) for item in results[: max(1, min(limit, 20))]]
+        return sorted(hits, key=lambda item: item.score, reverse=True)[:limit]
+
     def get_graph(self, system_id: str) -> KnowledgeGraphData:
         """加载 WeKnora Wiki 页面链接图谱概览。"""
         base_url = self._require_base_url()
@@ -1366,17 +1393,58 @@ class KnowledgeService:
 
     def _search_knowledge(self, base_url: str, system_id: str, query: str, *, limit: int) -> list[dict[str, Any]]:
         """调用 WeKnora 无总结检索接口。"""
+        return self._search_knowledge_many(base_url, [system_id], query, limit=limit)
+
+    def _search_knowledge_many(
+        self,
+        base_url: str,
+        system_ids: list[str],
+        query: str,
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """调用 WeKnora 无总结多知识库检索接口。
+
+        Args:
+            base_url: WeKnora API 基础地址。
+            system_ids: WeKnora 知识库 ID 列表。
+            query: 用户检索问题。
+            limit: 最大返回命中数。
+
+        Returns:
+            WeKnora 返回的原始命中列表。
+        """
+        normalized_ids = self._normalize_system_ids(system_ids)
+        if not normalized_ids:
+            return []
         with self._client(base_url) as client:
             response = client.post(
                 "/knowledge-search",
                 json={
                     "query": query,
-                    "knowledge_base_ids": [system_id],
+                    "knowledge_base_ids": normalized_ids,
                 },
             )
             response.raise_for_status()
             raw = self._unwrap(response.json())
         return self._raw_items(raw)[: max(1, min(limit, 100))]
+
+    @staticmethod
+    def _normalize_system_ids(system_ids: list[str]) -> list[str]:
+        """清洗并去重知识库 ID 列表。
+
+        Args:
+            system_ids: 原始知识库 ID 列表。
+
+        Returns:
+            清洗后的知识库 ID 列表。
+        """
+        normalized: list[str] = []
+        for system_id in system_ids or []:
+            value = str(system_id or "").strip()
+            if value and value not in normalized:
+                normalized.append(value)
+        return normalized
 
     @classmethod
     def _base_url(cls) -> str:

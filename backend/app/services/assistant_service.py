@@ -9,7 +9,7 @@ import re
 import socket
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Iterable
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -160,6 +160,8 @@ class KnowledgeOutcome:
     query: str
     results: list[KnowledgeEvidence]
     error: str | None = None
+    system_ids: list[str] = field(default_factory=list)
+    system_names: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1518,6 +1520,8 @@ class AssistantService:
                 "provider": knowledge_outcome.provider,
                 "system_id": knowledge_outcome.system_id,
                 "system_name": knowledge_outcome.system_name,
+                "system_ids": knowledge_outcome.system_ids or [knowledge_outcome.system_id],
+                "system_names": knowledge_outcome.system_names or [knowledge_outcome.system_name],
                 "query": knowledge_outcome.query,
                 "result_count": len(knowledge_outcome.results),
                 "error": knowledge_outcome.error,
@@ -1539,6 +1543,8 @@ class AssistantService:
                 "provider": None,
                 "system_id": None,
                 "system_name": None,
+                "system_ids": [],
+                "system_names": [],
                 "query": None,
                 "result_count": 0,
                 "error": None,
@@ -1656,10 +1662,14 @@ class AssistantService:
         """
         context = request.context or {}
         enabled = self._normalize_bool(context.get("use_knowledge_base"))
-        system_id = str(context.get("knowledge_base_id") or context.get("system_id") or "").strip()
-        if not enabled or not system_id:
+        system_ids = self._selected_knowledge_base_ids(context)
+        if not enabled or not system_ids:
             return None
-        system_name = str(context.get("knowledge_base_name") or system_id).strip()
+        system_names = self._selected_knowledge_base_names(context, system_ids)
+        system_id = system_ids[0]
+        system_name = "、".join(system_names[:3])
+        if len(system_names) > 3:
+            system_name = f"{system_name} 等 {len(system_names)} 个知识库"
         normalized_query = str(query or "").strip()
         if not normalized_query:
             return KnowledgeOutcome(
@@ -1669,9 +1679,11 @@ class AssistantService:
                 system_name=system_name,
                 query="",
                 results=[],
+                system_ids=system_ids,
+                system_names=system_names,
             )
         try:
-            hits = self.knowledge_service.search_hits(system_id, normalized_query, limit=5)
+            hits = self.knowledge_service.search_hits_many(system_ids, normalized_query, limit=5)
         except Exception as exc:
             logger.warning("assistant knowledge retrieval failed: %s", exc)
             return KnowledgeOutcome(
@@ -1682,6 +1694,8 @@ class AssistantService:
                 query=normalized_query,
                 results=[],
                 error=f"{type(exc).__name__}: {exc}",
+                system_ids=system_ids,
+                system_names=system_names,
             )
         results = [
             KnowledgeEvidence(
@@ -1701,6 +1715,8 @@ class AssistantService:
             system_name=system_name,
             query=normalized_query,
             results=results,
+            system_ids=system_ids,
+            system_names=system_names,
         )
 
     def _knowledge_references(self, outcome: KnowledgeOutcome | None) -> list[AssistantReference]:
@@ -1714,7 +1730,11 @@ class AssistantService:
         """
         if not outcome or not outcome.results:
             return []
-        target = f"/knowledge-base?system_id={quote_plus(outcome.system_id)}"
+        target = (
+            f"/knowledge?system_id={quote_plus(outcome.system_id)}"
+            if len(outcome.system_ids or []) <= 1
+            else "/knowledge"
+        )
         refs: list[AssistantReference] = []
         seen: set[str] = set()
         for item in outcome.results:
@@ -1755,6 +1775,60 @@ class AssistantService:
         if outcome.status == "failed":
             return f"{outcome.system_name} 检索失败，继续使用可用上下文"
         return "知识库检索未启用"
+
+    def _selected_knowledge_base_ids(self, context: dict) -> list[str]:
+        """从对话上下文中读取知识库 ID 列表。
+
+        Args:
+            context: 前端传入的对话上下文。
+
+        Returns:
+            去重后的知识库 ID 列表。
+        """
+        values = self._normalize_context_string_list(context.get("knowledge_base_ids"))
+        if not values:
+            values = self._normalize_context_string_list(context.get("knowledge_base_id") or context.get("system_id"))
+        return values
+
+    def _selected_knowledge_base_names(self, context: dict, system_ids: list[str]) -> list[str]:
+        """从对话上下文中读取知识库名称列表。
+
+        Args:
+            context: 前端传入的对话上下文。
+            system_ids: 已选择的知识库 ID 列表。
+
+        Returns:
+            与知识库 ID 顺序对应的名称列表。
+        """
+        names = self._normalize_context_string_list(context.get("knowledge_base_names"))
+        if not names:
+            names = self._normalize_context_string_list(context.get("knowledge_base_name"))
+        padded = names[: len(system_ids)]
+        while len(padded) < len(system_ids):
+            padded.append(system_ids[len(padded)])
+        return padded
+
+    @staticmethod
+    def _normalize_context_string_list(value: object) -> list[str]:
+        """规范化上下文中的字符串或字符串数组。
+
+        Args:
+            value: 前端传入的单个字符串、字符串数组或逗号分隔字符串。
+
+        Returns:
+            去重后的字符串列表。
+        """
+        raw_values = value if isinstance(value, list) else [value]
+        normalized: list[str] = []
+        for item in raw_values:
+            if item is None:
+                continue
+            parts = [item] if not isinstance(item, str) else re.split(r"[,，]", item)
+            for part in parts:
+                text = str(part or "").strip()
+                if text and text not in normalized:
+                    normalized.append(text)
+        return normalized
 
     def _combined_retrieval_status(
         self,
