@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import unittest
 import sys
+from io import BytesIO
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.main import app
 from app.core.auth import get_current_user
+from app.core.config import settings
 from app.infra.demo_store import demo_store
 from app.schemas.data_catalog import (
+    DataCatalogCollectionAnalysisData,
     DataCatalogCollectionSummary,
     DataCatalogMongoCollectionListData,
     DataCatalogOverviewData,
@@ -35,12 +39,27 @@ class FakeS3Client:
     def __init__(self, objects: dict[str, dict] | None = None, configured: bool = True) -> None:
         self.objects = objects or {}
         self.configured = configured
+        self.head_calls: list[tuple[str, str]] = []
+        self.get_calls: list[tuple[str, str]] = []
 
     def is_configured(self) -> bool:
         return self.configured
 
     def head_object(self, bucket: str, object_key: str) -> dict | None:
+        self.head_calls.append((bucket, object_key))
         return self.objects.get(object_key)
+
+    def get_object(self, bucket: str, object_key: str) -> dict | None:
+        self.get_calls.append((bucket, object_key))
+        item = self.objects.get(object_key)
+        if not item:
+            return None
+        content = item.get("content", b"")
+        return {
+            "body": BytesIO(content),
+            "size_bytes": len(content),
+            "mime_type": item.get("mime_type", "application/octet-stream"),
+        }
 
 
 class FakeMongoCollection:
@@ -50,7 +69,21 @@ class FakeMongoCollection:
         self.rows = rows
 
     def find(self, filters: dict, projection: dict | None = None) -> list[dict]:
-        return [dict(row) for row in self.rows]
+        if not filters:
+            return [dict(row) for row in self.rows]
+        return [
+            dict(row)
+            for row in self.rows
+            if all(self._nested_value(row, key) == value for key, value in filters.items())
+        ]
+
+    def find_one(self, filters: dict, projection: dict | None = None, **kwargs) -> dict | None:
+        rows = self.find(filters, projection)
+        sort = kwargs.get("sort")
+        if sort:
+            for key, direction in reversed(sort):
+                rows.sort(key=lambda row: row.get(key) or "", reverse=direction < 0)
+        return rows[0] if rows else None
 
     def count_documents(self, filters: dict) -> int:
         if not filters:
@@ -144,6 +177,59 @@ class DataCatalogServiceTest(unittest.TestCase):
         self.assertEqual(len(data.items), 16)
         self.assertFalse(any(obj.exists for dataset in data.items for obj in dataset.objects))
 
+    def test_minio_objects_use_logical_asset_ids_and_reject_unknown_dataset_without_s3(self) -> None:
+        fake_s3 = FakeS3Client(
+            {
+                "datasets/radonpy_pi1070/docs/readme.md": {
+                    "size_bytes": 12,
+                    "last_modified": datetime(2026, 7, 29, tzinfo=timezone.utc),
+                }
+            }
+        )
+        service = DataCatalogService(s3_client=fake_s3)
+
+        data = service.list_minio_objects(dataset_id="radonpy_pi1070")
+
+        self.assertGreaterEqual(data.total, 1)
+        readme = next(item for item in data.items if item.role == "readme")
+        self.assertEqual(readme.asset_id, "radonpy_pi1070__readme")
+        self.assertEqual(readme.filename, "readme.md")
+        self.assertTrue(readme.exists)
+        self.assertEqual(readme.permission, "download")
+        self.assertNotIn("datasets/radonpy_pi1070/docs/readme.md", readme.download_path)
+
+        before_calls = list(fake_s3.head_calls)
+        with self.assertRaises(HTTPException) as context:
+            service.list_minio_objects(dataset_id="../radonpy_pi1070")
+
+        self.assertEqual(context.exception.status_code, 404)
+        self.assertEqual(fake_s3.head_calls, before_calls)
+
+    def test_minio_download_uses_asset_whitelist_before_s3(self) -> None:
+        fake_s3 = FakeS3Client(
+            {
+                "datasets/radonpy_pi1070/docs/readme.md": {
+                    "content": b"# RadonPy\n",
+                    "mime_type": "text/markdown",
+                }
+            }
+        )
+        service = DataCatalogService(s3_client=fake_s3)
+
+        download = service.open_minio_object("radonpy_pi1070__readme")
+
+        self.assertEqual(download.asset.filename, "readme.md")
+        self.assertEqual(download.asset.size_bytes, len(b"# RadonPy\n"))
+        self.assertEqual(download.asset.mime_type, "text/markdown")
+        self.assertEqual(download.body.read(), b"# RadonPy\n")
+        self.assertEqual(fake_s3.get_calls, [("polymer-data", "datasets/radonpy_pi1070/docs/readme.md")])
+
+        with self.assertRaises(HTTPException) as context:
+            service.open_minio_object("../datasets/radonpy_pi1070/docs/readme.md")
+
+        self.assertEqual(context.exception.status_code, 404)
+        self.assertEqual(fake_s3.get_calls, [("polymer-data", "datasets/radonpy_pi1070/docs/readme.md")])
+
     def test_dataset_catalog_prefers_poly_data_metadata(self) -> None:
         service = DataCatalogService(s3_client=FakeS3Client(configured=False))
         fake_db = FakeMongoDatabase(
@@ -234,6 +320,61 @@ class DataCatalogServiceTest(unittest.TestCase):
         self.assertEqual(omg.record_mode, "sample")
         self.assertEqual(omg.coverage_percent, 40.0)
         self.assertEqual(omg.verification_status, "partial")
+
+    def test_dataset_catalog_exposes_active_import_progress_fields(self) -> None:
+        service = DataCatalogService(s3_client=FakeS3Client(configured=False))
+        now = datetime(2026, 7, 29, 1, 46, tzinfo=timezone.utc)
+        fake_db = FakeMongoDatabase(
+            {
+                "datasets": [
+                    {
+                        "dataset_id": "omg",
+                        "display_name": "OMG",
+                        "source_category": "reaction data",
+                        "confidence_label": "source table",
+                        "description": "running import",
+                        "row_count": 12886131,
+                        "column_count": 4,
+                        "storage_prefix": "datasets/omg/",
+                    }
+                ],
+                "dataset_fields": [],
+                "import_jobs": [
+                    {
+                        "job_id": "omg-full-import",
+                        "dataset_id": "omg",
+                        "status": "running",
+                        "processed_count": 20000,
+                        "expected_count": 12886131,
+                        "checkpoint_count": 2,
+                        "active_chunk_index": 2,
+                        "active_source_file": "OMG_polymers.csv",
+                        "active_row_start": 10001,
+                        "active_row_end": 20000,
+                        "started_at": now,
+                        "updated_at": now,
+                        "throughput_rows_per_second": 1250.5,
+                    }
+                ],
+                "omg_polymers": [{"record_id": "OMG-00000001"}, {"record_id": "OMG-00000002"}],
+            }
+        )
+
+        with (
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+        ):
+            data = service.list_datasets()
+
+        omg = next(item for item in data.items if item.dataset_id == "omg")
+        self.assertEqual(omg.verification_status, "running")
+        self.assertEqual(omg.import_status.status, "running")
+        self.assertEqual(omg.import_status.processed_count, 20000)
+        self.assertEqual(omg.import_status.active_chunk_index, 2)
+        self.assertEqual(omg.import_status.active_source_file, "OMG_polymers.csv")
+        self.assertEqual(omg.import_status.active_row_start, 10001)
+        self.assertEqual(omg.import_status.active_row_end, 20000)
 
     def test_dataset_catalog_exposes_verified_coverage_for_exact_count(self) -> None:
         service = DataCatalogService(s3_client=FakeS3Client(configured=False))
@@ -351,14 +492,42 @@ class DataCatalogServiceTest(unittest.TestCase):
         self.assertEqual(edges[("report_jobs", "report_artifacts")].linked_count, 1)
         self.assertEqual(edges[("materials", "computations")].target_coverage, 0.5)
 
+    def test_collection_analysis_reports_sampled_statistics_and_correlations(self) -> None:
+        original = demo_store.load()
+        rows = [
+            {"record_id": f"TOPORG-{index:04d}", "Topology": "linear" if index % 2 else "branched", "Rg2": index + 1, "Density": (index + 1) * 2}
+            for index in range(230)
+        ]
+        try:
+            demo_store.save({**original, "poly_data.toporg_records": rows})
+            with patch("app.services.data_catalog_service.settings.require_mongodb", False):
+                data = DataCatalogService().get_collection_analysis(
+                    "poly_data.toporg_records",
+                    sample_size=200,
+                    refresh=True,
+                )
+        finally:
+            demo_store.save(original)
+
+        self.assertEqual(data.total_count, 230)
+        self.assertEqual(data.sample_count, 200)
+        self.assertEqual(data.analysis_status, "partial")
+        rg2 = next(item for item in data.field_stats if item.field == "Rg2")
+        self.assertEqual(rg2.value_type, "number")
+        self.assertEqual(rg2.numeric_summary["min"], 1.0)
+        self.assertGreaterEqual(len(data.correlations), 1)
+        self.assertTrue(any(item.title == "结构类别分布" for item in data.insights))
+
 
 class DataCatalogApiTest(unittest.TestCase):
     """覆盖数据目录 API 响应契约。"""
 
     def setUp(self) -> None:
+        app.dependency_overrides.pop(get_current_user, None)
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
+        app.dependency_overrides.pop(get_current_user, None)
         self.client.close()
 
     def test_overview_endpoint_returns_api_response(self) -> None:
@@ -400,6 +569,146 @@ class DataCatalogApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"]["total"], 0)
 
+    def test_collection_analysis_endpoint_returns_controlled_profile(self) -> None:
+        analysis = DataCatalogCollectionAnalysisData(
+            collection_key="poly_data.toporg_records",
+            collection_name="toporg_records",
+            source_id="poly_data",
+            database="poly_data",
+            display_name="ToPoRg 记录",
+            data_domain="toporg_records",
+            analysis_status="partial",
+            generated_at=datetime.now(timezone.utc),
+            total_count=1342,
+            sample_count=200,
+            sample_limit=200,
+            analysis_scope="full_count_sample_distribution",
+        )
+        with patch.object(DataCatalogService, "get_collection_analysis", return_value=analysis):
+            response = self.client.get(
+                "/api/v1/data-catalog/mongo-collections/poly_data.toporg_records/analysis",
+                params={"sample_size": 200},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data"]["analysis_status"], "partial")
+        self.assertEqual(response.json()["data"]["sample_limit"], 200)
+
+    def test_api_catalog_registers_all_read_only_data_interfaces_without_secrets(self) -> None:
+        with (
+            patch("app.services.data_catalog_service.settings.minio_endpoint", "http://minio-secret.example"),
+            patch("app.services.data_catalog_service.settings.minio_access_key", "MINIO_ACCESS_KEY_SECRET"),
+            patch("app.services.data_catalog_service.settings.minio_secret_key", "MINIO_SECRET_KEY_SECRET"),
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://secret-user:secret-pass@mongo.example/poly_data"),
+        ):
+            response = self.client.get("/api/v1/data-catalog/api-catalog")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        paths = {item["path"] for item in data["endpoints"]}
+        self.assertEqual(data["authentication"]["header"], "Authorization: Bearer $POLY_AGENT_TOKEN")
+        self.assertIn("access_token", data["read_only_statement"])
+        self.assertIn("不需要也不会提供底层存储账号或密钥", data["read_only_statement"])
+        self.assertTrue(all(item["method"] == "GET" for item in data["endpoints"]))
+        self.assertTrue(all(item["permission"] in {"read", "download"} for item in data["endpoints"]))
+        endpoint_by_id = {item["endpoint_id"]: item for item in data["endpoints"]}
+        self.assertEqual(endpoint_by_id["mongo_collections"]["name"], "MongoDB 可访问集合")
+        self.assertEqual(endpoint_by_id["mongo_collection_analysis"]["name"], "MongoDB 集合分析")
+        self.assertEqual(endpoint_by_id["minio_objects"]["name"], "MinIO 文件列表")
+        self.assertIn("返回文件流，不是 JSON", endpoint_by_id["minio_download"]["summary"])
+        self.assertTrue({
+            "/data-catalog/overview",
+            "/data-catalog/datasets",
+            "/data-catalog/datasets/{dataset_id}/profile",
+            "/data-catalog/datasets/{dataset_id}/records",
+            "/data-catalog/datasets/{dataset_id}/visual-samples",
+            "/data-catalog/mongo-collections",
+            "/data-catalog/mongo-collections/{collection_name}/records",
+            "/data-catalog/mongo-collections/{collection_name}/analysis",
+            "/data-catalog/mongo-collections/{collection_name}/records/{record_id}",
+            "/data-catalog/relationships",
+            "/data-catalog/minio-objects",
+            "/data-catalog/minio-objects/{asset_id}/download",
+        }.issubset(paths))
+        serialized = response.text
+        self.assertIn("$POLY_AGENT_TOKEN", serialized)
+        self.assertNotIn("MINIO_ACCESS_KEY_SECRET", serialized)
+        self.assertNotIn("MINIO_SECRET_KEY_SECRET", serialized)
+        self.assertNotIn("mongodb://secret-user", serialized)
+        self.assertNotIn("http://minio-secret.example", serialized)
+
+    def test_data_catalog_routes_require_bearer_when_auth_enabled(self) -> None:
+        original_auth_enabled = settings.auth_enabled
+        settings.auth_enabled = True
+        try:
+            urls = [
+                "/api/v1/data-catalog/api-catalog",
+                "/api/v1/data-catalog/overview",
+                "/api/v1/data-catalog/datasets",
+                "/api/v1/data-catalog/datasets/pi1m_v2/profile",
+                "/api/v1/data-catalog/datasets/pi1m_v2/records",
+                "/api/v1/data-catalog/datasets/pi1m_v2/visual-samples",
+                "/api/v1/data-catalog/mongo-collections",
+                "/api/v1/data-catalog/mongo-collections/poly_data.material_records/records",
+                "/api/v1/data-catalog/mongo-collections/poly_data.material_records/analysis",
+                "/api/v1/data-catalog/mongo-collections/poly_data.material_records/records/OPENPOLY-16172",
+                "/api/v1/data-catalog/relationships",
+                "/api/v1/data-catalog/minio-objects?dataset_id=radonpy_pi1070",
+                "/api/v1/data-catalog/minio-objects/radonpy_pi1070__readme/download",
+            ]
+            statuses = [self.client.get(url).status_code for url in urls]
+        finally:
+            settings.auth_enabled = original_auth_enabled
+
+        self.assertEqual(statuses, [401 for _ in statuses])
+
+    def test_minio_download_endpoint_returns_file_headers_without_storage_uri(self) -> None:
+        fake_s3 = FakeS3Client(
+            {
+                "datasets/radonpy_pi1070/docs/readme.md": {
+                    "content": b"# RadonPy\n",
+                    "mime_type": "text/markdown",
+                }
+            }
+        )
+        with patch("app.services.data_catalog_service.S3ObjectClient", return_value=fake_s3):
+            response = self.client.get("/api/v1/data-catalog/minio-objects/radonpy_pi1070__readme/download")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"# RadonPy\n")
+        self.assertEqual(response.headers["content-type"].split(";")[0], "text/markdown")
+        self.assertEqual(response.headers["content-length"], str(len(b"# RadonPy\n")))
+        self.assertIn("readme.md", response.headers["content-disposition"])
+        self.assertNotIn("datasets/radonpy_pi1070/docs/readme.md", response.text)
+        self.assertEqual(fake_s3.get_calls, [("polymer-data", "datasets/radonpy_pi1070/docs/readme.md")])
+
+    def test_data_catalog_router_exposes_no_user_write_methods(self) -> None:
+        methods = {
+            method
+            for route in app.routes
+            if getattr(route, "path", "").startswith("/api/v1/data-catalog")
+            for method in getattr(route, "methods", set())
+        }
+
+        self.assertTrue(methods)
+        self.assertTrue(methods.issubset({"GET", "HEAD"}))
+
+    def test_dataset_list_marks_md_allatom_complete_for_actual_demo_rows(self) -> None:
+        demo_data = {"poly_data.md_allatom_carbon_results": [{} for _ in range(9608)]}
+        with (
+            patch("app.services.data_catalog_service.settings.require_mongodb", False),
+            patch("app.services.data_catalog_service.demo_store.load", return_value=demo_data),
+        ):
+            response = self.client.get("/api/v1/data-catalog/datasets")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        md_allatom = next(item for item in data["items"] if item["dataset_id"] == "md_allatom")
+        self.assertEqual(md_allatom["row_count"], 9608)
+        self.assertEqual(md_allatom["record_count"], 9608)
+        self.assertEqual(md_allatom["coverage_percent"], 100.0)
+        self.assertEqual(md_allatom["verification_status"], "verified")
+
 
 class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
     """覆盖 Mongo 集合记录下钻 API 契约。"""
@@ -429,6 +738,12 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
                         "molecule": {"smiles": "CCO", "name": "ethanol"},
                         "parameters": {"method": "GFN2-xTB"},
                         "resources": {"num_cores": 2},
+                        "mongo_uri": "mongodb://secret-user:secret-pass@mongo.example/poly_data",
+                        "dsn": "postgres://secret-user:secret-pass@db.example/app",
+                        "connection_info": {
+                            "private_key": "-----BEGIN PRIVATE KEY-----",
+                            "cookie": "session=secret",
+                        },
                         "created_by": "user-a",
                         "created_at": "2026-07-11T10:00:00Z",
                         "updated_at": "2026-07-11T10:05:00Z",
@@ -825,6 +1140,9 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
         self.assertEqual(data["collection_name"], "computation_runs")
         self.assertEqual(data["record_id"], "run-001")
         self.assertEqual(data["document"]["result_summary"]["energy"], -12.3)
+        self.assertEqual(data["document"]["mongo_uri"], "***")
+        self.assertEqual(data["document"]["dsn"], "***")
+        self.assertEqual(data["document"]["connection_info"], {"private_key": "***", "cookie": "***"})
 
     def test_hidden_system_collection_cannot_be_drilled_down(self) -> None:
         self._seed_demo_records()

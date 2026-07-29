@@ -2,31 +2,63 @@
 
 from __future__ import annotations
 
+import urllib.parse
+from typing import Any, Iterator
+
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 
 from app.core.auth import get_current_user
 from app.schemas.common import ApiResponse
 from app.schemas.data_catalog import (
+    DataCatalogApiCatalogData,
     DataCatalogCollectionRecordDetailData,
     DataCatalogCollectionRecordListData,
     DataCatalogDatasetProfileData,
     DataCatalogDatasetRecordListData,
     DataCatalogDatasetVisualSamplesData,
     DataCatalogDatasetListData,
+    DataCatalogMinioObjectListData,
     DataCatalogMongoCollectionListData,
+    DataCatalogCollectionAnalysisData,
     DataCatalogOverviewData,
     DataCatalogRelationshipsData,
 )
 from app.services.data_catalog_service import DataCatalogService
 
 
-router = APIRouter(prefix="/data-catalog", tags=["data-catalog"])
+router = APIRouter(prefix="/data-catalog", tags=["data-catalog"], dependencies=[Depends(get_current_user)])
+
+
+def _iter_download_body(body: Any) -> Iterator[bytes]:
+    """Yield a binary body in bounded chunks and close it when possible."""
+    try:
+        while True:
+            chunk = body.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            close()
+
+
+def _content_disposition(filename: str) -> str:
+    quoted = urllib.parse.quote(filename)
+    return f"attachment; filename*=UTF-8''{quoted}"
 
 
 @router.get("/overview", response_model=ApiResponse[DataCatalogOverviewData])
 def get_data_catalog_overview() -> ApiResponse[DataCatalogOverviewData]:
     """查询数据目录总览。"""
     return ApiResponse(code=0, message="ok", data=DataCatalogService().get_overview())
+
+
+@router.get("/api-catalog", response_model=ApiResponse[DataCatalogApiCatalogData])
+def get_data_catalog_api_catalog() -> ApiResponse[DataCatalogApiCatalogData]:
+    """查询数据调用 API 清单。"""
+    return ApiResponse(code=0, message="ok", data=DataCatalogService().get_api_catalog())
 
 
 @router.get("/datasets", response_model=ApiResponse[DataCatalogDatasetListData])
@@ -62,7 +94,6 @@ def list_data_catalog_dataset_records(
     keyword: str | None = Query(default=None, max_length=240),
     row_start: int | None = Query(default=None, ge=1),
     row_end: int | None = Query(default=None, ge=1),
-    current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[DataCatalogDatasetRecordListData]:
     """游标分页查询数据集记录。"""
     data = DataCatalogService().list_dataset_records(
@@ -91,6 +122,31 @@ def get_data_catalog_relationships() -> ApiResponse[DataCatalogRelationshipsData
     return ApiResponse(data=DataCatalogService().get_relationships())
 
 
+@router.get("/minio-objects", response_model=ApiResponse[DataCatalogMinioObjectListData])
+def list_data_catalog_minio_objects(
+    dataset_id: str | None = Query(default=None, max_length=120),
+) -> ApiResponse[DataCatalogMinioObjectListData]:
+    """查询 MinIO 白名单逻辑对象。"""
+    return ApiResponse(code=0, message="ok", data=DataCatalogService().list_minio_objects(dataset_id=dataset_id))
+
+
+@router.get("/minio-objects/{asset_id}/download")
+def download_data_catalog_minio_object(asset_id: str) -> StreamingResponse:
+    """通过后端代理下载 MinIO 白名单逻辑对象。"""
+    download = DataCatalogService().open_minio_object(asset_id)
+    headers = {
+        "Content-Disposition": _content_disposition(download.asset.filename),
+        "X-Content-Type-Options": "nosniff",
+    }
+    if download.asset.size_bytes is not None:
+        headers["Content-Length"] = str(download.asset.size_bytes)
+    return StreamingResponse(
+        _iter_download_body(download.body),
+        media_type=download.asset.mime_type,
+        headers=headers,
+    )
+
+
 @router.get(
     "/mongo-collections/{collection_name}/records",
     response_model=ApiResponse[DataCatalogCollectionRecordListData],
@@ -102,7 +158,6 @@ def list_data_catalog_mongo_collection_records(
     keyword: str | None = Query(default=None, max_length=120),
     use_cursor: bool = Query(default=False),
     cursor: str | None = Query(default=None, max_length=512),
-    current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[DataCatalogCollectionRecordListData]:
     """分页查询白名单 Mongo 集合的记录摘要。"""
     data = DataCatalogService().list_mongo_collection_records(
@@ -117,13 +172,30 @@ def list_data_catalog_mongo_collection_records(
 
 
 @router.get(
+    "/mongo-collections/{collection_name}/analysis",
+    response_model=ApiResponse[DataCatalogCollectionAnalysisData],
+)
+def get_data_catalog_mongo_collection_analysis(
+    collection_name: str,
+    sample_size: int = Query(default=1000, ge=200, le=5000),
+    refresh: bool = Query(default=False),
+) -> ApiResponse[DataCatalogCollectionAnalysisData]:
+    """查询白名单 Mongo 集合的受控画像和领域分析。"""
+    data = DataCatalogService().get_collection_analysis(
+        collection_name,
+        sample_size=sample_size,
+        refresh=refresh,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get(
     "/mongo-collections/{collection_name}/records/{record_id}",
     response_model=ApiResponse[DataCatalogCollectionRecordDetailData],
 )
 def get_data_catalog_mongo_collection_record(
     collection_name: str,
     record_id: str,
-    current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[DataCatalogCollectionRecordDetailData]:
     """查询白名单 Mongo 集合的单条脱敏记录详情。"""
     data = DataCatalogService().get_mongo_collection_record(collection_name, record_id)

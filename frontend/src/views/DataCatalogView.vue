@@ -1,9 +1,9 @@
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowRight, Back, DataAnalysis, Files, FolderOpened, Refresh, Right, Search, TrendCharts, View, Warning,
+  ArrowRight, Back, Connection, DataAnalysis, Files, FolderOpened, Refresh, Right, Search, TrendCharts, View, Warning,
 } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
@@ -26,6 +26,7 @@ import {
   listDataCatalogMongoCollections,
 } from '../api/polyAgentApi'
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
+import { buildPolyDataDatasetGroups, polyDataDatasetGroupCount } from '../utils/polyDataDatasetGroups'
 
 use([
   BarChart,
@@ -73,6 +74,7 @@ const pi1mVisualSamples = ref({ points: [], sample_count: 0, total: 0 })
 const pi1mRecords = ref([])
 const pi1mNextCursor = ref(null)
 const pi1mLoading = ref(false)
+const importProgressTimer = ref(null)
 
 const recordFilters = reactive({
   page: Number(route.query.page || 1),
@@ -104,40 +106,15 @@ const computationRunCollection = computed(() => mongoCollections.value.find((ite
 const computationArtifactCollection = computed(() => mongoCollections.value.find((item) => collectionIdentity(item) === 'computation_artifacts') || null)
 const pi1mDataset = computed(() => datasets.value.find((item) => item.dataset_id === 'pi1m_v2') || null)
 
-const datasetGroupMeta = {
-  structure: { label: '结构与分子', description: '分子、单体与聚合物结构描述', tone: 'blue' },
-  simulation: { label: '模拟与计算', description: '分子动力学、量化计算与轨迹结果', tone: 'teal' },
-  properties: { label: '物性与表征', description: '热学、电学、溶解性与多性质数据', tone: 'amber' },
-  synthesis: { label: '合成与反应', description: '反应条件、产物与结构映射', tone: 'coral' },
-  generated: { label: '生成与候选', description: '模型生成的候选单体与聚合物结构', tone: 'violet' },
-  other: { label: '其他数据', description: '尚未归入上述分类的数据资产', tone: 'slate' },
-}
-
-function datasetGroupKey(dataset) {
-  const text = `${dataset?.dataset_id || ''} ${dataset?.source_category || ''} ${dataset?.description || ''}`.toLowerCase()
-  if (/生成|候选|virtual|generation|polyone|polyuniverse/.test(text)) return 'generated'
-  if (/反应|合成|mapping/.test(text)) return 'synthesis'
-  if (/模拟|动力学|量化|md-|md_allatom|radonpy/.test(text)) return 'simulation'
-  if (/物性|性质|溶解|热学|电学|相行为|表征|property|polyomics|polysol|pppdb|tropic/.test(text)) return 'properties'
-  if (/结构|分子|单体|smiles|标识|openpoly|smipoly|polyid|nanomine/.test(text)) return 'structure'
-  return 'other'
-}
-
-const datasetGroups = computed(() => {
-  const grouped = Object.fromEntries(Object.keys(datasetGroupMeta).map((key) => [key, []]))
-  for (const dataset of datasets.value) grouped[datasetGroupKey(dataset)].push(dataset)
-  return Object.entries(grouped)
-    .map(([key, items]) => ({ key, ...datasetGroupMeta[key], items }))
-    .filter((group) => group.items.length)
-})
+const datasetGroups = computed(() => buildPolyDataDatasetGroups(datasets.value))
 
 const visibleDatasetGroups = computed(() => datasetGroupFilter.value === 'all'
   ? datasetGroups.value
   : datasetGroups.value.filter((group) => group.key === datasetGroupFilter.value))
 
 const datasetGroupCount = (key) => key === 'all'
-  ? datasets.value.length
-  : datasetGroups.value.find((group) => group.key === key)?.items.length || 0
+  ? polyDataDatasetGroupCount(datasets.value, 'all')
+  : polyDataDatasetGroupCount(datasets.value, key)
 
 const collectionGroups = computed(() => {
   const grouped = {}
@@ -188,6 +165,7 @@ const collectionGroupColors = {
 }
 
 const PI1M_SA_COLOR_SCALE = ['#15803d', '#84cc16', '#facc15', '#f97316', '#dc2626']
+const ACTIVE_IMPORT_STATUSES = new Set(['running', 'verifying', 'queued'])
 
 const collectionVolumeRows = computed(() => mongoCollections.value
   .map((item) => {
@@ -619,6 +597,54 @@ function datasetRecordCountText(dataset) {
   return `${formatNumber(dataset.record_count)} / ${formatNumber(dataset.row_count)} · ${formatPercent(coverage)}`
 }
 
+function isDatasetImportActive(dataset) {
+  return ACTIVE_IMPORT_STATUSES.has(dataset?.import_status?.status)
+}
+
+function datasetImportCurrent(dataset) {
+  const status = dataset?.import_status || {}
+  if (isDatasetImportActive(dataset)) {
+    return Number(status.processed_count ?? status.imported_count ?? dataset?.record_count ?? 0)
+  }
+  return Number(dataset?.record_count ?? status.imported_count ?? status.processed_count ?? 0)
+}
+
+function datasetImportExpected(dataset) {
+  return Number(dataset?.row_count ?? dataset?.import_status?.expected_count ?? 0)
+}
+
+function datasetImportStateText(dataset) {
+  const status = dataset?.import_status || {}
+  if (isDatasetImportActive(dataset)) return statusLabel(status.status)
+  if (status.status === 'failed') return '导入失败'
+  const current = datasetImportCurrent(dataset)
+  const expected = datasetImportExpected(dataset)
+  if (expected > 0 && current >= expected) return '导入完成'
+  if (current > 0) return status.status === 'unknown' ? '未检测到全量任务' : '部分入库'
+  return '未开始'
+}
+
+function datasetImportProgressText(dataset) {
+  return `${formatNumber(datasetImportCurrent(dataset))} / ${formatNumber(datasetImportExpected(dataset))} · ${formatPercent(datasetImportPercent(dataset))}`
+}
+
+function datasetImportChunkText(dataset) {
+  if (!isDatasetImportActive(dataset)) return ''
+  const status = dataset?.import_status || {}
+  const parts = []
+  if (status.active_source_file) parts.push(status.active_source_file)
+  if (status.active_row_start || status.active_row_end) {
+    parts.push(`行 ${formatNumber(status.active_row_start)}-${formatNumber(status.active_row_end)}`)
+  }
+  if (status.active_chunk_index) parts.push(`chunk ${formatNumber(status.active_chunk_index)}`)
+  return parts.join(' · ')
+}
+
+function datasetImportUpdatedText(dataset) {
+  const updatedAt = dataset?.import_status?.updated_at || dataset?.import_status?.started_at
+  return updatedAt ? `更新 ${formatDate(updatedAt)}` : ''
+}
+
 function verificationStatusLabel(status) {
   const map = { verified: '已校验', partial: '未完整', metadata_only: '未导入', running: '导入中', failed: '校验失败', unavailable: '不可用' }
   return map[status] || '待校验'
@@ -635,11 +661,10 @@ function datasetStatusLabel(dataset) {
 }
 
 function datasetImportPercent(dataset) {
-  const status = dataset?.import_status || {}
-  const current = Number(status.processed_count ?? status.imported_count ?? dataset?.record_count ?? 0)
-  const expected = Number(status.expected_count ?? dataset?.row_count ?? 0)
+  const current = datasetImportCurrent(dataset)
+  const expected = datasetImportExpected(dataset)
   if (!expected) return 0
-  return Math.min(100, Math.max(0, Number(((current / expected) * 100).toFixed(2))))
+  return Math.min(100, Math.max(0, Number(((current / expected) * 100).toFixed(4))))
 }
 
 function countBy(items, field) {
@@ -761,8 +786,15 @@ function syncRouteQuery(extra = {}) {
   router.replace({ path: '/database/data-catalog', query })
 }
 
-async function loadDataCatalog() {
-  loading.value = true
+function syncSelectedDatasetFromList() {
+  if (!selectedDataset.value) return
+  const freshDataset = datasets.value.find((item) => item.dataset_id === selectedDataset.value.dataset_id)
+  if (freshDataset) selectedDataset.value = freshDataset
+}
+
+async function loadDataCatalog(options = {}) {
+  const silent = Boolean(options.silent)
+  if (!silent) loading.value = true
   try {
     const [overviewData, datasetData, mongoData, relationshipData] = await Promise.all([
       getDataCatalogOverview(),
@@ -775,16 +807,43 @@ async function loadDataCatalog() {
     legacyObjects.value = datasetData.legacy_objects || overviewData.legacy_objects || []
     mongoCollections.value = mongoData.items || []
     relationships.value = relationshipData
+    syncSelectedDatasetFromList()
     if (selectedCollectionName.value) await loadCollectionRecords()
   } catch (error) {
-    ElMessage.error(getApiErrorMessage(error))
+    if (!silent) ElMessage.error(getApiErrorMessage(error))
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
+}
+
+async function refreshDatasetImportProgress() {
+  try {
+    const datasetData = await listDataCatalogDatasets()
+    datasets.value = datasetData.items || []
+    legacyObjects.value = datasetData.legacy_objects || legacyObjects.value
+    syncSelectedDatasetFromList()
+  } catch {
+    // Keep background polling quiet; manual refresh still reports API errors.
+  }
+}
+
+function startImportProgressPolling() {
+  stopImportProgressPolling()
+  importProgressTimer.value = window.setInterval(refreshDatasetImportProgress, 5000)
+}
+
+function stopImportProgressPolling() {
+  if (!importProgressTimer.value) return
+  window.clearInterval(importProgressTimer.value)
+  importProgressTimer.value = null
 }
 
 function openAnalysisPage() {
   router.push('/database/data-analysis')
+}
+
+function openDataApiPage() {
+  router.push('/database/data-api')
 }
 
 async function loadPi1mOverview() {
@@ -994,6 +1053,7 @@ watch(recordDrawerVisible, (visible) => {
 onMounted(async () => {
   selectedCollectionName.value = String(route.query.collection || '')
   await loadDataCatalog()
+  startImportProgressPolling()
   if (selectedCollectionName.value) {
     activeTab.value = 'mongo'
     await loadCollectionRecords()
@@ -1003,6 +1063,10 @@ onMounted(async () => {
       await loadRecordDetail(String(route.query.record))
     }
   }
+})
+
+onUnmounted(() => {
+  stopImportProgressPolling()
 })
 </script>
 
@@ -1014,6 +1078,7 @@ onMounted(async () => {
         <p>材料数据资产、计算结果和 Mongo 结构化索引的统一视图。</p>
       </div>
       <div class="header-actions">
+        <el-button :icon="Connection" @click="openDataApiPage">数据调用 API</el-button>
         <el-button :icon="TrendCharts" @click="openAnalysisPage">数据分析</el-button>
         <el-button :icon="Refresh" :loading="loading" @click="loadDataCatalog">刷新</el-button>
       </div>
@@ -1102,8 +1167,18 @@ onMounted(async () => {
                       <span class="dataset-list-stat"><strong>{{ formatNumber(dataset.row_count) }}</strong><small>原始行</small></span>
                       <span class="dataset-list-stat"><strong>{{ formatNumber(dataset.column_count) }}</strong><small>字段</small></span>
                       <span class="dataset-list-status">
-                        <el-tag size="small" :type="verificationStatusType(dataset.verification_status)">{{ datasetStatusLabel(dataset) }}</el-tag>
-                        <small>{{ datasetRecordCountText(dataset) }}</small>
+                        <span class="dataset-list-status-line">
+                          <el-tag size="small" :type="verificationStatusType(dataset.verification_status)">{{ datasetStatusLabel(dataset) }}</el-tag>
+                          <small>{{ datasetImportStateText(dataset) }}</small>
+                        </span>
+                        <el-progress
+                          class="dataset-list-progress"
+                          :percentage="datasetImportPercent(dataset)"
+                          :show-text="false"
+                          :stroke-width="6"
+                        />
+                        <small>{{ datasetImportProgressText(dataset) }}</small>
+                        <small v-if="datasetImportChunkText(dataset)" class="dataset-list-chunk">{{ datasetImportChunkText(dataset) }}</small>
                       </span>
                       <el-icon class="dataset-list-arrow" aria-hidden="true"><ArrowRight /></el-icon>
                     </button>
@@ -1330,14 +1405,26 @@ onMounted(async () => {
           <code>{{ selectedDataset.storage_prefix }}</code>
         </div>
         <div
-          v-if="['running', 'verifying', 'queued'].includes(selectedDataset.import_status?.status)"
+          v-if="selectedDataset.record_collection_key"
           class="dataset-import-progress"
         >
           <div>
-            <strong>{{ statusLabel(selectedDataset.import_status.status) }}</strong>
-            <span>{{ formatNumber(selectedDataset.import_status.processed_count || 0) }} / {{ formatNumber(selectedDataset.import_status.expected_count || selectedDataset.row_count) }}</span>
+            <strong>{{ datasetImportStateText(selectedDataset) }}</strong>
+            <span>{{ datasetImportProgressText(selectedDataset) }}</span>
           </div>
           <el-progress :percentage="datasetImportPercent(selectedDataset)" :stroke-width="8" />
+          <p v-if="datasetImportChunkText(selectedDataset)" class="dataset-import-detail">
+            {{ datasetImportChunkText(selectedDataset) }}
+          </p>
+          <p v-else-if="datasetImportUpdatedText(selectedDataset)" class="dataset-import-detail">
+            {{ datasetImportUpdatedText(selectedDataset) }}
+          </p>
+          <p
+            v-if="selectedDataset.import_status?.throughput_rows_per_second"
+            class="dataset-import-detail"
+          >
+            {{ formatNumber(selectedDataset.import_status.throughput_rows_per_second) }} 行/秒
+          </p>
         </div>
         <el-alert
           v-if="selectedDataset.verification_status === 'failed'"
@@ -1791,7 +1878,7 @@ onMounted(async () => {
 
 .dataset-list-row {
   display: grid;
-  grid-template-columns: minmax(240px, 1.8fr) 86px 72px 130px 22px;
+  grid-template-columns: minmax(240px, 1.8fr) 96px 76px minmax(210px, 0.82fr) 22px;
   gap: 14px;
   align-items: center;
   width: 100%;
@@ -1814,7 +1901,11 @@ onMounted(async () => {
 .dataset-list-tags .el-tag { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dataset-list-stat strong { display: block; color: var(--app-sidebar-from); font-size: 18px; line-height: 1.1; }
 .dataset-list-stat small, .dataset-list-status small { display: block; margin-top: 5px; color: var(--app-ink-muted); font-size: 12px; }
-.dataset-list-status { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.dataset-list-status { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+.dataset-list-status-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dataset-list-status-line small { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dataset-list-progress { width: 100%; margin-top: 7px; }
+.dataset-list-chunk { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dataset-list-arrow { color: var(--app-ink-subtle); }
 .dataset-list-row:hover .dataset-list-arrow { color: var(--app-primary); }
 
@@ -2152,6 +2243,13 @@ code {
   font-size: 13px;
 }
 
+.dataset-import-detail {
+  margin: 7px 0 0;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .drawer-section-title {
   margin: 18px 0 10px;
   font-size: 14px;
@@ -2201,7 +2299,7 @@ code {
   }
 
   .dataset-browser-layout { grid-template-columns: 160px minmax(0, 1fr); }
-  .dataset-list-row { grid-template-columns: minmax(190px, 1.6fr) 76px 62px 120px 20px; gap: 10px; }
+  .dataset-list-row { grid-template-columns: minmax(190px, 1.5fr) 82px 66px minmax(180px, 0.85fr) 20px; gap: 10px; }
   .relation-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .relation-summary-note { grid-column: 1 / -1; min-height: auto !important; }
   .relation-lower-grid { grid-template-columns: 1fr; }
@@ -2232,7 +2330,8 @@ code {
   .dataset-rail { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 0 10px; border-right: 0; border-bottom: 1px solid var(--app-border-soft); }
   .dataset-rail-label { grid-column: 1 / -1; margin: 0 0 2px; }
   .dataset-list-row { grid-template-columns: minmax(0, 1fr) 20px; gap: 6px 10px; }
-  .dataset-list-stat, .dataset-list-status { display: none; }
+  .dataset-list-stat { display: none; }
+  .dataset-list-status { grid-column: 1 / -1; }
   .dataset-list-description { white-space: normal; }
   .relation-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .relation-summary-note { grid-column: 1 / -1; }

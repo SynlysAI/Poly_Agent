@@ -681,19 +681,30 @@ class AlgorithmPackageService:
                 previous_version.package_id,
                 {"status": "deployed_staging", "updated_at": now},
             )
-        developer_attribution = version.developer_attribution or self._developer_attribution_from_contract(
-            contract,
-            created_by=version.created_by,
+        preserve_registry_metadata = bool(
+            registry_entry and registry_entry.get("source") == "uploaded_package"
         )
-        contributors = (
-            version.contributors
-            or self._contributors_from_contract(contract)
-            or (registry_entry or {}).get("contributors")
-            or []
-        )
+        if preserve_registry_metadata:
+            raw_attribution = registry_entry.get("developer_attribution")
+            developer_attribution = (
+                AttributionItem(**raw_attribution) if isinstance(raw_attribution, dict) else raw_attribution
+            )
+            contributors = registry_entry.get("contributors") or []
+        else:
+            developer_attribution = version.developer_attribution or self._developer_attribution_from_contract(
+                contract,
+                created_by=version.created_by,
+            )
+            contributors = version.contributors or self._contributors_from_contract(contract) or []
+
+        def display_metadata(key: str, fallback: Any) -> Any:
+            if preserve_registry_metadata and key in registry_entry:
+                return registry_entry.get(key)
+            return fallback
+
         registry_doc = {
             "algorithm_id": algorithm_id,
-            "name": contract.get("name", algorithm_id),
+            "name": display_metadata("name", contract.get("name", algorithm_id)),
             "type": contract.get("type", "predictor"),
             "algorithm_family": contract.get("algorithm_family", "vertical_prediction"),
             "material_scope": contract.get("material_scope") or ["universal"],
@@ -711,12 +722,15 @@ class AlgorithmPackageService:
             "validation_metric": {},
             "owner": (registry_entry or {}).get("owner") or version.created_by,
             "status": "active",
-            "description": contract.get("description"),
+            "description": display_metadata("description", contract.get("description")),
             "active_version_id": version_id,
             "source": "uploaded_package",
             "deployment_status": "active",
-            "visibility": self._normalize_visibility(version.visibility or contract.get("visibility") or "private"),
-            "mentor_team": contract.get("mentor_team") or version.mentor_team,
+            "visibility": self._normalize_visibility(display_metadata(
+                "visibility",
+                version.visibility or contract.get("visibility") or "private",
+            )),
+            "mentor_team": display_metadata("mentor_team", contract.get("mentor_team") or version.mentor_team),
             "contributors": [
                 item.model_dump(mode="python") if hasattr(item, "model_dump") else item
                 for item in contributors

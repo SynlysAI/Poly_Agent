@@ -13,6 +13,7 @@ import stat
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,7 +21,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from io import BytesIO
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
@@ -72,6 +73,7 @@ MD_ALLATOM_DEFAULT_FAMILIES = ("C", "F", "Si")
 DEFAULT_PI1M_SAMPLE_SIZE: int | None = None
 DEFAULT_PI1M_CHUNK_SIZE = 50000
 DEFAULT_EXTRA_SAMPLE_SIZE: int | None = None
+DEFAULT_EXTRA_CHUNK_SIZE = 10_000
 DEFAULT_UPLOAD_WORKERS = 8
 DEFAULT_UPLOAD_RETRIES = 3
 UPLOAD_MULTIPART_THRESHOLD = 64 * 1024 * 1024
@@ -1368,6 +1370,26 @@ def migrate_sftp_md_allatom_objects(
     return records
 
 
+def ensure_index(collection: Any, keys: list[tuple[str, int]], *, name: str, unique: bool = False) -> None:
+    """Create an index only when its key pattern is not already present."""
+    try:
+        existing_indexes = list(collection.list_indexes())
+    except AttributeError:
+        existing_indexes = []
+    requested_keys = list(keys)
+    for existing in existing_indexes:
+        existing_keys = list(existing.get("key", {}).items())
+        if existing_keys == requested_keys:
+            return
+    existing_names = {str(existing.get("name")) for existing in existing_indexes}
+    index_name = name
+    suffix = 2
+    while index_name in existing_names:
+        index_name = f"{name}_v{suffix}"
+        suffix += 1
+    collection.create_index(keys, name=index_name, unique=unique)
+
+
 def create_indexes(target_db: Any) -> None:
     """Create Poly Data indexes."""
     target_db["datasets"].create_index([("dataset_id", 1)], name="dataset_id", unique=True)
@@ -1424,7 +1446,7 @@ def create_indexes(target_db: Any) -> None:
         collection = target_db[spec.collection_name]
         collection.create_index([("record_id", 1)], name="record_id", unique=True)
         collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
-        collection.create_index([("source_file", 1), ("row_index", 1)], name="source_row")
+        ensure_index(collection, [("source_file", 1), ("source_row_index", 1)], name="source_row_index")
         collection.create_index([("title", 1)], name="title")
     target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].create_index([("generated_at", -1)], name="generated_at")
     target_db[TARGET_MIGRATION_MANIFESTS_COLLECTION].create_index(
@@ -1582,21 +1604,33 @@ def histogram(values: list[float], *, bins: int = 12) -> list[dict[str, Any]]:
     ]
 
 
-def upsert_documents_bulk(collection: Any, key_field: str, documents: list[dict[str, Any]]) -> int:
-    """Bulk upsert documents by key field."""
+def upsert_documents_bulk(
+    collection: Any,
+    key_field: str,
+    documents: list[dict[str, Any]],
+    *,
+    batch_size: int = 5_000,
+) -> int:
+    """Bulk upsert documents in bounded requests with a per-batch fallback."""
     if not documents:
         return 0
-    try:
-        from pymongo import UpdateOne
+    from pymongo import UpdateOne
 
+    bounded_batch_size = max(int(batch_size), 1)
+    imported = 0
+    for offset in range(0, len(documents), bounded_batch_size):
+        batch = documents[offset : offset + bounded_batch_size]
         operations = [
             UpdateOne({key_field: doc[key_field]}, {"$set": doc}, upsert=True)
-            for doc in documents
+            for doc in batch
         ]
-        collection.bulk_write(operations, ordered=False)
-        return len(documents)
-    except Exception:
-        return upsert_documents(collection, key_field, documents)
+        try:
+            collection.bulk_write(operations, ordered=False)
+        except Exception:
+            # Keep retries idempotent without falling back to a whole 100k-row chunk.
+            upsert_documents(collection, key_field, batch)
+        imported += len(batch)
+    return imported
 
 
 def build_smipoly_documents(dataframe: Any) -> list[dict[str, Any]]:
@@ -2039,8 +2073,9 @@ def staging_collection_name(dataset_id: str, job_id: str) -> str:
 
 def atomic_replace_collection(target_db: Any, staging_name: str, target_name: str) -> None:
     """Replace a canonical collection only after staging verification succeeds."""
-    if hasattr(target_db, "replace_collection"):
-        target_db.replace_collection(staging_name, target_name)
+    replace_collection = getattr(type(target_db), "replace_collection", None)
+    if callable(replace_collection):
+        replace_collection(target_db, staging_name, target_name)
         return
     target_db[staging_name].rename(target_name, dropTarget=True)
 
@@ -2680,6 +2715,23 @@ def import_polyuniverse_records(target_db: Any, *, s3_client: Any, bucket: str, 
     )
 
 
+def override_extra_dataset_chunk_size(
+    dataset_spec: ExtraDatasetSpec,
+    chunk_size: int | None,
+) -> ExtraDatasetSpec:
+    """Return a dataset spec with a bounded parser chunk size when requested."""
+    if chunk_size is None:
+        return dataset_spec
+    bounded_chunk_size = max(int(chunk_size), 1)
+    return replace(
+        dataset_spec,
+        files=tuple(
+            replace(file_spec, chunksize=bounded_chunk_size) if file_spec.importable else file_spec
+            for file_spec in dataset_spec.files
+        ),
+    )
+
+
 def import_extra_open_database_records(
     target_db: Any,
     *,
@@ -2689,10 +2741,15 @@ def import_extra_open_database_records(
     sample_size: int | None,
     apply: bool,
     resume_job_id: str | None = None,
+    chunk_size: int | None = None,
 ) -> list[dict[str, Any]]:
     """Import selected processed 05–16 dataset rows into generic Mongo collections."""
     requested = {item.strip() for item in dataset_ids if item.strip()}
-    selected_specs = [spec for spec in EXTRA_DATASET_SPECS if not requested or spec.dataset_id in requested]
+    selected_specs = [
+        override_extra_dataset_chunk_size(spec, chunk_size)
+        for spec in EXTRA_DATASET_SPECS
+        if not requested or spec.dataset_id in requested
+    ]
     if resume_job_id and len(selected_specs) != 1:
         raise ValueError("resume_job_id requires exactly one extra dataset id")
     summaries: list[dict[str, Any]] = []
@@ -2758,13 +2815,17 @@ def import_extra_open_database_records(
                         "checkpoint_count": 0,
                         "started_at": started_at,
                         "updated_at": started_at,
-                    }
+                    },
+                    "$unset": {"error": "", "finished_at": "", "duration_seconds": ""},
                 },
                 upsert=True,
             )
             collection = target_db[staging_name]
             if not resume_job_id:
                 collection.drop()
+            # Resume jobs already contain rows but may predate the staging index.
+            # Without this index every upsert degrades into a collection scan.
+            collection.create_index([("record_id", 1)], name="record_id", unique=True)
             row_index = 1
             global_chunk_index = 0
             file_counts: list[dict[str, Any]] = []
@@ -2803,6 +2864,19 @@ def import_extra_open_database_records(
                     checkpoint = completed_checkpoints.get(global_chunk_index)
                     expected_row_start = row_index
                     expected_row_end = row_index + len(documents) - 1
+                    target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
+                        {"job_id": job_id},
+                        {
+                            "$set": {
+                                "active_chunk_index": global_chunk_index,
+                                "active_source_file": Path(file_spec.remote_relative_path).name,
+                                "active_row_start": expected_row_start,
+                                "active_row_end": expected_row_end,
+                                "updated_at": datetime.now(timezone.utc),
+                            }
+                        },
+                        upsert=True,
+                    )
                     if (
                         checkpoint
                         and checkpoint.get("source_file") == Path(file_spec.remote_relative_path).name
@@ -2872,7 +2946,7 @@ def import_extra_open_database_records(
                 )
             collection.create_index([("record_id", 1)], name="record_id", unique=True)
             collection.create_index([("dataset.dataset_id", 1), ("row_index", 1)], name="dataset_row")
-            collection.create_index([("source_file", 1), ("source_row_index", 1)], name="source_row")
+            ensure_index(collection, [("source_file", 1), ("source_row_index", 1)], name="source_row_index")
             collection.create_index([("title", 1)], name="title")
             atomic_replace_collection(target_db, staging_name, dataset_spec.collection_name)
             verified_count = int(target_db[dataset_spec.collection_name].count_documents({}))
@@ -2926,6 +3000,7 @@ def import_extra_open_database_records(
         except Exception as exc:  # noqa: BLE001 - import manifest must preserve failure detail.
             summary["status"] = "failed"
             summary["error"] = f"{exc.__class__.__name__}: {exc}"
+            traceback.print_exc()
             target_db[TARGET_IMPORT_JOBS_COLLECTION].update_one(
                 {"job_id": job_id},
                 {
@@ -3486,6 +3561,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="stream all configured extra dataset rows instead of limiting to --extra-sample-size",
     )
     parser.add_argument("--extra-sample-size", type=int, default=DEFAULT_EXTRA_SAMPLE_SIZE)
+    parser.add_argument(
+        "--extra-chunk-size",
+        type=int,
+        default=int(os.getenv("EXTRA_CHUNK_SIZE", str(DEFAULT_EXTRA_CHUNK_SIZE))),
+        help="parser rows per extra-dataset checkpoint (smaller values reduce long Mongo operations)",
+    )
     parser.add_argument("--structured-data-root", type=Path, default=PROJECT_ROOT / "refer" / "data")
     parser.add_argument(
         "--requirements-doc",
@@ -3714,6 +3795,7 @@ def main(argv: list[str] | None = None) -> int:
                 sample_size=None if args.extra_full_import else args.extra_sample_size,
                 apply=args.apply,
                 resume_job_id=args.extra_resume_job_id or None,
+                chunk_size=args.extra_chunk_size,
             )
         )
     manifest = build_manifest(

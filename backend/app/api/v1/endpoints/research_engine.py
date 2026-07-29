@@ -18,6 +18,7 @@ from app.schemas.computation import ArtifactListResponseData, ComputationArtifac
 from app.schemas.research_engine import (
     AlgorithmCreditSummary,
     AlgorithmCreditUpdateRequest,
+    AlgorithmMetadataUpdateRequest,
     AlgorithmHandoff,
     AlgorithmHandoffCreate,
     AlgorithmHandoffListData,
@@ -977,6 +978,27 @@ def get_algorithm(
         and data.visibility != "public"
     ):
         raise HTTPException(status_code=403, detail="无权限访问该算法")
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.patch(
+    "/algorithms/{algorithm_id}/metadata",
+    response_model=ApiResponse[AlgorithmRegistryEntry],
+)
+def update_algorithm_metadata(
+    algorithm_id: str,
+    payload: AlgorithmMetadataUpdateRequest,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmRegistryEntry]:
+    """由上传者或管理员维护已部署算法的展示信息。"""
+    data = service.update_algorithm_metadata(
+        algorithm_id,
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+        request_id=_request_id(request),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 

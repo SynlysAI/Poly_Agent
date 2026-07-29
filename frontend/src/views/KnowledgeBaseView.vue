@@ -10,8 +10,6 @@ import {
   DataAnalysis,
   Expand,
   Fold,
-  Histogram,
-  Document,
   Refresh,
   Search,
   Setting,
@@ -488,18 +486,6 @@ function handleSystemChange() {
   }
 }
 
-function openTaskCenter() {
-  router.push('/tasks/center')
-}
-
-function openAlgorithmCenter() {
-  router.push({ path: '/vertical-prediction', query: { tab: 'center' } })
-}
-
-function openReportCenter() {
-  router.push('/research-engine')
-}
-
 function nodeTypeTag(type) {
   const map = {
     Material: 'success',
@@ -843,9 +829,6 @@ onMounted(loadBootstrap)
             {{ currentStatusLabel }}
           </el-tag>
           <span v-if="!showQueryLanding" class="status-message">{{ currentStatusMessage }}</span>
-          <el-button :icon="Histogram" @click="openTaskCenter">任务中心</el-button>
-          <el-button :icon="DataAnalysis" @click="openAlgorithmCenter">算法结果</el-button>
-          <el-button :icon="Document" @click="openReportCenter">报告</el-button>
           <el-button :icon="Refresh" circle aria-label="刷新知识库" @click="refreshAll" />
           <el-button v-if="!showQueryLanding" :icon="Fold" @click="topBarCollapsed = true">隐藏</el-button>
         </div>

@@ -231,7 +231,7 @@ onMounted(loadAlgorithms)
         </el-descriptions>
       </template>
     </el-drawer>
-    <AlgorithmCreditDrawer v-model:visible="creditVisible" :algorithm-id="selectedAlgorithmId" />
+    <AlgorithmCreditDrawer v-model:visible="creditVisible" :algorithm-id="selectedAlgorithmId" :refresh-key="refreshKey" />
   </div>
 </template>
 

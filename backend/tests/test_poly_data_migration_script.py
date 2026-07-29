@@ -340,6 +340,65 @@ class FakeDatabase:
         self.collections[target_name] = self.collections.pop(staging_name)
 
 
+class DynamicAttributeDatabase:
+    """Mimic PyMongo Database's dynamic collection attribute lookup."""
+
+    def __init__(self, collections: dict[str, FakeCollection] | None = None) -> None:
+        self.collections = collections or {}
+
+    def __getitem__(self, name: str) -> FakeCollection:
+        collection = self.collections.setdefault(name, RenameableCollection(self, name))
+        if not isinstance(collection, RenameableCollection):
+            replacement = RenameableCollection(self, name, collection.rows)
+            self.collections[name] = replacement
+            collection = replacement
+
+        return self.collections[name]
+
+    def __getattr__(self, name: str) -> FakeCollection:
+        return self[name]
+
+
+class RenameableCollection(FakeCollection):
+    """Collection fake with the PyMongo rename operation used by the fallback."""
+
+    def __init__(self, database: DynamicAttributeDatabase, name: str, rows: list[dict] | None = None) -> None:
+        super().__init__(rows)
+        self.database = database
+        self.name = name
+
+    def rename(self, target_name: str, dropTarget: bool = False) -> None:
+        if dropTarget:
+            self.database.collections.pop(target_name, None)
+        self.database.collections[target_name] = self
+        self.database.collections.pop(self.name, None)
+        self.name = target_name
+
+
+class ExistingSourceRowIndexCollection(FakeCollection):
+    """Reject a conflicting reuse of an existing Mongo index name."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.indexes.append(([('source_file', 1), ('row_index', 1)], 'source_row', False))
+
+    def create_index(self, keys, name: str, unique: bool = False, **kwargs) -> None:
+        for existing_keys, existing_name, _ in self.indexes:
+            if existing_name == name and existing_keys != keys:
+                raise AssertionError(f"conflicting index definition for {name}")
+        super().create_index(keys, name, unique, **kwargs)
+
+
+class ListedIndexCollection(FakeCollection):
+    """Collection fake exposing existing index metadata."""
+
+    def list_indexes(self):
+        return [
+            {"name": name, "key": dict(keys), "unique": unique}
+            for keys, name, unique in self.indexes
+        ]
+
+
 class PyMongoLikeCollection:
     """Mimic PyMongo's dynamic collection attribute lookup."""
 
@@ -355,6 +414,52 @@ class PyMongoLikeCollection:
 
 
 class PolyDataMigrationScriptTest(unittest.TestCase):
+    def test_upsert_documents_bulk_uses_bounded_batches(self) -> None:
+        collection = FakeCollection()
+        documents = [{"record_id": f"ROW-{index}"} for index in range(11)]
+
+        imported = migration_script.upsert_documents_bulk(collection, "record_id", documents, batch_size=5)
+
+        self.assertEqual(imported, 11)
+        self.assertEqual(collection.bulk_batches, [5, 5, 1])
+        self.assertEqual(collection.count_documents({}), 11)
+
+    def test_create_indexes_matches_existing_extra_source_row_schema(self) -> None:
+        target_db = FakeDatabase({'omg_polymers': ExistingSourceRowIndexCollection()})
+
+        migration_script.create_indexes(target_db)
+
+        self.assertIn(
+            ([('source_file', 1), ('source_row_index', 1)], 'source_row_index', False),
+            target_db['omg_polymers'].indexes,
+        )
+
+    def test_ensure_index_reuses_same_key_pattern_with_legacy_name(self) -> None:
+        collection = ListedIndexCollection()
+        collection.indexes.append(([('source_file', 1), ('source_row_index', 1)], 'source_row', False))
+
+        migration_script.ensure_index(
+            collection,
+            [('source_file', 1), ('source_row_index', 1)],
+            name='source_row_index',
+        )
+
+        self.assertEqual(len(collection.indexes), 1)
+
+    def test_atomic_replace_uses_collection_rename_for_dynamic_database_attributes(self) -> None:
+        target_db = DynamicAttributeDatabase(
+            {"__staging_dataset_job": FakeCollection([{"record_id": "1"}])}
+        )
+
+        migration_script.atomic_replace_collection(
+            target_db,
+            "__staging_dataset_job",
+            "dataset_records",
+        )
+
+        self.assertEqual(target_db["dataset_records"].count_documents({}), 1)
+        self.assertNotIn("__staging_dataset_job", target_db.collections)
+
     """Test dry-run and apply behavior without network or MongoDB I/O."""
 
     def test_dry_run_does_not_mutate_minio_objects(self) -> None:

@@ -40,6 +40,7 @@ from app.schemas.research_engine import (
     AlgorithmCreditMetrics,
     AlgorithmCreditSummary,
     AlgorithmCreditUpdateRequest,
+    AlgorithmMetadataUpdateRequest,
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
     AlgorithmRun,
@@ -1165,6 +1166,80 @@ class ResearchEngineService:
             is_admin=True,
         )
 
+    def update_algorithm_metadata(
+        self,
+        algorithm_id: str,
+        payload: AlgorithmMetadataUpdateRequest,
+        *,
+        actor_user_id: str,
+        is_admin: bool = False,
+        request_id: str | None = None,
+    ) -> AlgorithmRegistryEntry:
+        """部分更新上传算法的算法级展示信息。"""
+        algorithm_doc = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+        if not algorithm_doc:
+            raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
+        self._ensure_algorithm_metadata_access(
+            algorithm_doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
+
+        requested = payload.model_dump(mode="python", exclude_unset=True)
+        reason = requested.pop("reason", None) or "在线维护算法展示信息"
+        fields: dict[str, Any] = {}
+        for key in ("name", "description", "visibility", "mentor_team"):
+            if key in requested:
+                fields[key] = requested[key]
+        if "name" in fields and fields["name"] is None:
+            raise HTTPException(status_code=422, detail="算法名称不能为空")
+        if "visibility" in fields and fields["visibility"] is None:
+            raise HTTPException(status_code=422, detail="公开状态不能为空")
+        if "contributors" in requested:
+            fields["contributors"] = [
+                item.model_dump(mode="python") for item in (payload.contributors or [])
+            ]
+
+        attribution_keys = {
+            "developer",
+            "developer_organization",
+            "source_url",
+            "citation",
+        }
+        if attribution_keys.intersection(requested):
+            fields["developer_attribution"] = self._updated_developer_attribution(
+                algorithm_doc.get("developer_attribution"),
+                developer=requested.get("developer") if "developer" in requested else None,
+                developer_set="developer" in requested,
+                organization=(
+                    requested.get("developer_organization")
+                    if "developer_organization" in requested
+                    else None
+                ),
+                organization_set="developer_organization" in requested,
+                source_url=requested.get("source_url") if "source_url" in requested else None,
+                source_url_set="source_url" in requested,
+                citation=requested.get("citation") if "citation" in requested else None,
+                citation_set="citation" in requested,
+            )
+
+        if not fields:
+            return self.get_algorithm(algorithm_id)
+        updated = AlgorithmRegistryRepository.update_fields(algorithm_id, fields)
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="algorithm",
+            entity_id=algorithm_id,
+            event_type="algorithm_metadata_updated",
+            reason=reason,
+            before={key: algorithm_doc.get(key) for key in fields},
+            after=fields,
+            request_id=request_id,
+        )
+        return self.get_algorithm(algorithm_id)
+
     def list_algorithms(
         self,
         *,
@@ -1246,7 +1321,12 @@ class ResearchEngineService:
         if not normalized.get("developer_attribution"):
             source = normalized.get("source")
             owner = str(normalized.get("owner") or "")
-            if source == "uploaded_package" and owner and not cls._looks_internal_user_id(owner):
+            if (
+                source == "uploaded_package"
+                and "developer_attribution" not in normalized
+                and owner
+                and not cls._looks_internal_user_id(owner)
+            ):
                 normalized["developer_attribution"] = AttributionItem(
                     name=owner,
                     role="developer",
@@ -1278,6 +1358,62 @@ class ResearchEngineService:
     @staticmethod
     def _normalize_algorithm_visibility(value: Any) -> str:
         return "public" if str(value or "private") == "public" else "private"
+
+    @staticmethod
+    def _ensure_algorithm_metadata_access(
+        doc: dict,
+        *,
+        actor_user_id: str,
+        is_admin: bool,
+    ) -> None:
+        if doc.get("source") != "uploaded_package":
+            raise HTTPException(status_code=409, detail="仅支持维护用户上传算法的展示信息")
+        if is_admin or doc.get("owner") == actor_user_id:
+            return
+        raise HTTPException(status_code=403, detail="无权限修改该算法信息")
+
+    @staticmethod
+    def _updated_developer_attribution(
+        current: dict[str, Any] | AttributionItem | None,
+        *,
+        developer: str | None,
+        developer_set: bool,
+        organization: str | None,
+        organization_set: bool,
+        source_url: str | None,
+        source_url_set: bool,
+        citation: str | None,
+        citation_set: bool,
+    ) -> dict[str, Any] | None:
+        existing = (
+            current.model_dump(mode="python")
+            if isinstance(current, AttributionItem)
+            else dict(current or {})
+        )
+        name = developer if developer_set else existing.get("name")
+        org = organization if organization_set else existing.get("organization")
+        url = source_url if source_url_set else existing.get("url")
+        citation_text = citation if citation_set else existing.get("citation_text")
+        if not any((name, org, url, citation_text)):
+            return None
+        display_name = name or org or "算法开发者"
+        description = (
+            f"算法由 {org} / {display_name} 提供。"
+            if org and org != display_name
+            else f"算法由 {display_name} 提供。"
+        )
+        return AttributionItem(
+            name=display_name,
+            role="developer",
+            organization=org,
+            description=description,
+            url=url,
+            citation_text=citation_text,
+            license=existing.get("license"),
+            logo_asset=existing.get("logo_asset"),
+            logo_alt=org or display_name,
+            visibility="prominent",
+        ).model_dump(mode="python")
 
     @classmethod
     def _ensure_algorithm_credit_access(

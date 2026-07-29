@@ -177,6 +177,48 @@ class AlgorithmCreditUpdateRequest(BaseModel):
             raise ValueError("更正原因不能为空")
         return normalized
 
+
+class AlgorithmMetadataUpdateRequest(BaseModel):
+    """已部署上传算法的展示信息部分更新请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+    visibility: AlgorithmVisibility | None = None
+    developer: str | None = Field(default=None, max_length=160)
+    developer_organization: str | None = Field(default=None, max_length=160)
+    mentor_team: str | None = Field(default=None, max_length=160)
+    source_url: str | None = Field(default=None, max_length=600)
+    citation: str | None = Field(default=None, max_length=1000)
+    contributors: list[AlgorithmContributor] | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_metadata_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("算法名称不能为空")
+        return normalized
+
+    @field_validator(
+        "description",
+        "developer",
+        "developer_organization",
+        "mentor_team",
+        "source_url",
+        "citation",
+        "reason",
+    )
+    @classmethod
+    def normalize_metadata_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
 AlgorithmPackageStatus = Literal[
     "uploaded",
     "validating",

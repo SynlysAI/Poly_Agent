@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from app.schemas.attribution import AttributionItem
 from app.schemas.research_engine import (
     AlgorithmIOSchema,
+    AlgorithmMetadataUpdateRequest,
     AlgorithmRegistryEntry,
     AlgorithmRun,
     AlgorithmRunCreate,
@@ -302,6 +303,24 @@ class AlgorithmRegistrySchemaTest(ComputationTestCase):
         self.assertEqual(entry.version, "1.0.0")
         self.assertEqual(entry.call_method, "REST")
         self.assertEqual(entry.visibility, "private")
+
+    def test_algorithm_metadata_update_is_partial_and_normalized(self) -> None:
+        """算法展示信息 PATCH 只包含显式字段并清理空白。"""
+        payload = AlgorithmMetadataUpdateRequest(
+            name="  修订名称  ",
+            description=None,
+            developer="  张三  ",
+            visibility="public",
+        )
+        self.assertEqual(payload.name, "修订名称")
+        self.assertEqual(payload.developer, "张三")
+        self.assertIsNone(payload.description)
+        self.assertNotIn("mentor_team", payload.model_dump(exclude_unset=True))
+
+    def test_algorithm_metadata_update_rejects_technical_contract_fields(self) -> None:
+        """在线展示信息更新不能夹带输入输出契约。"""
+        with self.assertRaises(ValueError):
+            AlgorithmMetadataUpdateRequest(input_schema={"fields": {"smiles": "string"}})
 
 
 # =============================================================================
