@@ -17,6 +17,10 @@ const apiClient = axios.create({
   timeout: 60000,
 })
 
+export function getResolvedApiBaseUrl() {
+  return resolvedBaseUrl
+}
+
 export function generateRequestId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -344,6 +348,10 @@ export function getDataCatalogOverview() {
   return apiClient.get('/data-catalog/overview').then(unwrapResponse)
 }
 
+export function getDataCatalogApiCatalog() {
+  return apiClient.get('/data-catalog/api-catalog').then(unwrapResponse)
+}
+
 export function listDataCatalogDatasets() {
   return apiClient.get('/data-catalog/datasets').then(unwrapResponse)
 }
@@ -368,8 +376,26 @@ export function getDataCatalogRelationships() {
   return apiClient.get('/data-catalog/relationships').then(unwrapResponse)
 }
 
+export function listDataCatalogMinioObjects(params = {}) {
+  return apiClient.get('/data-catalog/minio-objects', { params }).then(unwrapResponse)
+}
+
+export function downloadDataCatalogMinioObject(assetId, fallbackName = 'data-asset.dat') {
+  return apiClient
+    .get(`/data-catalog/minio-objects/${encodeURIComponent(assetId)}/download`, { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], fallbackName),
+      contentType: response.headers['content-type'] || 'application/octet-stream',
+    }))
+}
+
 export function listDataCatalogCollectionRecords(collectionName, params = {}) {
   return apiClient.get(`/data-catalog/mongo-collections/${encodeURIComponent(collectionName)}/records`, { params }).then(unwrapResponse)
+}
+
+export function getDataCatalogCollectionAnalysis(collectionName, params = {}) {
+  return apiClient.get(`/data-catalog/mongo-collections/${encodeURIComponent(collectionName)}/analysis`, { params }).then(unwrapResponse)
 }
 
 export function getDataCatalogCollectionRecord(collectionName, recordId) {

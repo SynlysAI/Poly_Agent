@@ -12,6 +12,8 @@ CatalogStatus = Literal["ready", "degraded", "not_configured"]
 DatasetRecordMode = Literal["full", "sample", "metadata_only"]
 DatasetVerificationStatus = Literal["verified", "partial", "metadata_only", "running", "failed", "unavailable"]
 DatasetRecordSortBy = Literal["row_index", "sa_score"]
+DataCatalogApiSource = Literal["data_catalog", "mongodb", "minio"]
+DataCatalogApiPermission = Literal["read", "download"]
 
 
 class DataCatalogObjectInfo(BaseModel):
@@ -48,7 +50,12 @@ class DataCatalogDatasetImportStatus(BaseModel):
     verified_count: int | None = None
     failed_count: int | None = None
     checkpoint_count: int | None = None
+    active_chunk_index: int | None = None
+    active_source_file: str | None = None
+    active_row_start: int | None = None
+    active_row_end: int | None = None
     started_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
     finished_at: datetime | str | None = None
     throughput_rows_per_second: float | None = None
     error: str | None = None
@@ -209,6 +216,63 @@ class DataCatalogHistogramBin(BaseModel):
     count: int
 
 
+class DataCatalogCollectionFieldAnalysis(BaseModel):
+    """受控样本中的单字段统计。"""
+
+    field: str
+    label: str | None = None
+    value_type: str = "empty"
+    sample_count: int = 0
+    non_empty_count: int = 0
+    missing_count: int = 0
+    missing_percent: float = 100
+    unique_count: int = 0
+    example: Any | None = None
+    numeric_summary: dict[str, float | int | None] = Field(default_factory=dict)
+    top_values: list[dict[str, Any]] = Field(default_factory=list)
+    histogram: list[DataCatalogHistogramBin] = Field(default_factory=list)
+
+
+class DataCatalogCollectionCorrelation(BaseModel):
+    """两个数值字段之间的描述性相关性。"""
+
+    field_x: str
+    field_y: str
+    coefficient: float
+    sample_count: int
+
+
+class DataCatalogCollectionInsight(BaseModel):
+    """基于字段证据生成的规则化分析线索。"""
+
+    level: Literal["info", "notice", "warning"] = "info"
+    title: str
+    conclusion: str
+    evidence_fields: list[str] = Field(default_factory=list)
+    sample_count: int = 0
+
+
+class DataCatalogCollectionAnalysisData(BaseModel):
+    """单个 Mongo 集合的受控画像与领域分析。"""
+
+    collection_key: str
+    collection_name: str
+    source_id: str = "poly_agent"
+    database: str | None = None
+    display_name: str
+    data_domain: str | None = None
+    analysis_status: Literal["ready", "partial", "degraded", "not_configured"] = "not_configured"
+    analysis_message: str | None = None
+    generated_at: datetime
+    total_count: int = 0
+    sample_count: int = 0
+    sample_limit: int = 1000
+    analysis_scope: str = "sample_only"
+    field_stats: list[DataCatalogCollectionFieldAnalysis] = Field(default_factory=list)
+    correlations: list[DataCatalogCollectionCorrelation] = Field(default_factory=list)
+    insights: list[DataCatalogCollectionInsight] = Field(default_factory=list)
+
+
 class DataCatalogDatasetProfileData(BaseModel):
     """数据集画像与导入健康。"""
 
@@ -258,3 +322,63 @@ class DataCatalogDatasetVisualSamplesData(BaseModel):
     sample_count: int
     total: int | None = None
     points: list[DataCatalogVisualSamplePoint] = Field(default_factory=list)
+
+
+class DataCatalogApiParameter(BaseModel):
+    """数据调用 API 参数说明。"""
+
+    name: str
+    location: Literal["path", "query"]
+    required: bool = False
+    type: str = "string"
+    description: str
+    example: Any | None = None
+
+
+class DataCatalogApiEndpoint(BaseModel):
+    """单个数据调用 API 契约。"""
+
+    endpoint_id: str
+    name: str
+    method: Literal["GET"] = "GET"
+    path: str
+    source: DataCatalogApiSource
+    permission: DataCatalogApiPermission
+    summary: str
+    path_parameters: list[DataCatalogApiParameter] = Field(default_factory=list)
+    query_parameters: list[DataCatalogApiParameter] = Field(default_factory=list)
+    response_type: str
+    response_example: dict[str, Any] = Field(default_factory=dict)
+    examples: dict[Literal["curl", "python", "javascript"], str]
+
+
+class DataCatalogApiCatalogData(BaseModel):
+    """数据调用 API 清单。"""
+
+    api_version: str = "v1"
+    base_path: str
+    authentication: dict[str, str]
+    read_only_statement: str
+    endpoints: list[DataCatalogApiEndpoint]
+
+
+class DataCatalogMinioObjectItem(BaseModel):
+    """MinIO 白名单逻辑对象。"""
+
+    asset_id: str
+    dataset_id: str
+    role: str
+    filename: str
+    exists: bool = False
+    size_bytes: int | None = None
+    last_modified: datetime | None = None
+    mime_type: str = "application/octet-stream"
+    permission: Literal["download"] = "download"
+    download_path: str
+
+
+class DataCatalogMinioObjectListData(BaseModel):
+    """MinIO 逻辑对象列表。"""
+
+    items: list[DataCatalogMinioObjectItem]
+    total: int
