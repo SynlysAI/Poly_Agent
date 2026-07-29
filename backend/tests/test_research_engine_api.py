@@ -166,12 +166,14 @@ class ProblemSpecApiTest(ComputationTestCase):
         original_llm_api_key = settings.llm_api_key
         original_llm_default_provider = settings.llm_default_provider
         original_llm_default_model = settings.llm_default_model
+        original_llm_provider_configs_file = getattr(settings, "llm_provider_configs_file", "")
         original_llm_provider_configs_json = settings.llm_provider_configs_json
         settings.llm_model = "gpt-test"
         settings.llm_base_url = "http://llm.local/v1"
         settings.llm_api_key = "test-key"
         settings.llm_default_provider = ""
         settings.llm_default_model = ""
+        settings.llm_provider_configs_file = ""
         settings.llm_provider_configs_json = ""
         try:
             with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
@@ -184,6 +186,7 @@ class ProblemSpecApiTest(ComputationTestCase):
             settings.llm_api_key = original_llm_api_key
             settings.llm_default_provider = original_llm_default_provider
             settings.llm_default_model = original_llm_default_model
+            settings.llm_provider_configs_file = original_llm_provider_configs_file
             settings.llm_provider_configs_json = original_llm_provider_configs_json
 
         self.assertEqual(resp.status_code, 200)

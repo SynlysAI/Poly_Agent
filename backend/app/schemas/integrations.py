@@ -15,8 +15,9 @@ IntegrationServiceKey = Literal[
     "alchemist-backend",
     "computation-worker",
     "artifact-store",
+    "weknora",
 ]
-IntegrationServiceType = Literal["experiment", "provenance", "workflow", "worker", "artifact", "optimizer"]
+IntegrationServiceType = Literal["experiment", "provenance", "workflow", "worker", "artifact", "optimizer", "knowledge"]
 IntegrationStatus = Literal["unknown", "disabled", "not_configured", "available", "up", "down", "degraded", "failed"]
 
 SENSITIVE_KEY_MARKERS = ("token", "password", "api_key", "secret", "private_key", "credential")

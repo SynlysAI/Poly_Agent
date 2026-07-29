@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -29,34 +30,52 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.original_llm_default_model = getattr(settings, "llm_default_model", "")
         self.original_llm_reasoning_provider = getattr(settings, "llm_reasoning_provider", "")
         self.original_llm_reasoning_model = getattr(settings, "llm_reasoning_model", "")
+        self.original_llm_provider_configs_file = getattr(settings, "llm_provider_configs_file", "")
         self.original_llm_provider_configs_json = getattr(settings, "llm_provider_configs_json", "")
         self.original_report_ollama_model = settings.report_ollama_model
         self.original_report_ollama_base_url = settings.report_ollama_base_url
-        self.original_extra_key = os.environ.get("POLY_AGENT_TEST_REASONING_KEY")
+        self.original_llm_api_key_env = os.environ.get("LLM_API_KEY")
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.provider_config_path = Path(self.temp_dir.name) / "llm.providers.json"
 
-        settings.llm_model = "DeepSeek-V4-Flash-w8a8-mtp"
-        settings.llm_base_url = "https://fast.example.test/v1"
-        settings.llm_api_key = "fast-secret-key"
-        settings.llm_default_provider = "default_openai"
-        settings.llm_default_model = "DeepSeek-V4-Flash-w8a8-mtp"
-        settings.llm_reasoning_provider = "default_openai"
-        settings.llm_reasoning_model = "DeepSeek-V4-Flash-w8a8-mtp"
+        settings.llm_model = ""
+        settings.llm_base_url = ""
+        settings.llm_api_key = ""
+        settings.llm_default_provider = ""
+        settings.llm_default_model = ""
+        settings.llm_reasoning_provider = ""
+        settings.llm_reasoning_model = ""
         settings.report_ollama_base_url = "http://127.0.0.1:11434"
         settings.report_ollama_model = "qwen2.5:3b"
-        os.environ["POLY_AGENT_TEST_REASONING_KEY"] = "reasoning-secret-key"
-        settings.llm_provider_configs_json = json.dumps(
-            [
-                {
-                    "provider_id": "reasoning_primary",
-                    "display_name": "Reasoning Primary",
-                    "provider_type": "openai_compatible",
-                    "base_url": "https://reasoning.example.test/v1",
-                    "api_key_env": "POLY_AGENT_TEST_REASONING_KEY",
-                    "models": ["Qwen3.6-35B-A3B"],
-                    "capabilities": ["chat", "reasoning", "structured_json"],
-                    "recommended_for": ["deep"],
-                }
-            ]
+        os.environ["LLM_API_KEY"] = "reasoning-secret-key"
+        settings.llm_provider_configs_file = str(self.provider_config_path)
+        settings.llm_provider_configs_json = ""
+        self.provider_config_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "provider_id": "default_openai",
+                        "display_name": "Default chat model",
+                        "provider_type": "openai_compatible",
+                        "base_url": "https://fast.example.test/v1",
+                        "api_key_env": "LLM_API_KEY",
+                        "models": ["DeepSeek-V4-Flash-w8a8-mtp"],
+                        "capabilities": ["chat", "structured_json"],
+                        "recommended_for": ["qa", "deep"],
+                    },
+                    {
+                        "provider_id": "qwen_reasoning_primary",
+                        "display_name": "Reasoning Primary",
+                        "provider_type": "openai_compatible",
+                        "base_url": "https://reasoning.example.test/v1",
+                        "api_key_env": "LLM_API_KEY",
+                        "models": ["Qwen3.6-35B-A3B"],
+                        "capabilities": ["chat", "reasoning", "structured_json"],
+                        "recommended_for": ["deep"],
+                    },
+                ],
+            ),
+            encoding="utf-8",
         )
 
     def tearDown(self) -> None:
@@ -67,13 +86,15 @@ class LLMModelManagementApiTest(ComputationTestCase):
         settings.llm_default_model = self.original_llm_default_model
         settings.llm_reasoning_provider = self.original_llm_reasoning_provider
         settings.llm_reasoning_model = self.original_llm_reasoning_model
+        settings.llm_provider_configs_file = self.original_llm_provider_configs_file
         settings.llm_provider_configs_json = self.original_llm_provider_configs_json
         settings.report_ollama_model = self.original_report_ollama_model
         settings.report_ollama_base_url = self.original_report_ollama_base_url
-        if self.original_extra_key is None:
-            os.environ.pop("POLY_AGENT_TEST_REASONING_KEY", None)
+        if self.original_llm_api_key_env is None:
+            os.environ.pop("LLM_API_KEY", None)
         else:
-            os.environ["POLY_AGENT_TEST_REASONING_KEY"] = self.original_extra_key
+            os.environ["LLM_API_KEY"] = self.original_llm_api_key_env
+        self.temp_dir.cleanup()
         super().tearDown()
 
     def test_models_endpoint_lists_configured_models_without_secrets(self) -> None:
@@ -85,14 +106,13 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertIn("DeepSeek-V4-Flash-w8a8-mtp", text)
         self.assertIn("Qwen3.6-35B-A3B", text)
         self.assertIn("qwen2.5:3b", text)
-        self.assertNotIn("fast-secret-key", text)
         self.assertNotIn("reasoning-secret-key", text)
         self.assertEqual(data["routing"]["deep"]["provider_id"], "default_openai")
         self.assertEqual(data["routing"]["deep"]["model_id"], "DeepSeek-V4-Flash-w8a8-mtp")
         self.assertTrue(data["routing"]["deep"]["reasoning_model_available"])
-        reasoning_provider = next(item for item in data["providers"] if item["provider_id"] == "reasoning_primary")
+        reasoning_provider = next(item for item in data["providers"] if item["provider_id"] == "qwen_reasoning_primary")
         self.assertTrue(reasoning_provider["api_key_configured"])
-        self.assertEqual(reasoning_provider["api_key_ref"], "POLY_AGENT_TEST_REASONING_KEY")
+        self.assertEqual(reasoning_provider["api_key_ref"], "LLM_API_KEY")
         reasoning_capabilities = reasoning_provider["models"][0]["capabilities"]
         self.assertIn("reasoning", reasoning_capabilities)
         self.assertIn("structured_json", reasoning_capabilities)
@@ -103,9 +123,7 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertIn("structured_json", default_capabilities)
 
     def test_deep_route_falls_back_to_fast_reasoning_default_model(self) -> None:
-        settings.llm_reasoning_provider = ""
-        settings.llm_reasoning_model = ""
-        settings.llm_provider_configs_json = "[]"
+        settings.llm_provider_configs_file = str(self.provider_config_path)
 
         resp = self.client.get("/api/v1/llm/models")
 
@@ -132,18 +150,18 @@ class LLMModelManagementApiTest(ComputationTestCase):
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
-        reasoning_provider = next(item for item in data["providers"] if item["provider_id"] == "reasoning_primary")
+        reasoning_provider = next(item for item in data["providers"] if item["provider_id"] == "qwen_reasoning_primary")
         self.assertEqual(reasoning_provider["status"], "available")
         self.assertEqual(reasoning_provider["models"][0]["model_id"], "Qwen3.6-35B-A3B")
 
     def test_routing_can_restore_qa_and_deep_to_default_deepseek(self) -> None:
         qwen_payload = {
-            "qa": {"provider_id": "reasoning_primary", "model_id": "Qwen3.6-35B-A3B"},
-            "deep": {"provider_id": "reasoning_primary", "model_id": "Qwen3.6-35B-A3B"},
+            "qa": {"provider_id": "qwen_reasoning_primary", "model_id": "Qwen3.6-35B-A3B"},
+            "deep": {"provider_id": "qwen_reasoning_primary", "model_id": "Qwen3.6-35B-A3B"},
         }
         resp = self.client.put("/api/v1/llm/routing", json=qwen_payload)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["data"]["qa"]["provider_id"], "reasoning_primary")
+        self.assertEqual(resp.json()["data"]["qa"]["provider_id"], "qwen_reasoning_primary")
 
         deepseek_payload = {
             "qa": {"provider_id": "default_openai", "model_id": "DeepSeek-V4-Flash-w8a8-mtp"},
@@ -166,7 +184,7 @@ class LLMModelManagementApiTest(ComputationTestCase):
             return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="legacy ok"))])
 
         fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
-        with patch("app.core.llm_client.OpenAI", return_value=fake_client):
+        with patch("app.services.llm_model_service.OpenAI", return_value=fake_client):
             resp = self.client.post(
                 "/api/v1/llm/chat",
                 json={"messages": [{"role": "user", "content": "hello"}]},

@@ -681,7 +681,7 @@ class ResearchEngineOrchestrator:
         if stage_key == "RECOMMENDATION_ASK" and not self._is_alchemist_adapter_ready():
             return "mobo_mock"
         return {
-            "KNOWLEDGE_RETRIEVAL": "literature_rag_adapter",
+            "KNOWLEDGE_RETRIEVAL": "weknora_adapter",
             "STRUCTURE_FEATURE": "polymer_descriptor_mock",
             "COMPUTE_PREDICT": "computation_submit_adapter",
             "RECOMMENDATION_ASK": "mobo_alchemist_adapter",
@@ -791,7 +791,7 @@ class ResearchEngineOrchestrator:
     @staticmethod
     def _has_nonblocking_demo_output(algorithm_id: str, output: dict) -> bool:
         """Return whether an unconfigured adapter still produced usable demo evidence."""
-        if algorithm_id != "literature_rag_adapter":
+        if algorithm_id != "weknora_adapter":
             return False
         return bool(output.get("hits") or output.get("citations") or output.get("graph_context"))
 
@@ -819,7 +819,7 @@ class ResearchEngineOrchestrator:
             "batch_size": doc.get("batch_size", 10),
         }
 
-        if algorithm_id == "literature_rag_adapter":
+        if algorithm_id == "weknora_adapter":
             query_parts = [problem_spec.name, material_family, *(target_properties or [])]
             return {
                 **base,

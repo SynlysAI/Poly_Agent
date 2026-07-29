@@ -9,7 +9,7 @@
 | Alchemist 工具 | `/optimization/alchemist` | ALchemist 实验设计、GP、采集优化 | NatLabRockies / NREL / NLR | 无授权图片时使用文字来源牌 | https://github.com/NatLabRockies/ALchemist | PolyAgent 负责中文工作台、认证、会话和平台集成 |
 | ComputeEngine | `/computations/submit` | RDKit、OpenBabel、xTB、CREST、ORCA | 对应第三方项目；PolyAgent | 无授权图片时使用文字来源牌 | https://www.rdkit.org/；https://openbabel.org/；https://xtb-docs.readthedocs.io/；https://orcaforum.kofo.mpg.de/ | PolyAgent 负责任务、worker、artifact、审计和 campaign 联动；计算能力来自本地依赖 |
 | 垂类预测模型 | `/vertical-prediction` | 算法包契约中的方法来源 | 算法开发者、开发机构、导师课题组 | 优先使用算法包提交且授权的 Logo；否则文字来源牌 | 来自 `source_url` / `citation` | 平台治理上传、校验、部署和运行；模型方法不归属 PolyAgent 除非明确标注 |
-| 文献知识库 | `/knowledge` | RAG、知识图谱和语料服务契约 | PolyAgent KnowledgeService / literature-rag | 无授权图片时使用文字来源牌 | 服务和语料库配置记录 | 查询、证据、图谱上下文和语料来源按服务契约追溯 |
+| 文献知识库 | `/knowledge` | WeKnora 知识库管理、检索问答、引用证据和 Neo4j 图谱数据 | Tencent WeKnora；PolyAgent KnowledgeService 适配层 | 无授权图片时使用文字来源牌 | https://github.com/Tencent/WeKnora | 查询、证据、检索子图和语料来源按 WeKnora 响应与 WeKnora Neo4j 图库追溯；PolyAgent 仅保留本地接口契约 |
 | 数据管理 | `/database/data-catalog`、`/database/data-analysis` | 16 个目录数据集，详见下表 | 对应数据集/项目开发者与数据提供方；PolyAgent | 无授权图片时使用文字来源牌 | 仅登记可由上游材料核验的链接 | PolyAgent 负责 MinIO/MongoDB 迁移、目录展示、记录下钻、分析视图和来源追溯；不声明拥有原始数据集 |
 
 ### 数据目录来源矩阵

@@ -106,8 +106,8 @@ class CapabilityService:
             demo_fallback = bool(health.demo_available and not healthy)
             return CapabilityStatus(
                 module_id="knowledge",
-                capability_id="literature-rag",
-                label="文献 RAG / 知识图谱",
+                capability_id="weknora",
+                label="WeKnora 知识库",
                 level=self._level(configured=health.configured, healthy=healthy, demo_fallback=demo_fallback),
                 configured=health.configured,
                 healthy=healthy,
@@ -115,20 +115,20 @@ class CapabilityService:
                 provider=health.backend,
                 last_checked_at=checked_at,
                 blocking_reason=None if healthy else health.message,
-                next_action=None if healthy else "配置 LITERATURE_RAG_BASE_URL 和查询 API key，或确认本地 RAG 服务。",
+                next_action=None if healthy else "配置 WEKNORA_BASE_URL 和 WEKNORA_API_KEY，或确认 WeKnora 服务可访问。",
             )
         except Exception as exc:
             return CapabilityStatus(
                 module_id="knowledge",
-                capability_id="literature-rag",
-                label="文献 RAG / 知识图谱",
+                capability_id="weknora",
+                label="WeKnora 知识库",
                 level="unavailable",
                 configured=False,
                 healthy=False,
                 demo_fallback=False,
                 last_checked_at=checked_at,
                 blocking_reason=f"{type(exc).__name__}: {exc}",
-                next_action="检查 Literature RAG 服务配置。",
+                next_action="检查 WeKnora 服务配置。",
             )
 
     def _llm_capability(self, checked_at: datetime) -> CapabilityStatus:
@@ -153,7 +153,7 @@ class CapabilityService:
                 model=model_id or None,
                 last_checked_at=checked_at,
                 blocking_reason=None if configured else "LLM provider/model 未配置",
-                next_action=None if configured else "配置 LLM_MODEL/LLM_BASE_URL/LLM_API_KEY 或 LLM_PROVIDER_CONFIGS_JSON。",
+                next_action=None if configured else "配置 `backend/config/llm.providers.json`、`LLM_PROVIDER_CONFIGS_FILE` 或旧版 `LLM_PROVIDER_CONFIGS_JSON`。",
             )
         except Exception as exc:
             return CapabilityStatus(

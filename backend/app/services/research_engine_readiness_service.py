@@ -129,10 +129,10 @@ class ResearchEngineReadinessService:
         if health.configured:
             healthy = health.status == "ready"
             return ResearchEngineReadinessItem(
-                service="literature-rag",
-                label="知识库 RAG",
+                service="weknora",
+                label="WeKnora 知识库",
                 status="ready" if healthy else "warning",
-                capability_id="literature-rag",
+                capability_id="weknora",
                 level=self._capability_level(
                     configured=True,
                     healthy=healthy,
@@ -146,15 +146,15 @@ class ResearchEngineReadinessService:
                 provider=health.backend,
                 execution_mode="adapter" if healthy else "demo_fallback",
                 fallback_reason=None if healthy else health.message,
-                next_action=None if healthy else "检查 Literature RAG corpus 与图谱索引状态。",
+                next_action=None if healthy else "检查 WeKnora 知识库和索引状态。",
                 message=health.message,
                 details=details,
             )
         return ResearchEngineReadinessItem(
-            service="literature-rag",
-            label="知识库 RAG",
+            service="weknora",
+            label="WeKnora 知识库",
             status="warning",
-            capability_id="literature-rag",
+            capability_id="weknora",
             level=self._capability_level(
                 configured=False,
                 healthy=False,
@@ -168,7 +168,7 @@ class ResearchEngineReadinessService:
             provider=health.backend,
             execution_mode="demo_fallback" if health.demo_available else "not_configured",
             fallback_reason=health.message,
-            next_action="配置 LITERATURE_RAG_BASE_URL 和查询 API key，或启动本地 RAG 服务。",
+            next_action="配置 WEKNORA_BASE_URL 和 WEKNORA_API_KEY，或确认 WeKnora 服务可访问。",
             message=health.message,
             details=details,
         )
@@ -202,7 +202,7 @@ class ResearchEngineReadinessService:
                 model=model_id or None,
                 execution_mode="llm" if configured else "demo_fallback",
                 fallback_reason=None if configured else "LLM provider/model 未配置",
-                next_action=None if configured else "配置 LLM_MODEL/LLM_BASE_URL/LLM_API_KEY 或 LLM_PROVIDER_CONFIGS_JSON。",
+                next_action=None if configured else "配置 `backend/config/llm.providers.json`、`LLM_PROVIDER_CONFIGS_FILE` 或旧版 `LLM_PROVIDER_CONFIGS_JSON`。",
                 message="AI 模型已配置，连通性待模型检查确认。" if configured else "AI 模型未配置，AutoResearch 将保留 demo/mock 路径提示。",
                 details={
                     "provider_status": provider.status if provider else "not_configured",

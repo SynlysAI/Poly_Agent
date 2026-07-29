@@ -43,7 +43,7 @@
 | --- | --- | --- |
 | 计算 workflow 适配器 | `local_structure_adapter`、`local_xtb_adapter`、`orca_compute_engine_laser_adapter` | 代表已有 Computation workflow 能力；直接提交统一走 `computation_submit_adapter` |
 | 计算提交 bridge | `computation_submit_adapter` | 委托 ComputationService 创建 `LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER` 计算任务 |
-| 生产候选适配器 | `literature_rag_adapter`、`vertical_predictor_adapter`、`mobo_alchemist_adapter` | `literature_rag_adapter` 已接 KnowledgeService，未配置 LightRAG 时返回 AI4S demo fallback；其余适配器依赖外部模型或优化服务 |
+| 生产候选适配器 | `weknora_adapter`、`vertical_predictor_adapter`、`mobo_alchemist_adapter` | `weknora_adapter` 已接 KnowledgeService 和 WeKnora；其余适配器依赖外部模型或优化服务 |
 | 演示 mock 算法 | `literature_mock`、`polymer_descriptor_mock`、`property_predictor_mock`、`mobo_mock` | 用于 P0 演示、测试和闭环验收，不代表真实生产算法 |
 
 ---
@@ -145,7 +145,7 @@ dist/assets/index.js  5936.54 kB
 | 1 | 用户可创建氟基高分子 ProblemSpec，并关联或创建现有 campaign | ✅ |
 | 2 | 用户可从算法清单人工触发 mock/preset 算法，形成 AlgorithmRun、输入快照、输出摘要、artifact/audit | ✅ |
 | 3 | 用户可基于同一个 ProblemSpec 创建 ResearchRun，并启动固定阶段推进 | ✅ |
-| 4 | ResearchRun 至少能推进到 `RECOMMENDATION_ASK` 或 `HUMAN_REVIEW` gate | ✅ `KNOWLEDGE_RETRIEVAL` 可通过 `literature_rag_adapter` 调用 KnowledgeService；未配置 LightRAG 时返回 AI4S demo fallback |
+| 4 | ResearchRun 至少能推进到 `RECOMMENDATION_ASK` 或 `HUMAN_REVIEW` gate | ✅ `KNOWLEDGE_RETRIEVAL` 可通过 `weknora_adapter` 调用 KnowledgeService 和 WeKnora |
 | 5 | 用户可批准或拒绝候选；批准路径复用现有 suggestion/computation/observation 能力 | ⚠️ 拒绝路径可用；批准后继续推进依赖后续适配器配置 |
 | 6 | ResearchRun / AlgorithmRun / StageRun 详情可查看关键输入、输出、artifact 和 audit | ✅ |
 | 7 | 现有 computation、optimization、integration config 测试不回退 | ✅ |
@@ -202,7 +202,7 @@ dist/assets/index.js  5936.54 kB
 1. **Computation adapter 映射**：`local_structure_adapter`、`local_xtb_adapter`、`orca_compute_engine_laser_adapter` 三个 algorithm_id 在 AlgorithmRegistry 中存在，但用户直接调用时需使用 `computation_submit_adapter`（P1 建议统一映射）
 2. **Mock stage 输出**：非 gate 阶段的 mock runner 输出为预设数据，P1 可接入真实算法
 3. **真实观测回填**：当前 observation 主要通过 campaign_id 和 computation 结果关联，P1 可增强 ResearchRun 级别 observation、失败原因和实验原始文件回填
-4. **生产候选适配器配置**：`literature_rag_adapter` 已接入 KnowledgeService，未配置 LightRAG 时使用 AI4S demo fallback；`vertical_predictor_adapter`、`mobo_alchemist_adapter` 仍需要配置模型服务或 Alchemist 服务后才可作为生产能力使用
+4. **生产候选适配器配置**：`weknora_adapter` 已接入 KnowledgeService 和 WeKnora；`vertical_predictor_adapter`、`mobo_alchemist_adapter` 仍需要配置模型服务或 Alchemist 服务后才可作为生产能力使用
 5. **产品内助手边界**：assistant 已做事实约束和确定性回答分支，但复杂问题仍可能走 LLM fallback，回答必须继续以 live facts 为准
 
 ### 历史已知测试失败与当前状态
@@ -226,7 +226,7 @@ python -m pytest backend/tests/test_research_engine_schemas.py \
 | 失败用例 | 当前表现 | 初步定位 |
 | --- | --- | --- |
 | `ProblemSpecRepositoryTest.test_list_by_status` | 查询 `status="frozen"` 返回 2 条而非 1 条 | demo store 路径下 `list_problem_specs()` 对显式 status 过滤处理不完整 |
-| `AutoResearchExampleTest.test_autoresearch_with_gate_approval` | 历史失败：批准 `PROBLEM_SPEC` 后 ResearchRun 进入 `failed`，随后 `/advance` 返回 409 | ✅ 本次已通过；未配置 LightRAG 时 `literature_rag_adapter` 返回 demo evidence，不再因 `configured=false` 触发失败路径 |
+| `AutoResearchExampleTest.test_autoresearch_with_gate_approval` | 历史失败：批准 `PROBLEM_SPEC` 后 ResearchRun 进入 `failed`，随后 `/advance` 返回 409 | ✅ 历史记录；当前知识检索适配器已切为 `weknora_adapter`，依赖 WeKnora 服务配置 |
 
 ### P1/P2 候选计划（不在 P0 范围）
 - P1：Schema 驱动算法表单增强和 AlgorithmRegistry 管理

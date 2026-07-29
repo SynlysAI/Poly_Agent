@@ -1,9 +1,9 @@
-"""Knowledge base RAG/KG API endpoints."""
+"""Knowledge base API endpoints backed by WeKnora."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.schemas.common import ApiResponse
 from app.schemas.knowledge import (
@@ -29,13 +29,13 @@ def list_knowledge_systems() -> ApiResponse[KnowledgeSystemListData]:
 
 @router.get("/health", response_model=ApiResponse[KnowledgeHealthData])
 def get_knowledge_health() -> ApiResponse[KnowledgeHealthData]:
-    """Return standalone literature RAG readiness."""
+    """Return WeKnora knowledge service readiness."""
     return ApiResponse(code=0, message="ok", data=service.health())
 
 
 @router.post("/query", response_model=ApiResponse[KnowledgeQueryResponse])
 def query_knowledge_base(payload: KnowledgeQueryRequest) -> ApiResponse[KnowledgeQueryResponse]:
-    """Run a query through the standalone literature RAG service."""
+    """Run a query through WeKnora knowledge chat."""
     return ApiResponse(code=0, message="ok", data=service.query(payload))
 
 
@@ -43,7 +43,7 @@ def query_knowledge_base(payload: KnowledgeQueryRequest) -> ApiResponse[Knowledg
 def stream_knowledge_query(payload: KnowledgeQueryRequest) -> StreamingResponse:
     """Stream observable retrieval stages and answer chunks as NDJSON."""
     if not service._base_url():
-        raise HTTPException(status_code=503, detail="Literature RAG 服务未配置")
+        raise HTTPException(status_code=503, detail="WeKnora 服务未配置")
     return StreamingResponse(service.stream_query(payload), media_type="application/x-ndjson")
 
 
@@ -70,3 +70,13 @@ def get_knowledge_subgraph(
         message="ok",
         data=service.get_subgraph(system_id, query=query, limit=limit),
     )
+
+
+@router.get("/{system_id}/files")
+def get_knowledge_file_resource(
+    system_id: str,
+    file_path: str = Query(..., min_length=1, max_length=2000),
+) -> Response:
+    """Proxy WeKnora protected file resources used by answer Markdown."""
+    content, media_type = service.fetch_file_resource(system_id, file_path)
+    return Response(content=content, media_type=media_type)

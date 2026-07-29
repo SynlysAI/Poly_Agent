@@ -956,7 +956,7 @@ class ResearchEngineService:
     # ------------------------------------------------------------------
 
     REAL_ALGORITHM_IDS = {
-        "literature_rag_adapter",
+        "weknora_adapter",
         "knowledge_graph_adapter",
         "computation_submit_adapter",
         "local_structure_adapter",
