@@ -414,6 +414,16 @@ class PyMongoLikeCollection:
 
 
 class PolyDataMigrationScriptTest(unittest.TestCase):
+    def test_upsert_documents_bulk_uses_bounded_batches(self) -> None:
+        collection = FakeCollection()
+        documents = [{"record_id": f"ROW-{index}"} for index in range(11)]
+
+        imported = migration_script.upsert_documents_bulk(collection, "record_id", documents, batch_size=5)
+
+        self.assertEqual(imported, 11)
+        self.assertEqual(collection.bulk_batches, [5, 5, 1])
+        self.assertEqual(collection.count_documents({}), 11)
+
     def test_create_indexes_matches_existing_extra_source_row_schema(self) -> None:
         target_db = FakeDatabase({'omg_polymers': ExistingSourceRowIndexCollection()})
 

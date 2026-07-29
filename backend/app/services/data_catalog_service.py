@@ -7,13 +7,16 @@ import hmac
 import base64
 import json
 import math
+import mimetypes
 import re
+import statistics
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from time import monotonic
 from typing import Any
 
@@ -25,9 +28,16 @@ from app.infra.demo_store import demo_store
 from app.infra.mongo import get_data_asset_database, get_database
 from app.schemas.data_catalog import (
     CatalogStatus,
+    DataCatalogApiCatalogData,
+    DataCatalogApiEndpoint,
+    DataCatalogApiParameter,
     DataCatalogCollectionRecordDetailData,
     DataCatalogCollectionRecordListData,
     DataCatalogCollectionSummary,
+    DataCatalogCollectionAnalysisData,
+    DataCatalogCollectionCorrelation,
+    DataCatalogCollectionFieldAnalysis,
+    DataCatalogCollectionInsight,
     DataCatalogDataset,
     DataCatalogDatasetListData,
     DataCatalogDatasetProfileData,
@@ -36,6 +46,8 @@ from app.schemas.data_catalog import (
     DataCatalogFieldSummary,
     DataCatalogHistogramBin,
     DataCatalogDatasetImportStatus,
+    DataCatalogMinioObjectItem,
+    DataCatalogMinioObjectListData,
     DataCatalogVisualSamplePoint,
     DataCatalogObjectInfo,
     DataCatalogOverviewData,
@@ -302,7 +314,7 @@ DATASET_DEFINITIONS = {
         "source_category": "全原子分子动力学数据",
         "confidence_label": "结构化 MD 结果 + 原始模拟文件",
         "description": "包含 C/F/Si 三类 MD-AllAtom 原始模拟文件索引，以及二胺、二酐字典和碳基全原子 MD 结构统计结果。",
-        "row_count": 10000,
+        "row_count": 9608,
         "column_count": 26,
         "storage_prefix": "datasets/md_allatom/",
         "field_summaries": [
@@ -322,7 +334,24 @@ DATASET_DEFINITIONS = {
 
 
 _OBJECT_STATUS_CACHE: dict[str, tuple[float, dict[str, list[DataCatalogObjectInfo]]]] = {}
-SENSITIVE_FIELD_PATTERNS = ("secret", "token", "password", "api_key", "access_key", "credential", "authorization")
+_COLLECTION_ANALYSIS_CACHE: dict[tuple[str, int], tuple[float, DataCatalogCollectionAnalysisData]] = {}
+SENSITIVE_FIELD_PATTERNS = (
+    "secret",
+    "token",
+    "password",
+    "api_key",
+    "access_key",
+    "credential",
+    "authorization",
+    "cookie",
+    "private_key",
+    "privatekey",
+    "dsn",
+    "uri",
+    "endpoint",
+    "connection_string",
+    "connection_info",
+)
 POLY_AGENT_SOURCE_ID = "poly_agent"
 MATERIAL_SOURCE_ID = POLY_DATA_SOURCE_ID
 
@@ -341,6 +370,14 @@ class MongoCollectionDefinition:
     primary_keys: list[str]
     analysis_facets: list[str]
     search_fields: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DataCatalogMinioDownload:
+    """Resolved MinIO object stream metadata."""
+
+    asset: DataCatalogMinioObjectItem
+    body: Any
 
 
 MONGO_COLLECTION_DEFINITIONS = [
@@ -638,11 +675,28 @@ class S3ObjectClient:
                 return {
                     "size_bytes": int(response.headers.get("Content-Length") or 0),
                     "last_modified": parsed_last_modified,
+                    "mime_type": response.headers.get("Content-Type") or guess_mime_type(object_key),
                 }
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return None
             raise
+
+    def get_object(self, bucket: str, object_key: str) -> dict[str, Any] | None:
+        """Open an object stream or return None when the object does not exist."""
+        request = self._signed_request("GET", bucket, object_key)
+        try:
+            response = urllib.request.urlopen(request, timeout=30)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+        return {
+            "body": response,
+            "size_bytes": int(response.headers.get("Content-Length") or 0),
+            "mime_type": response.headers.get("Content-Type") or guess_mime_type(object_key),
+            "last_modified": response.headers.get("Last-Modified"),
+        }
 
     def _signed_request(self, method: str, bucket: str, object_key: str) -> urllib.request.Request:
         parsed_endpoint = urllib.parse.urlparse(self.endpoint)
@@ -757,6 +811,22 @@ class DataCatalogService:
                 "MongoDB poly_data 保存材料结构、物性、来源和导入追溯。",
                 "MongoDB poly_agent 保存计算任务、产物、研发流程、优化闭环和报告产物。",
             ],
+        )
+
+    def get_api_catalog(self) -> DataCatalogApiCatalogData:
+        """Return the registered read-only Data Catalog API contract."""
+        return DataCatalogApiCatalogData(
+            base_path=settings.api_prefix,
+            authentication={
+                "type": "Bearer",
+                "header": "Authorization: Bearer $POLY_AGENT_TOKEN",
+                "token_placeholder": "$POLY_AGENT_TOKEN",
+            },
+            read_only_statement=(
+                "登录 PolyAgent 后即可在页面查询和下载；外部脚本调用时使用登录接口返回的 access_token。"
+                "这些接口只提供已授权数据，不需要也不会提供底层存储账号或密钥。"
+            ),
+            endpoints=build_data_catalog_api_endpoints(settings.api_prefix),
         )
 
     def _material_record_count(self, collections: list[DataCatalogCollectionSummary]) -> int | None:
@@ -993,6 +1063,48 @@ class DataCatalogService:
             points=points,
         )
 
+    def list_minio_objects(self, dataset_id: str | None = None) -> DataCatalogMinioObjectListData:
+        """Return whitelisted logical MinIO objects without exposing storage credentials."""
+        if dataset_id and dataset_id not in {mapping.dataset_id for mapping in MINIO_OBJECT_MAPPINGS}:
+            raise HTTPException(status_code=404, detail="未知数据资产")
+        object_status = self._load_object_status()
+        items: list[DataCatalogMinioObjectItem] = []
+        for mapping in MINIO_OBJECT_MAPPINGS:
+            if dataset_id and mapping.dataset_id != dataset_id:
+                continue
+            status = next(
+                (item for item in object_status.get(mapping.dataset_id, []) if item.role == mapping.role),
+                None,
+            )
+            items.append(self._minio_item_from_mapping(mapping, status))
+        return DataCatalogMinioObjectListData(items=items, total=len(items))
+
+    def open_minio_object(self, asset_id: str) -> DataCatalogMinioDownload:
+        """Open a whitelisted MinIO object stream by logical asset ID."""
+        mapping = self._mapping_by_asset_id(asset_id)
+        if mapping is None:
+            raise HTTPException(status_code=404, detail="数据资产不存在")
+        if not self.s3_client.is_configured():
+            raise HTTPException(status_code=404, detail="数据资产不存在")
+        try:
+            payload = self.s3_client.get_object(settings.minio_bucket, mapping.canonical_key)
+        except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+            raise HTTPException(status_code=404, detail="数据资产不存在") from exc
+        if not payload or not payload.get("body"):
+            raise HTTPException(status_code=404, detail="数据资产不存在")
+        item = self._minio_item_from_mapping(
+            mapping,
+            DataCatalogObjectInfo(
+                object_key=mapping.canonical_key,
+                role=mapping.role,
+                exists=True,
+                size_bytes=payload.get("size_bytes"),
+                last_modified=None,
+            ),
+            mime_type=str(payload.get("mime_type") or guess_mime_type(mapping.canonical_key)),
+        )
+        return DataCatalogMinioDownload(asset=item, body=payload["body"])
+
     def _dataset_by_id(self, dataset_id: str) -> DataCatalogDataset:
         for dataset in self.list_datasets().items:
             if dataset.dataset_id == dataset_id:
@@ -1115,7 +1227,12 @@ class DataCatalogService:
                 verified_count=doc.get("verified_count"),
                 failed_count=doc.get("failed_count"),
                 checkpoint_count=doc.get("checkpoint_count"),
+                active_chunk_index=doc.get("active_chunk_index"),
+                active_source_file=doc.get("active_source_file"),
+                active_row_start=doc.get("active_row_start"),
+                active_row_end=doc.get("active_row_end"),
                 started_at=doc.get("started_at"),
+                updated_at=doc.get("updated_at"),
                 finished_at=doc.get("finished_at"),
                 throughput_rows_per_second=doc.get("throughput_rows_per_second"),
                 error=doc.get("error"),
@@ -1805,6 +1922,396 @@ class DataCatalogService:
             document=self._sanitize_document(row),
         )
 
+    def get_collection_analysis(
+        self,
+        collection_name: str,
+        *,
+        sample_size: int = 1000,
+        refresh: bool = False,
+    ) -> DataCatalogCollectionAnalysisData:
+        """Return a bounded, read-only profile for a whitelisted collection."""
+        definition = self._require_collection_definition(collection_name)
+        bounded_sample_size = max(200, min(int(sample_size), 5000))
+        cache_key = (definition.collection_key, bounded_sample_size)
+        cached = _COLLECTION_ANALYSIS_CACHE.get(cache_key)
+        ttl = max(int(settings.data_catalog_cache_ttl_seconds), 0)
+        if not refresh and cached and ttl > 0 and monotonic() - cached[0] <= ttl:
+            return cached[1]
+
+        generated_at = datetime.now(timezone.utc)
+        try:
+            rows, total_count, status, message = self._load_collection_analysis_rows(
+                definition,
+                sample_size=bounded_sample_size,
+            )
+        except PyMongoError:
+            rows, total_count, status, message = [], 0, "degraded", "数据库暂时不可用，无法生成表分析。"
+
+        if status == "not_configured" or not rows and not total_count:
+            result = DataCatalogCollectionAnalysisData(
+                collection_key=definition.collection_key,
+                collection_name=definition.collection_name,
+                source_id=definition.source_id,
+                database=self._definition_database_name(definition),
+                display_name=definition.display_name,
+                data_domain=definition.data_domain,
+                analysis_status=status,
+                analysis_message=message or "暂无可分析记录。",
+                generated_at=generated_at,
+                total_count=total_count,
+                sample_count=0,
+                sample_limit=bounded_sample_size,
+                analysis_scope="sample_only",
+            )
+            if ttl:
+                _COLLECTION_ANALYSIS_CACHE[cache_key] = (monotonic(), result)
+            return result
+
+        field_stats, numeric_values = self._build_collection_field_stats(definition, rows)
+        correlations = self._build_collection_correlations(numeric_values)
+        insights = self._build_collection_insights(
+            definition,
+            field_stats,
+            correlations,
+            sample_count=len(rows),
+        )
+        effective_status = status
+        if effective_status == "ready" and total_count > len(rows):
+            effective_status = "partial"
+        result = DataCatalogCollectionAnalysisData(
+            collection_key=definition.collection_key,
+            collection_name=definition.collection_name,
+            source_id=definition.source_id,
+            database=self._definition_database_name(definition),
+            display_name=definition.display_name,
+            data_domain=definition.data_domain,
+            analysis_status=effective_status,
+            analysis_message=message,
+            generated_at=generated_at,
+            total_count=total_count,
+            sample_count=len(rows),
+            sample_limit=bounded_sample_size,
+            analysis_scope="full_count_sample_distribution",
+            field_stats=field_stats,
+            correlations=correlations,
+            insights=insights,
+        )
+        if ttl:
+            _COLLECTION_ANALYSIS_CACHE[cache_key] = (monotonic(), result)
+        return result
+
+    def _load_collection_analysis_rows(
+        self,
+        definition: MongoCollectionDefinition,
+        *,
+        sample_size: int,
+    ) -> tuple[list[dict[str, Any]], int, str, str | None]:
+        """Load only a bounded projection; never expose raw collection documents."""
+        if not settings.require_mongodb:
+            rows = [dict(row) for row in demo_store.load().get(definition.collection_key, [])]
+            return rows[:sample_size], len(rows), "ready" if rows else "not_configured", None
+        if definition.source_id == MATERIAL_SOURCE_ID and not settings.data_asset_mongodb_uri:
+            return [], 0, "not_configured", "材料数据 MongoDB 尚未配置。"
+
+        db = self._database_for_definition(definition)
+        collection = db[definition.collection_name]
+        total_count = int(collection.estimated_document_count())
+        if total_count == 0:
+            return [], 0, "not_configured", "该表暂无记录。"
+        fields = self._analysis_field_allowlist(definition)
+        projection = {field: 1 for field in fields if field and "." not in field}
+        for field in fields:
+            if "." in field:
+                projection[field] = 1
+        cursor = collection.find({}, projection)
+        if hasattr(cursor, "limit"):
+            rows = [dict(row) for row in cursor.limit(sample_size)]
+        else:
+            rows = [dict(row) for row in list(cursor)[:sample_size]]
+        return rows, total_count, "ready", None
+
+    def _analysis_field_allowlist(self, definition: MongoCollectionDefinition) -> list[str]:
+        fields = [*definition.primary_keys, *definition.analysis_facets, *definition.search_fields]
+        dataset_id = next(
+            (item_id for item_id, (collection_key, _) in DATASET_RECORD_COLLECTIONS.items() if collection_key == definition.collection_key),
+            None,
+        )
+        dataset_definition = DATASET_DEFINITIONS.get(dataset_id or "")
+        if dataset_definition:
+            fields.extend(item[0] for item in dataset_definition.get("field_summaries", []))
+            fields.extend(item[1] for item in dataset_definition.get("field_summaries", []))
+        for spec in EXTRA_DATASET_SPECS:
+            if f"{POLY_DATA_SOURCE_ID}.{spec.collection_name}" == definition.collection_key:
+                fields.extend(item[0] for item in spec.field_summaries)
+                fields.extend(item[1] for item in spec.field_summaries)
+                break
+        return list(dict.fromkeys(str(field) for field in fields if field))[:120]
+
+    def _build_collection_field_stats(
+        self,
+        definition: MongoCollectionDefinition,
+        rows: list[dict[str, Any]],
+    ) -> tuple[list[DataCatalogCollectionFieldAnalysis], dict[str, list[float]]]:
+        allowlist = self._analysis_field_allowlist(definition)
+        labels = self._analysis_field_labels(definition)
+        observed: list[str] = []
+        for row in rows:
+            observed.extend(self._flatten_analysis_fields(row).keys())
+        fields: list[str] = []
+        seen_fields: set[str] = set()
+        for field in [*observed, *allowlist]:
+            normalized_field = re.sub(r"[^a-z0-9]", "", field.lower())
+            if normalized_field in seen_fields:
+                continue
+            seen_fields.add(normalized_field)
+            fields.append(field)
+            if len(fields) >= 100:
+                break
+        field_stats: list[DataCatalogCollectionFieldAnalysis] = []
+        numeric_values: dict[str, list[float]] = {}
+        for field in fields:
+            values = [self._nested_value(row, field) for row in rows]
+            present = [value for value in values if self._analysis_value_present(value)]
+            numeric = [number for value in present if (number := self._analysis_number(value)) is not None]
+            value_type = self._analysis_value_type(present, numeric)
+            unique_values = {self._analysis_value_key(value) for value in present}
+            top_values = self._analysis_top_values(present)
+            histogram = self._histogram(numeric)
+            numeric_summary: dict[str, float | int | None] = {}
+            if numeric:
+                q25 = self._analysis_percentile(numeric, 0.25)
+                q75 = self._analysis_percentile(numeric, 0.75)
+                lower = q25 - 1.5 * (q75 - q25)
+                upper = q75 + 1.5 * (q75 - q25)
+                numeric_summary = {
+                    "min": min(numeric),
+                    "max": max(numeric),
+                    "mean": statistics.fmean(numeric),
+                    "median": statistics.median(numeric),
+                    "p25": q25,
+                    "p75": q75,
+                    "iqr_outlier_count": sum(value < lower or value > upper for value in numeric),
+                }
+                numeric_values[field] = [self._analysis_number(value) for value in values]
+            field_stats.append(
+                DataCatalogCollectionFieldAnalysis(
+                    field=field,
+                    label=labels.get(field),
+                    value_type=value_type,
+                    sample_count=len(values),
+                    non_empty_count=len(present),
+                    missing_count=len(values) - len(present),
+                    missing_percent=round(((len(values) - len(present)) / len(values)) * 100, 4) if values else 100,
+                    unique_count=len(unique_values),
+                    example=self._analysis_safe_value(present[0]) if present else None,
+                    numeric_summary=numeric_summary,
+                    top_values=top_values,
+                    histogram=histogram,
+                )
+            )
+        return field_stats, numeric_values
+
+    def _analysis_field_labels(self, definition: MongoCollectionDefinition) -> dict[str, str]:
+        labels: dict[str, str] = {}
+        dataset_id = next(
+            (item_id for item_id, (collection_key, _) in DATASET_RECORD_COLLECTIONS.items() if collection_key == definition.collection_key),
+            None,
+        )
+        dataset_definition = DATASET_DEFINITIONS.get(dataset_id or "")
+        if dataset_definition:
+            for raw, canonical, label, *_ in dataset_definition.get("field_summaries", []):
+                labels[str(raw)] = str(label)
+                labels[str(canonical)] = str(label)
+        for spec in EXTRA_DATASET_SPECS:
+            if f"{POLY_DATA_SOURCE_ID}.{spec.collection_name}" == definition.collection_key:
+                for raw, canonical, label, *_ in spec.field_summaries:
+                    labels[str(raw)] = str(label)
+                    labels[str(canonical)] = str(label)
+        return labels
+
+    def _flatten_analysis_fields(self, row: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+        flattened: dict[str, Any] = {}
+        for key, value in row.items():
+            if key.startswith("_"):
+                continue
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, dict):
+                flattened.update(self._flatten_analysis_fields(value, path))
+            elif isinstance(value, (list, tuple)):
+                flattened[path] = value
+            else:
+                flattened[path] = value
+        return flattened
+
+    def _analysis_value_present(self, value: Any) -> bool:
+        return value is not None and value != "" and value != [] and value != {}
+
+    def _analysis_number(self, value: Any) -> float | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    def _analysis_value_type(self, values: list[Any], numeric: list[float]) -> str:
+        if not values:
+            return "empty"
+        if len(numeric) == len(values):
+            return "number"
+        if all(isinstance(value, bool) for value in values):
+            return "boolean"
+        if all(isinstance(value, (list, tuple)) for value in values):
+            return "array"
+        if all(isinstance(value, dict) for value in values):
+            return "object"
+        if all(isinstance(value, str) for value in values):
+            return "string"
+        return "mixed"
+
+    def _analysis_safe_value(self, value: Any) -> Any:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, (list, tuple)):
+            return ", ".join(str(item) for item in value[:5])
+        return str(value)
+
+    def _analysis_value_key(self, value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+    def _analysis_top_values(self, values: list[Any], limit: int = 8) -> list[dict[str, Any]]:
+        counts: dict[str, int] = {}
+        display: dict[str, Any] = {}
+        for value in values:
+            key = self._analysis_value_key(value)
+            counts[key] = counts.get(key, 0) + 1
+            display[key] = self._analysis_safe_value(value)
+        return [
+            {"value": display[key], "count": count}
+            for key, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:limit]
+        ]
+
+    def _analysis_percentile(self, values: list[float], percentile: float) -> float:
+        ordered = sorted(values)
+        if len(ordered) == 1:
+            return ordered[0]
+        position = (len(ordered) - 1) * percentile
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            return ordered[lower]
+        return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+    def _build_collection_correlations(
+        self,
+        numeric_values: dict[str, list[float | None]],
+    ) -> list[DataCatalogCollectionCorrelation]:
+        fields = list(numeric_values)[:12]
+        correlations: list[DataCatalogCollectionCorrelation] = []
+        for index, field_x in enumerate(fields):
+            for field_y in fields[index + 1:]:
+                pairs = [(x, y) for x, y in zip(numeric_values[field_x], numeric_values[field_y]) if x is not None and y is not None]
+                if len(pairs) < 20:
+                    continue
+                xs, ys = zip(*pairs)
+                mean_x, mean_y = statistics.fmean(xs), statistics.fmean(ys)
+                denominator = math.sqrt(sum((x - mean_x) ** 2 for x in xs) * sum((y - mean_y) ** 2 for y in ys))
+                if denominator == 0:
+                    continue
+                coefficient = sum((x - mean_x) * (y - mean_y) for x, y in pairs) / denominator
+                correlations.append(DataCatalogCollectionCorrelation(
+                    field_x=field_x,
+                    field_y=field_y,
+                    coefficient=round(coefficient, 4),
+                    sample_count=len(pairs),
+                ))
+        return sorted(correlations, key=lambda item: abs(item.coefficient), reverse=True)[:20]
+
+    def _build_collection_insights(
+        self,
+        definition: MongoCollectionDefinition,
+        field_stats: list[DataCatalogCollectionFieldAnalysis],
+        correlations: list[DataCatalogCollectionCorrelation],
+        *,
+        sample_count: int,
+    ) -> list[DataCatalogCollectionInsight]:
+        stats_by_field = {item.field.lower(): item for item in field_stats}
+
+        def find_field(*aliases: str) -> DataCatalogCollectionFieldAnalysis | None:
+            for alias in aliases:
+                for field, item in stats_by_field.items():
+                    if field == alias.lower() or field.endswith(f".{alias.lower()}"):
+                        return item
+            return None
+
+        insights: list[DataCatalogCollectionInsight] = []
+        incomplete = [item for item in field_stats if item.sample_count and item.missing_percent >= 20]
+        if incomplete:
+            worst = sorted(incomplete, key=lambda item: item.missing_percent, reverse=True)[:3]
+            insights.append(DataCatalogCollectionInsight(
+                level="notice",
+                title="字段完整度存在差异",
+                conclusion="；".join(f"{item.label or item.field} 缺失 {item.missing_percent:.1f}%" for item in worst),
+                evidence_fields=[item.field for item in worst],
+                sample_count=sample_count,
+            ))
+
+        domain = definition.data_domain or ""
+        if domain == "omg_polymers":
+            reactants = [find_field("reactant_1"), find_field("reactant_2"), find_field("product")]
+            if all(reactants):
+                completeness = sum(item.non_empty_count for item in reactants) / (len(reactants) * max(sample_count, 1))
+                insights.append(DataCatalogCollectionInsight(
+                    level="info" if completeness >= 0.95 else "warning",
+                    title="反应结构映射完整度",
+                    conclusion=f"反应物与产物字段联合完整度约 {completeness * 100:.1f}%，可用于观察反应结构映射覆盖。",
+                    evidence_fields=[item.field for item in reactants if item],
+                    sample_count=sample_count,
+                ))
+        elif domain in {"toporg_records", "polyid_records"}:
+            topology = find_field("topology", "mechanism")
+            if topology and topology.top_values:
+                insights.append(DataCatalogCollectionInsight(
+                    level="info",
+                    title="结构类别分布",
+                    conclusion=f"检测到 {topology.unique_count} 个结构类别，最高频类别占样本 {topology.top_values[0]['count'] / max(sample_count, 1) * 100:.1f}%。",
+                    evidence_fields=[topology.field],
+                    sample_count=sample_count,
+                ))
+        elif domain in {"polysol_records"}:
+            solvent = find_field("solvent", "solvent_characteristic")
+            if solvent:
+                insights.append(DataCatalogCollectionInsight(
+                    level="info",
+                    title="溶剂体系分布",
+                    conclusion=f"样本覆盖 {solvent.unique_count} 个溶剂/溶剂特性取值，可用于比较聚合物-溶剂组合差异。",
+                    evidence_fields=[solvent.field],
+                    sample_count=sample_count,
+                ))
+        elif domain in {"pppdb_records", "tropic_records", "omg_physical_properties_records", "polyomics_records", "radonpy_records", "md_allatom_carbon_results"}:
+            preferred = {"temperature", "tg", "tg_k", "ceiling_temperature", "rg", "rg2", "e2e_mean", "persist_len_mean", "dp", "chi", "thermal_conductivity"}
+            relevant = [item for item in correlations if item.field_x.lower().split(".")[-1] in preferred or item.field_y.lower().split(".")[-1] in preferred]
+            if relevant:
+                strongest = relevant[0]
+                direction = "正" if strongest.coefficient > 0 else "负"
+                insights.append(DataCatalogCollectionInsight(
+                    level="notice" if abs(strongest.coefficient) >= 0.7 else "info",
+                    title="关键数值字段统计关联",
+                    conclusion=f"{strongest.field_x} 与 {strongest.field_y} 呈{direction}相关（r={strongest.coefficient:.2f}）；这是样本内描述性线索，不代表因果关系。",
+                    evidence_fields=[strongest.field_x, strongest.field_y],
+                    sample_count=strongest.sample_count,
+                ))
+        if not insights:
+            insights.append(DataCatalogCollectionInsight(
+                level="info",
+                title="通用数据画像",
+                conclusion="已生成字段完整度、取值基数和数值分布；当前样本没有足够领域字段支持更具体的机理线索。",
+                evidence_fields=[item.field for item in field_stats[:8]],
+                sample_count=sample_count,
+            ))
+        return insights
+
     def _require_collection_definition(self, collection_name: str) -> MongoCollectionDefinition:
         definition = COLLECTION_DEFINITION_BY_NAME.get(collection_name)
         if not definition:
@@ -2342,6 +2849,30 @@ class DataCatalogService:
         normalized = key.lower()
         return any(pattern in normalized for pattern in SENSITIVE_FIELD_PATTERNS)
 
+    def _minio_item_from_mapping(
+        self,
+        mapping: ObjectMapping,
+        status: DataCatalogObjectInfo | None,
+        *,
+        mime_type: str | None = None,
+    ) -> DataCatalogMinioObjectItem:
+        filename = Path(mapping.canonical_key).name or f"{mapping.dataset_id}-{mapping.role}"
+        asset_id = minio_asset_id(mapping)
+        return DataCatalogMinioObjectItem(
+            asset_id=asset_id,
+            dataset_id=mapping.dataset_id,
+            role=mapping.role,
+            filename=filename,
+            exists=bool(status and status.exists),
+            size_bytes=status.size_bytes if status else None,
+            last_modified=status.last_modified if status else None,
+            mime_type=mime_type or (status and getattr(status, "mime_type", None)) or guess_mime_type(filename),
+            download_path=f"/data-catalog/minio-objects/{urllib.parse.quote(asset_id, safe='')}/download",
+        )
+
+    def _mapping_by_asset_id(self, asset_id: str) -> ObjectMapping | None:
+        return next((mapping for mapping in MINIO_OBJECT_MAPPINGS if minio_asset_id(mapping) == asset_id), None)
+
     def _load_object_status(self) -> dict[str, list[DataCatalogObjectInfo]]:
         cache_key = self._object_status_cache_key()
         if cache_key:
@@ -2409,3 +2940,254 @@ class DataCatalogService:
         if any(item.status == "degraded" for item in source_items):
             return "degraded"
         return "not_configured"
+
+
+def minio_asset_id(mapping: ObjectMapping) -> str:
+    """Return the public logical asset ID for a whitelisted MinIO mapping."""
+    return f"{mapping.dataset_id}__{mapping.role}"
+
+
+def guess_mime_type(filename: str) -> str:
+    """Guess a stable MIME type for object listings and downloads."""
+    return mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+
+def build_data_catalog_api_endpoints(base_path: str) -> list[DataCatalogApiEndpoint]:
+    """Build endpoint contracts from the backend registry."""
+
+    def param(
+        name: str,
+        location: str,
+        description: str,
+        *,
+        required: bool = False,
+        type_: str = "string",
+        example: Any | None = None,
+    ) -> DataCatalogApiParameter:
+        return DataCatalogApiParameter(
+            name=name,
+            location=location,
+            required=required,
+            type=type_,
+            description=description,
+            example=example,
+        )
+
+    api_specs: list[dict[str, Any]] = [
+        {
+            "endpoint_id": "overview",
+            "name": "数据目录总览",
+            "path": "/data-catalog/overview",
+            "source": "data_catalog",
+            "permission": "read",
+            "summary": "查看数据目录当前可用的数据集、文件数量和连接状态。",
+            "response_type": "ApiResponse[DataCatalogOverviewData]",
+            "response_example": {"status": "degraded", "dataset_count": 16, "canonical_root": "datasets/"},
+        },
+        {
+            "endpoint_id": "datasets",
+            "name": "数据集列表",
+            "path": "/data-catalog/datasets",
+            "source": "data_catalog",
+            "permission": "read",
+            "summary": "查看可访问的数据集列表，以及每个数据集包含的字段和文件状态。",
+            "response_type": "ApiResponse[DataCatalogDatasetListData]",
+            "response_example": {"items": [{"dataset_id": "pi1m_v2", "record_mode": "full"}]},
+        },
+        {
+            "endpoint_id": "dataset_profile",
+            "name": "数据集画像",
+            "path": "/data-catalog/datasets/{dataset_id}/profile",
+            "source": "data_catalog",
+            "permission": "read",
+            "summary": "查看单个数据集的字段完整度、分布统计和文件覆盖情况。",
+            "path_parameters": [param("dataset_id", "path", "数据集 ID，可从数据集列表中复制。", required=True, example="pi1m_v2")],
+            "response_type": "ApiResponse[DataCatalogDatasetProfileData]",
+            "response_example": {"dataset_id": "pi1m_v2", "coverage_percent": 100.0},
+        },
+        {
+            "endpoint_id": "dataset_records",
+            "name": "数据集记录",
+            "path": "/data-catalog/datasets/{dataset_id}/records",
+            "source": "data_catalog",
+            "permission": "read",
+            "summary": "分页读取某个数据集的记录摘要，可按关键词或常用字段过滤。",
+            "path_parameters": [param("dataset_id", "path", "数据集 ID，可从数据集列表中复制。", required=True, example="pi1m_v2")],
+            "query_parameters": [
+                param("cursor", "query", "上一页响应里的 next_cursor；第一页不用填。", example="eyJyb3dfaW5kZXgiOjJ9"),
+                param("page_size", "query", "每页记录数，1-200。", type_="integer", example=50),
+                param("sort_by", "query", "排序字段：row_index 或 sa_score。", example="row_index"),
+                param("sa_min", "query", "SA Score 下界。", type_="number", example=2.0),
+                param("sa_max", "query", "SA Score 上界。", type_="number", example=8.0),
+                param("keyword", "query", "记录 ID、SMILES 或哈希关键词。", example="*CC*"),
+                param("row_start", "query", "起始行号。", type_="integer", example=1),
+                param("row_end", "query", "结束行号。", type_="integer", example=1000),
+            ],
+            "response_type": "ApiResponse[DataCatalogDatasetRecordListData]",
+            "response_example": {"dataset_id": "pi1m_v2", "items": [{"record_id": "PI1M_V2-000001"}]},
+        },
+        {
+            "endpoint_id": "dataset_visual_samples",
+            "name": "数据集可视化抽样",
+            "path": "/data-catalog/datasets/{dataset_id}/visual-samples",
+            "source": "data_catalog",
+            "permission": "read",
+            "summary": "读取可用于散点图或预览图的数据抽样点。",
+            "path_parameters": [param("dataset_id", "path", "数据集 ID，可从数据集列表中复制。", required=True, example="pi1m_v2")],
+            "query_parameters": [param("limit", "query", "抽样点上限，100-20000。", type_="integer", example=5000)],
+            "response_type": "ApiResponse[DataCatalogDatasetVisualSamplesData]",
+            "response_example": {"sample_count": 5000, "points": [{"record_id": "PI1M_V2-000001", "x": 0.12, "y": -0.34}]},
+        },
+        {
+            "endpoint_id": "mongo_collections",
+            "name": "MongoDB 可访问集合",
+            "path": "/data-catalog/mongo-collections",
+            "source": "mongodb",
+            "permission": "read",
+            "summary": "查看你可以只读访问的结构化数据集合。",
+            "response_type": "ApiResponse[DataCatalogMongoCollectionListData]",
+            "response_example": {"total": 24, "items": [{"collection_key": "poly_data.material_records"}]},
+        },
+        {
+            "endpoint_id": "mongo_collection_records",
+            "name": "MongoDB 集合记录",
+            "path": "/data-catalog/mongo-collections/{collection_name}/records",
+            "source": "mongodb",
+            "permission": "read",
+            "summary": "分页读取某个结构化集合的记录摘要。",
+            "path_parameters": [param("collection_name", "path", "集合 key 或集合名，只允许注册表内集合。", required=True, example="poly_data.material_records")],
+            "query_parameters": [
+                param("page", "query", "页码。", type_="integer", example=1),
+                param("page_size", "query", "每页记录数，1-100。", type_="integer", example=20),
+                param("keyword", "query", "关键词。", example="openpoly"),
+                param("use_cursor", "query", "是否启用游标分页。", type_="boolean", example=False),
+                param("cursor", "query", "上一页响应里的 next_cursor；第一页不用填。", example="eyJjb2xsZWN0aW9uX2tleSI6IiJ9"),
+            ],
+            "response_type": "ApiResponse[DataCatalogCollectionRecordListData]",
+            "response_example": {"collection_key": "poly_data.material_records", "items": [{"record_id": "OPENPOLY-16172"}]},
+        },
+        {
+            "endpoint_id": "mongo_collection_analysis",
+            "name": "MongoDB 集合分析",
+            "path": "/data-catalog/mongo-collections/{collection_name}/analysis",
+            "source": "mongodb",
+            "permission": "read",
+            "summary": "查看单个结构化集合的字段画像、数值分布、相关性和规则化机理线索。",
+            "path_parameters": [param("collection_name", "path", "集合 key 或集合名，只允许注册表内集合。", required=True, example="poly_data.toporg_records")],
+            "query_parameters": [
+                param("sample_size", "query", "分布与相关性分析样本数，200-5000。", type_="integer", example=1000),
+                param("refresh", "query", "是否绕过服务端缓存重新计算。", type_="boolean", example=False),
+            ],
+            "response_type": "ApiResponse[DataCatalogCollectionAnalysisData]",
+            "response_example": {
+                "collection_key": "poly_data.toporg_records",
+                "analysis_status": "partial",
+                "total_count": 1342,
+                "sample_count": 1000,
+                "insights": [{"title": "结构类别分布", "level": "info"}],
+            },
+        },
+        {
+            "endpoint_id": "mongo_collection_record_detail",
+            "name": "MongoDB 记录详情",
+            "path": "/data-catalog/mongo-collections/{collection_name}/records/{record_id}",
+            "source": "mongodb",
+            "permission": "read",
+            "summary": "读取某条结构化记录的详情。",
+            "path_parameters": [
+                param("collection_name", "path", "集合 key 或集合名，可从集合列表中复制。", required=True, example="poly_data.material_records"),
+                param("record_id", "path", "记录 ID，可从记录列表中复制。", required=True, example="OPENPOLY-16172"),
+            ],
+            "response_type": "ApiResponse[DataCatalogCollectionRecordDetailData]",
+            "response_example": {"record_id": "OPENPOLY-16172", "document": {"polymer": {"psmiles": "[*]CC[*]"}}},
+        },
+        {
+            "endpoint_id": "relationships",
+            "name": "数据关系",
+            "path": "/data-catalog/relationships",
+            "source": "data_catalog",
+            "permission": "read",
+            "summary": "查看材料、计算结果、报告之间已经整理好的关联关系。",
+            "response_type": "ApiResponse[DataCatalogRelationshipsData]",
+            "response_example": {"nodes": [{"node_id": "materials"}], "edges": []},
+        },
+        {
+            "endpoint_id": "minio_objects",
+            "name": "MinIO 文件列表",
+            "path": "/data-catalog/minio-objects",
+            "source": "minio",
+            "permission": "read",
+            "summary": "按数据集查看可下载文件，并获取下载所需的 asset_id。",
+            "query_parameters": [param("dataset_id", "query", "数据集 ID，可从 MinIO 文件页筛选项中复制。", example="radonpy_pi1070")],
+            "response_type": "ApiResponse[DataCatalogMinioObjectListData]",
+            "response_example": {"items": [{"asset_id": "radonpy_pi1070__readme", "filename": "readme.md"}]},
+        },
+        {
+            "endpoint_id": "minio_download",
+            "name": "MinIO 文件下载",
+            "path": "/data-catalog/minio-objects/{asset_id}/download",
+            "source": "minio",
+            "permission": "download",
+            "summary": "用 asset_id 下载文件；返回文件流，不是 JSON。",
+            "path_parameters": [param("asset_id", "path", "文件资产 ID，先在 MinIO 文件页或文件列表接口中复制。", required=True, example="radonpy_pi1070__readme")],
+            "response_type": "binary stream",
+            "response_example": {"content_type": "text/markdown", "content_disposition": "attachment"},
+        },
+    ]
+    return [DataCatalogApiEndpoint(**{**spec, "examples": build_endpoint_examples(base_path, spec)}) for spec in api_specs]
+
+
+def build_endpoint_examples(base_path: str, spec: dict[str, Any]) -> dict[str, str]:
+    """Build safe code examples with only the token placeholder."""
+    path = sample_path(spec["path"])
+    url = f"https://poly-agent.example.com{base_path}{path}{sample_query(spec.get('query_parameters', []))}"
+    return {
+        "curl": "\n".join([
+            f'curl -X GET "{url}" \\',
+            '  -H "Authorization: Bearer $POLY_AGENT_TOKEN"',
+        ]),
+        "python": "\n".join([
+            "import requests",
+            "",
+            f'response = requests.get("{url}", headers={{"Authorization": "Bearer $POLY_AGENT_TOKEN"}})',
+            "response.raise_for_status()",
+            "print(response.json() if response.headers.get('content-type', '').startswith('application/json') else response.content)",
+        ]),
+        "javascript": "\n".join([
+            f'const response = await fetch("{url}", {{',
+            '  headers: { Authorization: "Bearer $POLY_AGENT_TOKEN" },',
+            "});",
+            "if (!response.ok) throw new Error(`HTTP ${response.status}`);",
+            "const data = response.headers.get('content-type')?.startsWith('application/json')",
+            "  ? await response.json()",
+            "  : await response.blob();",
+        ]),
+    }
+
+
+def sample_path(path: str) -> str:
+    """Replace path templates with harmless documented examples."""
+    return (
+        path.replace("{dataset_id}", "pi1m_v2")
+        .replace("{collection_name}", "poly_data.material_records")
+        .replace("{record_id}", "OPENPOLY-16172")
+        .replace("{asset_id}", "radonpy_pi1070__readme")
+    )
+
+
+def sample_query(parameters: list[DataCatalogApiParameter]) -> str:
+    """Return a compact query string for documented examples."""
+    samples = {
+        "dataset_id": "radonpy_pi1070",
+        "page": 1,
+        "page_size": 20,
+        "limit": 5000,
+        "sample_size": 1000,
+        "refresh": False,
+    }
+    pairs = [
+        (parameter.name, samples[parameter.name])
+        for parameter in parameters
+        if parameter.name in samples
+    ]
+    return f"?{urllib.parse.urlencode(pairs)}" if pairs else ""
