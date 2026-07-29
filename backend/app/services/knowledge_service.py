@@ -160,6 +160,30 @@ class KnowledgeService:
             ).model_dump()
         return self._normalize_query(payload, raw)
 
+    def search_hits(self, system_id: str, query: str, *, limit: int = 5) -> list[KnowledgeHit]:
+        """调用 WeKnora 检索接口并返回归一化命中片段。
+
+        Args:
+            system_id: WeKnora 知识库 ID。
+            query: 用户检索问题。
+            limit: 最大返回命中数。
+
+        Returns:
+            归一化后的知识库命中片段列表。
+        """
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return []
+        base_url = self._require_base_url()
+        self._ensure_known_system(system_id)
+        results = self._search_knowledge(
+            base_url,
+            system_id,
+            normalized_query,
+            limit=max(1, min(limit, 20)),
+        )
+        return [KnowledgeHit(**self._safe_hit(item)) for item in results[:limit]]
+
     def get_graph(self, system_id: str) -> KnowledgeGraphData:
         """加载 WeKnora Wiki 页面链接图谱概览。"""
         base_url = self._require_base_url()

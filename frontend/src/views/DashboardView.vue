@@ -3,13 +3,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, ChatLineRound, Check, FolderOpened, Histogram, MagicStick, Promotion, SetUp,
+  Aim, ArrowDown, ChatLineRound, Check, Connection, FolderOpened, Histogram, MagicStick, Promotion, Reading, SetUp,
 } from '@element-plus/icons-vue'
 
 import {
   getApiErrorMessage,
   getIntegrationStatus,
   getLlmModels,
+  listKnowledgeSystems,
   listAlgorithmRuns,
   listCampaigns,
   listComputations,
@@ -40,10 +41,14 @@ const researchRunsTotal = ref(0)
 const chatMode = ref('qa')
 const chatInput = ref('')
 const modelLoading = ref(false)
+const knowledgeLoading = ref(false)
 const llmCatalog = ref({ providers: [], routing: {} })
+const knowledgeSystems = ref([])
 const selectedModelKey = ref('')
+const selectedKnowledgeBaseId = ref(loadKnowledgePreference())
 const useWebSearch = ref(loadWebSearchPreference())
 const WEB_SEARCH_STORAGE_KEY = 'poly-agent-dialogue-use-web-search'
+const KNOWLEDGE_STORAGE_KEY = 'poly-agent-dialogue-knowledge-base-id'
 
 const dashboardViewOptions = [
   { label: '问答', value: 'chat' },
@@ -116,6 +121,9 @@ const selectableModels = computed(() =>
 )
 
 const selectedModel = computed(() => selectableModels.value.find((item) => item.key === selectedModelKey.value) || null)
+const selectedKnowledgeBase = computed(() =>
+  knowledgeSystems.value.find((item) => item.system_id === selectedKnowledgeBaseId.value) || null,
+)
 
 const stats = computed(() => {
   const visibleCampaignRows = campaignRows.value.filter((item) => !isResearchEngineContainerCampaign(item))
@@ -239,8 +247,20 @@ function loadWebSearchPreference() {
   return false
 }
 
+function loadKnowledgePreference() {
+  return window.localStorage.getItem(KNOWLEDGE_STORAGE_KEY) || ''
+}
+
 watch(useWebSearch, (value) => {
   window.localStorage.setItem(WEB_SEARCH_STORAGE_KEY, value ? '1' : '0')
+})
+
+watch(selectedKnowledgeBaseId, (value) => {
+  if (value) {
+    window.localStorage.setItem(KNOWLEDGE_STORAGE_KEY, value)
+  } else {
+    window.localStorage.removeItem(KNOWLEDGE_STORAGE_KEY)
+  }
 })
 
 function selectDefaultModelForMode() {
@@ -271,10 +291,6 @@ function openDialogue(prompt) {
       modelId: selectedModel.value?.modelId || undefined,
     },
   })
-}
-
-function openModelManagement() {
-  router.push({ path: '/tools', query: { tab: 'llm-models' } })
 }
 
 function handleChatKeydown(event) {
@@ -322,9 +338,46 @@ async function loadLlmCatalog() {
   }
 }
 
+function currentModeLabel() {
+  return chatModeOptions.find((item) => item.value === chatMode.value)?.label || '科研问答'
+}
+
+function selectChatMode(mode) {
+  chatMode.value = mode
+  selectDefaultModelForMode()
+}
+
+function selectKnowledgeBase(systemId) {
+  selectedKnowledgeBaseId.value = systemId
+}
+
+function clearKnowledgeBase() {
+  selectedKnowledgeBaseId.value = ''
+}
+
+async function loadKnowledgeBases() {
+  knowledgeLoading.value = true
+  try {
+    const data = await listKnowledgeSystems()
+    knowledgeSystems.value = data?.items || []
+    if (
+      selectedKnowledgeBaseId.value &&
+      !knowledgeSystems.value.some((item) => item.system_id === selectedKnowledgeBaseId.value)
+    ) {
+      selectedKnowledgeBaseId.value = ''
+    }
+  } catch (error) {
+    knowledgeSystems.value = []
+    ElMessage.warning(`知识库列表加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    knowledgeLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadDashboardData()
   loadLlmCatalog()
+  loadKnowledgeBases()
 })
 </script>
 
@@ -342,6 +395,13 @@ onMounted(() => {
       </div>
 
       <div class="lui-composer">
+        <div v-if="selectedKnowledgeBase" class="selected-tags-inline">
+          <span class="mention-chip mention-chip--kb">
+            <el-icon><Reading /></el-icon>
+            <span class="mention-chip-name" :title="selectedKnowledgeBase.name">{{ selectedKnowledgeBase.name }}</span>
+            <button type="button" aria-label="移除知识库" @click="clearKnowledgeBase">×</button>
+          </span>
+        </div>
         <div class="composer-input">
           <el-icon class="composer-mark"><ChatLineRound /></el-icon>
           <el-input
@@ -354,26 +414,92 @@ onMounted(() => {
           />
         </div>
         <div class="composer-toolbar">
-          <el-segmented v-model="chatMode" :options="chatModeOptions" @change="selectDefaultModelForMode" />
-        <div class="composer-actions">
-            <div class="dashboard-web-search-toggle">
-              <span>联网搜索</span>
-              <el-switch v-model="useWebSearch" inline-prompt active-text="开" inactive-text="关" />
-            </div>
+          <div class="composer-left-tools">
+            <el-dropdown trigger="click" @command="selectChatMode">
+              <button type="button" class="mode-trigger">
+                <span>{{ currentModeLabel() }}</span>
+                <el-icon><ArrowDown /></el-icon>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="item in chatModeOptions"
+                    :key="item.value"
+                    :command="item.value"
+                    :class="{ selected: item.value === chatMode }"
+                  >
+                    {{ item.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-tooltip :content="useWebSearch ? '关闭联网搜索' : '开启联网搜索'" placement="top">
+              <button
+                type="button"
+                class="icon-tool-btn"
+                :class="{ active: useWebSearch }"
+                :aria-pressed="useWebSearch"
+                aria-label="联网搜索"
+                @click="useWebSearch = !useWebSearch"
+              >
+                <el-icon><Connection /></el-icon>
+              </button>
+            </el-tooltip>
+            <el-popover
+              placement="top-start"
+              trigger="click"
+              width="300"
+              popper-class="dashboard-kb-popper"
+            >
+              <template #reference>
+                <button
+                  type="button"
+                  class="icon-tool-btn"
+                  :class="{ active: Boolean(selectedKnowledgeBase) }"
+                  :disabled="knowledgeLoading || !knowledgeSystems.length"
+                  aria-label="选择知识库"
+                >
+                  <el-icon><Reading /></el-icon>
+                  <span v-if="selectedKnowledgeBase" class="tool-count">1</span>
+                </button>
+              </template>
+              <div class="kb-picker">
+                <button
+                  v-for="system in knowledgeSystems"
+                  :key="system.system_id"
+                  type="button"
+                  class="kb-picker-item"
+                  :class="{ selected: system.system_id === selectedKnowledgeBaseId }"
+                  @click="selectKnowledgeBase(system.system_id)"
+                >
+                  <el-icon><Reading /></el-icon>
+                  <span>
+                    <strong>{{ system.name }}</strong>
+                    <small>{{ system.document_count || 0 }} 文档 · {{ system.status || 'unknown' }}</small>
+                  </span>
+                </button>
+                <button v-if="selectedKnowledgeBaseId" type="button" class="kb-picker-clear" @click="clearKnowledgeBase">
+                  清除选择
+                </button>
+                <p v-if="!knowledgeSystems.length" class="kb-picker-empty">暂无可用知识库</p>
+              </div>
+            </el-popover>
+          </div>
+          <div class="composer-actions">
             <LlmModelSelect
               v-model="selectedModelKey"
+              class="dashboard-model-select"
               :models="selectableModels"
               :loading="modelLoading"
             />
-            <el-button text type="primary" :icon="SetUp" @click="openModelManagement">模型管理</el-button>
             <el-button
               type="primary"
+              circle
               :icon="Promotion"
               :disabled="!chatInput.trim()"
+              aria-label="发送"
               @click="openDialogue()"
-            >
-              发送
-            </el-button>
+            />
           </div>
         </div>
       </div>
@@ -477,12 +603,37 @@ h1 { font-size: 38px; line-height: 1.18; }
 h2 { font-size: 16px; line-height: 1.35; }
 .hero-copy p:last-child, .section-heading p, .command-panel-header p { margin: 8px 0 0; color: var(--app-ink-muted); font-size: 14px; line-height: 1.65; }
 .lui-composer { width: min(820px, 100%); border: 1px solid #bcd5fb; border-radius: var(--app-radius-lg); background: rgba(255, 255, 255, 0.96); box-shadow: 0 18px 44px rgba(22, 59, 110, 0.09); padding: 14px; }
+.selected-tags-inline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 0 8px; border-bottom: 1px solid var(--app-border-soft); }
+.mention-chip { max-width: 100%; height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; color: var(--app-ink-body); font-size: 12px; font-weight: 650; }
+.mention-chip--kb .el-icon { color: #16a34a; }
+.mention-chip-name { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-chip button { width: 16px; height: 16px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #94a3b8; cursor: pointer; line-height: 1; }
+.mention-chip button:hover { background: #e2e8f0; color: var(--app-ink); }
 .composer-input { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; align-items: start; }
 .composer-mark { margin-top: 8px; color: var(--app-primary-active); font-size: 20px; }
 .composer-input :deep(.el-textarea__inner) { min-height: 116px !important; border: 0; box-shadow: none; font-size: 15px; line-height: 1.7; }
-.composer-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 10px; border-top: 1px solid var(--app-border-soft); }
-.composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
-.dashboard-web-search-toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--app-ink-muted); font-size: 13px; font-weight: 600; }
+.composer-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--app-border-soft); }
+.composer-left-tools, .composer-actions { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.composer-actions { justify-content: flex-end; }
+.mode-trigger { height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 10px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #fff; color: var(--app-ink-body); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.mode-trigger:hover { background: #f8fbff; border-color: #bfdbfe; color: var(--app-primary-active); }
+.mode-trigger .el-icon { font-size: 12px; }
+.icon-tool-btn { position: relative; width: 28px; height: 28px; min-width: 28px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: var(--app-radius-sm); background: transparent; color: var(--app-ink-muted); cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
+.icon-tool-btn:hover:not(:disabled) { background: #eef4ff; color: var(--app-ink); }
+.icon-tool-btn.active { background: rgba(16, 185, 129, 0.12); color: #059669; box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.22); }
+.icon-tool-btn.active:hover:not(:disabled) { background: rgba(16, 185, 129, 0.18); color: #047857; }
+.icon-tool-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.tool-count { position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 3px; border: 2px solid #fff; border-radius: 999px; background: var(--app-primary); color: #fff; font-size: 9px; line-height: 11px; box-sizing: border-box; }
+.dashboard-model-select { flex: 0 1 280px; }
+.kb-picker { display: grid; gap: 6px; }
+.kb-picker-item { width: 100%; min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px; border: 0; border-radius: var(--app-radius-sm); background: transparent; color: var(--app-ink-body); text-align: left; cursor: pointer; }
+.kb-picker-item:hover, .kb-picker-item.selected { background: #f0f7ff; color: var(--app-primary-active); }
+.kb-picker-item .el-icon { color: #16a34a; }
+.kb-picker-item span { min-width: 0; display: grid; gap: 2px; }
+.kb-picker-item strong, .kb-picker-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-picker-item strong { font-size: 13px; }
+.kb-picker-item small, .kb-picker-empty { color: var(--app-ink-muted); font-size: 12px; }
+.kb-picker-clear { justify-self: start; padding: 5px 7px; border: 0; border-radius: var(--app-radius-sm); background: transparent; color: var(--app-primary-active); cursor: pointer; font-size: 12px; }
 .suggestion-row { width: min(820px, 100%); display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
 .suggestion-row button { max-width: 100%; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-pill); background: rgba(255, 255, 255, 0.86); color: var(--app-ink-body); padding: 8px 12px; font: inherit; font-size: 13px; cursor: pointer; }
 .suggestion-row button:hover { border-color: #bfdbfe; color: var(--app-primary-active); }
@@ -520,7 +671,8 @@ h2 { font-size: 16px; line-height: 1.35; }
   .lui-hero { min-height: auto; padding: 24px 0 18px; }
   h1 { font-size: 30px; }
   .composer-toolbar, .section-heading, .command-panel-header { align-items: stretch; flex-direction: column; }
-  .composer-actions { align-items: stretch; flex-direction: column; }
+  .composer-left-tools, .composer-actions { justify-content: space-between; }
+  .dashboard-model-select { width: 100%; }
   .stat-grid, .module-card-grid, .command-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {

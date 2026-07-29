@@ -2,9 +2,9 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ChatLineRound, Loading, Promotion, Setting } from '@element-plus/icons-vue'
+import { ArrowDown, ChatLineRound, Connection, Promotion, Reading } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, getLlmModels, streamAssistantChat } from '../api/polyAgentApi'
+import { getApiErrorMessage, getLlmModels, listKnowledgeSystems, streamAssistantChat } from '../api/polyAgentApi'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import { buildSelectableLlmModels } from '../utils/llmModels'
 
@@ -14,11 +14,15 @@ const bodyRef = ref(null)
 const inputText = ref('')
 const sending = ref(false)
 const modelLoading = ref(false)
+const knowledgeLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
 const llmCatalog = ref({ providers: [], routing: {} })
+const knowledgeSystems = ref([])
 const selectedModelKey = ref('')
+const selectedKnowledgeBaseId = ref(loadKnowledgePreference())
 const useWebSearch = ref(loadWebSearchPreference())
 const WEB_SEARCH_STORAGE_KEY = 'poly-agent-dialogue-use-web-search'
+const KNOWLEDGE_STORAGE_KEY = 'poly-agent-dialogue-knowledge-base-id'
 
 const messages = ref([
   {
@@ -43,6 +47,11 @@ const selectableModels = computed(() =>
 )
 
 const selectedModel = computed(() => selectableModels.value.find((item) => item.key === selectedModelKey.value) || null)
+const selectedKnowledgeBase = computed(() =>
+  knowledgeSystems.value.find((item) => item.system_id === selectedKnowledgeBaseId.value) || null,
+)
+const hasKnowledgeBase = computed(() => Boolean(selectedKnowledgeBase.value))
+const conversationStarted = computed(() => messages.value.some((item) => item.role === 'user'))
 
 const currentSuggestions = computed(() => {
   const latestAssistant = [...messages.value].reverse().find((item) => item.role === 'assistant')
@@ -61,7 +70,7 @@ const answerModeLabelMap = {
 const retrievalStatusLabelMap = {
   not_needed: '无需检索',
   skipped_disabled: '检索已关闭',
-  searched: '已联网检索',
+  searched: '已检索证据',
   no_results: '无检索结果',
   failed: '检索失败',
 }
@@ -82,8 +91,20 @@ function loadWebSearchPreference() {
   return false
 }
 
+function loadKnowledgePreference() {
+  return window.localStorage.getItem(KNOWLEDGE_STORAGE_KEY) || ''
+}
+
 watch(useWebSearch, (value) => {
   window.localStorage.setItem(WEB_SEARCH_STORAGE_KEY, value ? '1' : '0')
+})
+
+watch(selectedKnowledgeBaseId, (value) => {
+  if (value) {
+    window.localStorage.setItem(KNOWLEDGE_STORAGE_KEY, value)
+  } else {
+    window.localStorage.removeItem(KNOWLEDGE_STORAGE_KEY)
+  }
 })
 
 function cleanInitialQuery() {
@@ -136,6 +157,25 @@ async function loadLlmModels(preferred = {}) {
   }
 }
 
+async function loadKnowledgeBases() {
+  knowledgeLoading.value = true
+  try {
+    const data = await listKnowledgeSystems()
+    knowledgeSystems.value = data?.items || []
+    if (
+      selectedKnowledgeBaseId.value &&
+      !knowledgeSystems.value.some((item) => item.system_id === selectedKnowledgeBaseId.value)
+    ) {
+      selectedKnowledgeBaseId.value = ''
+    }
+  } catch (error) {
+    knowledgeSystems.value = []
+    ElMessage.warning(`知识库列表加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    knowledgeLoading.value = false
+  }
+}
+
 async function sendMessage() {
   await sendPrompt(inputText.value)
 }
@@ -175,6 +215,9 @@ async function sendPrompt(prompt) {
           page: 'dialogue',
           mode: chatMode.value,
           use_web_search: useWebSearch.value,
+          use_knowledge_base: hasKnowledgeBase.value,
+          knowledge_base_id: selectedKnowledgeBase.value?.system_id || '',
+          knowledge_base_name: selectedKnowledgeBase.value?.name || '',
           model: selectedModelContext(),
         },
       },
@@ -247,7 +290,9 @@ function applyAssistantStreamEvent(index, event) {
   if (event.type === 'evidence') {
     target.retrieval_status = event.status || target.retrieval_status
     target.stream_status = event.message || target.stream_status
-    if (Array.isArray(event.references) && event.references.length) target.references = event.references
+    if (Array.isArray(event.references) && event.references.length) {
+      target.references = mergeAssistantReferences(target.references, event.references)
+    }
     return ''
   }
   if (event.type === 'reasoning_summary_delta') {
@@ -289,6 +334,35 @@ function applyAssistantStreamEvent(index, event) {
   return ''
 }
 
+function currentModeLabel() {
+  return chatModeOptions.find((item) => item.value === chatMode.value)?.label || '科研问答'
+}
+
+function selectChatMode(mode) {
+  chatMode.value = mode
+  selectDefaultModelForMode()
+}
+
+function selectKnowledgeBase(systemId) {
+  selectedKnowledgeBaseId.value = systemId
+}
+
+function clearKnowledgeBase() {
+  selectedKnowledgeBaseId.value = ''
+}
+
+function mergeAssistantReferences(current = [], incoming = []) {
+  const merged = []
+  const seen = new Set()
+  for (const item of [...current, ...incoming]) {
+    const key = `${item.type || ''}|${item.target || ''}|${item.label || ''}`
+    if (!item.label || seen.has(key)) continue
+    seen.add(key)
+    merged.push(item)
+  }
+  return merged
+}
+
 function scrollToBottom() {
   nextTick(() => {
     if (bodyRef.value) bodyRef.value.scrollTop = bodyRef.value.scrollHeight
@@ -297,10 +371,6 @@ function scrollToBottom() {
 
 function openAssistantAction(action) {
   if (action?.target) router.push(action.target)
-}
-
-function openModelManagement() {
-  router.push({ path: '/tools', query: { tab: 'llm-models' } })
 }
 
 function openAssistantReference(ref) {
@@ -445,7 +515,10 @@ onMounted(() => {
   const initialModelId = normalizeQueryString(route.query.modelId).trim()
   chatMode.value = normalizeMode(route.query.mode)
   cleanInitialQuery()
-  loadLlmModels({ providerId: initialProviderId, modelId: initialModelId }).finally(() => {
+  Promise.all([
+    loadLlmModels({ providerId: initialProviderId, modelId: initialModelId }),
+    loadKnowledgeBases(),
+  ]).finally(() => {
     if (initialPrompt) sendPrompt(initialPrompt)
   })
 })
@@ -453,23 +526,10 @@ onMounted(() => {
 
 <template>
   <div class="dialogue-page">
-    <header class="dialogue-header">
+    <header class="dialogue-header" :class="{ 'dialogue-header-centered': !conversationStarted }">
       <div>
         <p class="dialogue-kicker">Poly Agent 问答</p>
         <h1>科研任务交互问答</h1>
-      </div>
-      <div class="dialogue-controls">
-        <div class="dialogue-web-search-toggle">
-          <span>联网搜索</span>
-          <el-switch v-model="useWebSearch" inline-prompt active-text="开" inactive-text="关" />
-        </div>
-        <LlmModelSelect
-          v-model="selectedModelKey"
-          :models="selectableModels"
-          :loading="modelLoading"
-        />
-        <el-segmented v-model="chatMode" :options="chatModeOptions" @change="() => selectDefaultModelForMode()" />
-        <el-button text type="primary" :icon="Setting" @click="openModelManagement">模型管理</el-button>
       </div>
     </header>
 
@@ -586,25 +646,115 @@ onMounted(() => {
         </button>
       </div>
       <div class="composer-box">
-        <el-icon class="composer-mark"><ChatLineRound /></el-icon>
-        <el-input
-          v-model="inputText"
-          type="textarea"
-          :rows="2"
-          placeholder="继续研究..."
-          resize="none"
-          :disabled="sending"
-          @keydown="handleComposerKeydown"
-        />
-        <el-button
-          type="primary"
-          circle
-          :icon="Promotion"
-          :disabled="!inputText.trim() || sending"
-          :loading="sending"
-          aria-label="发送"
-          @click="sendMessage"
-        />
+        <div v-if="selectedKnowledgeBase" class="selected-tags-inline">
+          <span class="mention-chip mention-chip--kb">
+            <el-icon><Reading /></el-icon>
+            <span class="mention-chip-name" :title="selectedKnowledgeBase.name">{{ selectedKnowledgeBase.name }}</span>
+            <button type="button" aria-label="移除知识库" @click="clearKnowledgeBase">×</button>
+          </span>
+        </div>
+        <div class="composer-input-row">
+          <el-icon class="composer-mark"><ChatLineRound /></el-icon>
+          <el-input
+            v-model="inputText"
+            type="textarea"
+            :rows="2"
+            placeholder="继续研究..."
+            resize="none"
+            :disabled="sending"
+            @keydown="handleComposerKeydown"
+          />
+        </div>
+        <div class="composer-toolbar">
+          <div class="composer-toolbar-left">
+            <el-dropdown trigger="click" @command="selectChatMode">
+              <button type="button" class="mode-trigger">
+                <span>{{ currentModeLabel() }}</span>
+                <el-icon><ArrowDown /></el-icon>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="item in chatModeOptions"
+                    :key="item.value"
+                    :command="item.value"
+                    :class="{ selected: item.value === chatMode }"
+                  >
+                    {{ item.label }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-tooltip :content="useWebSearch ? '关闭联网搜索' : '开启联网搜索'" placement="top">
+              <button
+                type="button"
+                class="icon-tool-btn"
+                :class="{ active: useWebSearch }"
+                :aria-pressed="useWebSearch"
+                aria-label="联网搜索"
+                @click="useWebSearch = !useWebSearch"
+              >
+                <el-icon><Connection /></el-icon>
+              </button>
+            </el-tooltip>
+            <el-popover
+              placement="top-start"
+              trigger="click"
+              width="300"
+              popper-class="dialogue-kb-popper"
+            >
+              <template #reference>
+                <button
+                  type="button"
+                  class="icon-tool-btn"
+                  :class="{ active: hasKnowledgeBase }"
+                  :disabled="knowledgeLoading || !knowledgeSystems.length"
+                  aria-label="选择知识库"
+                >
+                  <el-icon><Reading /></el-icon>
+                  <span v-if="hasKnowledgeBase" class="tool-count">1</span>
+                </button>
+              </template>
+              <div class="kb-picker">
+                <button
+                  v-for="system in knowledgeSystems"
+                  :key="system.system_id"
+                  type="button"
+                  class="kb-picker-item"
+                  :class="{ selected: system.system_id === selectedKnowledgeBaseId }"
+                  @click="selectKnowledgeBase(system.system_id)"
+                >
+                  <el-icon><Reading /></el-icon>
+                  <span>
+                    <strong>{{ system.name }}</strong>
+                    <small>{{ system.document_count || 0 }} 文档 · {{ system.status || 'unknown' }}</small>
+                  </span>
+                </button>
+                <button v-if="selectedKnowledgeBaseId" type="button" class="kb-picker-clear" @click="clearKnowledgeBase">
+                  清除选择
+                </button>
+                <p v-if="!knowledgeSystems.length" class="kb-picker-empty">暂无可用知识库</p>
+              </div>
+            </el-popover>
+          </div>
+          <div class="composer-toolbar-right">
+            <LlmModelSelect
+              v-model="selectedModelKey"
+              class="composer-model-select"
+              :models="selectableModels"
+              :loading="modelLoading"
+            />
+            <el-button
+              type="primary"
+              circle
+              :icon="Promotion"
+              :disabled="!inputText.trim() || sending"
+              :loading="sending"
+              aria-label="发送"
+              @click="sendMessage"
+            />
+          </div>
+        </div>
       </div>
     </footer>
   </div>
@@ -629,21 +779,13 @@ onMounted(() => {
   min-height: 48px;
 }
 
-.dialogue-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.dialogue-header-centered {
+  justify-content: center;
+  text-align: center;
 }
 
-.dialogue-web-search-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--app-ink-muted);
-  font-size: 13px;
-  font-weight: 600;
+.dialogue-header > div:first-child {
+  min-width: 0;
 }
 
 .dialogue-kicker {
@@ -861,14 +1003,29 @@ h1 {
 
 .composer-box {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) 42px;
-  align-items: end;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   padding: 12px;
   border: 1px solid #c7dcfb;
   border-radius: var(--app-radius-lg);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 12px 28px rgba(22, 59, 110, 0.08);
+}
+
+.dialogue-top-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-input-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
 }
 
 .composer-mark {
@@ -886,6 +1043,233 @@ h1 {
   line-height: 1.65;
 }
 
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.composer-toolbar-left,
+.composer-toolbar-right {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-toolbar-right {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.mode-trigger {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+  color: var(--app-ink-body);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.mode-trigger:hover {
+  background: #f8fbff;
+  border-color: #bfdbfe;
+  color: var(--app-primary-active);
+}
+
+.mode-trigger .el-icon {
+  font-size: 12px;
+}
+
+.icon-tool-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--app-ink-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.icon-tool-btn:hover:not(:disabled) {
+  background: #eef4ff;
+  color: var(--app-ink);
+}
+
+.icon-tool-btn.active {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.22);
+}
+
+.icon-tool-btn.active:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.18);
+  color: #047857;
+}
+
+.icon-tool-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.tool-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: var(--app-primary);
+  color: #ffffff;
+  font-size: 9px;
+  line-height: 11px;
+  box-sizing: border-box;
+}
+
+.selected-tags-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--app-border-soft);
+}
+
+.mention-chip {
+  max-width: 100%;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+  color: var(--app-ink-body);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.mention-chip--kb .el-icon {
+  color: #16a34a;
+}
+
+.mention-chip-name {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-chip button {
+  width: 16px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.mention-chip button:hover {
+  background: #e2e8f0;
+  color: var(--app-ink);
+}
+
+.composer-model-select {
+  flex: 0 1 280px;
+}
+
+.kb-picker {
+  display: grid;
+  gap: 6px;
+}
+
+.kb-picker-item {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--app-ink-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kb-picker-item:hover,
+.kb-picker-item.selected {
+  background: #f0f7ff;
+  color: var(--app-primary-active);
+}
+
+.kb-picker-item .el-icon {
+  color: #16a34a;
+}
+
+.kb-picker-item span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.kb-picker-item strong,
+.kb-picker-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-picker-item strong {
+  font-size: 13px;
+}
+
+.kb-picker-item small,
+.kb-picker-empty {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.kb-picker-clear {
+  justify-self: start;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--app-primary-active);
+  cursor: pointer;
+  font-size: 12px;
+}
+
 @media (max-width: 900px) {
   .dialogue-page {
     height: calc(100vh - 78px);
@@ -897,9 +1281,27 @@ h1 {
     flex-direction: column;
   }
 
+  .dialogue-top-toolbar {
+    justify-content: stretch;
+  }
+
   .chat-bubble,
   .chat-message-user .chat-bubble {
     max-width: 92%;
+  }
+
+  .composer-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .composer-toolbar-left,
+  .composer-toolbar-right {
+    justify-content: stretch;
+  }
+
+  .composer-model-select {
+    width: 100%;
   }
 }
 
@@ -908,12 +1310,16 @@ h1 {
     padding: 18px 10px 24px;
   }
 
-  .composer-box {
-    grid-template-columns: minmax(0, 1fr) 40px;
-  }
-
   .composer-mark {
     display: none;
+  }
+
+  .composer-input-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mode-trigger {
+    flex: 0 0 auto;
   }
 }
 </style>

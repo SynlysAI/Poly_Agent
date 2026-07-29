@@ -27,6 +27,7 @@ from app.schemas.assistant import AssistantChatResponse
 from app.schemas.assistant import AssistantReference
 from app.schemas.assistant import AssistantRetrievalStatus
 from app.services.integration_status_service import IntegrationStatusService
+from app.services.knowledge_service import KnowledgeService
 from app.services.llm_model_service import LLMModelService
 from app.services.research_engine_defaults import DEFAULT_STAGE_SEQUENCE
 from app.services.research_engine_defaults import P0_GATE_STAGES
@@ -36,9 +37,11 @@ from app.services.research_engine_service import ResearchEngineService
 logger = get_logger("poly_agent.assistant")
 
 SYSTEM_PROMPT = (
-    "你是 PolyAgent 的产品内助手。优先使用给定 FACTS 和 WEB_EVIDENCE 回答，"
+    "你是 PolyAgent 的产品内助手。优先使用给定 FACTS、KNOWLEDGE_EVIDENCE 和 WEB_EVIDENCE 回答，"
     "所有正常回答都要经过项目配置的 LLM 润色。"
     "项目内问题只依据项目事实；项目外问题必须结合网页证据；混合问题同时结合两者。"
+    "当存在 KNOWLEDGE_EVIDENCE 时，应优先把它作为用户所选知识库的依据。"
+    "知识库命中只作为回答依据，不要建议用户点击、预览或下载知识库 PDF 原文。"
     "如果事实和网页证据冲突，以项目事实为准，并明确说明冲突。"
     "不要编造算法、按钮、配置状态或外部资料。"
     "回答要简洁、可操作，必要时用要点列出依据。"
@@ -136,6 +139,27 @@ class SearchOutcome:
     dropped_terms: list[str] | None = None
     raw_result_count: int = 0
     filtered_result_count: int = 0
+
+
+@dataclass(frozen=True)
+class KnowledgeEvidence:
+    title: str
+    snippet: str
+    source_id: str
+    score: float = 0.0
+    source: str | None = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class KnowledgeOutcome:
+    status: AssistantRetrievalStatus
+    provider: str
+    system_id: str
+    system_name: str
+    query: str
+    results: list[KnowledgeEvidence]
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1084,6 +1108,7 @@ class AssistantAnswerSynthesizer:
         request: AssistantChatRequest,
         intent: AssistantIntent,
         facts: dict,
+        knowledge: KnowledgeOutcome | None,
         evidence: SearchOutcome | None,
         llm_route: dict,
     ) -> SynthesizedAnswer:
@@ -1091,7 +1116,12 @@ class AssistantAnswerSynthesizer:
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "system",
-                "content": self._build_context_block(intent=intent, facts=facts, evidence=evidence),
+                "content": self._build_context_block(
+                    intent=intent,
+                    facts=facts,
+                    knowledge=knowledge,
+                    evidence=evidence,
+                ),
             },
         ]
         if intent.deep:
@@ -1126,6 +1156,7 @@ class AssistantAnswerSynthesizer:
         request: AssistantChatRequest,
         intent: AssistantIntent,
         facts: dict,
+        knowledge: KnowledgeOutcome | None,
         evidence: SearchOutcome | None,
         llm_route: dict,
     ) -> Iterator[str]:
@@ -1133,7 +1164,12 @@ class AssistantAnswerSynthesizer:
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "system",
-                "content": self._build_context_block(intent=intent, facts=facts, evidence=evidence),
+                "content": self._build_context_block(
+                    intent=intent,
+                    facts=facts,
+                    knowledge=knowledge,
+                    evidence=evidence,
+                ),
             },
         ]
         if intent.deep:
@@ -1180,13 +1216,31 @@ class AssistantAnswerSynthesizer:
             text = re.sub(r"\s*```$", "", text)
         return text.strip()
 
-    def _build_context_block(self, *, intent: AssistantIntent, facts: dict, evidence: SearchOutcome | None) -> str:
+    def _build_context_block(
+        self,
+        *,
+        intent: AssistantIntent,
+        facts: dict,
+        knowledge: KnowledgeOutcome | None,
+        evidence: SearchOutcome | None,
+    ) -> str:
         sections = [
             f"ANSWER_SCOPE: {intent.scope}",
             f"DEEP_MODE: {intent.deep}",
             "FACTS:",
             self._format_facts(facts),
         ]
+        if knowledge and knowledge.results:
+            sections.append("KNOWLEDGE_EVIDENCE:")
+            for index, item in enumerate(knowledge.results, start=1):
+                sections.append(
+                    f"[K{index}] {item.title}\n"
+                    f"SOURCE_ID: {item.source_id}\n"
+                    f"SCORE: {item.score:.4f}\n"
+                    f"SNIPPET: {item.snippet[:1400]}"
+                )
+        else:
+            sections.append(f"KNOWLEDGE_EVIDENCE: {knowledge.status if knowledge else 'not_needed'}")
         if evidence and evidence.results:
             sections.append("WEB_EVIDENCE:")
             for index, item in enumerate(evidence.results, start=1):
@@ -1195,7 +1249,11 @@ class AssistantAnswerSynthesizer:
                 )
         else:
             sections.append(f"WEB_EVIDENCE: {evidence.status if evidence else 'not_needed'}")
-        sections.append("RESPONSE RULES: 先给结论，再给依据，最后给可执行建议；网页证据请用 [1] [2] 这样的编号引用。")
+        sections.append(
+            "RESPONSE RULES: 先给结论，再给依据，最后给可执行建议；"
+            "知识库证据用 [K1] [K2] 引用，网页证据用 [1] [2] 引用；"
+            "不要引导用户点击、预览或下载知识库 PDF。"
+        )
         return "\n".join(sections)
 
     def _format_facts(self, facts: dict) -> str:
@@ -1210,6 +1268,7 @@ class AssistantService:
         self.project_service = ProjectGroundingService()
         self.search_query_builder = AssistantSearchQueryBuilder()
         self.web_service = AssistantWebSearchService()
+        self.knowledge_service = KnowledgeService()
         self.answer_synthesizer = AssistantAnswerSynthesizer()
         self.llm_model_service = LLMModelService()
 
@@ -1223,10 +1282,12 @@ class AssistantService:
         actions = self.project_service.build_actions(user_text)
         suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
         llm_route = self._resolve_llm_route(mode=mode, request=request)
+        knowledge_outcome = self._retrieve_knowledge(user_text, request)
 
         if mode == "model":
             response_facts = self._build_response_facts(
                 facts=facts,
+                knowledge_outcome=knowledge_outcome,
                 web_outcome=None,
                 request=request,
                 search_query_plan=None,
@@ -1252,10 +1313,11 @@ class AssistantService:
 
         web_refs = self._web_references(web_outcome)
         references = project_refs + web_refs
-        retrieval_status = web_outcome.status if web_outcome else "not_needed"
+        retrieval_status = self._combined_retrieval_status(knowledge_outcome, web_outcome)
         answer_mode = self._answer_mode(intent)
         response_facts = self._build_response_facts(
             facts=facts,
+            knowledge_outcome=knowledge_outcome,
             web_outcome=web_outcome,
             request=request,
             search_query_plan=search_query_plan,
@@ -1267,6 +1329,7 @@ class AssistantService:
                 request=request,
                 intent=intent,
                 facts=response_facts,
+                knowledge=knowledge_outcome,
                 evidence=web_outcome,
                 llm_route=llm_route,
             )
@@ -1280,6 +1343,8 @@ class AssistantService:
             confidence = "medium"
             answer_mode = "fallback"
             if web_outcome and web_outcome.status == "searched":
+                retrieval_status = "searched"
+            if knowledge_outcome and knowledge_outcome.status == "searched":
                 retrieval_status = "searched"
 
         return AssistantChatResponse(
@@ -1319,6 +1384,7 @@ class AssistantService:
             if mode == "model":
                 response_facts = self._build_response_facts(
                     facts=facts,
+                    knowledge_outcome=None,
                     web_outcome=None,
                     request=request,
                     search_query_plan=None,
@@ -1345,6 +1411,14 @@ class AssistantService:
 
             web_outcome: SearchOutcome | None = None
             search_query_plan: SearchQueryPlan | None = None
+            knowledge_outcome = self._retrieve_knowledge(user_text, request)
+            if knowledge_outcome:
+                yield {
+                    "type": "evidence",
+                    "status": knowledge_outcome.status,
+                    "message": self._knowledge_evidence_message(knowledge_outcome),
+                    "references": [],
+                }
             if intent.use_web:
                 yield {"type": "status", "stage": "search", "message": "正在检索外部证据..."}
                 search_query_plan = self.search_query_builder.build(user_text)
@@ -1352,7 +1426,7 @@ class AssistantService:
 
             web_refs = self._web_references(web_outcome)
             references = project_refs + web_refs
-            retrieval_status = web_outcome.status if web_outcome else "not_needed"
+            retrieval_status = self._combined_retrieval_status(knowledge_outcome, web_outcome)
             if web_outcome:
                 yield {
                     "type": "evidence",
@@ -1364,13 +1438,18 @@ class AssistantService:
             answer_mode = self._answer_mode(intent)
             response_facts = self._build_response_facts(
                 facts=facts,
+                knowledge_outcome=knowledge_outcome,
                 web_outcome=web_outcome,
                 request=request,
                 search_query_plan=search_query_plan,
                 llm_route=llm_route,
             )
 
-            reasoning_summary = self._visible_reasoning_summary(intent=intent, web_outcome=web_outcome)
+            reasoning_summary = self._visible_reasoning_summary(
+                intent=intent,
+                knowledge_outcome=knowledge_outcome,
+                web_outcome=web_outcome,
+            )
             if intent.deep:
                 for item in reasoning_summary:
                     yield {"type": "reasoning_summary_delta", "item": item}
@@ -1381,6 +1460,7 @@ class AssistantService:
                 request=request,
                 intent=intent,
                 facts=response_facts,
+                knowledge=knowledge_outcome,
                 evidence=web_outcome,
                 llm_route=llm_route,
             ):
@@ -1423,6 +1503,7 @@ class AssistantService:
         self,
         *,
         facts: dict,
+        knowledge_outcome: KnowledgeOutcome | None,
         web_outcome: SearchOutcome | None,
         request: AssistantChatRequest,
         search_query_plan: SearchQueryPlan | None = None,
@@ -1431,6 +1512,38 @@ class AssistantService:
         response_facts = dict(facts)
         response_facts["request_context"] = dict(request.context)
         response_facts["llm_route"] = self._safe_llm_route(llm_route or {})
+        if knowledge_outcome:
+            response_facts["knowledge_search"] = {
+                "status": knowledge_outcome.status,
+                "provider": knowledge_outcome.provider,
+                "system_id": knowledge_outcome.system_id,
+                "system_name": knowledge_outcome.system_name,
+                "query": knowledge_outcome.query,
+                "result_count": len(knowledge_outcome.results),
+                "error": knowledge_outcome.error,
+                "results": [
+                    {
+                        "title": item.title,
+                        "source_id": item.source_id,
+                        "snippet": item.snippet,
+                        "score": item.score,
+                        "source": item.source,
+                        "metadata": item.metadata or {},
+                    }
+                    for item in knowledge_outcome.results
+                ],
+            }
+        else:
+            response_facts["knowledge_search"] = {
+                "status": "not_needed",
+                "provider": None,
+                "system_id": None,
+                "system_name": None,
+                "query": None,
+                "result_count": 0,
+                "error": None,
+                "results": [],
+            }
         if web_outcome:
             raw_count = web_outcome.raw_result_count or len(web_outcome.results)
             filtered_count = web_outcome.filtered_result_count or len(web_outcome.results)
@@ -1531,6 +1644,90 @@ class AssistantService:
             return []
         return [AssistantReference(label=item.title, target=item.url, type="web") for item in outcome.results[:3]]
 
+    def _retrieve_knowledge(self, query: str, request: AssistantChatRequest) -> KnowledgeOutcome | None:
+        """按前端选择从 WeKnora 检索知识库证据。
+
+        Args:
+            query: 用户最新问题。
+            request: 当前对话请求。
+
+        Returns:
+            检索结果；未启用知识库时返回 ``None``。
+        """
+        context = request.context or {}
+        enabled = self._normalize_bool(context.get("use_knowledge_base"))
+        system_id = str(context.get("knowledge_base_id") or context.get("system_id") or "").strip()
+        if not enabled or not system_id:
+            return None
+        system_name = str(context.get("knowledge_base_name") or system_id).strip()
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return KnowledgeOutcome(
+                status="no_results",
+                provider="weknora",
+                system_id=system_id,
+                system_name=system_name,
+                query="",
+                results=[],
+            )
+        try:
+            hits = self.knowledge_service.search_hits(system_id, normalized_query, limit=5)
+        except Exception as exc:
+            logger.warning("assistant knowledge retrieval failed: %s", exc)
+            return KnowledgeOutcome(
+                status="failed",
+                provider="weknora",
+                system_id=system_id,
+                system_name=system_name,
+                query=normalized_query,
+                results=[],
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        results = [
+            KnowledgeEvidence(
+                title=hit.title,
+                snippet=hit.snippet,
+                source_id=hit.source_id,
+                score=hit.score,
+                source=hit.source,
+                metadata=hit.metadata,
+            )
+            for hit in hits
+        ]
+        return KnowledgeOutcome(
+            status="searched" if results else "no_results",
+            provider="weknora",
+            system_id=system_id,
+            system_name=system_name,
+            query=normalized_query,
+            results=results,
+        )
+
+    def _knowledge_references(self, outcome: KnowledgeOutcome | None) -> list[AssistantReference]:
+        """将 WeKnora 命中转换为工作台引用入口。
+
+        Args:
+            outcome: 知识库检索结果。
+
+        Returns:
+            可在前端展示的引用列表。
+        """
+        if not outcome or not outcome.results:
+            return []
+        target = f"/knowledge-base?system_id={quote_plus(outcome.system_id)}"
+        refs: list[AssistantReference] = []
+        seen: set[str] = set()
+        for item in outcome.results:
+            key = item.source_id or item.title
+            if key in seen:
+                continue
+            seen.add(key)
+            label = item.title or outcome.system_name
+            refs.append(AssistantReference(label=label, target=target, type="knowledge"))
+            if len(refs) >= 5:
+                break
+        return refs
+
     def _evidence_message(self, outcome: SearchOutcome) -> str:
         if outcome.status == "searched":
             return f"已检索到 {len(outcome.results)} 条可用证据"
@@ -1542,11 +1739,63 @@ class AssistantService:
             return "外部检索未启用"
         return "无需外部检索"
 
-    def _visible_reasoning_summary(self, *, intent: AssistantIntent, web_outcome: SearchOutcome | None) -> list[str]:
+    def _knowledge_evidence_message(self, outcome: KnowledgeOutcome) -> str:
+        """生成知识库检索状态文案。
+
+        Args:
+            outcome: 知识库检索结果。
+
+        Returns:
+            面向前端展示的检索状态。
+        """
+        if outcome.status == "searched":
+            return f"已从 {outcome.system_name} 检索到 {len(outcome.results)} 条证据"
+        if outcome.status == "no_results":
+            return f"{outcome.system_name} 未检索到可用证据"
+        if outcome.status == "failed":
+            return f"{outcome.system_name} 检索失败，继续使用可用上下文"
+        return "知识库检索未启用"
+
+    def _combined_retrieval_status(
+        self,
+        knowledge_outcome: KnowledgeOutcome | None,
+        web_outcome: SearchOutcome | None,
+    ) -> AssistantRetrievalStatus:
+        """合并网页和知识库检索状态。
+
+        Args:
+            knowledge_outcome: 知识库检索结果。
+            web_outcome: 网页检索结果。
+
+        Returns:
+            面向前端展示的综合检索状态。
+        """
+        statuses = [item.status for item in (knowledge_outcome, web_outcome) if item]
+        if not statuses:
+            return "not_needed"
+        if "searched" in statuses:
+            return "searched"
+        if "failed" in statuses:
+            return "failed"
+        if "no_results" in statuses:
+            return "no_results"
+        if "skipped_disabled" in statuses:
+            return "skipped_disabled"
+        return "not_needed"
+
+    def _visible_reasoning_summary(
+        self,
+        *,
+        intent: AssistantIntent,
+        knowledge_outcome: KnowledgeOutcome | None,
+        web_outcome: SearchOutcome | None,
+    ) -> list[str]:
         summary = [
             f"识别回答范围为 {intent.scope}，确认是否需要项目事实或外部证据。",
             "整合项目配置、算法清单、任务入口和模型路由等可核查事实。",
         ]
+        if knowledge_outcome:
+            summary.append(f"检查知识库检索状态为 {knowledge_outcome.status}，筛选 WeKnora 命中证据。")
         if web_outcome:
             summary.append(f"检查外部检索状态为 {web_outcome.status}，筛选可引用证据。")
         summary.append("基于已验证事实组织结论、依据和可执行建议。")
@@ -1591,6 +1840,23 @@ class AssistantService:
         if intent.scope == "model":
             return intent
         return AssistantIntent(scope="project", use_web=False, deep=intent.deep)
+
+    def _normalize_bool(self, value: object) -> bool:
+        """规范化前端布尔开关。
+
+        Args:
+            value: 前端传入的开关值。
+
+        Returns:
+            解析后的布尔值。
+        """
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return False
 
     def _normalize_web_search_preference(self, use_web_search: object) -> bool | None:
         """规范化联网搜索开关。
