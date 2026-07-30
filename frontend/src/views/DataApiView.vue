@@ -1,6 +1,6 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   Back, Connection, CopyDocument, Document, Download, FolderOpened, Hide, Refresh, Search, View,
@@ -12,6 +12,7 @@ import {
   getDataCatalogApiCatalog,
   getResolvedApiBaseUrl,
   listDataCatalogMinioObjects,
+  listMdAllatomCFiles,
 } from '../api/polyAgentApi'
 import { authState } from '../auth/authState'
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
@@ -21,14 +22,17 @@ import {
   polyDataDatasetGroupKey,
 } from '../utils/polyDataDatasetGroups'
 
+const route = useRoute()
 const router = useRouter()
 
 const loading = ref(false)
 const minioLoading = ref(false)
+const mdCLoading = ref(false)
 const detailVisible = ref(false)
 const selectedEndpoint = ref(null)
 const activeExample = ref('curl')
-const activeWorkbenchTab = ref('endpoints')
+const workbenchTabs = ['endpoints', 'minio', 'md-c-files', 'guide']
+const activeWorkbenchTab = ref(workbenchTabs.includes(String(route.query.tab)) ? String(route.query.tab) : 'endpoints')
 const sourceFilter = ref('all')
 const keyword = ref('')
 const activeMinioGroupKey = ref('')
@@ -38,6 +42,16 @@ const downloadingAssetId = ref('')
 const showAccessToken = ref(false)
 const catalog = ref(null)
 const minioObjects = ref([])
+const mdCFiles = ref([])
+const mdCTotal = ref(0)
+
+const mdCForm = reactive({
+  folder: String(route.query.folder || '1_1_16'),
+  filename: String(route.query.filename || 'polymer_1_1_16minf.data'),
+  keyword: String(route.query.keyword || ''),
+  page: Number(route.query.page || 1),
+  page_size: 50,
+})
 
 const sourceOptions = [
   { value: 'all', label: '全部接口' },
@@ -211,6 +225,11 @@ const loginCurlExample = computed(() => [
   '',
   `export POLY_AGENT_TOKEN="把返回 data.access_token 粘贴到这里"`,
 ].join('\n'))
+const mdCListCurl = computed(() => [
+  `curl -X GET "${mdCListUrl()}" \\`,
+  `  -H "Authorization: Bearer ${tokenPlaceholder.value}"`,
+].join('\n'))
+const mdCDownloadCurl = computed(() => buildMdCDownloadCurl(mdCForm.folder, mdCForm.filename))
 
 function sourceLabel(source) {
   const map = { data_catalog: '数据目录', mongodb: 'MongoDB', minio: 'MinIO' }
@@ -294,6 +313,68 @@ function formatDate(value) {
   const date = new Date(normalized)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
+}
+
+function cleanQuery(query) {
+  const nextQuery = { ...(query || {}) }
+  Object.keys(nextQuery).forEach((key) => {
+    if (nextQuery[key] === '' || nextQuery[key] === null || nextQuery[key] === undefined) delete nextQuery[key]
+  })
+  return nextQuery
+}
+
+function encodePathSegment(value) {
+  return encodeURIComponent(String(value || '').trim())
+}
+
+function mdCPageValue() {
+  const page = Number(mdCForm.page || 1)
+  return Number.isFinite(page) && page > 0 ? Math.floor(page) : 1
+}
+
+function mdCPageSizeValue() {
+  const pageSize = Number(mdCForm.page_size || 50)
+  return Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 50
+}
+
+function mdCListUrl(folder = mdCForm.folder) {
+  const params = new URLSearchParams()
+  params.set('page', String(mdCPageValue()))
+  params.set('page_size', String(mdCPageSizeValue()))
+  if (mdCForm.keyword) params.set('keyword', mdCForm.keyword)
+  return `${apiBaseUrl.value}/data-catalog/md-allatom/c-files/${encodePathSegment(folder)}?${params.toString()}`
+}
+
+function mdCDownloadUrl(folder = mdCForm.folder, filename = mdCForm.filename) {
+  return `${apiBaseUrl.value}/data-catalog/md-allatom/c-files/${encodePathSegment(folder)}/${encodePathSegment(filename)}/download`
+}
+
+function buildMdCDownloadCurl(folder, filename) {
+  const outputName = String(filename || 'md-allatom-c-file.dat').trim() || 'md-allatom-c-file.dat'
+  return [
+    `curl -L "${mdCDownloadUrl(folder, filename)}" \\`,
+    `  -H "Authorization: Bearer ${tokenPlaceholder.value}" \\`,
+    `  -o "${outputName}"`,
+  ].join('\n')
+}
+
+function syncMdCQuery() {
+  const query = cleanQuery({
+    ...route.query,
+    tab: 'md-c-files',
+    folder: mdCForm.folder,
+    filename: mdCForm.filename,
+    keyword: mdCForm.keyword,
+    page: mdCPageValue() > 1 ? mdCPageValue() : undefined,
+  })
+  router.replace({ path: '/database/data-api', query })
+}
+
+function syncWorkbenchTabQuery(tabName) {
+  router.replace({
+    path: '/database/data-api',
+    query: cleanQuery({ ...route.query, tab: tabName }),
+  })
 }
 
 function buildAuthGuideSteps() {
@@ -457,6 +538,47 @@ async function handleDownload(asset) {
   }
 }
 
+async function loadMdCFiles(options = {}) {
+  if (!String(mdCForm.folder || '').trim()) {
+    ElMessage.warning('请填写 C 类目录')
+    return
+  }
+  if (options.reset) mdCForm.page = 1
+  mdCLoading.value = true
+  try {
+    const data = await listMdAllatomCFiles(mdCForm.folder, {
+      page: mdCPageValue(),
+      page_size: mdCPageSizeValue(),
+      keyword: mdCForm.keyword || undefined,
+    })
+    mdCFiles.value = data.items || []
+    mdCTotal.value = data.total || 0
+    syncMdCQuery()
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    mdCLoading.value = false
+  }
+}
+
+function handleMdCSearch() {
+  loadMdCFiles({ reset: true })
+}
+
+function handleMdCPageChange(page) {
+  mdCForm.page = page
+  loadMdCFiles()
+}
+
+async function copyMdCDownloadCurl(row) {
+  const folder = row?.folder || mdCForm.folder
+  const filename = row?.filename || mdCForm.filename
+  mdCForm.folder = folder
+  mdCForm.filename = filename
+  syncMdCQuery()
+  await copyText(buildMdCDownloadCurl(folder, filename))
+}
+
 async function loadApiCatalog() {
   loading.value = true
   try {
@@ -485,7 +607,12 @@ async function loadData() {
   await Promise.all([loadApiCatalog(), loadMinioObjects()])
 }
 
-onMounted(loadData)
+onMounted(async () => {
+  await loadData()
+  if (activeWorkbenchTab.value === 'md-c-files') {
+    await loadMdCFiles()
+  }
+})
 
 function ensureActiveMinioGroup() {
   if (!minioGroupOptions.value.length) {
@@ -506,6 +633,16 @@ watch(activeMinioGroupKey, () => {
 
 watch(minioDatasetFilter, () => {
   minioRoleFilter.value = ''
+})
+
+watch(activeWorkbenchTab, (value) => {
+  if (!workbenchTabs.includes(value)) return
+  if (value === 'md-c-files') {
+    syncMdCQuery()
+    if (!mdCFiles.value.length) loadMdCFiles()
+    return
+  }
+  syncWorkbenchTabQuery(value)
 })
 </script>
 
@@ -534,6 +671,11 @@ watch(minioDatasetFilter, () => {
         <el-icon><FolderOpened /></el-icon>
         <span>文件下载</span>
         <strong>按分类浏览 MinIO 文件，页面下载走 PolyAgent API。</strong>
+      </button>
+      <button type="button" @click="setWorkbenchTab('md-c-files')">
+        <el-icon><CopyDocument /></el-icon>
+        <span>MD C curl</span>
+        <strong>按 C 类目录和文件名生成文献文件下载 curl。</strong>
       </button>
       <button type="button" @click="setWorkbenchTab('guide')">
         <el-icon><Document /></el-icon>
@@ -583,6 +725,123 @@ watch(minioDatasetFilter, () => {
               </template>
             </el-table-column>
           </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane label="MD C curl" name="md-c-files">
+          <section class="md-c-call-panel">
+            <div class="section-heading md-c-heading">
+              <div>
+                <h2>MD-AllAtom C 类 curl</h2>
+                <p>面向已入库 C 类非结构化文件，按目录和文件名生成 PolyAgent API 调用命令。</p>
+              </div>
+              <el-tag effect="plain">{{ mdCTotal }} 个文件</el-tag>
+            </div>
+            <div class="md-c-form-grid">
+              <label class="md-c-field">
+                <span>C 类目录</span>
+                <el-input
+                  v-model="mdCForm.folder"
+                  clearable
+                  placeholder="1_1_16"
+                  @keyup.enter="handleMdCSearch"
+                />
+              </label>
+              <label class="md-c-field">
+                <span>下载文件名</span>
+                <el-input
+                  v-model="mdCForm.filename"
+                  clearable
+                  placeholder="polymer_1_1_16minf.data"
+                  @keyup.enter="copyText(mdCDownloadCurl)"
+                />
+              </label>
+              <label class="md-c-field">
+                <span>文件名筛选</span>
+                <el-input
+                  v-model="mdCForm.keyword"
+                  clearable
+                  placeholder="minf"
+                  @keyup.enter="handleMdCSearch"
+                >
+                  <template #prefix><el-icon><Search /></el-icon></template>
+                </el-input>
+              </label>
+              <div class="md-c-actions">
+                <el-button type="primary" :icon="Search" :loading="mdCLoading" @click="handleMdCSearch">查询</el-button>
+                <el-button :icon="Refresh" :loading="mdCLoading" @click="loadMdCFiles">刷新</el-button>
+              </div>
+            </div>
+          </section>
+
+          <div class="md-c-curl-grid">
+            <section class="guide-panel md-c-curl-panel">
+              <h2>列目录 curl</h2>
+              <div class="example-toolbar">
+                <span>GET list</span>
+                <el-button :icon="CopyDocument" @click="copyText(mdCListCurl)">复制</el-button>
+              </div>
+              <pre class="code-block compact">{{ mdCListCurl }}</pre>
+            </section>
+            <section class="guide-panel md-c-curl-panel">
+              <h2>下载指定文件 curl</h2>
+              <div class="example-toolbar">
+                <span>GET file stream</span>
+                <el-button type="primary" :icon="CopyDocument" @click="copyText(mdCDownloadCurl)">复制</el-button>
+              </div>
+              <pre class="code-block compact">{{ mdCDownloadCurl }}</pre>
+            </section>
+          </div>
+
+          <section class="md-c-files-panel">
+            <div class="section-heading md-c-heading">
+              <div>
+                <h2>目录文件</h2>
+                <p>表格操作只复制 curl，不在浏览器内发起文件下载。</p>
+              </div>
+            </div>
+            <el-table :data="mdCFiles" v-loading="mdCLoading" stripe class="api-table" empty-text="暂无文件">
+              <el-table-column prop="filename" label="文件名" min-width="240">
+                <template #default="{ row }"><code>{{ row.filename }}</code></template>
+              </el-table-column>
+              <el-table-column label="大小" width="118">
+                <template #default="{ row }">{{ formatBytes(row.size_bytes) }}</template>
+              </el-table-column>
+              <el-table-column label="对象状态" width="118">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.exists ? 'success' : 'info'">
+                    {{ row.exists ? '对象已就绪' : '对象未就绪' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="同步状态" width="138">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.sync_status === 'uploaded' || row.sync_status === 'already_migrated' || row.sync_status === 'verified' ? 'success' : 'info'" effect="plain">
+                    {{ row.sync_status || '-' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="mime_type" label="MIME" min-width="170" />
+              <el-table-column label="更新时间" min-width="170">
+                <template #default="{ row }">{{ formatDate(row.updated_at) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="148" fixed="right">
+                <template #default="{ row }">
+                  <el-button text type="primary" size="small" :icon="CopyDocument" @click="copyMdCDownloadCurl(row)">
+                    复制下载 curl
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-pagination
+              class="md-c-pagination"
+              background
+              layout="prev, pager, next, total"
+              :current-page="mdCForm.page"
+              :page-size="mdCForm.page_size"
+              :total="mdCTotal"
+              @current-change="handleMdCPageChange"
+            />
+          </section>
         </el-tab-pane>
 
         <el-tab-pane label="MinIO 文件" name="minio">
@@ -939,7 +1198,7 @@ watch(minioDatasetFilter, () => {
 
 .feature-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  grid-template-columns: repeat(4, minmax(190px, 1fr));
   gap: 1px;
   overflow: hidden;
   border: 1px solid var(--app-card-border);
@@ -1017,6 +1276,67 @@ watch(minioDatasetFilter, () => {
 .api-table,
 .minio-table {
   width: 100%;
+}
+
+.md-c-call-panel,
+.md-c-files-panel {
+  min-width: 0;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.md-c-heading {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.md-c-form-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(240px, 1fr) minmax(180px, 0.8fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.md-c-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.md-c-field span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.md-c-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.md-c-curl-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.md-c-curl-panel {
+  min-width: 0;
+}
+
+.md-c-files-panel {
+  background: #fff;
+}
+
+.md-c-pagination {
+  margin-top: 14px;
+  justify-content: flex-end;
 }
 
 .endpoint-name {
@@ -1633,8 +1953,14 @@ code {
   }
 
   .guide-layout,
-  .minio-browser-layout {
+  .minio-browser-layout,
+  .md-c-form-grid,
+  .md-c-curl-grid {
     grid-template-columns: 1fr;
+  }
+
+  .md-c-actions {
+    justify-content: flex-start;
   }
 
   .minio-rail {
@@ -1661,7 +1987,8 @@ code {
   }
 
   .header-actions,
-  .drawer-tags {
+  .drawer-tags,
+  .md-c-actions {
     justify-content: flex-start;
   }
 
@@ -1673,6 +2000,11 @@ code {
 
   .minio-filters {
     width: 100%;
+  }
+
+  .md-c-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .auth-summary,

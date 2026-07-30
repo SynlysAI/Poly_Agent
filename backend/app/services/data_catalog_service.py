@@ -45,6 +45,8 @@ from app.schemas.data_catalog import (
     DataCatalogDatasetVisualSamplesData,
     DataCatalogFieldSummary,
     DataCatalogHistogramBin,
+    DataCatalogMdAllatomCFileItem,
+    DataCatalogMdAllatomCFileListData,
     DataCatalogDatasetImportStatus,
     DataCatalogMinioObjectItem,
     DataCatalogMinioObjectListData,
@@ -82,6 +84,11 @@ MD_ALLATOM_DIANHYDRIDES_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{MD_ALLATOM_DIA
 MD_ALLATOM_CARBON_RESULTS_COLLECTION_NAME = "md_allatom_carbon_results"
 MD_ALLATOM_CARBON_RESULTS_COLLECTION_KEY = f"{POLY_DATA_SOURCE_ID}.{MD_ALLATOM_CARBON_RESULTS_COLLECTION_NAME}"
 MD_ALLATOM_DEFAULT_FAMILIES = ("C", "F", "Si")
+MD_ALLATOM_C_FILE_FOLDER_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+MD_ALLATOM_C_FILE_FILENAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+MD_ALLATOM_C_DOWNLOADABLE_SYNC_STATUSES = {"uploaded", "already_migrated", "verified", "indexed"}
+MD_ALLATOM_C_CANONICAL_RAW_PREFIX = "datasets/md_allatom/raw/C/"
+MD_ALLATOM_C_LEGACY_RAW_PREFIX = "polymer-multi-modal/MD-AllAtom/C/"
 
 DATASET_RECORD_COLLECTIONS = {
     "openpoly": (MATERIAL_COLLECTION_KEY, "full"),
@@ -376,7 +383,7 @@ class MongoCollectionDefinition:
 class DataCatalogMinioDownload:
     """Resolved MinIO object stream metadata."""
 
-    asset: DataCatalogMinioObjectItem
+    asset: DataCatalogMinioObjectItem | DataCatalogMdAllatomCFileItem
     body: Any
 
 
@@ -1105,6 +1112,76 @@ class DataCatalogService:
         )
         return DataCatalogMinioDownload(asset=item, body=payload["body"])
 
+    def list_md_allatom_c_files(
+        self,
+        folder: str,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+        keyword: str | None = None,
+    ) -> DataCatalogMdAllatomCFileListData:
+        """List indexed MD-AllAtom C raw files under one controlled folder."""
+        normalized_folder = self._validate_md_allatom_c_folder(folder)
+        bounded_page = max(1, page)
+        bounded_page_size = min(100, max(1, page_size))
+        prefix = self._md_allatom_c_folder_prefix(normalized_folder)
+        rows = [
+            row
+            for row in self._load_md_allatom_c_file_rows(prefix=prefix)
+            if self._is_downloadable_md_allatom_c_file_row(row)
+        ]
+        normalized_keyword = (keyword or "").strip().lower()
+        if normalized_keyword:
+            rows = [
+                row for row in rows
+                if normalized_keyword in str(row.get("filename") or Path(str(row.get("object_key") or "")).name).lower()
+            ]
+        rows.sort(key=lambda row: str(row.get("filename") or row.get("object_key") or ""))
+        start = (bounded_page - 1) * bounded_page_size
+        page_rows = rows[start:start + bounded_page_size]
+        return DataCatalogMdAllatomCFileListData(
+            folder=normalized_folder,
+            items=[self._md_allatom_c_file_item_from_row(normalized_folder, row, check_exists=True) for row in page_rows],
+            total=len(rows),
+            page=bounded_page,
+            page_size=bounded_page_size,
+        )
+
+    def open_md_allatom_c_file(self, folder: str, filename: str) -> DataCatalogMinioDownload:
+        """Open an indexed MD-AllAtom C raw file stream by folder and filename."""
+        normalized_folder = self._validate_md_allatom_c_folder(folder)
+        normalized_filename = self._validate_md_allatom_c_filename(filename)
+        rows = self._load_md_allatom_c_file_rows(folder=normalized_folder, filename=normalized_filename)
+        row = next((item for item in rows if self._is_downloadable_md_allatom_c_file_row(item)), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="数据资产不存在")
+        if not self.s3_client.is_configured():
+            raise HTTPException(status_code=404, detail="数据资产不存在")
+        payload = None
+        selected_object_key = None
+        last_storage_error: Exception | None = None
+        for object_key in self._md_allatom_c_candidate_object_keys(normalized_folder, normalized_filename, row):
+            try:
+                payload = self.s3_client.get_object(settings.minio_bucket, object_key)
+            except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+                last_storage_error = exc
+                continue
+            if payload and payload.get("body"):
+                selected_object_key = object_key
+                break
+        if not payload or not payload.get("body") or not selected_object_key:
+            raise HTTPException(status_code=404, detail="数据资产不存在") from last_storage_error
+        enriched = {
+            **row,
+            "size_bytes": payload.get("size_bytes") if payload.get("size_bytes") is not None else row.get("size_bytes"),
+            "mime_type": payload.get("mime_type") or row.get("mime_type"),
+            "exists": True,
+        }
+        return DataCatalogMinioDownload(
+            asset=self._md_allatom_c_file_item_from_row(normalized_folder, enriched),
+            body=payload["body"],
+        )
+
     def _dataset_by_id(self, dataset_id: str) -> DataCatalogDataset:
         for dataset in self.list_datasets().items:
             if dataset.dataset_id == dataset_id:
@@ -1197,6 +1274,49 @@ class DataCatalogService:
         except PyMongoError:
             return []
 
+    def _load_md_allatom_c_file_rows(
+        self,
+        *,
+        prefix: str | None = None,
+        object_key: str | None = None,
+        folder: str | None = None,
+        filename: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if not settings.data_asset_mongodb_uri:
+            rows = [dict(row) for row in demo_store.load().get(MD_ALLATOM_FILES_COLLECTION_KEY, [])]
+        else:
+            try:
+                filters: dict[str, Any] = {"family": "C"}
+                rows = [dict(row) for row in get_data_asset_database()[MD_ALLATOM_FILES_COLLECTION_NAME].find(filters, {"_id": 0})]
+            except PyMongoError:
+                return []
+        if object_key:
+            return [
+                row for row in rows
+                if row.get("family") == "C"
+                and str(row.get("object_key") or "") == object_key
+            ]
+        if folder and filename:
+            return [
+                row for row in rows
+                if row.get("family") == "C"
+                and self._md_allatom_c_row_matches_folder_filename(row, folder, filename)
+            ]
+        if folder:
+            return [
+                row for row in rows
+                if row.get("family") == "C"
+                and self._md_allatom_c_row_matches_folder(row, folder)
+            ]
+        if prefix:
+            folder_from_prefix = prefix.removeprefix(MD_ALLATOM_C_CANONICAL_RAW_PREFIX).strip("/")
+            return [
+                row for row in rows
+                if row.get("family") == "C"
+                and self._md_allatom_c_row_matches_folder(row, folder_from_prefix)
+            ]
+        return [row for row in rows if row.get("family") == "C"]
+
     def _md_allatom_family_file_counts(self, file_rows: list[dict[str, Any]]) -> dict[str, int]:
         counts: dict[str, int] = {family: 0 for family in MD_ALLATOM_DEFAULT_FAMILIES}
         for row in file_rows:
@@ -1204,6 +1324,119 @@ class DataCatalogService:
             if family:
                 counts[family] = counts.get(family, 0) + 1
         return counts
+
+    def _validate_md_allatom_c_folder(self, folder: str) -> str:
+        normalized = str(folder or "").strip()
+        if (
+            not normalized
+            or "." in normalized
+            or "/" in normalized
+            or "\\" in normalized
+            or not MD_ALLATOM_C_FILE_FOLDER_RE.fullmatch(normalized)
+        ):
+            raise HTTPException(status_code=404, detail="数据资产不存在")
+        return normalized
+
+    def _validate_md_allatom_c_filename(self, filename: str) -> str:
+        normalized = str(filename or "").strip()
+        if (
+            not normalized
+            or ".." in normalized
+            or "/" in normalized
+            or "\\" in normalized
+            or not MD_ALLATOM_C_FILE_FILENAME_RE.fullmatch(normalized)
+        ):
+            raise HTTPException(status_code=404, detail="数据资产不存在")
+        return normalized
+
+    def _md_allatom_c_folder_prefix(self, folder: str) -> str:
+        return f"{MD_ALLATOM_C_CANONICAL_RAW_PREFIX}{folder}/"
+
+    def _md_allatom_c_object_key(self, folder: str, filename: str) -> str:
+        return f"{self._md_allatom_c_folder_prefix(folder)}{filename}"
+
+    def _md_allatom_c_legacy_object_key(self, folder: str, filename: str) -> str:
+        return f"{MD_ALLATOM_C_LEGACY_RAW_PREFIX}{folder}/{filename}"
+
+    def _is_downloadable_md_allatom_c_file_row(self, row: dict[str, Any]) -> bool:
+        status = str(row.get("sync_status") or "").strip().lower()
+        return (
+            row.get("family") == "C"
+            and status in MD_ALLATOM_C_DOWNLOADABLE_SYNC_STATUSES
+            and self._is_allowed_md_allatom_c_object_key(str(row.get("object_key") or ""))
+        )
+
+    def _is_allowed_md_allatom_c_object_key(self, object_key: str) -> bool:
+        return object_key.startswith(MD_ALLATOM_C_CANONICAL_RAW_PREFIX) or object_key.startswith(MD_ALLATOM_C_LEGACY_RAW_PREFIX)
+
+    def _md_allatom_c_row_matches_folder(self, row: dict[str, Any], folder: str) -> bool:
+        object_key = str(row.get("object_key") or "")
+        return (
+            object_key.startswith(f"{MD_ALLATOM_C_CANONICAL_RAW_PREFIX}{folder}/")
+            or object_key.startswith(f"{MD_ALLATOM_C_LEGACY_RAW_PREFIX}{folder}/")
+        )
+
+    def _md_allatom_c_row_matches_folder_filename(self, row: dict[str, Any], folder: str, filename: str) -> bool:
+        return self._md_allatom_c_object_key_matches_folder_filename(str(row.get("object_key") or ""), folder, filename)
+
+    def _md_allatom_c_object_key_matches_folder_filename(self, object_key: str, folder: str, filename: str) -> bool:
+        return object_key in {
+            self._md_allatom_c_object_key(folder, filename),
+            self._md_allatom_c_legacy_object_key(folder, filename),
+        }
+
+    def _md_allatom_c_candidate_object_keys(self, folder: str, filename: str, row: dict[str, Any]) -> list[str]:
+        row_object_key = str(row.get("object_key") or "")
+        candidates = [
+            row_object_key if self._md_allatom_c_object_key_matches_folder_filename(row_object_key, folder, filename) else "",
+            self._md_allatom_c_object_key(folder, filename),
+            self._md_allatom_c_legacy_object_key(folder, filename),
+        ]
+        return [
+            key for key in dict.fromkeys(candidates)
+            if key and self._is_allowed_md_allatom_c_object_key(key)
+        ]
+
+    def _md_allatom_c_file_exists(self, folder: str, filename: str, row: dict[str, Any]) -> bool:
+        if row.get("exists") is True:
+            return True
+        if not self.s3_client.is_configured():
+            return False
+        for object_key in self._md_allatom_c_candidate_object_keys(folder, filename, row):
+            try:
+                if self.s3_client.head_object(settings.minio_bucket, object_key):
+                    return True
+            except (OSError, urllib.error.URLError, urllib.error.HTTPError):
+                continue
+        return False
+
+    def _md_allatom_c_file_item_from_row(
+        self,
+        folder: str,
+        row: dict[str, Any],
+        *,
+        check_exists: bool = False,
+    ) -> DataCatalogMdAllatomCFileItem:
+        object_key = str(row.get("object_key") or "")
+        filename = str(row.get("filename") or Path(object_key).name)
+        mime_type = str(row.get("mime_type") or row.get("content_type") or guess_mime_type(filename))
+        updated_at = row.get("updated_at") or row.get("created_at") or row.get("mtime")
+        exists = bool(row.get("exists"))
+        if check_exists:
+            exists = self._md_allatom_c_file_exists(folder, filename, row)
+        return DataCatalogMdAllatomCFileItem(
+            folder=folder,
+            filename=filename,
+            exists=exists,
+            size_bytes=row.get("size_bytes"),
+            mime_type=mime_type,
+            sync_status=row.get("sync_status"),
+            updated_at=updated_at,
+            download_path=(
+                "/data-catalog/md-allatom/c-files/"
+                f"{urllib.parse.quote(folder, safe='')}/{urllib.parse.quote(filename, safe='')}/download"
+            ),
+        )
 
     def _load_dataset_import_status(self, dataset_id: str) -> DataCatalogDatasetImportStatus:
         if not settings.require_mongodb:
@@ -3133,6 +3366,36 @@ def build_data_catalog_api_endpoints(base_path: str) -> list[DataCatalogApiEndpo
             "response_type": "binary stream",
             "response_example": {"content_type": "text/markdown", "content_disposition": "attachment"},
         },
+        {
+            "endpoint_id": "md_allatom_c_files",
+            "name": "MD-AllAtom C 文件列表",
+            "path": "/data-catalog/md-allatom/c-files/{folder}",
+            "source": "minio",
+            "permission": "read",
+            "summary": "按 C 类目录查看已入库的 MD-AllAtom 非结构化文件。",
+            "path_parameters": [param("folder", "path", "C 类目录名，例如 1_1_16。", required=True, example="1_1_16")],
+            "query_parameters": [
+                param("page", "query", "页码。", type_="integer", example=1),
+                param("page_size", "query", "每页文件数，1-100。", type_="integer", example=50),
+                param("keyword", "query", "文件名关键词。", example="minf"),
+            ],
+            "response_type": "ApiResponse[DataCatalogMdAllatomCFileListData]",
+            "response_example": {"folder": "1_1_16", "items": [{"filename": "polymer_1_1_16minf.data"}]},
+        },
+        {
+            "endpoint_id": "md_allatom_c_download",
+            "name": "MD-AllAtom C 文件下载",
+            "path": "/data-catalog/md-allatom/c-files/{folder}/{filename}/download",
+            "source": "minio",
+            "permission": "download",
+            "summary": "用 C 类目录和文件名下载已入库文件；返回文件流，不是 JSON。",
+            "path_parameters": [
+                param("folder", "path", "C 类目录名，例如 1_1_16。", required=True, example="1_1_16"),
+                param("filename", "path", "目录内文件名，例如 polymer_1_1_16minf.data。", required=True, example="polymer_1_1_16minf.data"),
+            ],
+            "response_type": "binary stream",
+            "response_example": {"content_type": "application/octet-stream", "content_disposition": "attachment"},
+        },
     ]
     return [DataCatalogApiEndpoint(**{**spec, "examples": build_endpoint_examples(base_path, spec)}) for spec in api_specs]
 
@@ -3172,6 +3435,8 @@ def sample_path(path: str) -> str:
         .replace("{collection_name}", "poly_data.material_records")
         .replace("{record_id}", "OPENPOLY-16172")
         .replace("{asset_id}", "radonpy_pi1070__readme")
+        .replace("{folder}", "1_1_16")
+        .replace("{filename}", "polymer_1_1_16minf.data")
     )
 
 
@@ -3184,6 +3449,7 @@ def sample_query(parameters: list[DataCatalogApiParameter]) -> str:
         "limit": 5000,
         "sample_size": 1000,
         "refresh": False,
+        "keyword": "minf",
     }
     pairs = [
         (parameter.name, samples[parameter.name])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+import re
 import sys
 from io import BytesIO
 from datetime import datetime, timezone
@@ -74,7 +75,7 @@ class FakeMongoCollection:
         return [
             dict(row)
             for row in self.rows
-            if all(self._nested_value(row, key) == value for key, value in filters.items())
+            if all(self._matches_filter(self._nested_value(row, key), value) for key, value in filters.items())
         ]
 
     def find_one(self, filters: dict, projection: dict | None = None, **kwargs) -> dict | None:
@@ -88,7 +89,10 @@ class FakeMongoCollection:
     def count_documents(self, filters: dict) -> int:
         if not filters:
             return len(self.rows)
-        return sum(1 for row in self.rows if all(self._nested_value(row, key) == value for key, value in filters.items()))
+        return sum(
+            1 for row in self.rows
+            if all(self._matches_filter(self._nested_value(row, key), value) for key, value in filters.items())
+        )
 
     def estimated_document_count(self) -> int:
         return len(self.rows)
@@ -100,6 +104,11 @@ class FakeMongoCollection:
                 return None
             value = value.get(part)
         return value
+
+    def _matches_filter(self, actual, expected) -> bool:
+        if isinstance(expected, dict) and "$regex" in expected:
+            return re.search(str(expected["$regex"]), str(actual or "")) is not None
+        return actual == expected
 
 
 class FakeMongoDatabase:
@@ -229,6 +238,237 @@ class DataCatalogServiceTest(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 404)
         self.assertEqual(fake_s3.get_calls, [("polymer-data", "datasets/radonpy_pi1070/docs/readme.md")])
+
+    def test_md_allatom_c_files_list_and_download_use_mongo_index_before_s3(self) -> None:
+        object_key = "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16minf.data"
+        fake_s3 = FakeS3Client(
+            {
+                object_key: {
+                    "content": b"LAMMPS data\n",
+                    "mime_type": "application/octet-stream",
+                }
+            }
+        )
+        fake_db = FakeMongoDatabase(
+            {
+                "md_allatom_files": [
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-1",
+                        "family": "C",
+                        "object_key": object_key,
+                        "filename": "polymer_1_1_16minf.data",
+                        "size_bytes": 12,
+                        "sync_status": "uploaded",
+                        "created_at": datetime(2026, 7, 29, tzinfo=timezone.utc),
+                    },
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-2",
+                        "family": "C",
+                        "object_key": "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16npt.data",
+                        "filename": "polymer_1_1_16npt.data",
+                        "size_bytes": 9,
+                        "sync_status": "failed",
+                    },
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-F-1",
+                        "family": "F",
+                        "object_key": "datasets/md_allatom/raw/F/1_1_16/polymer_1_1_16minf.data",
+                        "filename": "polymer_1_1_16minf.data",
+                        "size_bytes": 11,
+                        "sync_status": "uploaded",
+                    },
+                ]
+            }
+        )
+        service = DataCatalogService(s3_client=fake_s3)
+
+        with (
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+        ):
+            listed = service.list_md_allatom_c_files("1_1_16", keyword="minf")
+            download = service.open_md_allatom_c_file("1_1_16", "polymer_1_1_16minf.data")
+
+        self.assertEqual(listed.total, 1)
+        self.assertEqual(listed.items[0].folder, "1_1_16")
+        self.assertEqual(listed.items[0].filename, "polymer_1_1_16minf.data")
+        self.assertTrue(listed.items[0].exists)
+        self.assertNotIn(object_key, listed.items[0].download_path)
+        self.assertEqual(download.asset.filename, "polymer_1_1_16minf.data")
+        self.assertEqual(download.asset.size_bytes, len(b"LAMMPS data\n"))
+        self.assertEqual(download.body.read(), b"LAMMPS data\n")
+        self.assertEqual(fake_s3.get_calls, [("polymer-data", object_key)])
+
+    def test_md_allatom_c_download_accepts_indexed_legacy_minio_prefix(self) -> None:
+        object_key = "polymer-multi-modal/MD-AllAtom/C/1_1_16/polymer_1_1_16minf.data"
+        fake_s3 = FakeS3Client(
+            {
+                object_key: {
+                    "content": b"legacy minio data\n",
+                    "mime_type": "application/octet-stream",
+                }
+            }
+        )
+        fake_db = FakeMongoDatabase(
+            {
+                "md_allatom_files": [
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-legacy",
+                        "family": "C",
+                        "object_key": object_key,
+                        "filename": "polymer_1_1_16minf.data",
+                        "size_bytes": 18,
+                        "sync_status": "uploaded",
+                    }
+                ]
+            }
+        )
+        service = DataCatalogService(s3_client=fake_s3)
+
+        with (
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+        ):
+            download = service.open_md_allatom_c_file("1_1_16", "polymer_1_1_16minf.data")
+
+        self.assertEqual(download.asset.filename, "polymer_1_1_16minf.data")
+        self.assertEqual(download.body.read(), b"legacy minio data\n")
+        self.assertEqual(fake_s3.get_calls, [("polymer-data", object_key)])
+
+    def test_md_allatom_c_download_falls_back_to_legacy_minio_prefix_for_canonical_index(self) -> None:
+        canonical_key = "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16minf.data"
+        legacy_key = "polymer-multi-modal/MD-AllAtom/C/1_1_16/polymer_1_1_16minf.data"
+        fake_s3 = FakeS3Client(
+            {
+                legacy_key: {
+                    "content": b"legacy fallback data\n",
+                    "mime_type": "application/octet-stream",
+                }
+            }
+        )
+        fake_db = FakeMongoDatabase(
+            {
+                "md_allatom_files": [
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-canonical",
+                        "family": "C",
+                        "object_key": canonical_key,
+                        "filename": "polymer_1_1_16minf.data",
+                        "size_bytes": 21,
+                        "sync_status": "uploaded",
+                    }
+                ]
+            }
+        )
+        service = DataCatalogService(s3_client=fake_s3)
+
+        with (
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+        ):
+            download = service.open_md_allatom_c_file("1_1_16", "polymer_1_1_16minf.data")
+
+        self.assertEqual(download.body.read(), b"legacy fallback data\n")
+        self.assertEqual(fake_s3.get_calls, [("polymer-data", canonical_key), ("polymer-data", legacy_key)])
+
+    def test_md_allatom_c_list_marks_indexed_file_missing_when_minio_object_absent(self) -> None:
+        object_key = "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16minf.data"
+        fake_s3 = FakeS3Client({})
+        fake_db = FakeMongoDatabase(
+            {
+                "md_allatom_files": [
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-missing",
+                        "family": "C",
+                        "object_key": object_key,
+                        "filename": "polymer_1_1_16minf.data",
+                        "size_bytes": 12,
+                        "sync_status": "uploaded",
+                    }
+                ]
+            }
+        )
+        service = DataCatalogService(s3_client=fake_s3)
+
+        with (
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+        ):
+            listed = service.list_md_allatom_c_files("1_1_16")
+
+        self.assertEqual(listed.total, 1)
+        self.assertFalse(listed.items[0].exists)
+        self.assertEqual(fake_s3.get_calls, [])
+        self.assertIn(("polymer-data", object_key), fake_s3.head_calls)
+
+    def test_md_allatom_c_download_rejects_missing_index_before_s3(self) -> None:
+        fake_s3 = FakeS3Client(
+            {
+                "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16minf.data": {
+                    "content": b"LAMMPS data\n",
+                }
+            }
+        )
+        service = DataCatalogService(s3_client=fake_s3)
+        fake_db = FakeMongoDatabase({"md_allatom_files": []})
+
+        with (
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+            self.assertRaises(HTTPException) as context,
+        ):
+            service.open_md_allatom_c_file("1_1_16", "polymer_1_1_16minf.data")
+
+        self.assertEqual(context.exception.status_code, 404)
+        self.assertEqual(fake_s3.get_calls, [])
+
+    def test_md_allatom_c_download_requires_index_object_key_to_match_requested_file(self) -> None:
+        indexed_object_key = "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16npt.data"
+        requested_object_key = "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16minf.data"
+        fake_s3 = FakeS3Client(
+            {
+                indexed_object_key: {"content": b"wrong indexed object\n"},
+                requested_object_key: {"content": b"requested object without index\n"},
+            }
+        )
+        fake_db = FakeMongoDatabase(
+            {
+                "md_allatom_files": [
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-mismatch",
+                        "family": "C",
+                        "object_key": indexed_object_key,
+                        "filename": "polymer_1_1_16minf.data",
+                        "sync_status": "uploaded",
+                    }
+                ]
+            }
+        )
+        service = DataCatalogService(s3_client=fake_s3)
+
+        with (
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+            self.assertRaises(HTTPException) as context,
+        ):
+            service.open_md_allatom_c_file("1_1_16", "polymer_1_1_16minf.data")
+
+        self.assertEqual(context.exception.status_code, 404)
+        self.assertEqual(fake_s3.get_calls, [])
+
+    def test_md_allatom_c_file_parameters_reject_path_traversal(self) -> None:
+        service = DataCatalogService(s3_client=FakeS3Client())
+
+        for folder, filename in [
+            ("../1_1_16", "polymer_1_1_16minf.data"),
+            ("1_1_16", "../polymer_1_1_16minf.data"),
+            ("1_1_16", "subdir/polymer_1_1_16minf.data"),
+            ("1.1.16", "polymer_1_1_16minf.data"),
+        ]:
+            with self.subTest(folder=folder, filename=filename):
+                with self.assertRaises(HTTPException) as context:
+                    service.open_md_allatom_c_file(folder, filename)
+                self.assertEqual(context.exception.status_code, 404)
 
     def test_dataset_catalog_prefers_poly_data_metadata(self) -> None:
         service = DataCatalogService(s3_client=FakeS3Client(configured=False))
@@ -616,6 +856,9 @@ class DataCatalogApiTest(unittest.TestCase):
         self.assertEqual(endpoint_by_id["mongo_collection_analysis"]["name"], "MongoDB 集合分析")
         self.assertEqual(endpoint_by_id["minio_objects"]["name"], "MinIO 文件列表")
         self.assertIn("返回文件流，不是 JSON", endpoint_by_id["minio_download"]["summary"])
+        self.assertEqual(endpoint_by_id["md_allatom_c_files"]["name"], "MD-AllAtom C 文件列表")
+        self.assertIn("1_1_16", endpoint_by_id["md_allatom_c_download"]["examples"]["curl"])
+        self.assertIn("polymer_1_1_16minf.data", endpoint_by_id["md_allatom_c_download"]["examples"]["python"])
         self.assertTrue({
             "/data-catalog/overview",
             "/data-catalog/datasets",
@@ -629,6 +872,8 @@ class DataCatalogApiTest(unittest.TestCase):
             "/data-catalog/relationships",
             "/data-catalog/minio-objects",
             "/data-catalog/minio-objects/{asset_id}/download",
+            "/data-catalog/md-allatom/c-files/{folder}",
+            "/data-catalog/md-allatom/c-files/{folder}/{filename}/download",
         }.issubset(paths))
         serialized = response.text
         self.assertIn("$POLY_AGENT_TOKEN", serialized)
@@ -655,12 +900,88 @@ class DataCatalogApiTest(unittest.TestCase):
                 "/api/v1/data-catalog/relationships",
                 "/api/v1/data-catalog/minio-objects?dataset_id=radonpy_pi1070",
                 "/api/v1/data-catalog/minio-objects/radonpy_pi1070__readme/download",
+                "/api/v1/data-catalog/md-allatom/c-files/1_1_16",
+                "/api/v1/data-catalog/md-allatom/c-files/1_1_16/polymer_1_1_16minf.data/download",
             ]
             statuses = [self.client.get(url).status_code for url in urls]
         finally:
             settings.auth_enabled = original_auth_enabled
 
         self.assertEqual(statuses, [401 for _ in statuses])
+
+    def test_md_allatom_c_download_endpoint_returns_file_headers_without_storage_uri(self) -> None:
+        object_key = "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16minf.data"
+        fake_s3 = FakeS3Client(
+            {
+                object_key: {
+                    "content": b"LAMMPS data\n",
+                    "mime_type": "application/octet-stream",
+                }
+            }
+        )
+        fake_db = FakeMongoDatabase(
+            {
+                "md_allatom_files": [
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-1",
+                        "family": "C",
+                        "object_key": object_key,
+                        "filename": "polymer_1_1_16minf.data",
+                        "size_bytes": 12,
+                        "sync_status": "uploaded",
+                    }
+                ]
+            }
+        )
+        with (
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+            patch("app.services.data_catalog_service.S3ObjectClient", return_value=fake_s3),
+        ):
+            response = self.client.get(
+                "/api/v1/data-catalog/md-allatom/c-files/1_1_16/polymer_1_1_16minf.data/download"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"LAMMPS data\n")
+        self.assertEqual(response.headers["content-type"].split(";")[0], "application/octet-stream")
+        self.assertEqual(response.headers["content-length"], str(len(b"LAMMPS data\n")))
+        self.assertIn("polymer_1_1_16minf.data", response.headers["content-disposition"])
+        self.assertNotIn(object_key, response.text)
+        self.assertEqual(fake_s3.get_calls, [("polymer-data", object_key)])
+
+    def test_md_allatom_c_list_endpoint_returns_template_download_paths(self) -> None:
+        fake_db = FakeMongoDatabase(
+            {
+                "md_allatom_files": [
+                    {
+                        "md_allatom_file_id": "MDALLATOM-FILE-C-1",
+                        "family": "C",
+                        "object_key": "datasets/md_allatom/raw/C/1_1_16/polymer_1_1_16minf.data",
+                        "filename": "polymer_1_1_16minf.data",
+                        "size_bytes": 12,
+                        "sync_status": "already_migrated",
+                    }
+                ]
+            }
+        )
+        with (
+            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
+            patch("app.services.data_catalog_service.S3ObjectClient", return_value=FakeS3Client({})),
+        ):
+            response = self.client.get("/api/v1/data-catalog/md-allatom/c-files/1_1_16", params={"keyword": "minf"})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["folder"], "1_1_16")
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["items"][0]["filename"], "polymer_1_1_16minf.data")
+        self.assertFalse(data["items"][0]["exists"])
+        self.assertEqual(
+            data["items"][0]["download_path"],
+            "/data-catalog/md-allatom/c-files/1_1_16/polymer_1_1_16minf.data/download",
+        )
 
     def test_minio_download_endpoint_returns_file_headers_without_storage_uri(self) -> None:
         fake_s3 = FakeS3Client(
