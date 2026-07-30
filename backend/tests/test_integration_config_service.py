@@ -217,7 +217,7 @@ class IntegrationConfigServiceTest(ComputationTestCase):
             ) as health:
                 health.return_value.status = "unavailable"
                 health.return_value.configured = False
-                health.return_value.message = "Literature RAG 服务未配置或本地未发现。"
+                health.return_value.message = "WeKnora 服务未配置。"
                 health.return_value.systems = []
                 items = IntegrationStatusService().get_status()["items"]
         finally:
@@ -227,10 +227,10 @@ class IntegrationConfigServiceTest(ComputationTestCase):
 
         self.assertIn("mongodb", by_service)
         self.assertIn("data-asset-mongodb", by_service)
-        self.assertIn("literature-rag", by_service)
+        self.assertIn("weknora", by_service)
         self.assertIn("knowledge-graph", by_service)
         self.assertEqual(by_service["mongodb"]["details"]["database"], settings.mongodb_database)
-        self.assertEqual(by_service["literature-rag"]["status"], "not_configured")
+        self.assertEqual(by_service["weknora"]["status"], "not_configured")
         self.assertEqual(by_service["knowledge-graph"]["status"], "not_configured")
 
     def test_executable_status_cleans_banner_versions(self) -> None:

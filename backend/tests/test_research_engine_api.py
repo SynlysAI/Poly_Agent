@@ -158,7 +158,7 @@ class ProblemSpecApiTest(ComputationTestCase):
             status="unavailable",
             configured=False,
             demo_available=False,
-            message="Literature RAG 服务未配置或本地未发现。",
+            message="WeKnora 服务未配置。",
             systems=[],
         )
         original_llm_model = settings.llm_model
@@ -195,10 +195,10 @@ class ProblemSpecApiTest(ComputationTestCase):
 
         self.assertFalse(data["ready"])
         self.assertTrue(data["can_start"])
-        self.assertEqual(by_service["literature-rag"]["status"], "warning")
-        self.assertEqual(by_service["literature-rag"]["level"], "not_configured")
-        self.assertFalse(by_service["literature-rag"]["demo_fallback"])
-        self.assertFalse(by_service["literature-rag"]["blocking"])
+        self.assertEqual(by_service["weknora"]["status"], "warning")
+        self.assertEqual(by_service["weknora"]["level"], "not_configured")
+        self.assertFalse(by_service["weknora"]["demo_fallback"])
+        self.assertFalse(by_service["weknora"]["blocking"])
         self.assertEqual(by_service["artifact-store"]["status"], "ready")
         self.assertEqual(by_service["computation-engine"]["status"], "ready")
         self.assertEqual(by_service["alchemist-backend"]["status"], "ready")
@@ -206,7 +206,7 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertEqual(by_service["research-llm"]["model"], "gpt-test")
         self.assertEqual(by_service["research-llm"]["level"], "configured_pending_verification")
         stage_modes = {item["stage_key"]: item for item in data["stage_modes"]}
-        self.assertEqual(stage_modes["KNOWLEDGE_RETRIEVAL"]["capability_id"], "literature-rag")
+        self.assertEqual(stage_modes["KNOWLEDGE_RETRIEVAL"]["capability_id"], "weknora")
         self.assertEqual(stage_modes["STRUCTURE_FEATURE"]["execution_mode"], "mock_fallback")
         self.assertEqual(stage_modes["MODEL_UPDATE"]["provider"], "default_openai")
 
@@ -216,9 +216,9 @@ class ProblemSpecApiTest(ComputationTestCase):
             status="warning",
             configured=False,
             demo_available=True,
-            message="使用内置 demo corpus。",
+            message="WeKnora 服务未配置。",
             systems=["demo"],
-            backend="memory",
+            backend="weknora",
         )
         with patch("app.services.integration_status_service.IntegrationStatusService._can_connect", return_value=False), \
              patch("app.services.knowledge_service.KnowledgeService.health", return_value=rag_demo):
@@ -227,10 +227,10 @@ class ProblemSpecApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200, resp.text)
         data = resp.json()["data"]
         items = {(item["module_id"], item["capability_id"]): item for item in data["items"]}
-        self.assertIn(("knowledge", "literature-rag"), items)
+        self.assertIn(("knowledge", "weknora"), items)
         self.assertIn(("research-engine", "research-llm"), items)
-        self.assertEqual(items[("knowledge", "literature-rag")]["level"], "demo_fallback")
-        self.assertTrue(items[("knowledge", "literature-rag")]["demo_fallback"])
+        self.assertEqual(items[("knowledge", "weknora")]["level"], "demo_fallback")
+        self.assertTrue(items[("knowledge", "weknora")]["demo_fallback"])
         self.assertIn(
             items[("research-engine", "research-llm")]["level"],
             {"not_configured", "configured_pending_verification", "production_ready", "unavailable"},

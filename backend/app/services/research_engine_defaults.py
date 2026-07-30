@@ -1012,7 +1012,7 @@ DEFAULT_MATERIAL_PROFILES: dict[MaterialScope, dict] = {
         "profile_id": "fluoropolymer",
         "display_name": "氟基高分子",
         "default_algorithm_pipeline": {
-            "literature": "literature_rag.default",
+            "literature": "weknora_adapter",
             "structure_feature": "polymer_descriptor.default",
             "compute_predict": ["local_xtb_adapter", "fluoropolymer_predictor.v1"],
             "recommender": "mobo.default",
@@ -1034,7 +1034,7 @@ DEFAULT_MATERIAL_PROFILES: dict[MaterialScope, dict] = {
         "profile_id": "carbon_polymer",
         "display_name": "碳基高分子",
         "default_algorithm_pipeline": {
-            "literature": "literature_rag.default",
+            "literature": "weknora_adapter",
             "structure_feature": "polymer_descriptor.default",
             "compute_predict": ["local_xtb_adapter"],
             "recommender": "mobo.default",
@@ -1049,7 +1049,7 @@ DEFAULT_MATERIAL_PROFILES: dict[MaterialScope, dict] = {
         "profile_id": "silicon_polymer",
         "display_name": "硅基高分子",
         "default_algorithm_pipeline": {
-            "literature": "literature_rag.default",
+            "literature": "weknora_adapter",
             "structure_feature": "polymer_descriptor.default",
             "compute_predict": ["local_xtb_adapter"],
             "recommender": "mobo.default",
@@ -1064,7 +1064,7 @@ DEFAULT_MATERIAL_PROFILES: dict[MaterialScope, dict] = {
         "profile_id": "fluoro_carbon_copolymer",
         "display_name": "含氟-碳共聚体系",
         "default_algorithm_pipeline": {
-            "literature": "literature_rag.default",
+            "literature": "weknora_adapter",
             "structure_feature": "polymer_descriptor.default",
             "compute_predict": ["local_xtb_adapter", "fluoropolymer_predictor.v1"],
             "recommender": "mobo.default",
@@ -1080,7 +1080,7 @@ DEFAULT_MATERIAL_PROFILES: dict[MaterialScope, dict] = {
         "profile_id": "universal",
         "display_name": "通用材料",
         "default_algorithm_pipeline": {
-            "literature": "literature_rag.default",
+            "literature": "weknora_adapter",
             "structure_feature": "polymer_descriptor.default",
             "compute_predict": ["local_xtb_adapter"],
             "recommender": "mobo.default",

@@ -1,4 +1,4 @@
-"""Knowledge base API coverage for the standalone literature RAG service."""
+"""Knowledge base API coverage for the WeKnora-backed adapter."""
 
 from __future__ import annotations
 
@@ -16,42 +16,54 @@ try:
 except ImportError:
     from _computation_test_utils import ComputationTestCase
 
+from app.core.config import settings
+from app.services.knowledge_service import KnowledgeService
+
 
 class FakeResponse:
+    """模拟 httpx 响应对象。"""
+
     def __init__(self, data, status_code=200):
         self._data = data
         self.status_code = status_code
         self.text = "ok"
 
     def raise_for_status(self):
+        """在错误状态码时抛出 httpx 异常。"""
         if self.status_code >= 400:
-            request = httpx.Request("GET", "http://literature.test")
+            request = httpx.Request("GET", "http://weknora.test")
             response = httpx.Response(self.status_code, request=request)
             raise httpx.HTTPStatusError("error", request=request, response=response)
         return None
 
     def json(self):
+        """返回 JSON 响应体。"""
         return self._data
 
 
 class KnowledgeBaseApiTest(ComputationTestCase):
+    """覆盖 PolyAgent 知识库 API 到 WeKnora 契约的映射。"""
+
     def setUp(self):
         super().setUp()
         self.base_url = "/api/v1/knowledge-bases"
         self.env_keys = (
-            "APP_ENV",
-            "LITERATURE_RAG_BASE_URL",
-            "LITERATURE_RAG_API_KEY",
-            "LITERATURE_RAG_QUERY_API_KEY",
-            "LITERATURE_RAG_DEFAULT_CORPUS_ID",
-            "KNOWLEDGE_RAG_BASE_URL",
-            "KNOWLEDGE_RAG_API_KEY",
+            "WEKNORA_BASE_URL",
+            "WEKNORA_API_KEY",
+            "WEKNORA_DEFAULT_KB_ID",
             "KNOWLEDGE_DEFAULT_SYSTEM_ID",
         )
         self.original_env = {key: os.environ.get(key) for key in self.env_keys}
+        self.original_settings = {
+            "weknora_base_url": settings.weknora_base_url,
+            "weknora_api_key": settings.weknora_api_key,
+            "weknora_default_kb_id": settings.weknora_default_kb_id,
+        }
         for key in self.env_keys:
             os.environ.pop(key, None)
-        os.environ["APP_ENV"] = "production"
+        settings.weknora_base_url = ""
+        settings.weknora_api_key = ""
+        settings.weknora_default_kb_id = ""
 
     def tearDown(self):
         for key, value in self.original_env.items():
@@ -59,120 +71,84 @@ class KnowledgeBaseApiTest(ComputationTestCase):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+        for key, value in self.original_settings.items():
+            setattr(settings, key, value)
         super().tearDown()
 
-    def test_list_systems_is_empty_without_remote_configuration(self):
+    def test_list_systems_is_empty_without_weknora_configuration(self):
         response = self.client.get(f"{self.base_url}/systems")
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
         self.assertEqual(data["items"], [])
         self.assertEqual(data["total"], 0)
 
-    def test_list_systems_maps_multiple_remote_corpora(self):
-        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
+    def test_list_systems_maps_multiple_weknora_knowledge_bases(self):
+        os.environ["WEKNORA_BASE_URL"] = "http://weknora.test"
 
         class FakeClient:
-            def __init__(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
+            """模拟 WeKnora 知识库列表客户端。"""
+
+            def __init__(self, *args, **kwargs):
+                self.base_url = str(kwargs.get("base_url") or args[0])
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
             def get(self, path):
-                assert path == "/api/v1/corpora"
-                return FakeResponse({"data": {"items": [
+                assert path == "/knowledge-bases"
+                assert self.base_url == "http://weknora.test/api/v1"
+                return FakeResponse({"data": [
                     {
-                        "corpus_id": "krf_photoresist", "name": "KrF", "domain": "polymer_lithography",
-                        "material_family": "photoresist", "description": "KrF corpus",
-                        "document_count": 2, "entity_count": 4, "relation_count": 5,
-                        "status": "ready", "capabilities": ["query", "streaming", "graph"],
-                        "backend": "production", "graph_backend": "neo4j", "source_mode": "ingested_pdf",
-                        "is_demo": False, "graph_node_count": 9, "graph_relationship_count": 8,
+                        "id": "kb_photoresist",
+                        "name": "KrF",
+                        "type": "polymer_lithography",
+                        "description": "KrF corpus",
+                        "knowledge_count": 2,
+                        "chunk_count": 4,
+                        "tags": ["photoresist"],
                     },
                     {
-                        "corpus_id": "battery_polymer", "name": "Battery Polymer", "domain": "energy",
-                        "material_family": "polymer_electrolyte", "description": "Battery corpus",
-                        "indexed_document_count": 0, "status": "empty", "capabilities": ["query"],
+                        "id": "kb_empty",
+                        "name": "Empty",
+                        "type": "general",
+                        "knowledge_count": 0,
                     },
-                ], "total": 2}})
+                ]})
 
         with patch("app.services.knowledge_service.httpx.Client", FakeClient):
             response = self.client.get(f"{self.base_url}/systems")
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
         self.assertEqual(data["total"], 2)
-        self.assertEqual([item["system_id"] for item in data["items"]], ["krf_photoresist", "battery_polymer"])
-        self.assertEqual(data["items"][0]["provider"], "literature-rag")
-        self.assertEqual(data["items"][0]["data_source_id"], "literature-rag:krf_photoresist")
+        self.assertEqual([item["system_id"] for item in data["items"]], ["kb_photoresist", "kb_empty"])
+        self.assertEqual(data["items"][0]["provider"], "weknora")
+        self.assertEqual(data["items"][0]["data_source_id"], "weknora:kb_photoresist")
         self.assertEqual(data["items"][0]["status"], "ready")
-        self.assertEqual(data["items"][0]["backend"], "production")
-        self.assertEqual(data["items"][0]["graph_backend"], "neo4j")
-        self.assertEqual(data["items"][0]["source_mode"], "ingested_pdf")
-        self.assertFalse(data["items"][0]["is_demo"])
-        self.assertEqual(data["items"][0]["graph_node_count"], 9)
+        self.assertEqual(data["items"][0]["backend"], "weknora")
+        self.assertEqual(data["items"][0]["graph_backend"], "search-synthesis")
+        self.assertEqual(data["items"][0]["source_mode"], "weknora-api")
         self.assertEqual(data["items"][1]["status"], "empty")
 
-    def test_production_neo4j_empty_graph_is_not_ready(self):
-        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
+    def test_health_reports_invalid_weknora_key(self):
+        os.environ["WEKNORA_BASE_URL"] = "http://weknora.test"
 
         class FakeClient:
-            def __init__(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def get(self, path):
-                assert path == "/api/v1/corpora"
-                return FakeResponse({"data": {"items": [{
-                    "corpus_id": "krf_photoresist", "name": "KrF",
-                    "indexed_document_count": 30, "document_count": 30,
-                    "status": "ready", "backend": "production",
-                    "graph_backend": "neo4j", "source_mode": "ingested_pdf",
-                    "graph_node_count": 0, "graph_relationship_count": 0,
-                }]}})
+            """模拟 WeKnora 未授权响应。"""
 
-        with patch("app.services.knowledge_service.httpx.Client", FakeClient):
-            response = self.client.get(f"{self.base_url}/systems")
-        self.assertEqual(response.status_code, 200)
-        item = response.json()["data"]["items"][0]
-        self.assertEqual(item["status"], "warning")
-        self.assertEqual(item["graph_backend"], "neo4j")
-        self.assertEqual(item["indexed_document_count"], 30)
-
-    def test_list_systems_auto_discovers_local_literature_rag_in_local_env(self):
-        os.environ["APP_ENV"] = "dev"
-        os.environ["LITERATURE_RAG_QUERY_API_KEY"] = "query-secret"
-
-        class FakeClient:
             def __init__(self, *args, **kwargs):
-                self.base_url = str(kwargs.get("base_url") or args[0])
-                self.headers = kwargs.get("headers", {})
+                pass
 
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
             def get(self, path):
-                if path == "/health":
-                    return FakeResponse({"data": {"service": "literature-rag", "status": "ready"}})
-                assert path == "/api/v1/corpora"
-                assert self.base_url == "http://127.0.0.1:8200"
-                assert self.headers["Authorization"] == "Bearer query-secret"
-                return FakeResponse({"data": {"items": [
-                    {"corpus_id": "krf_photoresist", "name": "KrF", "indexed_document_count": 14, "status": "ready"},
-                ]}})
-
-        with patch("app.services.knowledge_service.httpx.Client", FakeClient):
-            response = self.client.get(f"{self.base_url}/systems")
-        self.assertEqual(response.status_code, 200)
-        data = response.json()["data"]
-        self.assertEqual(data["items"][0]["system_id"], "krf_photoresist")
-        self.assertEqual(data["items"][0]["status"], "ready")
-
-    def test_health_reports_discovered_service_with_missing_or_invalid_key(self):
-        os.environ["APP_ENV"] = "dev"
-
-        class FakeClient:
-            def __init__(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def get(self, path):
-                if path == "/health":
-                    return FakeResponse({"data": {"service": "literature-rag", "status": "ready"}})
-                assert path == "/api/v1/corpora"
+                assert path == "/knowledge-bases"
                 return FakeResponse({"error": {"code": "UNAUTHORIZED"}}, status_code=401)
 
         with patch("app.services.knowledge_service.httpx.Client", FakeClient):
@@ -181,70 +157,87 @@ class KnowledgeBaseApiTest(ComputationTestCase):
         data = response.json()["data"]
         self.assertEqual(data["status"], "warning")
         self.assertFalse(data["configured"])
-        self.assertIn("API Key", data["message"])
+        self.assertIn("X-API-Key", data["message"])
 
-    def test_default_system_id_falls_back_to_literature_default_corpus_id(self):
-        os.environ["LITERATURE_RAG_DEFAULT_CORPUS_ID"] = "krf_photoresist"
+    def test_default_system_id_uses_weknora_default_kb_id(self):
+        os.environ["WEKNORA_DEFAULT_KB_ID"] = "kb_photoresist"
         response = self.client.get(f"{self.base_url}/systems")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["data"]["default_system_id"], "krf_photoresist")
+        self.assertEqual(response.json()["data"]["default_system_id"], "kb_photoresist")
 
-    def test_query_without_service_returns_unavailable(self):
+    def test_query_without_weknora_service_returns_unavailable(self):
         response = self.client.post(f"{self.base_url}/query", json={
-            "system_id": "any_corpus", "question": "What controls sensitivity?",
-            "top_k": 3, "include_graph_context": True,
+            "system_id": "any_kb",
+            "question": "What controls sensitivity?",
+            "top_k": 3,
+            "include_graph_context": True,
         })
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("demo", response.text.lower())
 
-    def test_graph_endpoint_requires_query(self):
-        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
+    def test_graph_endpoint_requires_query_when_wiki_graph_unavailable(self):
+        os.environ["WEKNORA_BASE_URL"] = "http://weknora.test"
 
         class FakeClient:
-            def __init__(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def get(self, path):
-                assert path == "/api/v1/corpora"
-                return FakeResponse({"data": {"items": [{"corpus_id": "krf_photoresist", "name": "KrF"}]}})
+            """模拟只有知识库列表可用的 WeKnora 客户端。"""
 
-        with patch("app.services.knowledge_service.httpx.Client", FakeClient):
-            response = self.client.get(f"{self.base_url}/krf_photoresist/graph")
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def get(self, path):
+                assert path == "/knowledge-bases"
+                return FakeResponse({"data": [{"id": "kb_photoresist", "name": "KrF", "knowledge_count": 1}]})
+
+        with patch("app.services.knowledge_service.httpx.Client", FakeClient), \
+             patch.object(KnowledgeService, "_wiki_subgraph", side_effect=RuntimeError("wiki unavailable")):
+            response = self.client.get(f"{self.base_url}/kb_photoresist/graph")
         self.assertEqual(response.status_code, 400)
 
-    def test_query_maps_literature_service_contract_and_hides_key(self):
-        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
-        os.environ["LITERATURE_RAG_API_KEY"] = "replace-with-query-key"
-        os.environ["LITERATURE_RAG_QUERY_API_KEY"] = "query-secret"
+    def test_query_maps_weknora_chat_response_and_hides_key(self):
+        os.environ["WEKNORA_BASE_URL"] = "http://weknora.test"
+        os.environ["WEKNORA_API_KEY"] = "query-secret"
 
         class FakeClient:
-            def __init__(self, *args, **kwargs): self.headers = kwargs.get("headers", {})
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def get(self, path):
-                assert path == "/api/v1/corpora"
-                assert self.headers["Authorization"] == "Bearer query-secret"
-                return FakeResponse({"data": {"items": [{"corpus_id": "krf_photoresist", "name": "KrF"}]}})
-            def post(self, path, json=None):
-                assert path == "/api/v1/query"
-                assert json["corpus_id"] == "krf_photoresist"
-                assert self.headers["Authorization"] == "Bearer query-secret"
-                return FakeResponse({"data": {
-                    "corpus_id": "krf_photoresist", "question": json["question"], "mode": json["mode"],
-                    "answer": "PAG controls sensitivity.",
-                    "hits": [{"source_id": "doc_1", "title": "KrF PAG paper", "snippet": "evidence",
-                              "source": "https://doi.org/10.1000/krf", "doi": "10.1000/krf",
-                              "url": "https://doi.org/10.1000/krf", "score": 0.9,
-                              "metadata": {"source_kind": "publisher_oa", "storage_uri": "blocked"}}],
-                    "citations": [{"source_id": "doc_1", "title": "KrF PAG paper", "doi": "10.1000/krf",
-                                   "url": "https://doi.org/10.1000/krf", "chunk_id": "chunk_00001"}],
-                    "graph_context": None, "configured": True, "message": "ok",
-                }})
+            """模拟 WeKnora 知识库列表客户端。"""
 
-        with patch("app.services.knowledge_service.httpx.Client", FakeClient):
+            def __init__(self, *args, **kwargs):
+                self.headers = kwargs.get("headers", {})
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def get(self, path):
+                assert path == "/knowledge-bases"
+                assert self.headers["X-API-Key"] == "query-secret"
+                return FakeResponse({"data": [{"id": "kb_photoresist", "name": "KrF", "knowledge_count": 1}]})
+
+        references = [{
+            "knowledge_id": "doc_1",
+            "id": "chunk_00001",
+            "knowledge_title": "KrF PAG paper",
+            "content": "PAG evidence",
+            "doi": "10.1000/krf",
+            "url": "https://doi.org/10.1000/krf",
+            "score": 0.9,
+            "metadata": {"storage_uri": "blocked", "source_kind": "publisher_oa"},
+        }]
+        with patch("app.services.knowledge_service.httpx.Client", FakeClient), \
+             patch.object(KnowledgeService, "_create_session", return_value="session-1"), \
+             patch.object(KnowledgeService, "_consume_chat_stream", return_value=("PAG controls sensitivity.", references)):
             response = self.client.post(f"{self.base_url}/query", json={
-                "system_id": "krf_photoresist", "question": "What controls sensitivity?",
-                "top_k": 2, "include_graph_context": False,
+                "system_id": "kb_photoresist",
+                "question": "What controls sensitivity?",
+                "top_k": 2,
+                "include_graph_context": False,
             })
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
@@ -253,126 +246,102 @@ class KnowledgeBaseApiTest(ComputationTestCase):
         self.assertNotIn("storage_uri", response.text)
         self.assertNotIn("query-secret", response.text)
 
-    def test_query_forwards_chinese_question_to_literature_service(self):
-        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
-        os.environ["LITERATURE_RAG_QUERY_API_KEY"] = "query-secret"
+    def test_query_forwards_chinese_question_to_weknora_chat(self):
+        os.environ["WEKNORA_BASE_URL"] = "http://weknora.test"
         captured = {}
 
         class FakeClient:
-            def __init__(self, *args, **kwargs): self.headers = kwargs.get("headers", {})
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def get(self, path):
-                assert path == "/api/v1/corpora"
-                return FakeResponse({"data": {"items": [{"corpus_id": "krf_photoresist", "name": "KrF"}]}})
-            def post(self, path, json=None):
-                captured.update(json or {})
-                return FakeResponse({"data": {
-                    "corpus_id": "krf_photoresist", "question": json["question"], "mode": json["mode"],
-                    "answer": "KrF photoresist evidence.",
-                    "hits": [{"source_id": "doc_1", "title": "KrF overview", "snippet": "photoresist",
-                              "doi": "10.1000/zh", "url": "https://doi.org/10.1000/zh", "score": 0.8}],
-                    "citations": [{"source_id": "doc_1", "title": "KrF overview", "doi": "10.1000/zh",
-                                   "url": "https://doi.org/10.1000/zh", "chunk_id": "chunk_00001"}],
-                    "graph_context": None, "configured": True, "message": "ok",
-                }})
+            """模拟 WeKnora 知识库列表客户端。"""
 
-        with patch("app.services.knowledge_service.httpx.Client", FakeClient):
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def get(self, path):
+                assert path == "/knowledge-bases"
+                return FakeResponse({"data": [{"id": "kb_photoresist", "name": "KrF", "knowledge_count": 1}]})
+
+        def fake_consume_chat_stream(self, base_url, session_id, payload):
+            """记录发送给 WeKnora 会话问答的中文问题。"""
+            captured["question"] = payload.question
+            return "KrF photoresist evidence.", [{
+                "knowledge_id": "doc_1",
+                "id": "chunk_zh",
+                "knowledge_title": "KrF overview",
+                "content": "photoresist",
+                "doi": "10.1000/zh",
+                "url": "https://doi.org/10.1000/zh",
+                "score": 0.8,
+            }]
+
+        with patch("app.services.knowledge_service.httpx.Client", FakeClient), \
+             patch.object(KnowledgeService, "_create_session", return_value="session-1"), \
+             patch.object(KnowledgeService, "_consume_chat_stream", fake_consume_chat_stream):
             response = self.client.post(f"{self.base_url}/query", json={
-                "system_id": "krf_photoresist", "question": "KrF光刻胶是什么？",
-                "top_k": 3, "include_graph_context": False,
+                "system_id": "kb_photoresist",
+                "question": "KrF光刻胶是什么？",
+                "top_k": 3,
+                "include_graph_context": False,
             })
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["question"], "KrF光刻胶是什么？")
         self.assertEqual(response.json()["data"]["hits"][0]["doi"], "10.1000/zh")
 
-    def test_document_inventory_response_remains_sanitized(self):
-        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
-        os.environ["LITERATURE_RAG_QUERY_API_KEY"] = "query-secret"
+    def test_subgraph_maps_weknora_search_results(self):
+        os.environ["WEKNORA_BASE_URL"] = "http://weknora.test"
 
         class FakeClient:
-            def __init__(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
+            """模拟 WeKnora 列表和无总结检索客户端。"""
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
             def get(self, path):
-                assert path == "/api/v1/corpora"
-                return FakeResponse({"data": {"items": [{"corpus_id": "krf_photoresist", "name": "KrF"}]}})
+                assert path == "/knowledge-bases"
+                return FakeResponse({"data": [{"id": "kb_battery", "name": "Battery Polymer", "knowledge_count": 1}]})
+
             def post(self, path, json=None):
-                return FakeResponse({"data": {
-                    "corpus_id": "krf_photoresist", "question": json["question"], "mode": json["mode"],
-                    "answer": "- Indexed KrF paper [1]",
-                    "hits": [{"source_id": "doc_1", "title": "Indexed KrF paper", "snippet": "DOI: 10.1000/inventory",
-                              "doi": "10.1000/inventory", "url": "https://doi.org/10.1000/inventory",
-                              "score": 1.0, "metadata": {"storage_uri": "s3://secret", "object_key": "hidden",
-                                                        "source_kind": "authorized_upload"}}],
-                    "citations": [{"source_id": "doc_1", "title": "Indexed KrF paper", "doi": "10.1000/inventory",
-                                   "url": "https://doi.org/10.1000/inventory"}],
-                    "graph_context": None, "configured": True, "message": "document_inventory",
-                }})
+                assert path == "/knowledge-search"
+                assert json["query"] == "polymer electrolyte"
+                assert json["knowledge_base_ids"] == ["kb_battery"]
+                return FakeResponse({"data": [
+                    {
+                        "knowledge_id": "doc_1",
+                        "id": "chunk_1",
+                        "knowledge_title": "Battery paper",
+                        "content": "polymer electrolyte ionic conductivity",
+                        "score": 0.95,
+                        "metadata": {
+                            "source_kind": "authorized_upload",
+                            "storage_uri": "s3://secret",
+                            "embedding": [0.1],
+                        },
+                    },
+                ]})
 
-        with patch("app.services.knowledge_service.httpx.Client", FakeClient):
-            response = self.client.post(f"{self.base_url}/query", json={
-                "system_id": "krf_photoresist", "question": "帮我找全部的文档",
-                "top_k": 5, "include_graph_context": False,
-            })
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()["data"]
-        self.assertEqual(data["message"], "document_inventory")
-        self.assertEqual(data["hits"][0]["metadata"], {"source_kind": "authorized_upload"})
-        self.assertNotIn("storage_uri", response.text)
-        self.assertNotIn("object_key", response.text)
-        self.assertNotIn("query-secret", response.text)
-
-    def test_subgraph_maps_new_graph_contract(self):
-        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
-
-        class FakeClient:
-            def __init__(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def get(self, path, params=None):
-                if path == "/api/v1/corpora":
-                    return FakeResponse({"data": {"items": [{"corpus_id": "battery_polymer", "name": "Battery Polymer"}]}})
-                assert path == "/api/v1/corpora/battery_polymer/graph/subgraph"
-                assert params["query"] == "polymer electrolyte"
-                return FakeResponse({"data": {
-                    "corpus_id": "battery_polymer",
-                    "nodes": [
-                        {"id": "paper:1", "label": "Battery paper", "type": "Paper", "score": 1,
-                         "properties": {"document_id": "doc_1", "doi": "10.1000/battery"}},
-                        {"id": "metric:1", "label": "ionic conductivity", "type": "performance_metric", "score": 1,
-                         "properties": {"document_id": "doc_1"}},
-                        {"id": "material:1", "label": "polymer electrolyte", "type": "Entity", "score": 1,
-                         "properties": {"document_id": "doc_1", "entity_type": "Polymer"}},
-                    ],
-                    "edges": [],
-                    "stats": {"entity_count": 1, "relation_count": 0, "document_count": 1},
-                    "configured": True, "message": "ok",
-                    "backend": "production", "graph_backend": "neo4j", "source_mode": "ingested_pdf",
-                    "is_demo": False,
-                    "provenance": {"provider": "literature-rag", "query": params["query"],
-                                   "storage_uri": "s3://secret", "object_key": "hidden",
-                                   "embedding": [0.1], "backend": "production"},
-                }})
-
-        with patch("app.services.knowledge_service.httpx.Client", FakeClient):
-            response = self.client.get(f"{self.base_url}/battery_polymer/graph/subgraph",
-                                       params={"query": "polymer electrolyte", "limit": 10})
+        with patch("app.services.knowledge_service.httpx.Client", FakeClient), \
+             patch.object(KnowledgeService, "_wiki_subgraph", side_effect=RuntimeError("wiki unavailable")):
+            response = self.client.get(
+                f"{self.base_url}/kb_battery/graph/subgraph",
+                params={"query": "polymer electrolyte", "limit": 10},
+            )
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
         self.assertEqual(data["nodes"][0]["type"], "Paper")
-        self.assertEqual(data["nodes"][1]["type"], "LithographyMetric")
-        self.assertEqual(data["nodes"][2]["type"], "Polymer")
-        self.assertEqual(data["provenance"]["provider"], "literature-rag")
-        self.assertEqual(data["backend"], "production")
-        self.assertEqual(data["graph_backend"], "neo4j")
+        self.assertEqual(data["provenance"]["provider"], "weknora")
+        self.assertEqual(data["backend"], "weknora")
+        self.assertEqual(data["graph_backend"], "search-synthesis")
         self.assertNotIn("storage_uri", response.text)
-        self.assertNotIn("object_key", response.text)
         self.assertNotIn("embedding", response.text)
-
-    def test_legacy_environment_variable_remains_supported(self):
-        os.environ["KNOWLEDGE_RAG_BASE_URL"] = "http://legacy.test"
-        response = self.client.get(f"{self.base_url}/health")
-        self.assertEqual(response.status_code, 200)
