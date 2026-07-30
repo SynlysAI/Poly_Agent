@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "test:knowledge-graph-keywords": "node src/utils/knowledgeGraphKeywords.test.mjs",
+    "test:dialogue-preferences": "node src/utils/dialoguePreferences.test.mjs",
     "test:llm-models": "node src/utils/llmModels.test.mjs",
     "test:vertical-prediction": "node src/utils/verticalPredictionState.test.mjs && node src/utils/verticalPredictionJson.test.mjs",
     "test:poly-data-groups": "node src/utils/polyDataDatasetGroups.test.mjs",

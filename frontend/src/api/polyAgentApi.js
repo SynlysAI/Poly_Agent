@@ -390,6 +390,25 @@ export function downloadDataCatalogMinioObject(assetId, fallbackName = 'data-ass
     }))
 }
 
+export function listMdAllatomCFiles(folder, params = {}) {
+  return apiClient
+    .get(`/data-catalog/md-allatom/c-files/${encodeURIComponent(folder)}`, { params })
+    .then(unwrapResponse)
+}
+
+export function downloadMdAllatomCFile(folder, filename, fallbackName = 'md-allatom-c-file.dat') {
+  return apiClient
+    .get(
+      `/data-catalog/md-allatom/c-files/${encodeURIComponent(folder)}/${encodeURIComponent(filename)}/download`,
+      { responseType: 'blob' },
+    )
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], fallbackName),
+      contentType: response.headers['content-type'] || 'application/octet-stream',
+    }))
+}
+
 export function listDataCatalogCollectionRecords(collectionName, params = {}) {
   return apiClient.get(`/data-catalog/mongo-collections/${encodeURIComponent(collectionName)}/records`, { params }).then(unwrapResponse)
 }

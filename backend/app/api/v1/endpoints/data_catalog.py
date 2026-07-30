@@ -17,6 +17,7 @@ from app.schemas.data_catalog import (
     DataCatalogDatasetProfileData,
     DataCatalogDatasetRecordListData,
     DataCatalogDatasetVisualSamplesData,
+    DataCatalogMdAllatomCFileListData,
     DataCatalogDatasetListData,
     DataCatalogMinioObjectListData,
     DataCatalogMongoCollectionListData,
@@ -128,6 +129,40 @@ def list_data_catalog_minio_objects(
 ) -> ApiResponse[DataCatalogMinioObjectListData]:
     """查询 MinIO 白名单逻辑对象。"""
     return ApiResponse(code=0, message="ok", data=DataCatalogService().list_minio_objects(dataset_id=dataset_id))
+
+
+@router.get("/md-allatom/c-files/{folder}", response_model=ApiResponse[DataCatalogMdAllatomCFileListData])
+def list_data_catalog_md_allatom_c_files(
+    folder: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    keyword: str | None = Query(default=None, max_length=160),
+) -> ApiResponse[DataCatalogMdAllatomCFileListData]:
+    """按 C 类目录查询 MD-AllAtom 已入库原始文件。"""
+    data = DataCatalogService().list_md_allatom_c_files(
+        folder,
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/md-allatom/c-files/{folder}/{filename}/download")
+def download_data_catalog_md_allatom_c_file(folder: str, filename: str) -> StreamingResponse:
+    """通过后端代理下载 MD-AllAtom C 类已入库原始文件。"""
+    download = DataCatalogService().open_md_allatom_c_file(folder, filename)
+    headers = {
+        "Content-Disposition": _content_disposition(download.asset.filename),
+        "X-Content-Type-Options": "nosniff",
+    }
+    if download.asset.size_bytes is not None:
+        headers["Content-Length"] = str(download.asset.size_bytes)
+    return StreamingResponse(
+        _iter_download_body(download.body),
+        media_type=download.asset.mime_type,
+        headers=headers,
+    )
 
 
 @router.get("/minio-objects/{asset_id}/download")

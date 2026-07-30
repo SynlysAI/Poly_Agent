@@ -382,3 +382,26 @@ class DataCatalogMinioObjectListData(BaseModel):
 
     items: list[DataCatalogMinioObjectItem]
     total: int
+
+
+class DataCatalogMdAllatomCFileItem(BaseModel):
+    """MD-AllAtom C 类已入库原始文件。"""
+
+    folder: str
+    filename: str
+    exists: bool = False
+    size_bytes: int | None = None
+    mime_type: str = "application/octet-stream"
+    sync_status: str | None = None
+    updated_at: datetime | str | None = None
+    download_path: str
+
+
+class DataCatalogMdAllatomCFileListData(BaseModel):
+    """MD-AllAtom C 类目录文件分页响应。"""
+
+    folder: str
+    items: list[DataCatalogMdAllatomCFileItem]
+    total: int
+    page: int
+    page_size: int

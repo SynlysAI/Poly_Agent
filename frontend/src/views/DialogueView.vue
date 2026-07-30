@@ -7,6 +7,12 @@ import { ArrowDown, ChatLineRound, Promotion, Reading } from '@element-plus/icon
 import { getApiErrorMessage, getLlmModels, listKnowledgeSystems, streamAssistantChat } from '../api/polyAgentApi'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
+import {
+  loadKnowledgePreference,
+  loadWebSearchPreference,
+  saveKnowledgePreference,
+  saveWebSearchPreference,
+} from '../utils/dialoguePreferences'
 import { buildSelectableLlmModels } from '../utils/llmModels'
 
 const route = useRoute()
@@ -22,8 +28,6 @@ const knowledgeSystems = ref([])
 const selectedModelKey = ref('')
 const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
 const useWebSearch = ref(loadWebSearchPreference())
-const WEB_SEARCH_STORAGE_KEY = 'poly-agent-dialogue-use-web-search'
-const KNOWLEDGE_STORAGE_KEY = 'poly-agent-dialogue-knowledge-base-id'
 
 const messages = ref([
   {
@@ -72,7 +76,7 @@ const answerModeLabelMap = {
 
 const retrievalStatusLabelMap = {
   not_needed: '无需检索',
-  skipped_disabled: '检索已关闭',
+  skipped_disabled: '全局检索未启用',
   searched: '已检索证据',
   no_results: '无检索结果',
   failed: '检索失败',
@@ -87,38 +91,14 @@ function normalizeMode(value) {
   return ['qa', 'deep', 'model'].includes(mode) ? mode : 'qa'
 }
 
-function loadWebSearchPreference() {
-  const raw = window.localStorage.getItem(WEB_SEARCH_STORAGE_KEY)
-  if (raw === '1') return true
-  if (raw === '0') return false
-  return false
-}
-
-function loadKnowledgePreference() {
-  const raw = window.localStorage.getItem(KNOWLEDGE_STORAGE_KEY) || ''
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed)) return parsed.map((item) => String(item || '').trim()).filter(Boolean)
-  } catch {
-    return [raw].filter(Boolean)
-  }
-  return [raw].filter(Boolean)
-}
-
 watch(useWebSearch, (value) => {
-  window.localStorage.setItem(WEB_SEARCH_STORAGE_KEY, value ? '1' : '0')
+  saveWebSearchPreference(value)
 })
 
 watch(
   selectedKnowledgeBaseIds,
   (value) => {
-    const ids = Array.isArray(value) ? value.filter(Boolean) : []
-    if (ids.length) {
-      window.localStorage.setItem(KNOWLEDGE_STORAGE_KEY, JSON.stringify(ids))
-    } else {
-      window.localStorage.removeItem(KNOWLEDGE_STORAGE_KEY)
-    }
+    saveKnowledgePreference(value)
   },
   { flush: 'sync' },
 )
@@ -197,6 +177,7 @@ async function sendMessage() {
 async function sendPrompt(prompt) {
   const text = String(prompt || '').trim()
   if (!text || sending.value) return
+  const requestUseWebSearch = Boolean(useWebSearch.value)
   messages.value.push({ role: 'user', content: text })
   const requestMessages = buildRequestMessages()
   const assistantMessage = {
@@ -209,6 +190,7 @@ async function sendPrompt(prompt) {
     answer_mode: '',
     answer_scope: '',
     retrieval_status: '',
+    web_search_requested: requestUseWebSearch,
     stream_status: '准备回答...',
     stream_stage: 'queued',
     streaming: true,
@@ -228,7 +210,7 @@ async function sendPrompt(prompt) {
           current_route: router.currentRoute.value.fullPath,
           page: 'dialogue',
           mode: chatMode.value,
-          use_web_search: useWebSearch.value,
+          use_web_search: requestUseWebSearch,
           use_knowledge_base: hasKnowledgeBase.value,
           knowledge_base_ids: selectedKnowledgeBases.value.map((item) => item.system_id),
           knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
@@ -352,6 +334,23 @@ function applyAssistantStreamEvent(index, event) {
 
 function currentModeLabel() {
   return chatModeOptions.find((item) => item.value === chatMode.value)?.label || '科研问答'
+}
+
+function webSearchRequestLabel(message) {
+  if (message.web_search_requested === true) return '联网开启'
+  if (message.web_search_requested === false) return '联网关闭'
+  return ''
+}
+
+function webSearchRequestTagType(message) {
+  return message.web_search_requested ? 'primary' : 'info'
+}
+
+function retrievalStatusTagType(status) {
+  if (status === 'searched') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'skipped_disabled') return 'warning'
+  return 'info'
 }
 
 function selectChatMode(mode) {
@@ -570,11 +569,14 @@ onMounted(() => {
         >
           <div class="chat-bubble">
             <div class="chat-bubble-text">
-              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status" class="chat-meta">
+              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status || webSearchRequestLabel(msg)" class="chat-meta">
+                <el-tag v-if="webSearchRequestLabel(msg)" size="small" effect="plain" :type="webSearchRequestTagType(msg)">
+                  {{ webSearchRequestLabel(msg) }}
+                </el-tag>
                 <el-tag v-if="msg.answer_mode" size="small" effect="plain" type="info">
                   {{ answerModeLabelMap[msg.answer_mode] || msg.answer_mode }}
                 </el-tag>
-                <el-tag v-if="msg.retrieval_status" size="small" effect="plain" type="success">
+                <el-tag v-if="msg.retrieval_status" size="small" effect="plain" :type="retrievalStatusTagType(msg.retrieval_status)">
                   {{ retrievalStatusLabelMap[msg.retrieval_status] || msg.retrieval_status }}
                 </el-tag>
                 <el-tag v-if="msg.stream_status" size="small" effect="plain" type="warning">
