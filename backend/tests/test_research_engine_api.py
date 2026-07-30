@@ -1015,6 +1015,9 @@ def predict(inputs, context=None, model=None):
         self.assertEqual(version["developer_attribution"]["organization"], "Demo Institute")
         self.assertEqual(version["mentor_team"], "Demo Mentor Group")
         self.assertEqual(version["developer_attribution"]["url"], "https://example.org/model")
+        self.assertIn("overview", version["algorithm_summary"])
+        self.assertTrue(version["algorithm_summary"]["highlights"])
+        self.assertTrue(version["algorithm_summary"]["practices"])
 
     def test_multipart_algorithm_run_registers_input_and_output_artifacts(self) -> None:
         """v0.2 文件型算法可通过 multipart 输入文件并登记输出 artifact。"""

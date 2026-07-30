@@ -18,6 +18,7 @@ from app.schemas.research_engine import (
     AlgorithmIOSchema,
     AlgorithmMetadataUpdateRequest,
     AlgorithmRegistryEntry,
+    AlgorithmSummary,
     AlgorithmRun,
     AlgorithmRunCreate,
     AlgorithmRunListData,
@@ -303,6 +304,17 @@ class AlgorithmRegistrySchemaTest(ComputationTestCase):
         self.assertEqual(entry.version, "1.0.0")
         self.assertEqual(entry.call_method, "REST")
         self.assertEqual(entry.visibility, "private")
+
+    def test_algorithm_summary_schema(self) -> None:
+        """算法摘要支持结构化页面内容。"""
+        summary = AlgorithmSummary(
+            overview="这是一个用于聚合物性质预测的垂类模型。",
+            highlights=["输入为 SMILES", "输出为结构化预测结果"],
+            practices=["先跑样例输入", "大资源用资源管理绑定"],
+            generated_by="llm",
+        )
+        self.assertEqual(summary.generated_by, "llm")
+        self.assertEqual(summary.highlights[0], "输入为 SMILES")
 
     def test_algorithm_metadata_update_is_partial_and_normalized(self) -> None:
         """算法展示信息 PATCH 只包含显式字段并清理空白。"""

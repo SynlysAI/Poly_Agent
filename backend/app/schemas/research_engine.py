@@ -159,6 +159,18 @@ class AlgorithmCreditSummary(BaseModel):
     generated_at: datetime
 
 
+class AlgorithmSummary(BaseModel):
+    """算法单页摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    overview: str = Field(min_length=1, max_length=500)
+    highlights: list[str] = Field(default_factory=list)
+    practices: list[str] = Field(default_factory=list)
+    generated_by: Literal["llm", "rule"] = "rule"
+    generated_at: datetime | None = None
+
+
 class AlgorithmCreditUpdateRequest(BaseModel):
     """算法贡献信息修正请求。"""
 
@@ -822,6 +834,7 @@ class AlgorithmRegistryEntry(BaseModel):
     framework_attributions: list[AttributionItem] = Field(default_factory=list)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
     implementation_notes: str | None = Field(default=None, max_length=1000)
+    algorithm_summary: AlgorithmSummary | None = None
 
     @field_validator("algorithm_id")
     @classmethod
@@ -964,6 +977,7 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     contributors: list[AlgorithmContributor] = Field(default_factory=list)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
     implementation_notes: str | None = Field(default=None, max_length=1000)
+    algorithm_summary: AlgorithmSummary | None = None
     created_by: str
     uploaded_by: str | None = None
     activated_at: datetime | None = None

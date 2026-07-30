@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Medal, Refresh } from '@element-plus/icons-vue'
+import { Medal, Refresh, View as ViewIcon } from '@element-plus/icons-vue'
 
 import {
   activateAlgorithmVersion,
@@ -127,11 +127,6 @@ function statusLabel(status) {
   return versionLifecycleLabel(typeof status === 'string' ? { status } : status)
 }
 
-function shortDigest(value) {
-  if (!value) return '-'
-  return value.length > 22 ? `${value.slice(0, 18)}...` : value
-}
-
 function runtimeBackend(row) {
   return row.deployment?.backend || row.deployment?.kind || '未部署'
 }
@@ -144,16 +139,15 @@ function formatDate(value) {
   return formatApiDateTime(value)
 }
 
+function visibilityLabel(value) {
+  return value === 'public' ? '公开发布' : '非公开'
+}
+
 function rowAttributions(row) {
   return [
     row?.developer_attribution || selectedAlgorithm.value?.developer_attribution,
     ...(row?.method_attributions || selectedAlgorithm.value?.method_attributions || []),
   ].filter(Boolean)
-}
-
-function mentorTeamLabel(row) {
-  const value = String(row?.mentor_team || selectedAlgorithm.value?.mentor_team || '').trim()
-  return value || '-'
 }
 
 onMounted(loadAlgorithms)
@@ -180,7 +174,7 @@ onMounted(loadAlgorithms)
 
     <el-alert v-if="selectedAlgorithm" :closable="false" type="info" show-icon>
       <template #title>
-        当前 active：{{ selectedAlgorithm.active_version_id || '无' }} · 注册表状态：{{ statusLabel(selectedAlgorithm.status) }} · 导师课题组：{{ mentorTeamLabel(selectedAlgorithm) }}
+        当前 active：{{ selectedAlgorithm.active_version_id || '无' }} · 注册表状态：{{ statusLabel(selectedAlgorithm.status) }}
       </template>
     </el-alert>
     <el-alert v-if="selectedAlgorithm && !canManage" :closable="false" type="warning" show-icon title="当前账号仅可访问和调用该模型，不能修改版本或发布状态。" />
@@ -191,11 +185,38 @@ onMounted(loadAlgorithms)
       <el-table-column prop="status" label="状态" width="105"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row) }}</el-tag></template></el-table-column>
       <el-table-column label="Runtime" min-width="165"><template #default="{ row }"><code>{{ runtimeBackend(row) }}</code></template></el-table-column>
       <el-table-column label="Health" width="105"><template #default="{ row }"><el-tag size="small" :type="runtimeHealth(row) === 'ready' ? 'success' : 'info'">{{ runtimeHealth(row) }}</el-tag></template></el-table-column>
-      <el-table-column label="Package SHA256" min-width="170"><template #default="{ row }"><el-tooltip :content="row.package_sha256"><code>{{ shortDigest(row.package_sha256) }}</code></el-tooltip></template></el-table-column>
-      <el-table-column label="Runtime Digest" min-width="170"><template #default="{ row }"><el-tooltip :content="row.runtime_digest || row.image_digest || '-'"><code>{{ shortDigest(row.runtime_digest || row.image_digest) }}</code></el-tooltip></template></el-table-column>
+      <el-table-column label="追溯" width="88">
+        <template #default="{ row }">
+          <el-popover trigger="click" placement="bottom" width="320">
+            <template #reference>
+              <el-button text :icon="ViewIcon">追溯</el-button>
+            </template>
+            <div class="trace-popover">
+              <div>
+                <span>运行后端</span>
+                <code>{{ runtimeBackend(row) }}</code>
+              </div>
+              <div>
+                <span>健康状态</span>
+                <code>{{ runtimeHealth(row) }}</code>
+              </div>
+              <div>
+                <span>入口函数</span>
+                <code>{{ row.entrypoint || '-' }}</code>
+              </div>
+              <div>
+                <span>可见性</span>
+                <code>{{ visibilityLabel(row.visibility) }}</code>
+              </div>
+              <div>
+                <span>受管资源</span>
+                <code>{{ row.resource_assets?.length || 0 }} 项</code>
+              </div>
+            </div>
+          </el-popover>
+        </template>
+      </el-table-column>
       <el-table-column label="来源" min-width="170"><template #default="{ row }"><AttributionBadges :attributions="rowAttributions(row)" /></template></el-table-column>
-      <el-table-column label="导师课题组" min-width="150"><template #default="{ row }">{{ mentorTeamLabel(row) }}</template></el-table-column>
-      <el-table-column label="Environment Digest" min-width="180"><template #default="{ row }"><el-tooltip :content="row.environment_digest || '-'"><code>{{ shortDigest(row.environment_digest) }}</code></el-tooltip></template></el-table-column>
       <el-table-column prop="created_by" label="创建人" width="110" />
       <el-table-column label="创建时间" width="170"><template #default="{ row }">{{ formatDate(row.created_at) }}</template></el-table-column>
       <el-table-column label="操作" min-width="290" fixed="right">
@@ -237,13 +258,17 @@ onMounted(loadAlgorithms)
 
 <style scoped>
 .management-panel { display: grid; gap: 16px; }
-.management-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 12px; }
+.management-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 12px; user-select: none; }
 .management-toolbar > div { display: grid; gap: 6px; }
 .management-toolbar .management-actions { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .management-toolbar label { color: var(--app-ink-muted); font-size: 12px; }
 .selected-algorithm-title { color: var(--app-ink); font-size: 15px; overflow-wrap: anywhere; }
 code { font-family: var(--app-mono-font); font-size: 12px; }
 .log-block { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--app-mono-font); font-size: 12px; }
+.trace-popover { display: grid; gap: 10px; }
+.trace-popover div { display: grid; gap: 4px; }
+.trace-popover span { color: var(--app-ink-muted); font-size: 12px; }
+.trace-popover code { white-space: pre-wrap; word-break: break-all; }
 .empty-state { display: grid; gap: 4px; padding: 32px; text-align: center; color: var(--app-ink-muted); }
 .empty-state strong { color: var(--app-ink); }
 @media (max-width: 720px) { .management-toolbar { align-items: stretch; flex-direction: column; } .management-toolbar :deep(.el-select) { width: 100% !important; } }

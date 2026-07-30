@@ -31,6 +31,9 @@ const sourceFiles = ref([])
 const requirementsFiles = ref([])
 const zipFiles = ref([])
 const currentPackage = ref(null)
+const sourceUploadRef = ref(null)
+const requirementsUploadRef = ref(null)
+const zipUploadRef = ref(null)
 const expandedAdvanced = ref([])
 const availableResources = reactive({})
 const selectedResourceIds = reactive({})
@@ -391,6 +394,29 @@ function saveBlob(file) {
   URL.revokeObjectURL(url)
 }
 
+function openUploadPicker(uploadRef) {
+  const instance = uploadRef?.value || uploadRef
+  const input = instance?.$el?.querySelector('input[type="file"]') || instance?.querySelector?.('input[type="file"]')
+  input?.click()
+}
+
+function clearFileList(target) {
+  target.splice(0, target.length)
+}
+
+function replaceSingleFile(target, uploadRef) {
+  clearFileList(target)
+  openUploadPicker(uploadRef)
+}
+
+function formatFileSize(value) {
+  const size = Number(value || 0)
+  if (!size) return ''
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
 async function downloadTemplate() {
   try {
     saveBlob(await downloadAlgorithmPackageTemplate())
@@ -716,13 +742,57 @@ function viewModelDetail() {
           <div class="source-grid new-version-source">
             <section>
               <h3>新版本文件</h3>
-              <el-upload v-model:file-list="sourceFiles" drag multiple :auto-upload="false" accept=".py,.json,.md,.txt,.dat,.pkl,.joblib,.npy,.npz,.csv,.xlsx,.png,.jpg,.jpeg,.webp">
+              <el-upload
+                ref="sourceUploadRef"
+                v-model:file-list="sourceFiles"
+                drag
+                multiple
+                :auto-upload="false"
+                :show-file-list="false"
+                accept=".py,.json,.md,.txt,.dat,.pkl,.joblib,.npy,.npz,.csv,.xlsx,.png,.jpg,.jpeg,.webp"
+              >
                 <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
                 <div class="el-upload__text">拖入新脚本或模型文件，或点击选择</div>
               </el-upload>
-              <el-upload v-model:file-list="requirementsFiles" :auto-upload="false" :limit="1" accept=".txt">
-                <el-button>替换 requirements.txt</el-button>
+              <div v-if="sourceFiles.length" class="selected-file-panel">
+                <div class="selected-file-head">
+                  <strong>当前已选文件</strong>
+                  <el-button text @click="replaceSingleFile(sourceFiles, sourceUploadRef)">替换全部</el-button>
+                </div>
+                <div class="selected-file-list">
+                  <div v-for="(file, index) in sourceFiles" :key="file.uid || file.name" class="selected-file-row">
+                    <div class="selected-file-copy">
+                      <strong>{{ file.name }}</strong>
+                      <small>{{ formatFileSize(file.size) }}</small>
+                    </div>
+                    <div class="selected-file-actions">
+                      <el-button text type="danger" @click="sourceFiles.splice(index, 1)">移除</el-button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <el-upload
+                ref="requirementsUploadRef"
+                v-model:file-list="requirementsFiles"
+                :auto-upload="false"
+                :limit="1"
+                :show-file-list="false"
+                accept=".txt"
+              >
+                <el-button>选择 requirements.txt</el-button>
               </el-upload>
+              <div v-if="requirementsFiles.length" class="selected-file-panel compact">
+                <div class="selected-file-row single-file">
+                  <div class="selected-file-copy">
+                    <strong>{{ requirementsFiles[0].name }}</strong>
+                    <small>{{ formatFileSize(requirementsFiles[0].size) }}</small>
+                  </div>
+                  <div class="selected-file-actions">
+                    <el-button text @click="replaceSingleFile(requirementsFiles, requirementsUploadRef)">替换</el-button>
+                    <el-button text type="danger" @click="clearFileList(requirementsFiles)">移除</el-button>
+                  </div>
+                </div>
+              </div>
             </section>
             <el-alert
               title="名称、作者、机构、输入输出契约、资源声明和发布范围均继承当前活动版本。"
@@ -755,13 +825,58 @@ function viewModelDetail() {
         <div class="source-grid">
           <section>
             <h3>算法文件</h3>
-            <el-upload v-model:file-list="sourceFiles" drag multiple :auto-upload="false" accept=".py,.json,.md,.txt,.dat,.pkl,.joblib,.npy,.npz,.csv,.xlsx,.png,.jpg,.jpeg,.webp" @change="currentStep = Math.max(currentStep, 1)">
+            <el-upload
+              ref="sourceUploadRef"
+              v-model:file-list="sourceFiles"
+              drag
+              multiple
+              :auto-upload="false"
+              :show-file-list="false"
+              accept=".py,.json,.md,.txt,.dat,.pkl,.joblib,.npy,.npz,.csv,.xlsx,.png,.jpg,.jpeg,.webp"
+              @change="currentStep = Math.max(currentStep, 1)"
+            >
               <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
               <div class="el-upload__text">拖入 Python 源文件，或点击选择</div>
             </el-upload>
-            <el-upload v-model:file-list="requirementsFiles" :auto-upload="false" :limit="1" accept=".txt">
+            <div v-if="sourceFiles.length" class="selected-file-panel">
+              <div class="selected-file-head">
+                <strong>当前已选文件</strong>
+                <el-button text @click="replaceSingleFile(sourceFiles, sourceUploadRef)">替换全部</el-button>
+              </div>
+              <div class="selected-file-list">
+                <div v-for="(file, index) in sourceFiles" :key="file.uid || file.name" class="selected-file-row">
+                  <div class="selected-file-copy">
+                    <strong>{{ file.name }}</strong>
+                    <small>{{ formatFileSize(file.size) }}</small>
+                  </div>
+                  <div class="selected-file-actions">
+                    <el-button text type="danger" @click="sourceFiles.splice(index, 1)">移除</el-button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <el-upload
+              ref="requirementsUploadRef"
+              v-model:file-list="requirementsFiles"
+              :auto-upload="false"
+              :limit="1"
+              :show-file-list="false"
+              accept=".txt"
+            >
               <el-button>选择 requirements.txt</el-button>
             </el-upload>
+            <div v-if="requirementsFiles.length" class="selected-file-panel compact">
+              <div class="selected-file-row single-file">
+                <div class="selected-file-copy">
+                  <strong>{{ requirementsFiles[0].name }}</strong>
+                  <small>{{ formatFileSize(requirementsFiles[0].size) }}</small>
+                </div>
+                <div class="selected-file-actions">
+                  <el-button text @click="replaceSingleFile(requirementsFiles, requirementsUploadRef)">替换</el-button>
+                  <el-button text type="danger" @click="clearFileList(requirementsFiles)">移除</el-button>
+                </div>
+              </div>
+            </div>
           </section>
           <section>
             <h3>样例输入</h3>
@@ -931,10 +1046,31 @@ function viewModelDetail() {
             </el-radio-group>
           </el-form-item>
         </el-form>
-        <el-upload v-model:file-list="zipFiles" drag :auto-upload="false" :limit="1" accept=".zip" @change="currentStep = Math.max(currentStep, 1)">
+        <el-upload
+          ref="zipUploadRef"
+          v-model:file-list="zipFiles"
+          drag
+          :auto-upload="false"
+          :limit="1"
+          :show-file-list="false"
+          accept=".zip"
+          @change="currentStep = Math.max(currentStep, 1)"
+        >
           <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
           <div class="el-upload__text">拖入标准 ZIP，或点击选择</div>
         </el-upload>
+        <div v-if="zipFiles.length" class="selected-file-panel compact">
+          <div class="selected-file-row single-file">
+            <div class="selected-file-copy">
+              <strong>{{ zipFiles[0].name }}</strong>
+              <small>{{ formatFileSize(zipFiles[0].size) }}</small>
+            </div>
+            <div class="selected-file-actions">
+              <el-button text @click="replaceSingleFile(zipFiles, zipUploadRef)">替换</el-button>
+              <el-button text type="danger" @click="clearFileList(zipFiles)">移除</el-button>
+            </div>
+          </div>
+        </div>
       </section>
     </section>
 
@@ -1068,6 +1204,18 @@ h3 { font-size: 15px; }
 .source-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr); gap: 18px; margin-top: 8px; }
 .source-grid section { min-width: 0; }
 .source-grid h3, .contract-preview h3 { margin-bottom: 10px; }
+.selected-file-panel { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; }
+.selected-file-panel.compact { margin-top: 10px; }
+.selected-file-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.selected-file-head strong { color: var(--app-ink); font-size: 13px; }
+.selected-file-list { display: grid; gap: 8px; }
+.selected-file-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 8px; border-top: 1px solid var(--app-border-soft); }
+.selected-file-row:first-child { padding-top: 0; border-top: 0; }
+.selected-file-row.single-file { padding-top: 0; border-top: 0; }
+.selected-file-copy { min-width: 0; display: grid; gap: 3px; }
+.selected-file-copy strong { color: var(--app-ink); font-size: 13px; overflow-wrap: anywhere; }
+.selected-file-copy small { color: var(--app-ink-muted); font-size: 12px; }
+.selected-file-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .code-input :deep(textarea), pre { font-family: var(--app-mono-font); font-size: 12px; }
 .advanced-collapse { margin-top: 16px; border-top: 1px solid var(--app-border-soft); border-bottom: none; }
 .advanced-title { color: var(--app-ink); font-weight: 700; }
