@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Check, Download, Refresh, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
@@ -31,6 +31,7 @@ const route = useRoute()
 const router = useRouter()
 
 const loading = ref(false)
+const validationLoading = ref(false)
 const deploying = ref(false)
 const examples = ref([])
 const handoffs = ref([])
@@ -38,12 +39,15 @@ const currentHandoff = ref(null)
 const documentFiles = ref([])
 const uploadFiles = ref([])
 const validation = ref(null)
+const validationProgressIndex = ref(0)
 const parsedDocument = ref(null)
 const applyingDocumentDraft = ref(false)
 const handoffStep = ref(0)
 const showHistory = ref(false)
+let validationProgressTimer = null
 const requirementDocumentAccept = '.docx,.md,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/x-markdown'
 const requirementDocumentExtensions = new Set(['docx', 'md'])
+const validationProgressStages = ['解压 ZIP', '解析契约', '运行样例', '生成结果']
 
 const form = reactive({
   algorithm_id: 'electrolyte_formulation_predictor',
@@ -94,6 +98,7 @@ const handoffStepTitle = computed(() => {
   const titles = ['需求文档', '确认草案', '下载接入包', '上传自测', '正式部署结果']
   return titles[handoffStep.value] || titles[0]
 })
+const validationProgressLabel = computed(() => validationProgressStages[validationProgressIndex.value] || validationProgressStages[0])
 const documentSummary = computed(() => {
   if (!parsedDocument.value) return null
   return {
@@ -106,7 +111,7 @@ const documentSummary = computed(() => {
 function stepForStatus(status) {
   if (status === 'submitted') return 4
   if (status === 'self_test_passed' || status === 'self_test_failed') return 3
-  if (status === 'package_downloaded') return 3
+  if (status === 'package_downloaded') return 2
   if (status === 'draft') return 2
   return 0
 }
@@ -214,6 +219,21 @@ function saveBlob(file) {
   URL.revokeObjectURL(url)
 }
 
+function startValidationProgress() {
+  validationProgressIndex.value = 0
+  clearValidationProgressTimer()
+  validationProgressTimer = window.setInterval(() => {
+    validationProgressIndex.value = Math.min(validationProgressIndex.value + 1, validationProgressStages.length - 1)
+  }, 700)
+}
+
+function clearValidationProgressTimer() {
+  if (validationProgressTimer) {
+    window.clearInterval(validationProgressTimer)
+    validationProgressTimer = null
+  }
+}
+
 function handleDocumentFileChange(file, files) {
   const name = file?.name || file?.raw?.name || ''
   const extension = name.split('.').pop()?.toLowerCase()
@@ -317,7 +337,7 @@ async function downloadHandoffPackage() {
     saveBlob(await downloadAlgorithmHandoffPackage(currentHandoff.value.handoff_id))
     currentHandoff.value = await getAlgorithmHandoff(currentHandoff.value.handoff_id)
     await loadData()
-    handoffStep.value = 3
+    handoffStep.value = 2
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   }
@@ -332,7 +352,8 @@ async function validateUpload() {
     ElMessage.warning('请选择对接人上传的 ZIP')
     return
   }
-  loading.value = true
+  validationLoading.value = true
+  startValidationProgress()
   try {
     const data = new FormData()
     data.append('file', uploadFiles.value[0].raw)
@@ -344,7 +365,8 @@ async function validateUpload() {
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
-    loading.value = false
+    clearValidationProgressTimer()
+    validationLoading.value = false
   }
 }
 
@@ -407,10 +429,14 @@ function statusType(status) {
 watch(() => props.initialHandoffId, () => {
   loadData()
 }, { immediate: true })
+
+onBeforeUnmount(() => {
+  clearValidationProgressTimer()
+})
 </script>
 
 <template>
-  <div class="handoff-panel" v-loading="loading">
+  <div class="handoff-panel" v-loading="loading && !validationLoading">
     <section class="handoff-card">
       <div class="panel-heading">
         <div>
@@ -548,9 +574,10 @@ watch(() => props.initialHandoffId, () => {
           <div><strong>requirements.txt</strong><span>运行依赖</span></div>
           <div><strong>tests/sample_input.json</strong><span>真实样例输入</span></div>
         </div>
+        <el-alert :closable="false" type="info" show-icon title="下载完成后先按替换清单完成本地修改，再进入上传自测。" />
         <div class="action-row">
           <el-button @click="handoffStep = 1">上一步</el-button>
-          <el-button type="primary" :disabled="!currentHandoff" @click="handoffStep = 3">继续上传自测</el-button>
+          <el-button type="primary" :disabled="!currentHandoff" @click="handoffStep = 3">替换完成，进入自测</el-button>
         </div>
       </section>
 
@@ -567,9 +594,25 @@ watch(() => props.initialHandoffId, () => {
           <div class="el-upload__text">拖入对接 ZIP，或点击选择</div>
         </el-upload>
 
+        <div v-if="validationLoading" class="validation-progress">
+          <div class="validation-progress-head">
+            <strong>校验进程</strong>
+            <span>{{ validationProgressLabel }}</span>
+          </div>
+          <div class="validation-progress-track">
+            <span
+              v-for="(stage, index) in validationProgressStages"
+              :key="stage"
+              :class="{ active: index === validationProgressIndex, done: index < validationProgressIndex }"
+            >
+              {{ stage }}
+            </span>
+          </div>
+        </div>
+
         <div class="action-row">
           <el-button @click="handoffStep = 2">上一步</el-button>
-          <el-button :icon="VideoPlay" @click="validateUpload">上传前自测</el-button>
+          <el-button :icon="VideoPlay" :loading="validationLoading" @click="validateUpload">上传前自测</el-button>
           <el-button type="primary" :loading="deploying" :disabled="!canDeploy" @click="deployValidatedPackage">提交正式部署</el-button>
         </div>
 
@@ -668,6 +711,14 @@ h3 { font-size: 14px; }
 .replace-list div { display: grid; grid-template-columns: minmax(130px, 0.7fr) minmax(0, 1fr); gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--app-border-soft); }
 .replace-list strong { color: var(--app-ink); font-family: var(--app-mono-font); font-size: 12px; }
 .replace-list span { color: var(--app-ink-muted); font-size: 13px; }
+.validation-progress { display: grid; gap: 10px; padding: 14px; border: 1px solid #bfdbfe; border-radius: var(--app-radius-sm); background: #f8fbff; }
+.validation-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.validation-progress-head strong { color: var(--app-ink); font-size: 13px; }
+.validation-progress-head span { color: var(--app-primary-active); font-size: 12px; font-weight: 600; }
+.validation-progress-track { display: flex; flex-wrap: wrap; gap: 8px; }
+.validation-progress-track span { padding: 4px 10px; border: 1px solid var(--app-border-soft); border-radius: 9999px; background: #fff; color: var(--app-ink-muted); font-size: 12px; }
+.validation-progress-track span.active { border-color: #bfdbfe; background: #dbeafe; color: var(--app-primary-active); }
+.validation-progress-track span.done { border-color: #bbf7d0; background: #f0fdf4; color: #15803d; }
 .self-test-upload { margin-top: 10px; }
 .validation-box { display: grid; gap: 12px; margin-top: 14px; padding: 14px; border: 1px solid #fecaca; border-radius: var(--app-radius-sm); background: #fff7f7; }
 .validation-box.ok { border-color: #bbf7d0; background: #f7fff9; }

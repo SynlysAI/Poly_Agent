@@ -20,6 +20,7 @@ import yaml
 from fastapi import HTTPException
 
 from app.core.config import settings
+from app.core.llm_client import chat
 from app.infra.computation_repositories import utc_now
 from app.infra.research_engine_repositories import (
     AlgorithmPackageRepository,
@@ -37,6 +38,7 @@ from app.schemas.research_engine import (
     AlgorithmResourceBinding,
     AlgorithmVersion,
     AlgorithmVersionListData,
+    AlgorithmSummary,
 )
 from app.schemas.attribution import AttributionItem
 from app.services.algorithm_resource_service import AlgorithmManagedResourceService
@@ -483,6 +485,9 @@ class AlgorithmPackageService:
                     for item in self._method_attributions_from_contract(contract)
                 ],
                 "implementation_notes": contract.get("implementation_notes"),
+                "algorithm_summary": self._build_algorithm_summary(contract, validation_output=output).model_dump(
+                    mode="python"
+                ),
                 "created_by": package.created_by,
                 "uploaded_by": package.uploaded_by or package.created_by,
                 "activated_at": None,
@@ -743,6 +748,11 @@ class AlgorithmPackageService:
             "framework_attributions": contract.get("framework_attributions") or [],
             "method_attributions": [item.model_dump(mode="python") for item in version.method_attributions],
             "implementation_notes": version.implementation_notes or contract.get("implementation_notes"),
+            "algorithm_summary": self._serialize_algorithm_summary(
+                version.algorithm_summary
+                or registry_entry.get("algorithm_summary")
+                or self._build_algorithm_summary(contract)
+            ),
         }
         AlgorithmRegistryRepository.save("algorithm_id", registry_doc)
         AlgorithmVersionRepository.update_fields(
@@ -1004,6 +1014,162 @@ class AlgorithmPackageService:
             "stderr": result.logs.stderr,
             "truncated": result.logs.truncated,
         }
+
+    def _build_algorithm_summary(
+        self,
+        contract: dict[str, Any],
+        *,
+        validation_output: dict[str, Any] | None = None,
+    ) -> AlgorithmSummary:
+        if any(
+            [
+                settings.llm_model,
+                settings.llm_base_url,
+                settings.llm_provider_configs_file,
+                settings.llm_provider_configs_json,
+            ]
+        ):
+            try:
+                return self._generate_algorithm_summary_with_llm(contract, validation_output=validation_output)
+            except Exception:
+                pass
+        return self._rule_algorithm_summary(contract)
+
+    def _generate_algorithm_summary_with_llm(
+        self,
+        contract: dict[str, Any],
+        *,
+        validation_output: dict[str, Any] | None = None,
+    ) -> AlgorithmSummary:
+        prompt_payload = {
+            "algorithm_id": contract.get("algorithm_id"),
+            "name": contract.get("name"),
+            "version": contract.get("version"),
+            "type": contract.get("type"),
+            "algorithm_family": contract.get("algorithm_family"),
+            "description": contract.get("description"),
+            "developer": contract.get("developer"),
+            "developer_organization": contract.get("developer_organization"),
+            "mentor_team": contract.get("mentor_team"),
+            "material_scope": contract.get("material_scope") or [],
+            "task_scope": contract.get("task_scope") or [],
+            "trigger_modes": contract.get("trigger_modes") or [],
+            "input_schema": contract.get("input_schema") or {},
+            "output_schema": contract.get("output_schema") or {},
+            "resource_assets": contract.get("resource_assets") or [],
+            "result_envelope": contract.get("result_envelope"),
+            "implementation_notes": contract.get("implementation_notes"),
+            "validation_output_preview": validation_output or {},
+        }
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是PolyAgent算法摘要助手。请基于输入信息生成适合单页展示的简洁中文摘要，"
+                    "只返回JSON对象，不要Markdown，不要额外解释。"
+                    "必须包含 overview、highlights、practices 三个字段。"
+                    "overview 用一句话概括算法定位。"
+                    "highlights 输出 2-4 条算法亮点。"
+                    "practices 输出 2-4 条落地建议。"
+                    "不要编造未提供的事实，优先突出当前算法自身的输入、输出、资源和使用方式。"
+                ),
+            },
+            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False, indent=2)},
+        ]
+        raw = chat(
+            messages,
+            purpose="qa",
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            max_tokens=500,
+        )
+        payload = json.loads(raw or "{}")
+        if not isinstance(payload, dict):
+            raise ValueError("算法摘要必须是 JSON object")
+        overview = str(payload.get("overview") or "").strip()
+        if not overview:
+            raise ValueError("算法摘要缺少 overview")
+        return AlgorithmSummary(
+            overview=overview,
+            highlights=self._normalize_summary_items(payload.get("highlights")),
+            practices=self._normalize_summary_items(payload.get("practices")),
+            generated_by="llm",
+            generated_at=utc_now(),
+        )
+
+    @staticmethod
+    def _rule_algorithm_summary(contract: dict[str, Any]) -> AlgorithmSummary:
+        name = str(contract.get("name") or contract.get("algorithm_id") or "该算法").strip()
+        description = str(contract.get("description") or "").strip()
+        algorithm_type = str(contract.get("type") or "predictor").strip()
+        material_scope = contract.get("material_scope") or []
+        input_fields = AlgorithmPackageService._schema_field_names(contract.get("input_schema") or {})
+        output_fields = AlgorithmPackageService._schema_field_names(contract.get("output_schema") or {})
+        resource_assets = contract.get("resource_assets") or []
+        task_scope = contract.get("task_scope") or []
+
+        material_text = AlgorithmPackageService._join_labels(material_scope, limit=3)
+        task_text = AlgorithmPackageService._join_labels(task_scope, limit=3)
+        overview = description or f"{name} 是一个 {algorithm_type}，面向 {task_text or '当前任务'} 场景。"
+        highlights = [
+            f"输入契约：{AlgorithmPackageService._join_labels(input_fields, limit=4) or '无显式字段'}",
+            f"输出契约：{AlgorithmPackageService._join_labels(output_fields, limit=4) or '按默认结果返回'}",
+        ]
+        if material_text:
+            highlights.append(f"适用范围：{material_text}")
+        if resource_assets:
+            highlights.append(f"支持 {len(resource_assets)} 项受管资源绑定")
+
+        practices = [
+            "先用样例输入完成一次自测，确认字段名、类型和必填项一致。",
+            "新版本上线后保留旧版本一段时间，确认结果稳定再冻结或下线。",
+        ]
+        if resource_assets:
+            practices.append("大资源通过资源管理绑定，不要直接打进 ZIP 包。")
+        if task_text:
+            practices.append(f"围绕 {task_text} 场景补充更贴近真实业务的数据样例。")
+        return AlgorithmSummary(
+            overview=overview,
+            highlights=highlights[:4],
+            practices=practices[:4],
+            generated_by="rule",
+            generated_at=utc_now(),
+        )
+
+    @staticmethod
+    def _serialize_algorithm_summary(summary: AlgorithmSummary | dict[str, Any] | None) -> dict[str, Any] | None:
+        if summary is None:
+            return None
+        if isinstance(summary, AlgorithmSummary):
+            return summary.model_dump(mode="python")
+        return AlgorithmSummary.model_validate(summary).model_dump(mode="python")
+
+    @staticmethod
+    def _normalize_summary_items(value: Any) -> list[str]:
+        if isinstance(value, str):
+            items = [value]
+        elif isinstance(value, list):
+            items = value
+        else:
+            items = []
+        normalized = [str(item).strip() for item in items if str(item).strip()]
+        return normalized[:4]
+
+    @staticmethod
+    def _schema_field_names(schema: dict[str, Any]) -> list[str]:
+        fields = schema.get("fields") or {}
+        if not isinstance(fields, dict):
+            return []
+        return [str(name).strip() for name in fields.keys() if str(name).strip()]
+
+    @staticmethod
+    def _join_labels(items: list[Any], *, limit: int = 3) -> str:
+        values = [str(item).strip() for item in items if str(item).strip()]
+        if not values:
+            return ""
+        if len(values) <= limit:
+            return "、".join(values)
+        return "、".join(values[:limit]) + " 等"
 
     @staticmethod
     def demo_handler_source() -> str:

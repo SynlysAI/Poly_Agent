@@ -333,14 +333,11 @@ Poly_Agent/
 │   ├── research-report-generation-product-design.md     # 报告生成产品设计
 │   ├── knowledge-base-rag-kg-product-design.md          # 知识库 RAG + 图谱产品设计
 │   ├── knowledge-base-rag-kg-upgrade-plan.md            # 知识库升级计划
-│   ├── literature-rag-service-design.md                 # 旧版文献 RAG 服务设计记录
 │   ├── algorithm-upload-user-guide.md                   # 算法包上传使用指南
 │   ├── algorithm-upload-p0-assessment-and-roadmap.md    # 算法包上传评估与路线图
 │   ├── raman_algorithm_package_guide.md                 # Raman 结构分析算法包指南
 │   ├── raman_structure_analyzer_requirements.md         # Raman 结构分析算法需求
 │   └── poly-agent-toolchain-deployment-pack.md          # 工具链部署包
-├── services/
-│   └── literature-rag/                  # 旧版独立文献 RAG / GraphRAG 服务
 ├── examples/
 │   └── algorithm_upload/                # 垂类算法包示例
 ├── scripts/                             # 部署与运维脚本
@@ -412,7 +409,7 @@ WEKNORA_NEO4J_PASSWORD=<neo4j-password>
 WEKNORA_NEO4J_DATABASE=neo4j
 ```
 
-Poly Agent 后端不再自动探测或启动本地 `services/literature-rag`。如果 `WEKNORA_BASE_URL` 未包含 `/api/v1`，适配层会自动补齐。
+Poly Agent 知识库能力统一通过 WeKnora API 提供；旧版本地 `literature-rag` 独立服务目录和部署模板已移除。如果 `WEKNORA_BASE_URL` 未包含 `/api/v1`，适配层会自动补齐。
 
 ### 4. 常用命令
 

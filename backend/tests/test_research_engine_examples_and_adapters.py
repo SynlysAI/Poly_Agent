@@ -73,25 +73,22 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         self.service = ResearchEngineService()
         self.service.seed_default_algorithms()
 
-    def test_literature_rag_adapter_rejects_unconfigured_lightrag(self):
+    def test_weknora_adapter_rejects_unconfigured_service(self):
         old_app_env = os.environ.get("APP_ENV")
-        old_base_url = os.environ.pop("KNOWLEDGE_RAG_BASE_URL", None)
-        old_literature_base_url = os.environ.pop("LITERATURE_RAG_BASE_URL", None)
+        old_base_url = os.environ.pop("WEKNORA_BASE_URL", None)
         os.environ["APP_ENV"] = "production"
         try:
             with self.assertRaises(HTTPException) as ctx:
                 self.service.create_algorithm_run(
                     AlgorithmRunCreate(
-                        algorithm_id="literature_rag_adapter",
+                        algorithm_id="weknora_adapter",
                         input_snapshot={"query": "fluoropolymer dielectric", "top_k": 3},
                     ),
                     actor_user_id="tester",
                 )
         finally:
             if old_base_url is not None:
-                os.environ["KNOWLEDGE_RAG_BASE_URL"] = old_base_url
-            if old_literature_base_url is not None:
-                os.environ["LITERATURE_RAG_BASE_URL"] = old_literature_base_url
+                os.environ["WEKNORA_BASE_URL"] = old_base_url
             if old_app_env is None:
                 os.environ.pop("APP_ENV", None)
             else:
@@ -105,7 +102,7 @@ class ResearchEngineAdapterTest(ComputationTestCase):
             edges=[],
             stats=KnowledgeGraphStats(entity_count=1, relation_count=0, document_count=1),
             configured=True,
-            provenance={"provider": "literature-rag"},
+            provenance={"provider": "weknora"},
         )
         with patch.object(KnowledgeService, "get_subgraph", return_value=graph):
             run = self.service.create_algorithm_run(
@@ -124,78 +121,38 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         self.assertLessEqual(len(run.output_summary["nodes"]), 4)
         self.assertIn("stats", run.output_summary)
 
-    def test_literature_rag_adapter_uses_standalone_service_contract(self):
-        os.environ["LITERATURE_RAG_BASE_URL"] = "http://literature.test"
-
-        class FakeResponse:
-            def __init__(self, data):
-                self._data = data
-                self.status_code = 200
-                self.text = json.dumps(data)
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return self._data
-
-        class FakeClient:
-            def __init__(self, *args, **kwargs):
-                self.calls = []
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def post(self, path, json=None):
-                self.calls.append((path, json))
-                return FakeResponse({"data": {
-                    "corpus_id": "krf_photoresist",
-                    "question": json["question"],
-                    "mode": json["mode"],
-                    "answer": "Literature RAG adapter answer",
-                    "hits": [{"source_id": "ref_1", "title": "KrF paper", "snippet": "PAG evidence",
-                              "doi": "10.1000/krf", "url": "https://doi.org/10.1000/krf", "score": 0.9}],
-                    "citations": [{"source_id": "ref_1", "title": "KrF paper", "doi": "10.1000/krf",
-                                   "url": "https://doi.org/10.1000/krf", "chunk_id": "chunk_00001"}],
-                    "graph_context": None,
-                    "configured": True,
-                    "message": "ok",
-                }})
-
-            def get(self, path, params=None):
-                return FakeResponse({"data": {"items": [{
-                    "corpus_id": "krf_photoresist", "name": "KrF", "domain": "polymer_lithography",
-                    "material_family": "krf_photoresist", "description": "KrF corpus",
-                }], "total": 1}})
-
-        try:
-            with patch("app.services.knowledge_service.httpx.Client", FakeClient):
-                run = self.service.create_algorithm_run(
-                    AlgorithmRunCreate(
-                        algorithm_id="literature_rag_adapter",
-                        input_snapshot={
-                            "query": "fluoropolymer dielectric",
-                            "material_family": "fluoropolymer",
-                            "top_k": 3,
-                            "include_graph_context": False,
-                        },
-                    ),
-                    actor_user_id="tester",
-                )
-        finally:
-            os.environ.pop("LITERATURE_RAG_BASE_URL", None)
-
+    def test_weknora_adapter_uses_knowledge_service_contract(self):
+        response = KnowledgeQueryResponse(
+            system_id="ai4s_fluoropolymer",
+            question="fluoropolymer dielectric",
+            mode="hybrid",
+            answer="WeKnora adapter answer",
+            hits=[KnowledgeHit(source_id="ref_1", title="KrF paper", snippet="PAG evidence")],
+            configured=True,
+        )
+        with patch.object(KnowledgeService, "query", return_value=response):
+            run = self.service.create_algorithm_run(
+                AlgorithmRunCreate(
+                    algorithm_id="weknora_adapter",
+                    input_snapshot={
+                        "system_id": "ai4s_fluoropolymer",
+                        "query": "fluoropolymer dielectric",
+                        "material_family": "fluoropolymer",
+                        "top_k": 3,
+                        "include_graph_context": False,
+                    },
+                ),
+                actor_user_id="tester",
+            )
         self.assertEqual(run.status, "completed")
         self.assertTrue(run.output_summary["configured"])
-        self.assertEqual(run.output_summary["answer"], "Literature RAG adapter answer")
+        self.assertEqual(run.output_summary["answer"], "WeKnora adapter answer")
+        self.assertEqual(run.output_summary["knowledge_summary"], "WeKnora adapter answer")
 
     def test_algorithm_registry_contains_knowledge_graph_adapter(self):
         data = self.service.list_algorithms(algorithm_family="knowledge", page=1, page_size=20)
         algorithm_ids = {item.algorithm_id for item in data.items}
-        self.assertIn("literature_rag_adapter", algorithm_ids)
+        self.assertIn("weknora_adapter", algorithm_ids)
         self.assertIn("knowledge_graph_adapter", algorithm_ids)
         graph = next(item for item in data.items if item.algorithm_id == "knowledge_graph_adapter")
         self.assertEqual(graph.type, "retriever")
@@ -208,7 +165,7 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         by_id = {item.algorithm_id: item for item in data.items}
 
         for algorithm_id in {
-            "literature_rag_adapter",
+            "weknora_adapter",
             "knowledge_graph_adapter",
             "computation_submit_adapter",
             "local_structure_adapter",
@@ -228,7 +185,7 @@ class ResearchEngineAdapterTest(ComputationTestCase):
 
         self.assertEqual(by_id["vertical_predictor_adapter"].capability_group, "vertical_algorithm")
 
-    def test_literature_rag_adapter_preserves_existing_top_k_contract(self):
+    def test_weknora_adapter_preserves_existing_top_k_contract(self):
         response = KnowledgeQueryResponse(
             system_id="ai4s_fluoropolymer",
             question="fluoropolymer dielectric",
@@ -240,7 +197,7 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         with patch.object(KnowledgeService, "query", return_value=response):
             run = self.service.create_algorithm_run(
                 AlgorithmRunCreate(
-                    algorithm_id="literature_rag_adapter",
+                    algorithm_id="weknora_adapter",
                     input_snapshot={
                         "system_id": "ai4s_fluoropolymer",
                         "query": "fluoropolymer dielectric",

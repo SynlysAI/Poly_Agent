@@ -700,7 +700,7 @@ stage_gates:
     require_approval: true
 
 algorithm_pipeline:
-  literature: literature_rag.default
+  literature: weknora_adapter
   structure_feature: polymer_descriptor.default
   compute_predict:
     - local_xtb

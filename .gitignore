@@ -8,3 +8,4 @@ __pycache__/
 .vite/
 refer/
 .playwright-cli/
+backend/config/

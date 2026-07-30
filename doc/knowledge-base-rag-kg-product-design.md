@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-知识库能力已从早期 LightRAG 和本地 `services/literature-rag/` 方案调整为 Poly Agent 后端统一适配 WeKnora 服务。当前前端、ResearchEngine 和产品内助手仍调用 Poly Agent 的稳定知识库 API，后端由 `KnowledgeService` 转发 WeKnora 知识库列表、知识问答、流式事件和无总结检索。
+知识库能力已从早期 LightRAG 和本地 `literature-rag` 独立服务方案调整为 Poly Agent 后端统一适配 WeKnora 服务。当前前端、ResearchEngine 和产品内助手仍调用 Poly Agent 的稳定知识库 API，后端由 `KnowledgeService` 转发 WeKnora 知识库列表、知识问答、流式事件和无总结检索。
 
 当前图谱能力为 WeKnora 检索子图增强：先基于 WeKnora `knowledge-search` 返回的文档和片段合成 Paper/Chunk 子图；如果配置了 `WEKNORA_NEO4J_*`，PolyAgent 会按命中 chunk 到 WeKnora Neo4j 图库反查实体节点和实体关系。Neo4j 不可用或无命中时自动回退 Paper/Chunk 子图。
 
@@ -87,7 +87,7 @@ Poly Agent 后端环境变量：
 - `WEKNORA_NEO4J_DATABASE`: 可选 Neo4j database，默认 `neo4j`
 - `WEKNORA_NEO4J_TIMEOUT_SECONDS`: 可选 Neo4j 连接超时，默认 3 秒
 
-Poly Agent 后端不再自动探测或启动本地 `services/literature-rag`。
+Poly Agent 后端不再自动探测或启动旧版本地 `literature-rag` 服务；相关独立服务目录和部署模板已移除。
 
 ## 验收标准
 

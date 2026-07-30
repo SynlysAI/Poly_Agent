@@ -29,6 +29,7 @@ const router = useRouter()
 
 const detailTabMap = { management: 'api', test: 'experience', runs: 'api' }
 const routeModes = new Set(['center', 'doc', 'upload', 'detail'])
+const connectedPackageStatuses = ['built', 'deployed_staging', 'active']
 
 const activeMode = ref(normalizeMode(route.query.tab))
 const detailActiveTab = ref(normalizeDetailTab(route.query.tab))
@@ -78,26 +79,22 @@ const typeOptions = computed(() => Array.from(new Set(algorithms.value.map((item
 const statusOptions = computed(() => Array.from(new Set(algorithms.value.map((item) => item.status).filter(Boolean))))
 const materialOptions = computed(() => Array.from(new Set(algorithms.value.flatMap((item) => item.material_scope || []).filter(Boolean))))
 
-const detailHighlights = computed(() => {
-  const algo = selectedAlgorithm.value
-  if (!algo) return []
-  const inputFields = Object.keys(algo.input_schema?.fields || {})
-  const outputFields = Object.keys(algo.output_schema?.fields || {})
-  return [
-    { title: '可直接测试', text: inputFields.length ? `根据 ${inputFields.join('、')} 自动生成输入表单。` : '模型输入字段已接入测试台。' },
-    { title: '版本可治理', text: activeVersion.value ? `当前可用版本为 ${activeVersion.value.version}，支持日志、重部署、冻结和下线。` : '上传版本会进入校验、部署、激活流程。' },
-    { title: '输出可追溯', text: outputFields.length ? `预测结果包含 ${outputFields.join('、')} 等字段。` : '每次运行都会保留输入、输出、结果文件与版本摘要。' },
-  ]
-})
-
 const selectedAlgorithmAttributions = computed(() => algorithmAttributions(selectedAlgorithm.value))
 const canManageSelectedAlgorithm = computed(() => canManageUploadedAlgorithm(selectedAlgorithm.value, authState))
-
-const bestPracticeItems = computed(() => [
-  '先在互动体验里用最小样例完成一次预测，确认字段名和类型与模型说明一致。',
-  '上线新版本后保留旧版本一段时间；确认结果稳定后再冻结或下线旧版本。',
-  '样例输入应覆盖常见材料结构，输出字段命名保持稳定，便于后续研发流程复用。',
-])
+const algorithmSummary = computed(() => {
+  const algorithm = selectedAlgorithm.value
+  if (!algorithm) return null
+  const rawSummary = algorithm.algorithm_summary || activeVersion.value?.algorithm_summary
+  if (rawSummary?.overview) {
+    return {
+      overview: rawSummary.overview,
+      highlights: normalizeSummaryItems(rawSummary.highlights),
+      practices: normalizeSummaryItems(rawSummary.practices),
+      generated_by: rawSummary.generated_by || 'rule',
+    }
+  }
+  return buildSummaryFallback(algorithm, activeVersion.value)
+})
 
 function normalizeQueryString(value) {
   return Array.isArray(value) ? value[0] || '' : value || ''
@@ -113,7 +110,7 @@ function normalizeMode(tab) {
 
 function normalizeDetailTab(tab) {
   const value = normalizeQueryString(tab)
-  return detailTabMap[value] || (['experience', 'highlights', 'practice', 'docs', 'api'].includes(value) ? value : 'experience')
+  return detailTabMap[value] || (['experience', 'summary', 'docs', 'api'].includes(value) ? value : 'experience')
 }
 
 function syncRoute() {
@@ -169,15 +166,15 @@ watch([activeMode, selectedAlgorithmId, selectedHandoffId, docEntryMode, uploadC
 async function loadData() {
   loading.value = true
   try {
-    const [packages, algorithmData, runs] = await Promise.all([
-      listAlgorithmPackages({ page: 1, page_size: 100 }),
+    const [connectedPackages, algorithmData, runs] = await Promise.all([
+      listConnectedAlgorithmPackages(),
       listAlgorithms({ algorithm_family: 'vertical_prediction', page: 1, page_size: 100 }),
       listAlgorithmRuns({ page: 1, page_size: 100 }),
     ])
     algorithms.value = (algorithmData.items || []).filter((item) => item.source === 'uploaded_package')
     const uploadedRuns = (runs.items || []).filter((item) => item.algorithm_version_id)
     summary.value = {
-      packages: packages.total || packages.items?.length || 0,
+      packages: connectedAlgorithmCount(connectedPackages),
       activeAlgorithms: algorithms.value.filter((item) => item.status === 'active').length,
       recentRuns: uploadedRuns.length,
       failedRuns: uploadedRuns.filter((item) => item.status === 'failed').length,
@@ -189,6 +186,36 @@ async function loadData() {
   } finally {
     loading.value = false
   }
+}
+
+async function listConnectedAlgorithmPackages() {
+  const pagesByStatus = await Promise.all(
+    connectedPackageStatuses.map((status) => listAllAlgorithmPackages({ status })),
+  )
+  return pagesByStatus.flat()
+}
+
+async function listAllAlgorithmPackages(params = {}) {
+  const pageSize = 100
+  const firstPage = await listAlgorithmPackages({ ...params, page: 1, page_size: pageSize })
+  const items = [...(firstPage.items || [])]
+  const total = firstPage.total || items.length
+  const pageCount = Math.ceil(total / pageSize)
+  if (pageCount <= 1) return items
+
+  const remainingPages = await Promise.all(
+    Array.from({ length: pageCount - 1 }, (_, index) => listAlgorithmPackages({ ...params, page: index + 2, page_size: pageSize })),
+  )
+  return items.concat(remainingPages.flatMap((page) => page.items || []))
+}
+
+function connectedAlgorithmCount(packages) {
+  const algorithmIds = new Set()
+  for (const item of packages || []) {
+    const algorithmId = String(item.algorithm_id || item.target_algorithm_id || '').trim()
+    if (algorithmId) algorithmIds.add(algorithmId)
+  }
+  return algorithmIds.size
 }
 
 async function loadVersionsForCards() {
@@ -305,10 +332,52 @@ function fieldRows(schema) {
   }))
 }
 
+function normalizeSummaryItems(items) {
+  if (typeof items === 'string') return [items].filter(Boolean)
+  if (!Array.isArray(items)) return []
+  return items.map((item) => String(item || '').trim()).filter(Boolean)
+}
+
+function buildSummaryFallback(algorithm, version) {
+  const inputFields = Object.keys(algorithm.input_schema?.fields || {})
+  const outputFields = Object.keys(algorithm.output_schema?.fields || {})
+  const materialScope = (algorithm.material_scope || []).map((value) => materialLabel(value)).filter(Boolean)
+  const versionLabel = version?.version || algorithm.version || '-'
+  return {
+    overview:
+      algorithm.description
+      || `${algorithm.name} 是一个 ${typeLabel(algorithm.type)}，当前版本 ${versionLabel} 可用于垂类预测。`,
+    highlights: [
+      inputFields.length ? `输入字段：${inputFields.slice(0, 4).join('、')}` : '输入契约已接入测试台',
+      outputFields.length ? `输出字段：${outputFields.slice(0, 4).join('、')}` : '结果会保留版本和运行记录',
+      materialScope.length ? `适用范围：${materialScope.join('、')}` : '',
+      version?.resource_assets?.length ? `支持 ${version.resource_assets.length} 项受管资源绑定` : '',
+    ].filter(Boolean),
+    practices: [
+      '先用样例输入完成一次自测，确认字段名和类型一致。',
+      `版本 ${versionLabel} 上线后保留旧版本一段时间，再冻结或下线。`,
+      version?.resource_assets?.length ? '大资源通过资源管理绑定，不要直接打进 ZIP 包。' : '',
+    ].filter(Boolean),
+    generated_by: 'rule',
+  }
+}
+
+function summarySourceLabel(summary) {
+  return summary?.generated_by === 'llm' ? 'AI 生成摘要' : '规则摘要'
+}
+
+function sourceLine(algorithm) {
+  const parts = []
+  const author = authorLabel(algorithm)
+  if (author && author !== '未标注') parts.push(author)
+  const mentor = mentorTeamLabel(algorithm)
+  if (mentor && mentor !== '未标注') parts.push(`导师课题组：${mentor}`)
+  return parts.length ? parts.join(' · ') : '来源信息未标注'
+}
+
 function algorithmAttributions(algorithm) {
   if (!algorithm) return []
   return [
-    algorithm.developer_attribution,
     ...(algorithm.framework_attributions || []),
     ...(algorithm.method_attributions || []),
   ].filter(isPublicAttribution)
@@ -411,8 +480,7 @@ onMounted(() => {
             <el-tag :type="statusType(selectedAlgorithm.status)">{{ statusLabel(selectedAlgorithm.status) }}</el-tag>
           </div>
           <p>{{ selectedAlgorithm.description || '该模型已接入垂类预测工作台，可用于测试调用、版本管理和研发流程。' }}</p>
-          <div class="author-line">作者：{{ authorLabel(selectedAlgorithm) }}</div>
-          <div class="author-line">导师课题组：{{ mentorTeamLabel(selectedAlgorithm) }}</div>
+          <div class="author-line">来源：{{ sourceLine(selectedAlgorithm) }}</div>
           <AttributionBadges :attributions="selectedAlgorithmAttributions" />
           <div class="detail-meta">
             <span>{{ selectedAlgorithm.algorithm_id }}</span>
@@ -434,19 +502,29 @@ onMounted(() => {
           <el-tab-pane label="互动体验" name="experience">
             <AlgorithmTestPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-toolbar="false" @run-created="handleRunCreated" />
           </el-tab-pane>
-          <el-tab-pane label="亮点介绍" name="highlights">
-            <div class="info-grid">
-              <article v-for="item in detailHighlights" :key="item.title" class="info-card">
-                <h3>{{ item.title }}</h3>
-                <p>{{ item.text }}</p>
-              </article>
-            </div>
-          </el-tab-pane>
-          <el-tab-pane label="最佳实践" name="practice">
-            <div class="practice-list">
-              <div v-for="(item, index) in bestPracticeItems" :key="item" class="practice-item">
-                <strong>{{ index + 1 }}</strong>
-                <span>{{ item }}</span>
+          <el-tab-pane label="算法摘要" name="summary">
+            <div v-if="algorithmSummary" class="summary-panel">
+              <div class="summary-head">
+                <div>
+                  <h3>算法摘要</h3>
+                  <p>{{ summarySourceLabel(algorithmSummary) }}</p>
+                </div>
+                <el-tag size="small" effect="plain">{{ algorithmSummary.generated_by === 'llm' ? 'AI 生成' : '规则回退' }}</el-tag>
+              </div>
+              <p class="summary-overview">{{ algorithmSummary.overview }}</p>
+              <div class="summary-grid">
+                <section>
+                  <h4>亮点</h4>
+                  <ul>
+                    <li v-for="item in algorithmSummary.highlights" :key="item">{{ item }}</li>
+                  </ul>
+                </section>
+                <section>
+                  <h4>实践建议</h4>
+                  <ul>
+                    <li v-for="item in algorithmSummary.practices" :key="item">{{ item }}</li>
+                  </ul>
+                </section>
               </div>
             </div>
           </el-tab-pane>
@@ -553,8 +631,7 @@ onMounted(() => {
                 <el-tag :type="statusType(item.status)" size="small">{{ statusLabel(item.status) }}</el-tag>
               </div>
               <p>{{ item.description || '已上传的垂类预测模型，可在详情页进行测试调用、版本治理和运行追溯。' }}</p>
-              <div class="author-line compact">作者：{{ authorLabel(item) }}</div>
-              <div class="author-line compact">导师课题组：{{ mentorTeamLabel(item) }}</div>
+              <div class="author-line compact">来源：{{ sourceLine(item) }}</div>
               <AttributionBadges :attributions="algorithmAttributions(item)" />
               <div class="model-tags">
                 <el-tag size="small" effect="plain">{{ typeLabel(item.type) }}</el-tag>
@@ -605,7 +682,7 @@ h1 { font-size: 26px; line-height: 1.25; }
 h2 { font-size: 20px; line-height: 1.3; }
 h3 { font-size: 15px; }
 .model-page-hero p:last-child, .list-head p, .detail-main p { margin: 7px 0 0; color: var(--app-ink-muted); font-size: 14px; line-height: 1.6; }
-.hero-actions, .detail-actions, .subnav-row, .list-actions, .empty-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hero-actions, .detail-actions, .subnav-row, .list-actions, .empty-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; user-select: none; }
 .hero-actions { justify-content: flex-end; }
 .status-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
 .status-item { min-width: 0; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; padding: 12px 14px; border-right: 1px solid var(--app-border-soft); }
@@ -648,20 +725,22 @@ h3 { font-size: 15px; }
 .detail-meta span { padding-right: 10px; border-right: 1px solid var(--app-border-soft); }
 .detail-meta span:last-child { border-right: 0; }
 .detail-panel { min-width: 0; padding: 0 16px 18px; }
-.detail-tabs :deep(.el-tabs__header) { margin-bottom: 18px; }
-.info-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.info-card { padding: 16px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-md); background: #f8fbff; }
-.info-card p { margin: 8px 0 0; color: var(--app-ink-muted); font-size: 13px; line-height: 1.65; }
-.practice-list { display: grid; gap: 12px; max-width: 880px; }
-.practice-item { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; align-items: start; padding: 14px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-md); }
-.practice-item strong { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--app-primary-light); color: var(--app-primary-active); }
-.practice-item span { color: var(--app-ink-body); font-size: 14px; line-height: 1.7; }
+.detail-tabs :deep(.el-tabs__header) { margin-bottom: 18px; user-select: none; }
+.detail-tabs :deep(.el-tabs__nav), .detail-tabs :deep(.el-tabs__item) { user-select: none; }
+.summary-panel { display: grid; gap: 14px; max-width: 980px; }
+.summary-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.summary-head p { margin: 4px 0 0; color: var(--app-ink-muted); font-size: 12px; }
+.summary-overview { margin: 0; color: var(--app-ink-body); font-size: 14px; line-height: 1.75; }
+.summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.summary-grid section { padding: 16px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-md); background: #f8fbff; }
+.summary-grid h4 { margin: 0 0 10px; color: var(--app-ink); font-size: 14px; }
+.summary-grid ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; color: var(--app-ink-body); font-size: 13px; line-height: 1.6; }
 .docs-layout, .governance-layout { display: grid; gap: 16px; }
 .docs-layout section h3, .history-panel h3 { margin-bottom: 10px; }
 .api-note { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; color: var(--app-ink-muted); font-size: 13px; }
 .history-panel { padding-top: 16px; border-top: 1px solid var(--app-border-soft); }
 @media (max-width: 1180px) {
-  .model-card-grid, .info-grid { grid-template-columns: 1fr; }
+  .model-card-grid, .summary-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
   .model-page-hero, .list-head, .detail-banner { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }

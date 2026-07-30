@@ -36,7 +36,6 @@
 | [knowledge-base-rag-kg-upgrade-plan.md](knowledge-base-rag-kg-upgrade-plan.md) | 知识库内容、检索和界面增强计划 |
 | [platform-positioning-and-small-iteration-plan.md](platform-positioning-and-small-iteration-plan.md) | 平台定位、credit、低学习成本和小步优化方案 |
 | [internagents-inspired-product-optimization-design.md](internagents-inspired-product-optimization-design.md) | 借鉴 InternAgents 工作台模型的 PolyAgent 产品设计优化方案 |
-| [literature-rag-service-design.md](literature-rag-service-design.md) | 旧版独立 Literature RAG 服务设计记录，当前知识库运行不再依赖 |
 
 ## 进度、计划与验收
 
