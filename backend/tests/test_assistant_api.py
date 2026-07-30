@@ -136,6 +136,51 @@ class AssistantApiTest(ComputationTestCase):
         self.assertEqual(data["answer_scope"], "project")
         self.assertEqual(data["retrieval_status"], "not_needed")
 
+    def test_assistant_chat_can_force_web_search_for_project_questions(self) -> None:
+        def fake_search(_service, query: str, *, deep: bool):  # noqa: ANN001
+            from app.services.assistant_service import SearchOutcome
+            from app.services.assistant_service import WebEvidence
+
+            self.assertFalse(deep)
+            self.assertTrue(query)
+            return SearchOutcome(
+                status="searched",
+                provider="bing_rss",
+                query=query,
+                results=[
+                    WebEvidence(
+                        title="ResearchEngine approval workflow",
+                        url="https://example.com/researchengine-approval",
+                        snippet="Approval workflow notes.",
+                        content="ResearchEngine approval workflow notes.",
+                        source="bing_rss",
+                    )
+                ],
+            )
+
+        with patch("app.services.assistant_service.AssistantWebSearchService.search", new=fake_search), patch(
+            "app.core.llm_client.chat",
+            return_value="联网项目回答",
+        ):
+            resp = self.client.post(
+                "/api/v1/assistant/chat",
+                json={
+                    "messages": [
+                        {"role": "user", "content": "如何查看待审批任务？"},
+                    ],
+                    "context": {"mode": "qa", "use_web_search": True},
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        self.assertEqual(data["content"], "联网项目回答")
+        self.assertEqual(data["answer_mode"], "hybrid_grounded")
+        self.assertEqual(data["answer_scope"], "hybrid")
+        self.assertEqual(data["retrieval_status"], "searched")
+        self.assertEqual(data["grounding_facts"]["request_context"]["use_web_search"], True)
+        self.assertEqual(data["grounding_facts"]["web_search"]["result_count"], 1)
+
     def test_assistant_deep_returns_structured_reasoning_summary(self) -> None:
         with patch(
             "app.core.llm_client.chat",
@@ -345,6 +390,50 @@ class AssistantApiTest(ComputationTestCase):
         final = events[-1]["data"]
         self.assertEqual(final["retrieval_status"], "searched")
         self.assertTrue(any(ref["type"] == "web" for ref in final["references"]))
+
+    def test_assistant_stream_can_force_web_search_for_project_questions(self) -> None:
+        def fake_search(_service, query: str, *, deep: bool):  # noqa: ANN001
+            from app.services.assistant_service import SearchOutcome
+            from app.services.assistant_service import WebEvidence
+
+            self.assertFalse(deep)
+            self.assertTrue(query)
+            return SearchOutcome(
+                status="searched",
+                provider="bing_rss",
+                query=query,
+                results=[
+                    WebEvidence(
+                        title="ResearchEngine approval workflow",
+                        url="https://example.com/researchengine-approval",
+                        snippet="Approval workflow notes.",
+                        content="ResearchEngine approval workflow notes.",
+                        source="bing_rss",
+                    )
+                ],
+            )
+
+        with patch("app.services.assistant_service.AssistantWebSearchService.search", new=fake_search), patch(
+            "app.core.llm_client.chat_stream",
+            return_value=iter(["联网项目回答"]),
+            create=True,
+        ):
+            events = self._assistant_stream_events(
+                {
+                    "messages": [{"role": "user", "content": "如何查看待审批任务？"}],
+                    "context": {"mode": "qa", "use_web_search": True},
+                }
+            )
+
+        event_types = [event["type"] for event in events]
+        self.assertIn("status", event_types)
+        self.assertIn("evidence", event_types)
+        self.assertTrue(any(event.get("stage") == "search" for event in events))
+        final = events[-1]["data"]
+        self.assertEqual(final["content"], "联网项目回答")
+        self.assertEqual(final["answer_scope"], "hybrid")
+        self.assertEqual(final["retrieval_status"], "searched")
+        self.assertEqual(final["grounding_facts"]["request_context"]["use_web_search"], True)
 
     def test_assistant_stream_returns_error_event_when_llm_stream_fails(self) -> None:
         def failing_stream(*_args, **_kwargs):  # noqa: ANN002, ANN003

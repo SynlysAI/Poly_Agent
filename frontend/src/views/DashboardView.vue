@@ -19,6 +19,12 @@ import {
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import {
+  loadKnowledgePreference,
+  loadWebSearchPreference,
+  saveKnowledgePreference,
+  saveWebSearchPreference,
+} from '../utils/dialoguePreferences'
+import {
   isResearchEngineContainerCampaign,
   mapAlgorithmRunToGlobalTask,
   mapCampaignToGlobalTask,
@@ -48,8 +54,6 @@ const knowledgeSystems = ref([])
 const selectedModelKey = ref('')
 const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
 const useWebSearch = ref(loadWebSearchPreference())
-const WEB_SEARCH_STORAGE_KEY = 'poly-agent-dialogue-use-web-search'
-const KNOWLEDGE_STORAGE_KEY = 'poly-agent-dialogue-knowledge-base-id'
 
 const dashboardViewOptions = [
   { label: '问答', value: 'chat' },
@@ -243,38 +247,14 @@ function routePurpose() {
   return chatMode.value === 'deep' ? 'deep' : 'qa'
 }
 
-function loadWebSearchPreference() {
-  const raw = window.localStorage.getItem(WEB_SEARCH_STORAGE_KEY)
-  if (raw === '1') return true
-  if (raw === '0') return false
-  return false
-}
-
-function loadKnowledgePreference() {
-  const raw = window.localStorage.getItem(KNOWLEDGE_STORAGE_KEY) || ''
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed)) return parsed.map((item) => String(item || '').trim()).filter(Boolean)
-  } catch {
-    return [raw].filter(Boolean)
-  }
-  return [raw].filter(Boolean)
-}
-
 watch(useWebSearch, (value) => {
-  window.localStorage.setItem(WEB_SEARCH_STORAGE_KEY, value ? '1' : '0')
+  saveWebSearchPreference(value)
 })
 
 watch(
   selectedKnowledgeBaseIds,
   (value) => {
-    const ids = Array.isArray(value) ? value.filter(Boolean) : []
-    if (ids.length) {
-      window.localStorage.setItem(KNOWLEDGE_STORAGE_KEY, JSON.stringify(ids))
-    } else {
-      window.localStorage.removeItem(KNOWLEDGE_STORAGE_KEY)
-    }
+    saveKnowledgePreference(value)
   },
   { flush: 'sync' },
 )
