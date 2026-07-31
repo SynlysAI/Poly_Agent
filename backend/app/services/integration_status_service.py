@@ -58,19 +58,16 @@ class IntegrationStatusService:
         details = dict(item.get("details") or {})
         details.update(
             {
-                "configured": bool(config.endpoint or config.config_summary or config.secret_refs),
-                "enabled": config.enabled,
-                "last_error_summary": config.last_error_summary,
+                "manual_configured": bool(config.endpoint or config.config_summary or config.secret_refs),
+                "manual_enabled": config.enabled,
+                "manual_last_status": config.last_status,
+                "manual_last_checked_at": (
+                    config.last_checked_at.isoformat() if config.last_checked_at else None
+                ),
+                "manual_last_error_summary": config.last_error_summary,
             }
         )
         item["details"] = details
-        if config.last_checked_at:
-            item["status"] = config.last_status
-            item["checked_at"] = config.last_checked_at.isoformat()
-        elif details["configured"] and not config.enabled:
-            item["status"] = "disabled"
-        elif details["configured"] and item["status"] == "not_configured":
-            item["status"] = "down"
         return item
 
     def _worker_status(self, checked_at: str) -> dict:

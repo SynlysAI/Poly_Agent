@@ -147,26 +147,27 @@ class IntegrationConfigServiceTest(ComputationTestCase):
         self.assertEqual(by_service["alchemist-backend"]["status"], "built_in")
         self.assertIn("已内置", by_service["alchemist-backend"]["details"]["message"])
 
-    def test_disabled_persisted_config_marks_status_disabled(self) -> None:
+    def test_disabled_persisted_config_keeps_runtime_status(self) -> None:
+        """手动配置停用不应覆盖实时运行状态。"""
         self.service.upsert_config(
-            "speclabos",
+            "computation-worker",
             ServiceIntegrationUpsertRequest(
-                display_name="SpecLabOS",
-                service_type="experiment",
+                display_name="Computation worker",
+                service_type="worker",
                 enabled=False,
                 config_summary={"boundary": "not used in local demo"},
             ),
             actor_user_id="demo_user",
-            request_id="req-speclabos-disabled",
+            request_id="req-worker-disabled",
         )
 
         items = IntegrationStatusService().get_status()["items"]
 
         by_service = {item["service"]: item for item in items}
 
-        self.assertEqual(by_service["speclabos"]["status"], "disabled")
-        self.assertTrue(by_service["speclabos"]["details"]["configured"])
-        self.assertFalse(by_service["speclabos"]["details"]["enabled"])
+        self.assertEqual(by_service["computation-worker"]["status"], "up")
+        self.assertTrue(by_service["computation-worker"]["details"]["manual_configured"])
+        self.assertFalse(by_service["computation-worker"]["details"]["manual_enabled"])
 
     def test_request_rejects_plaintext_secret_fields(self) -> None:
         with self.assertRaises(ValidationError):
