@@ -57,6 +57,7 @@
 | 文档 | 内容 |
 |------|------|
 | [poly-agent-toolchain-deployment-pack.md](poly-agent-toolchain-deployment-pack.md) | 计算工具链部署包和运行环境说明 |
+| [centralized-deployment-data-security-technical-assurance-plan.md](centralized-deployment-data-security-technical-assurance-plan.md) | 集中部署模式数据安全技术保障方案 |
 | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) | 系统模块、外部框架、方法、机构和算法开发者来源矩阵 |
 
 ## 文档维护约定
