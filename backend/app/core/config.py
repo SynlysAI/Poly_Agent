@@ -238,12 +238,10 @@ class Settings:
             "on",
         }
 
-        # 统一认证（AI4MS）数据库配置
-        self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "")
+        # 统一认证（AI4MS）数据库名，与主业务库共用 MongoDB 连接。
         self.auth_database: str = os.getenv("AUTH_MONGODB_DATABASE", "ai4ms")
 
-        # 只读材料数据资产 MongoDB 配置
-        self.data_asset_mongodb_uri: str = os.getenv("DATA_ASSET_MONGODB_URI", "").strip()
+        # 只读材料数据资产数据库名，与主业务库共用 MongoDB 连接。
         self.data_asset_mongodb_database: str = os.getenv("DATA_ASSET_MONGODB_DATABASE", "poly_data").strip() or "poly_data"
 
         # MinIO / S3 数据目录配置

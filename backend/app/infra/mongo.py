@@ -24,12 +24,8 @@ def get_database() -> Database:
 
 @lru_cache(maxsize=1)
 def _get_auth_client() -> MongoClient:
-    """获取统一认证（AI4MS）MongoDB 客户端单例。
-
-    优先使用 AUTH_MONGODB_URI，未配置时回退到业务 MongoDB 连接。
-    """
-    uri = settings.auth_mongodb_uri or settings.mongodb_uri
-    return MongoClient(uri, serverSelectionTimeoutMS=5000)
+    """获取统一认证（AI4MS）MongoDB 客户端单例。"""
+    return MongoClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
 
 
 def _get_auth_database() -> Database:
@@ -40,7 +36,7 @@ def _get_auth_database() -> Database:
 @lru_cache(maxsize=1)
 def get_data_asset_client() -> MongoClient:
     """获取只读材料数据资产 MongoDB 客户端。"""
-    return MongoClient(settings.data_asset_mongodb_uri, serverSelectionTimeoutMS=5000)
+    return MongoClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
 
 
 def get_data_asset_database() -> Database:

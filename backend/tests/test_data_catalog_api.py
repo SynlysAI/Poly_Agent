@@ -283,7 +283,7 @@ class DataCatalogServiceTest(unittest.TestCase):
         service = DataCatalogService(s3_client=fake_s3)
 
         with (
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
         ):
             listed = service.list_md_allatom_c_files("1_1_16", keyword="minf")
@@ -326,7 +326,7 @@ class DataCatalogServiceTest(unittest.TestCase):
         service = DataCatalogService(s3_client=fake_s3)
 
         with (
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
         ):
             download = service.open_md_allatom_c_file("1_1_16", "polymer_1_1_16minf.data")
@@ -363,7 +363,7 @@ class DataCatalogServiceTest(unittest.TestCase):
         service = DataCatalogService(s3_client=fake_s3)
 
         with (
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
         ):
             download = service.open_md_allatom_c_file("1_1_16", "polymer_1_1_16minf.data")
@@ -391,7 +391,7 @@ class DataCatalogServiceTest(unittest.TestCase):
         service = DataCatalogService(s3_client=fake_s3)
 
         with (
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
         ):
             listed = service.list_md_allatom_c_files("1_1_16")
@@ -413,7 +413,7 @@ class DataCatalogServiceTest(unittest.TestCase):
         fake_db = FakeMongoDatabase({"md_allatom_files": []})
 
         with (
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
             self.assertRaises(HTTPException) as context,
         ):
@@ -447,7 +447,7 @@ class DataCatalogServiceTest(unittest.TestCase):
         service = DataCatalogService(s3_client=fake_s3)
 
         with (
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
             self.assertRaises(HTTPException) as context,
         ):
@@ -508,7 +508,6 @@ class DataCatalogServiceTest(unittest.TestCase):
 
         with (
             patch("app.services.data_catalog_service.settings.require_mongodb", True),
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
         ):
             data = service.list_datasets()
@@ -550,7 +549,6 @@ class DataCatalogServiceTest(unittest.TestCase):
 
         with (
             patch("app.services.data_catalog_service.settings.require_mongodb", True),
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
         ):
             data = service.list_datasets()
@@ -602,7 +600,6 @@ class DataCatalogServiceTest(unittest.TestCase):
 
         with (
             patch("app.services.data_catalog_service.settings.require_mongodb", True),
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
         ):
             data = service.list_datasets()
@@ -643,7 +640,6 @@ class DataCatalogServiceTest(unittest.TestCase):
 
         with (
             patch("app.services.data_catalog_service.settings.require_mongodb", True),
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
         ):
             data = service.list_datasets()
@@ -839,7 +835,7 @@ class DataCatalogApiTest(unittest.TestCase):
             patch("app.services.data_catalog_service.settings.minio_endpoint", "http://minio-secret.example"),
             patch("app.services.data_catalog_service.settings.minio_access_key", "MINIO_ACCESS_KEY_SECRET"),
             patch("app.services.data_catalog_service.settings.minio_secret_key", "MINIO_SECRET_KEY_SECRET"),
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://secret-user:secret-pass@mongo.example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
         ):
             response = self.client.get("/api/v1/data-catalog/api-catalog")
 
@@ -934,7 +930,7 @@ class DataCatalogApiTest(unittest.TestCase):
             }
         )
         with (
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
             patch("app.services.data_catalog_service.S3ObjectClient", return_value=fake_s3),
         ):
@@ -966,7 +962,7 @@ class DataCatalogApiTest(unittest.TestCase):
             }
         )
         with (
-            patch("app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example/poly_data"),
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
             patch("app.services.data_catalog_service.get_data_asset_database", return_value=fake_db),
             patch("app.services.data_catalog_service.S3ObjectClient", return_value=FakeS3Client({})),
         ):
@@ -1660,11 +1656,17 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
 
     def test_md_allatom_dataset_profile_falls_back_when_stats_document_is_missing(self) -> None:
         service = DataCatalogService()
-        with patch("app.services.data_catalog_service.settings.require_mongodb", True), patch(
-            "app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"
-        ), patch("app.services.data_catalog_service.get_data_asset_database", return_value=ProfileMongoDatabase(
+        profile_db = ProfileMongoDatabase(
             {
-                "datasets": [{"dataset_id": "md_allatom", "display_name": "MD-AllAtom", "row_count": 10000, "column_count": 26, "storage_prefix": "datasets/md_allatom/"}],
+                "datasets": [
+                    {
+                        "dataset_id": "md_allatom",
+                        "display_name": "MD-AllAtom",
+                        "row_count": 10000,
+                        "column_count": 26,
+                        "storage_prefix": "datasets/md_allatom/",
+                    }
+                ],
                 "dataset_fields": [],
                 "dataset_stats": [],
                 "md_allatom_carbon_results": [
@@ -1683,7 +1685,11 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
                 ],
             },
             counts={"md_allatom_carbon_results": 1, "md_allatom_files": 1},
-        )):
+        )
+        with (
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=profile_db),
+        ):
             data = service.get_dataset_profile("md_allatom")
 
         self.assertEqual(data.record_count, 1)
@@ -1694,17 +1700,27 @@ class DataCatalogRecordDrilldownApiTest(ComputationTestCase):
 
     def test_has_dataset_stats_reports_fallback_data_for_md_allatom(self) -> None:
         service = DataCatalogService()
-        with patch("app.services.data_catalog_service.settings.require_mongodb", True), patch(
-            "app.services.data_catalog_service.settings.data_asset_mongodb_uri", "mongodb://example"
-        ), patch("app.services.data_catalog_service.get_data_asset_database", return_value=ProfileMongoDatabase(
+        profile_db = ProfileMongoDatabase(
             {
-                "datasets": [{"dataset_id": "md_allatom", "display_name": "MD-AllAtom", "row_count": 10000, "column_count": 26, "storage_prefix": "datasets/md_allatom/"}],
+                "datasets": [
+                    {
+                        "dataset_id": "md_allatom",
+                        "display_name": "MD-AllAtom",
+                        "row_count": 10000,
+                        "column_count": 26,
+                        "storage_prefix": "datasets/md_allatom/",
+                    }
+                ],
                 "dataset_fields": [],
                 "dataset_stats": [],
                 "md_allatom_carbon_results": [{"md_allatom_carbon_result_id": "MDALLATOM-C-000001"}],
             },
             counts={"md_allatom_carbon_results": 1},
-        )):
+        )
+        with (
+            patch("app.services.data_catalog_service.settings.require_mongodb", True),
+            patch("app.services.data_catalog_service.get_data_asset_database", return_value=profile_db),
+        ):
             self.assertTrue(service.has_dataset_stats("md_allatom"))
 
     def test_md_allatom_collection_records_use_domain_summary(self) -> None:

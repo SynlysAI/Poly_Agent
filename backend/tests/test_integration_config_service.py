@@ -210,19 +210,14 @@ class IntegrationConfigServiceTest(ComputationTestCase):
         self.assertIn("无需外部服务", by_service["alchemist-backend"]["details"]["message"])
 
     def test_status_includes_database_and_knowledge_services(self) -> None:
-        original_asset_uri = settings.data_asset_mongodb_uri
-        settings.data_asset_mongodb_uri = "mongodb://127.0.0.1:27018"
-        try:
-            with patch.object(IntegrationStatusService, "_can_connect", return_value=False), patch(
-                "app.services.knowledge_service.KnowledgeService.health",
-            ) as health:
-                health.return_value.status = "unavailable"
-                health.return_value.configured = False
-                health.return_value.message = "WeKnora 服务未配置。"
-                health.return_value.systems = []
-                items = IntegrationStatusService().get_status()["items"]
-        finally:
-            settings.data_asset_mongodb_uri = original_asset_uri
+        with patch.object(IntegrationStatusService, "_can_connect", return_value=False), patch(
+            "app.services.knowledge_service.KnowledgeService.health",
+        ) as health:
+            health.return_value.status = "unavailable"
+            health.return_value.configured = False
+            health.return_value.message = "WeKnora 服务未配置。"
+            health.return_value.systems = []
+            items = IntegrationStatusService().get_status()["items"]
 
         by_service = {item["service"]: item for item in items}
 
