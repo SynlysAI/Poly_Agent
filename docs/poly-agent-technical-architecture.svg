@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
   <title id="title">Poly Agent 技术架构图</title>
-  <desc id="desc">Poly Agent 从浏览器前端、FastAPI 后端、领域服务、计算 worker、独立 Literature RAG 服务到存储和外部系统的技术架构。</desc>
+  <desc id="desc">Poly Agent 从浏览器前端、FastAPI 后端、领域服务、计算 worker、WeKnora 知识服务到存储和外部系统的技术架构。</desc>
   <style>
     text { font-family: Arial, "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif; }
     .title { font-size: 34px; font-weight: 700; fill: #111827; }
@@ -13,7 +13,7 @@
 
   <rect x="0" y="0" width="1440" height="900" fill="#f8fafc"/>
   <text class="title" x="56" y="60">Poly Agent 技术架构图</text>
-  <text class="subtitle" x="56" y="88">高分子材料智能研发平台：前端工作台、FastAPI 后端、领域服务、计算执行、文献 RAG 与外部系统集成</text>
+  <text class="subtitle" x="56" y="88">高分子材料智能研发平台：前端工作台、FastAPI 后端、领域服务、计算执行、WeKnora 知识库与外部系统集成</text>
 
   <rect x="40" y="126" width="198" height="640" rx="16" fill="#ffffff" stroke="#dbe3ea" stroke-width="1.3"/>
   <text class="group" x="64" y="164">访问层</text>
@@ -93,9 +93,9 @@
   <rect x="996" y="126" width="386" height="330" rx="16" fill="#ffffff" stroke="#dbe3ea" stroke-width="1.3"/>
   <text class="group" x="1020" y="164">独立服务与外部系统</text>
   <rect x="1020" y="204" width="154" height="102" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.4"/>
-  <text class="small" x="1045" y="236">Literature RAG</text>
-  <text class="tiny" x="1043" y="260">FastAPI :8200</text>
-  <text class="tiny" x="1043" y="280">RAG / Graph API</text>
+  <text class="small" x="1045" y="236">WeKnora</text>
+  <text class="tiny" x="1043" y="260">Knowledge API</text>
+  <text class="tiny" x="1043" y="280">RAG / Graph / Evidence</text>
   <rect x="1204" y="204" width="154" height="102" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
   <text class="small" x="1236" y="236">LLM Provider</text>
   <text class="tiny" x="1227" y="260">assistant / reports</text>
@@ -163,5 +163,5 @@
 
   <rect x="56" y="810" width="1328" height="64" rx="8" fill="#eef2f7" stroke="#dbe3ea" stroke-width="1"/>
   <text class="small" x="76" y="838">数据流：浏览器访问 Vue 工作台，经 FastAPI /api/v1 调用领域服务；计算 run 由 worker 执行并写回 MongoDB 与 runtime artifacts。</text>
-  <text class="small" x="76" y="858">Knowledge facade 通过独立 Literature RAG 服务访问文献、对象存储和知识图谱；助手与报告链路按配置调用 LLM。</text>
+  <text class="small" x="76" y="858">Knowledge facade 通过 WeKnora API 访问知识库问答、证据和检索子图；助手与报告链路按配置调用 LLM。</text>
 </svg>

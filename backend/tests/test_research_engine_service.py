@@ -278,6 +278,40 @@ class AlgorithmRegistryServiceTest(ComputationTestCase):
         count2 = self.service.seed_default_algorithms()
         self.assertEqual(count2, 0)
 
+    def test_seed_defaults_removes_legacy_literature_rag_adapter(self) -> None:
+        """默认清单同步时移除旧版 literature_rag 内置适配器。"""
+        from app.infra.research_engine_repositories import AlgorithmRegistryRepository
+
+        AlgorithmRegistryRepository.save(
+            "algorithm_id",
+            {
+                "algorithm_id": "literature_rag_adapter",
+                "name": "知识增强 RAG 检索",
+                "type": "retriever",
+                "algorithm_family": "knowledge",
+                "material_scope": ["universal"],
+                "task_scope": ["KNOWLEDGE_RETRIEVAL"],
+                "input_schema": {"fields": {}, "required": [], "constraints": {}},
+                "output_schema": {"fields": {}, "required": [], "constraints": {}},
+                "call_method": "REST",
+                "trigger_modes": ["human_workflow", "autoresearch"],
+                "runtime_dependency": "legacy literature-rag service",
+                "version": "1.0.0",
+                "validation_metric": {},
+                "owner": "research_engine_team",
+                "status": "active",
+                "description": "旧版本地 literature-rag 服务适配器。",
+                "source": "default_seed",
+            },
+        )
+
+        self.service.seed_default_algorithms()
+        result = self.service.list_algorithms(page_size=100)
+        algorithm_ids = {item.algorithm_id for item in result.items}
+
+        self.assertNotIn("literature_rag_adapter", algorithm_ids)
+        self.assertIn("weknora_adapter", algorithm_ids)
+
     def test_seed_has_all_eight_entries(self) -> None:
         """种子中包含 8 个算法条目（3 计算 + 5 mock）。"""
         self.service.seed_default_algorithms()

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.metadata
+import importlib.util
+import re
 import shutil
 import socket
 import subprocess
-import re
-import importlib.metadata
-import importlib.util
 from pathlib import Path
-from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.core.time import utc_now
@@ -58,19 +57,16 @@ class IntegrationStatusService:
         details = dict(item.get("details") or {})
         details.update(
             {
-                "configured": bool(config.endpoint or config.config_summary or config.secret_refs),
-                "enabled": config.enabled,
-                "last_error_summary": config.last_error_summary,
+                "manual_configured": bool(config.endpoint or config.config_summary or config.secret_refs),
+                "manual_enabled": config.enabled,
+                "manual_last_status": config.last_status,
+                "manual_last_checked_at": (
+                    config.last_checked_at.isoformat() if config.last_checked_at else None
+                ),
+                "manual_last_error_summary": config.last_error_summary,
             }
         )
         item["details"] = details
-        if config.last_checked_at:
-            item["status"] = config.last_status
-            item["checked_at"] = config.last_checked_at.isoformat()
-        elif details["configured"] and not config.enabled:
-            item["status"] = "disabled"
-        elif details["configured"] and item["status"] == "not_configured":
-            item["status"] = "down"
         return item
 
     def _worker_status(self, checked_at: str) -> dict:
@@ -112,18 +108,7 @@ class IntegrationStatusService:
         }
 
     def _data_asset_mongodb_status(self, checked_at: str) -> dict:
-        uri = settings.data_asset_mongodb_uri
-        if not uri:
-            return {
-                "service": "data-asset-mongodb",
-                "status": "not_configured",
-                "checked_at": checked_at,
-                "details": {
-                    "database": settings.data_asset_mongodb_database,
-                    "reason": "DATA_ASSET_MONGODB_URI is not configured",
-                },
-            }
-        host, port = self._parse_mongodb_endpoint(uri)
+        host, port = settings.mongodb_host, settings.mongodb_port
         available = bool(host and self._can_connect(host, port))
         return {
             "service": "data-asset-mongodb",
@@ -134,7 +119,7 @@ class IntegrationStatusService:
                 "port": port,
                 "database": settings.data_asset_mongodb_database,
                 "configured": True,
-                "reason": None if available else "data asset MongoDB endpoint is not reachable",
+                "reason": None if available else "MongoDB port is not reachable",
             },
         }
 
@@ -236,13 +221,6 @@ class IntegrationStatusService:
             return KnowledgeService().health()
         except Exception:
             return None
-
-    @staticmethod
-    def _parse_mongodb_endpoint(uri: str) -> tuple[str | None, int]:
-        parsed = urlparse(uri)
-        host = parsed.hostname
-        port = parsed.port or 27017
-        return host, port
 
     def _alchemist_status(self, checked_at: str) -> dict:
         return {

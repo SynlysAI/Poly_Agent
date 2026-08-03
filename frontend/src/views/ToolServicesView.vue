@@ -231,26 +231,38 @@ const visibleServiceGroups = computed(() => serviceGroupFilter.value === 'all'
   ? serviceGroups.value
   : serviceGroups.value.filter((group) => group.name === serviceGroupFilter.value))
 
+const serviceStatusByKey = computed(() => Object.fromEntries(
+  services.value.map((item) => [item.service, item]),
+))
+
+const CORE_SERVICE_IDS = ['mongodb', 'artifact-store', 'weknora', 'computation-worker']
+const TOOLCHAIN_SERVICE_IDS = ['rdkit', 'openbabel', 'xtb', 'crest', 'orca']
+
+function isReadyStatus(status) {
+  return ['up', 'available', 'built_in'].includes(status)
+}
+
 const healthSummary = computed(() => {
-  const required = ['mongodb', 'artifact-store', 'weknora', 'rdkit', 'openbabel', 'xtb']
-  const items = services.value.filter((item) => required.includes(item.service))
-  const ready = items.filter((item) => ['up', 'available', 'built_in'].includes(item.status)).length
+  const items = services.value.filter((item) => CORE_SERVICE_IDS.includes(item.service))
+  const ready = items.filter((item) => isReadyStatus(item.status)).length
   return { ready, total: items.length }
 })
 
 const serviceHealthStats = computed(() => {
-  const readyStatuses = new Set(['up', 'available', 'built_in'])
   const issueStatuses = new Set(['degraded', 'down', 'failed'])
   const setupStatuses = new Set(['not_configured', 'disabled', 'not_available'])
-  const ready = services.value.filter((item) => readyStatuses.has(item.status)).length
+  const toolchainItems = services.value.filter((item) => TOOLCHAIN_SERVICE_IDS.includes(item.service))
+  const toolchainReady = toolchainItems.filter((item) => isReadyStatus(item.status)).length
   const issues = services.value.filter((item) => issueStatuses.has(item.status)).length
-  const setupRequired = services.value.filter((item) => setupStatuses.has(item.status)).length
+  const setupRequired = services.value.filter((item) => (
+    setupStatuses.has(item.status) && !TOOLCHAIN_SERVICE_IDS.includes(item.service)
+  )).length
   const coreReady = healthSummary.value.total > 0 && healthSummary.value.ready === healthSummary.value.total
   return [
-    { label: '核心服务', value: `${healthSummary.value.ready}/${healthSummary.value.total}`, hint: '关键链路', tone: coreReady ? 'success' : 'warning', icon: DataAnalysis },
-    { label: '可用服务', value: String(ready), hint: '在线 / 内置', tone: 'success', icon: Files },
+    { label: '核心服务', value: `${healthSummary.value.ready}/${healthSummary.value.total}`, hint: '数据库 / 知识库 / worker', tone: coreReady ? 'success' : 'warning', icon: DataAnalysis },
+    { label: '计算工具链', value: `${toolchainReady}/${toolchainItems.length}`, hint: 'RDKit / xTB / ORCA', tone: toolchainReady === toolchainItems.length ? 'success' : 'warning', icon: Files },
     { label: '异常服务', value: String(issues), hint: '需排查', tone: issues ? 'danger' : 'neutral', icon: Warning },
-    { label: '待配置', value: String(setupRequired), hint: '未安装 / 未配置', tone: setupRequired ? 'warning' : 'neutral', icon: SetUp },
+    { label: '待接入', value: String(setupRequired), hint: '外部 / 可选服务', tone: setupRequired ? 'warning' : 'neutral', icon: SetUp },
   ]
 })
 
@@ -274,14 +286,15 @@ const llmModelOptions = computed(() => {
 
 const llmProviderStats = computed(() => {
   const providers = llmCatalog.value.providers || []
-  const available = providers.filter((item) => ['available', 'unknown'].includes(item.status)).length
+  const available = providers.filter((item) => item.status === 'available').length
+  const unprobed = providers.filter((item) => item.status === 'unknown').length
   const models = providers.reduce((sum, item) => sum + (item.models?.length || 0), 0)
   const reasoning = llmModelOptions.value.filter((item) => item.capabilities.includes('reasoning')).length
   return [
     { label: 'Provider', value: String(providers.length), hint: '已登记' },
     { label: '模型', value: String(models), hint: '可选择' },
     { label: '推理模型', value: String(reasoning), hint: 'deep 路由' },
-    { label: '可用/未知', value: String(available), hint: '未失败' },
+    { label: '已探测可用', value: String(available), hint: `${unprobed} 未探测` },
   ]
 })
 
@@ -335,6 +348,22 @@ function statusLabel(status) {
   return map[status] || status
 }
 
+function llmStatusLabel(status) {
+  if (status === 'unknown') return '未探测'
+  return statusLabel(status)
+}
+
+function llmStatusNote(provider) {
+  const map = {
+    available: '远端模型列表已确认',
+    unknown: '已登记，尚未执行连通性探测',
+    not_configured: '缺少模型列表或本地服务配置',
+    down: '探测失败',
+    degraded: '部分能力异常',
+  }
+  return map[provider?.status] || statusLabel(provider?.status)
+}
+
 function llmCapabilityLabel(capability) {
   const map = {
     chat: '聊天',
@@ -377,6 +406,38 @@ function serviceStatusNote(row) {
 
 function serviceVersion(row) {
   return row.details?.version || row.details?.message || '-'
+}
+
+function configRuntime(row) {
+  return serviceStatusByKey.value[row.service_key] || null
+}
+
+function configDisplayStatus(row) {
+  return configRuntime(row)?.status || row.last_status
+}
+
+function configStatusSource(row) {
+  const runtime = configRuntime(row)
+  if (runtime) return `实时检查 ${formatDate(runtime.checked_at)}`
+  return `配置检查 ${formatDate(row.last_checked_at)}`
+}
+
+function configSummaryText(row) {
+  const summary = compactConfigSummary(row)
+  if (summary !== '-') return summary
+  const runtime = configRuntime(row)
+  if (runtime && ['up', 'available', 'built_in'].includes(runtime.status)) {
+    return '运行状态来自环境变量或内置能力'
+  }
+  return '未保存手动配置'
+}
+
+function configSecondaryText(row) {
+  const parts = [`手动配置：${row.enabled ? '已启用' : '未启用'}`]
+  if (row.last_checked_at) {
+    parts.push(`配置检查 ${statusLabel(row.last_status)}`)
+  }
+  return parts.join(' · ')
 }
 
 function showServiceDetail(row) {
@@ -561,7 +622,7 @@ async function toggleEnabled(row, enabled) {
       config_summary: row.config_summary || {},
       secret_refs: row.secret_refs || {},
     })
-    await loadConfigs()
+    await Promise.all([loadConfigs(), loadStatus()])
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
     await loadConfigs({ quiet: true })
@@ -736,15 +797,15 @@ watch(activeTab, (tab) => {
 
       <el-tab-pane label="配置" name="configs">
         <section class="tools-section">
-          <div class="section-heading"><div><h2>服务配置</h2><p class="section-description">管理服务启用状态、连接地址和配置摘要。</p></div><span>{{ configs.length }} 项配置</span></div>
+          <div class="section-heading"><div><h2>服务配置</h2><p class="section-description">管理手动接入配置；运行状态以状态页实时检查为准。</p></div><span>{{ configs.length }} 项配置</span></div>
           <el-alert v-if="configError" :title="configError" type="warning" :closable="false" class="config-alert" />
           <div v-else v-loading="loadingConfigs" class="config-list">
             <article v-for="row in configs" :key="row.service_key" class="config-list-row">
               <div class="config-list-main"><strong>{{ row.display_name || row.service_key }}</strong><small>{{ row.service_key }} · {{ row.service_type }}</small></div>
-              <div class="config-list-status"><el-tag size="small" :type="statusTag(row.last_status)">{{ statusLabel(row.last_status) }}</el-tag><small>最后检查 {{ formatDate(row.last_checked_at) }}</small></div>
-              <div class="config-list-summary"><span>{{ compactConfigSummary(row) }}</span><small v-if="row.last_error_summary">{{ row.last_error_summary }}</small></div>
-              <div class="config-list-enabled"><span>启用</span><el-switch :model-value="row.enabled" :loading="actionLoading === `${row.service_key}:toggle`" @change="(value) => toggleEnabled(row, value)" /></div>
-              <div class="config-actions"><el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button><el-button text type="primary" size="small" :icon="Check" :loading="actionLoading === `${row.service_key}:check`" @click="handleCheck(row)">检查</el-button><el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button></div>
+              <div class="config-list-status"><el-tag size="small" :type="statusTag(configDisplayStatus(row))">{{ statusLabel(configDisplayStatus(row)) }}</el-tag><small>{{ configStatusSource(row) }}</small></div>
+              <div class="config-list-summary"><span>{{ configSummaryText(row) }}</span><small>{{ row.last_error_summary || configSecondaryText(row) }}</small></div>
+              <div class="config-list-enabled"><span>手动启用</span><el-switch :model-value="row.enabled" :loading="actionLoading === `${row.service_key}:toggle`" @change="(value) => toggleEnabled(row, value)" /></div>
+              <div class="config-actions"><el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button><el-button text type="primary" size="small" :icon="Check" :loading="actionLoading === `${row.service_key}:check`" @click="handleCheck(row)">检查配置</el-button><el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button></div>
             </article>
           </div>
         </section>
@@ -808,7 +869,7 @@ watch(activeTab, (tab) => {
                       <strong>{{ provider.display_name }}</strong>
                       <span>{{ provider.provider_id }} · {{ provider.provider_type }}</span>
                     </div>
-                    <el-tag size="small" :type="statusTag(provider.status)">{{ statusLabel(provider.status) }}</el-tag>
+                    <el-tag size="small" :type="statusTag(provider.status)">{{ llmStatusLabel(provider.status) }}</el-tag>
                   </div>
                   <dl class="llm-provider-meta">
                     <div>
@@ -820,6 +881,7 @@ watch(activeTab, (tab) => {
                       <dd>{{ provider.api_key_configured ? (provider.api_key_ref || '已配置') : '未配置' }}</dd>
                     </div>
                   </dl>
+                  <p class="llm-provider-note">{{ llmStatusNote(provider) }}</p>
                   <div class="llm-model-list">
                     <div v-for="model in provider.models || []" :key="model.model_id" class="llm-model-row">
                       <span>{{ model.display_name || model.model_id }}</span>
@@ -1331,6 +1393,12 @@ watch(activeTab, (tab) => {
   overflow-wrap: anywhere;
   color: var(--app-ink-body);
   font-size: 13px;
+}
+
+.llm-provider-note {
+  margin: -2px 0 12px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
 }
 
 .llm-model-list {

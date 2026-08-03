@@ -32,6 +32,7 @@ import {
   streamKnowledgeQuery,
 } from '../api/polyAgentApi'
 import { promptToGraphQuery } from '../utils/knowledgeGraphKeywords.mjs'
+import { renderKnowledgeMarkdown } from '../utils/knowledgeMarkdown.js'
 
 use([
   GraphChart,
@@ -61,7 +62,6 @@ const suggestedQuestions = ref([])
 const suggestionsLoading = ref(false)
 const topBarCollapsed = ref(false)
 const queryTrace = ref([])
-const failedAnswerImages = ref(new Set())
 const queryPaneCollapsed = ref(true)
 const citationPanelCollapsed = ref(true)
 const nodeDetailCollapsed = ref(false)
@@ -105,7 +105,13 @@ const graphNodeDegreeMap = computed(() => {
   })
   return degreeMap
 })
-const answerBlocks = computed(() => parseMarkdownBlocks(answer.value?.answer || ''))
+const answerHtml = computed(() => {
+  const currentSystemId = selectedSystemId.value
+  return renderKnowledgeMarkdown(answer.value?.answer || '', {
+    resolveImageUrl: (url) => resourceImageUrl(url, currentSystemId),
+    citationUrl: citationSourceUrlForAttrs,
+  })
+})
 const graphSourceLabel = computed(() => sourceStatusLabel(graph.value || selectedSystem.value || health.value))
 const graphEnhancementStatus = computed(() => {
   if (!graph.value) return ''
@@ -343,116 +349,37 @@ const selectedNodePropertyJson = computed(() => {
   return JSON.stringify(properties, null, 2)
 })
 
-function parseTagAttributes(attrString) {
-  const attributes = {}
-  const pattern = /([\w-]+)\s*=\s*"([^"]*)"/g
-  let match = pattern.exec(attrString || '')
-  while (match) {
-    attributes[match[1]] = match[2]
-    match = pattern.exec(attrString || '')
-  }
-  return attributes
-}
-
-function citationTitleFromKbTag(attrs) {
-  const doc = attrs.doc || attrs.title || '知识引用'
-  const chunkId = attrs.chunk_id || attrs.chunkId || ''
-  if (!chunkId) return doc
-  const shortChunkId = chunkId.length > 10 ? `${chunkId.slice(0, 6)}...${chunkId.slice(-4)}` : chunkId
-  return `${doc} · ${shortChunkId}`
-}
-
-function resourceImageUrl(rawUrl) {
+function resourceImageUrl(rawUrl, systemId = selectedSystemId.value) {
   const value = String(rawUrl || '').trim()
   if (!value) return ''
   if (/^https?:\/\//i.test(value)) return value
-  if (!selectedSystemId.value) return ''
+  if (!systemId) return ''
   const protectedSchemes = /^(resource|storage|local|minio|s3|cos|tos|oss|obs|ks3):\/\//i
   if (!protectedSchemes.test(value)) return ''
-  return `${getApiBaseUrl()}/knowledge-bases/${encodeURIComponent(selectedSystemId.value)}/files?file_path=${encodeURIComponent(value)}`
+  return `${getApiBaseUrl()}/knowledge-bases/${encodeURIComponent(systemId)}/files?file_path=${encodeURIComponent(value)}`
 }
 
-function hasAnswerImageFailed(rawSrc) {
-  return failedAnswerImages.value.has(rawSrc)
+function normalizeCitationMatchText(value) {
+  return String(value || '')
+    .replace(/\.(pdf|docx?|pptx?|md|markdown|txt|html?)$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
 }
 
-function markAnswerImageUnavailable(rawSrc) {
-  failedAnswerImages.value = new Set([...failedAnswerImages.value, rawSrc])
-}
+function citationSourceUrlForAttrs(attrs) {
+  const doc = normalizeCitationMatchText(attrs?.doc || attrs?.title)
+  if (!doc) return ''
 
-function parseWeKnoraImage(line) {
-  const match = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/)
-  if (!match) return null
-  const src = resourceImageUrl(match[2])
-  return src ? { type: 'image', alt: match[1] || '回答图片', src, rawSrc: match[2] } : null
-}
-
-function parseInlineSegments(text) {
-  const segments = []
-  const pattern = /<kb\b([^>]*?)\s*\/?>|\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g
-  let lastIndex = 0
-  let match = pattern.exec(text)
-  while (match) {
-    if (match.index > lastIndex) {
-      segments.push({ type: 'text', text: text.slice(lastIndex, match.index) })
-    }
-    if (match[0].startsWith('<kb')) {
-      const attrs = parseTagAttributes(match[1])
-      segments.push({
-        type: 'citation',
-        text: attrs.doc || '知识引用',
-        title: citationTitleFromKbTag(attrs),
-        chunkId: attrs.chunk_id || attrs.chunkId || '',
-        kbId: attrs.kb_id || attrs.kbId || '',
-      })
-    } else {
-      segments.push({ type: 'link', text: match[2], href: match[3] })
-    }
-    lastIndex = pattern.lastIndex
-    match = pattern.exec(text)
-  }
-  if (lastIndex < text.length) {
-    segments.push({ type: 'text', text: text.slice(lastIndex) })
-  }
-  return segments.length ? segments : [{ type: 'text', text }]
-}
-
-function parseMarkdownBlocks(markdown) {
-  const lines = markdown.split(/\r?\n/)
-  const blocks = []
-  let listItems = []
-  const flushList = () => {
-    if (listItems.length) {
-      blocks.push({ type: 'list', items: listItems.map((item) => parseInlineSegments(item)) })
-      listItems = []
-    }
-  }
-  lines.forEach((line) => {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      flushList()
-      return
-    }
-    if (trimmed.startsWith('### ')) {
-      flushList()
-      blocks.push({ type: 'heading', text: trimmed.slice(4) })
-      return
-    }
-    if (trimmed.startsWith('- ')) {
-      listItems.push(trimmed.slice(2))
-      return
-    }
-    const imageBlock = parseWeKnoraImage(trimmed)
-    if (imageBlock) {
-      flushList()
-      blocks.push(imageBlock)
-      return
-    }
-    flushList()
-    blocks.push({ type: 'paragraph', segments: parseInlineSegments(trimmed) })
+  const candidates = [
+    ...(answer.value?.citations || []),
+    ...(answer.value?.hits || []),
+  ]
+  const matched = candidates.find((item) => {
+    const title = normalizeCitationMatchText(item?.title || item?.source_id)
+    return title && (title === doc || title.includes(doc) || doc.includes(title))
   })
-  flushList()
-  return blocks
+  return citationUrl(matched)
 }
 
 function citationUrl(item) {
@@ -644,10 +571,6 @@ function sourceLevel(hit) {
     europe_pmc: 'Europe PMC',
   }
   return labels[sourceKind] || '可追溯来源'
-}
-
-function linkSegments(segments) {
-  return segments || []
 }
 
 function normalizeKnowledgeMessage(message) {
@@ -973,7 +896,6 @@ async function runQuery() {
   graphLoading.value = canLoadGraph.value
   queryError.value = ''
   graphError.value = ''
-  failedAnswerImages.value = new Set()
   answer.value = { answer: '', hits: [], citations: [], configured: true, message: canStreamQuery.value ? '知识库流式检索' : '知识库检索' }
   graph.value = null
   setGraphQueryFromQuestion(question)
@@ -1111,7 +1033,6 @@ function resetWorkspace() {
   graph.value = null
   queryError.value = ''
   graphError.value = ''
-  failedAnswerImages.value = new Set()
   queryLoading.value = false
   graphLoading.value = false
   selectedNodeId.value = ''
@@ -1371,51 +1292,7 @@ onMounted(loadBootstrap)
                       <span>证据 {{ queryForm.top_k }} 条</span>
                     </div>
                   </div>
-                  <template v-for="(block, index) in answerBlocks" :key="`${block.type}-${index}`">
-                    <h4 v-if="block.type === 'heading'">{{ block.text }}</h4>
-                    <p v-else-if="block.type === 'paragraph'" class="answer-text">
-                      <template v-for="(segment, segIndex) in linkSegments(block.segments)" :key="segIndex">
-                        <a v-if="segment.type === 'link'" :href="segment.href" target="_blank" rel="noreferrer">{{ segment.text }}</a>
-                        <el-tag
-                          v-else-if="segment.type === 'citation'"
-                          class="answer-citation-tag"
-                          size="small"
-                          effect="plain"
-                          :title="segment.title"
-                        >
-                          引用 {{ segment.text }}
-                        </el-tag>
-                        <span v-else>{{ segment.text }}</span>
-                      </template>
-                    </p>
-                    <ul v-else-if="block.type === 'list'" class="answer-list">
-                      <li v-for="(item, itemIndex) in block.items" :key="itemIndex">
-                        <template v-for="(segment, segIndex) in item" :key="segIndex">
-                          <a v-if="segment.type === 'link'" :href="segment.href" target="_blank" rel="noreferrer">{{ segment.text }}</a>
-                          <el-tag
-                            v-else-if="segment.type === 'citation'"
-                            class="answer-citation-tag"
-                            size="small"
-                            effect="plain"
-                            :title="segment.title"
-                          >
-                            引用 {{ segment.text }}
-                          </el-tag>
-                          <span v-else>{{ segment.text }}</span>
-                        </template>
-                      </li>
-                    </ul>
-                    <figure v-else-if="block.type === 'image'" class="answer-image-block">
-                      <template v-if="!hasAnswerImageFailed(block.rawSrc)">
-                        <img :src="block.src" :alt="block.alt" loading="lazy" @error="markAnswerImageUnavailable(block.rawSrc)" />
-                        <figcaption>{{ block.alt }}</figcaption>
-                      </template>
-                      <div v-else class="answer-image-unavailable">
-                        <strong>{{ block.alt }}</strong>
-                        <span>图片资源暂不可用，当前 WeKnora 凭据没有文件读取权限或资源已失效。</span>
-                      </div>
-                    </figure>
-                  </template>
+                  <div v-if="answerHtml" class="answer-markdown" v-html="answerHtml"></div>
                   <div
                     v-if="queryLoading"
                     class="answer-generation-indicator"
@@ -2400,56 +2277,286 @@ onMounted(loadBootstrap)
   min-width: 0;
 }
 
-.semantic-answer h4 {
-  padding-top: 4px;
-  color: #0b2d63;
-  font-size: 15px;
-}
-
-.answer-text {
-  margin: 0;
+.answer-markdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
   color: var(--app-ink-body);
-  line-height: 1.75;
+  line-height: 1.7;
 }
 
-.answer-citation-tag {
-  margin: 0 3px;
-  max-width: 220px;
+.answer-markdown :deep(.answer-citation-tag) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  max-width: 240px;
+  margin: 0 4px;
+  padding: 2px 8px 2px 7px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
   vertical-align: text-bottom;
+  white-space: nowrap;
+  overflow: visible;
+  cursor: help;
 }
 
-.answer-citation-tag :deep(.el-tag__content) {
-  max-width: 190px;
+.answer-markdown :deep(a.answer-citation-tag) {
+  color: #1d4ed8;
+  text-decoration: none;
+}
+
+.answer-markdown :deep(.answer-citation-tag__icon) {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #93c5fd 0%, #2563eb 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.answer-markdown :deep(.answer-citation-tag__text) {
+  min-width: 0;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.answer-image-block {
-  margin: 4px 0;
-  padding: 10px;
+.answer-markdown :deep(.answer-citation-tag__tooltip) {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 12;
+  display: none;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+  color: var(--app-ink-body);
+  transform: translateX(-50%);
+  white-space: normal;
+  text-align: left;
+}
+
+.answer-markdown :deep(.answer-citation-tag__tooltip::after) {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  background: #ffffff;
+  border-right: 1px solid #dbeafe;
+  border-bottom: 1px solid #dbeafe;
+  transform: translate(-50%, -55%) rotate(45deg);
+}
+
+.answer-markdown :deep(.answer-citation-tag__tooltip-title) {
+  display: block;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.answer-markdown :deep(.answer-citation-tag__tooltip-meta) {
+  display: block;
+  margin-top: 6px;
+  color: var(--app-ink-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.answer-markdown :deep(.answer-citation-tag:hover) {
+  border-color: #93c5fd;
+  background: #e0f2fe;
+}
+
+.answer-markdown :deep(.answer-citation-tag:hover .answer-citation-tag__tooltip) {
+  display: block;
+}
+
+.answer-markdown :deep(h1),
+.answer-markdown :deep(h2),
+.answer-markdown :deep(h3),
+.answer-markdown :deep(h4),
+.answer-markdown :deep(h5),
+.answer-markdown :deep(h6) {
+  margin: 0;
+  color: #0b2d63;
+  font-weight: 600;
+}
+
+.answer-markdown :deep(h1) {
+  font-size: 22px;
+  line-height: 1.3;
+}
+
+.answer-markdown :deep(h2) {
+  font-size: 19px;
+  line-height: 1.35;
+}
+
+.answer-markdown :deep(h3) {
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+.answer-markdown :deep(h4) {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.answer-markdown :deep(h5),
+.answer-markdown :deep(h6) {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--app-ink-muted);
+}
+
+.answer-markdown :deep(p) {
+  margin: 0;
+}
+
+.answer-markdown :deep(p + p),
+.answer-markdown :deep(p + ul),
+.answer-markdown :deep(p + ol),
+.answer-markdown :deep(ul + p),
+.answer-markdown :deep(ol + p),
+.answer-markdown :deep(blockquote + p),
+.answer-markdown :deep(p + blockquote),
+.answer-markdown :deep(table + p),
+.answer-markdown :deep(p + .knowledge-markdown-table) {
+  margin-top: 0.75em;
+}
+
+.answer-markdown :deep(ul),
+.answer-markdown :deep(ol) {
+  margin: 0.25em 0 0.75em;
+  padding-left: 1.6em;
+}
+
+.answer-markdown :deep(li) {
+  margin: 0;
+  line-height: 1.65;
+}
+
+.answer-markdown :deep(blockquote) {
+  margin: 0.5em 0 0.75em;
+  padding: 0.5em 0 0.5em 1.1em;
+  border-left: 2px solid var(--app-border-soft);
+  color: var(--app-ink-muted);
+}
+
+.knowledge-markdown-table {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.75em 0 1em;
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
   background: #ffffff;
 }
 
-.answer-image-block img {
+.answer-markdown :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.answer-markdown :deep(th),
+.answer-markdown :deep(td) {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--app-border-soft);
+  border-right: 1px solid var(--app-border-soft);
+  vertical-align: top;
+  text-align: left;
+}
+
+.answer-markdown :deep(th) {
+  background: #f8fafc;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.answer-markdown :deep(tr:last-child td) {
+  border-bottom: none;
+}
+
+.answer-markdown :deep(th:last-child),
+.answer-markdown :deep(td:last-child) {
+  border-right: none;
+}
+
+.answer-markdown :deep(a) {
+  color: var(--app-primary-active);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--app-primary-active) 45%, transparent);
+  text-underline-offset: 0.18em;
+}
+
+.answer-markdown :deep(a:hover) {
+  color: var(--app-primary);
+}
+
+.answer-markdown :deep(code):not(pre code) {
+  padding: 0.12em 0.34em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--app-ink) 8%, transparent);
+  font-family: var(--app-font-family-mono);
+  font-size: 0.875em;
+}
+
+.answer-markdown :deep(pre) {
+  margin: 0.75em 0;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fafc;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.answer-markdown :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+.answer-markdown :deep(img) {
   display: block;
   max-width: min(100%, 760px);
   max-height: 420px;
+  margin: 0.5em 0;
   object-fit: contain;
   border-radius: var(--app-radius-sm);
   background: #f8fafc;
 }
 
-.answer-image-block figcaption {
+.knowledge-image-block {
+  margin: 0.5em 0;
+}
+
+.knowledge-image-block figcaption {
   margin-top: 8px;
   color: var(--app-ink-muted);
   font-size: 12px;
   line-height: 1.45;
 }
 
-.answer-image-unavailable {
+.knowledge-image-unavailable {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2461,29 +2568,20 @@ onMounted(loadBootstrap)
   font-size: 12px;
 }
 
-.answer-image-unavailable strong {
+.knowledge-image-unavailable strong {
   color: var(--app-ink);
   font-size: 13px;
 }
 
-.semantic-answer a,
 .citation-card,
 .hit-footer a {
   color: var(--app-primary-active);
   text-decoration: none;
 }
 
-.semantic-answer a:hover,
 .citation-card:hover,
 .hit-footer a:hover {
   text-decoration: underline;
-}
-
-.answer-list {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--app-ink-body);
-  line-height: 1.7;
 }
 
 .citation-panel {

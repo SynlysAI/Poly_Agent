@@ -1191,8 +1191,6 @@ class DataCatalogService:
     def _load_dataset_stats(self, dataset_id: str) -> dict[str, Any]:
         if not settings.require_mongodb:
             return self._demo_dataset_stats(dataset_id)
-        if not settings.data_asset_mongodb_uri:
-            return {}
         try:
             doc = get_data_asset_database()["dataset_stats"].find_one({"dataset_id": dataset_id}, {"_id": 0})
             return dict(doc) if doc else {}
@@ -1257,7 +1255,7 @@ class DataCatalogService:
         }
 
     def _load_md_allatom_carbon_result_rows(self) -> list[dict[str, Any]]:
-        if not settings.data_asset_mongodb_uri:
+        if not settings.require_mongodb:
             return [dict(row) for row in demo_store.load().get(MD_ALLATOM_CARBON_RESULTS_COLLECTION_KEY, [])]
         try:
             db = get_data_asset_database()
@@ -1266,7 +1264,7 @@ class DataCatalogService:
             return []
 
     def _load_md_allatom_file_rows(self) -> list[dict[str, Any]]:
-        if not settings.data_asset_mongodb_uri:
+        if not settings.require_mongodb:
             return [dict(row) for row in demo_store.load().get(MD_ALLATOM_FILES_COLLECTION_KEY, [])]
         try:
             db = get_data_asset_database()
@@ -1282,7 +1280,7 @@ class DataCatalogService:
         folder: str | None = None,
         filename: str | None = None,
     ) -> list[dict[str, Any]]:
-        if not settings.data_asset_mongodb_uri:
+        if not settings.require_mongodb:
             rows = [dict(row) for row in demo_store.load().get(MD_ALLATOM_FILES_COLLECTION_KEY, [])]
         else:
             try:
@@ -1441,8 +1439,6 @@ class DataCatalogService:
     def _load_dataset_import_status(self, dataset_id: str) -> DataCatalogDatasetImportStatus:
         if not settings.require_mongodb:
             return DataCatalogDatasetImportStatus(status="demo")
-        if not settings.data_asset_mongodb_uri:
-            return DataCatalogDatasetImportStatus(status="not_configured")
         try:
             doc = get_data_asset_database()["import_jobs"].find_one(
                 {"dataset_id": dataset_id},
@@ -1500,7 +1496,7 @@ class DataCatalogService:
         row_start: int | None,
         row_end: int | None,
     ) -> list[dict[str, Any]]:
-        if not settings.data_asset_mongodb_uri:
+        if not settings.require_mongodb:
             return []
         filters = self._build_pi1m_dataset_filter(
             cursor=cursor,
@@ -1637,8 +1633,6 @@ class DataCatalogService:
     def _load_pi1m_visual_rows(self, limit: int) -> list[dict[str, Any]]:
         if not settings.require_mongodb:
             return demo_store.load().get(PI1M_COLLECTION_KEY, [])[:limit]
-        if not settings.data_asset_mongodb_uri:
-            return []
         try:
             collection = get_data_asset_database()[PI1M_COLLECTION_NAME]
             total = max(int(collection.estimated_document_count()), 1)
@@ -1750,7 +1744,7 @@ class DataCatalogService:
         count: int | None = None
         if not settings.require_mongodb:
             count = len(demo_store.load().get(collection_key, []))
-        elif settings.data_asset_mongodb_uri:
+        else:
             try:
                 db = self._database_for_definition(definition)
                 if definition.collection_name == MATERIAL_COLLECTION_NAME:
@@ -1792,7 +1786,7 @@ class DataCatalogService:
 
     def _load_dataset_definitions(self) -> dict[str, dict[str, Any]]:
         """Load dataset metadata from poly_data, falling back to built-in definitions."""
-        if not settings.require_mongodb or not settings.data_asset_mongodb_uri:
+        if not settings.require_mongodb:
             return DATASET_DEFINITIONS
         try:
             db = get_data_asset_database()
@@ -1858,7 +1852,7 @@ class DataCatalogService:
                 str(item.get("polymer_record_id")) == material_record_id
                 for item in demo_store.load().get(MATERIAL_COLLECTION_KEY, [])
             )
-        if not settings.data_asset_mongodb_uri:
+        if not settings.require_mongodb:
             return False
         try:
             return bool(
@@ -1934,7 +1928,7 @@ class DataCatalogService:
 
     def _relationships_from_mongo(self) -> DataCatalogRelationshipsData:
         business = get_database()
-        data_asset_db = get_data_asset_database() if settings.data_asset_mongodb_uri else None
+        data_asset_db = get_data_asset_database() if settings.require_mongodb else None
 
         def count(collection_name: str, *, asset: bool = False) -> int:
             try:
@@ -2101,8 +2095,6 @@ class DataCatalogService:
                 if not normalized_keyword or normalized_keyword in str(row).lower()
             ])
         else:
-            if definition.source_id == MATERIAL_SOURCE_ID and not settings.data_asset_mongodb_uri:
-                return [], 0, None
             db = self._database_for_definition(definition)
             collection = db[definition.collection_name]
             filters = self._build_keyword_filter(definition, keyword)
@@ -2243,8 +2235,6 @@ class DataCatalogService:
         if not settings.require_mongodb:
             rows = [dict(row) for row in demo_store.load().get(definition.collection_key, [])]
             return rows[:sample_size], len(rows), "ready" if rows else "not_configured", None
-        if definition.source_id == MATERIAL_SOURCE_ID and not settings.data_asset_mongodb_uri:
-            return [], 0, "not_configured", "材料数据 MongoDB 尚未配置。"
 
         db = self._database_for_definition(definition)
         collection = db[definition.collection_name]
@@ -2552,8 +2542,6 @@ class DataCatalogService:
         return definition
 
     def _collection_summary_from_mongo(self, definition: MongoCollectionDefinition) -> DataCatalogCollectionSummary:
-        if definition.source_id == MATERIAL_SOURCE_ID and not settings.data_asset_mongodb_uri:
-            return self._collection_summary(definition, 0, "not_configured", {})
         try:
             db = self._database_for_definition(definition)
             names = set(db.list_collection_names())
@@ -2614,9 +2602,6 @@ class DataCatalogService:
     ) -> tuple[list[dict[str, Any]], int]:
         if not settings.require_mongodb:
             return self._load_demo_collection_rows(definition, page=page, page_size=page_size, keyword=keyword)
-
-        if definition.source_id == MATERIAL_SOURCE_ID and not settings.data_asset_mongodb_uri:
-            return [], 0
 
         if definition.data_domain == "pi1m_samples":
             row_start = ((page - 1) * page_size) + 1 if page > 1 and not keyword else None
@@ -2681,9 +2666,6 @@ class DataCatalogService:
 
         if not settings.require_mongodb:
             return self._find_demo_collection_record(definition, record_id)
-
-        if definition.source_id == MATERIAL_SOURCE_ID and not settings.data_asset_mongodb_uri:
-            return None
 
         try:
             db = self._database_for_definition(definition)

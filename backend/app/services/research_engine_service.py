@@ -966,6 +966,7 @@ class ResearchEngineService:
     }
 
     VERTICAL_ALGORITHM_IDS = {"vertical_predictor_adapter"}
+    REMOVED_DEFAULT_ALGORITHM_IDS = {"literature_rag_adapter"}
 
     def seed_default_algorithms(self) -> int:
         """写入默认算法能力清单（幂等）。
@@ -989,7 +990,16 @@ class ResearchEngineService:
         for entry in build_mock_algorithm_registry():
             entries.append(self._with_algorithm_metadata(entry.model_dump()))
 
+        self._cleanup_removed_default_algorithms()
         return AlgorithmRegistryRepository.seed_defaults(entries)
+
+    def _cleanup_removed_default_algorithms(self) -> None:
+        """移除已迁移出默认清单的旧内置算法条目。"""
+        for algorithm_id in self.REMOVED_DEFAULT_ALGORITHM_IDS:
+            existing = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+            if existing is None or existing.get("source") == "uploaded_package":
+                continue
+            AlgorithmRegistryRepository.delete(algorithm_id)
 
     def get_algorithm(self, algorithm_id: str) -> AlgorithmRegistryEntry:
         """获取单个算法能力条目详情。
