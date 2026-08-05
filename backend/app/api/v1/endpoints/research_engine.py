@@ -23,6 +23,13 @@ from app.schemas.research_engine import (
     AlgorithmHandoffCreate,
     AlgorithmHandoffListData,
     AlgorithmHandoffValidationResult,
+    AlgorithmInterfaceCreate,
+    AlgorithmInterfaceDetails,
+    AlgorithmInterfaceListData,
+    AlgorithmInterfaceTestRequest,
+    AlgorithmInterfaceTestResult,
+    AlgorithmInterfaceVersionCreate,
+    AlgorithmInterfaceVersionUpdate,
     AlgorithmManagedResource,
     AlgorithmManagedResourceCreate,
     AlgorithmManagedResourceListData,
@@ -72,12 +79,15 @@ from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
 from app.services.research_engine_readiness_service import ResearchEngineReadinessService
 from app.services.research_engine_service import ResearchEngineService
 from app.services.computation_service import ComputationService
+from app.services.remote_interface_service import RemoteInterfaceService
+from app.infra.research_engine_repositories import AlgorithmRegistryRepository
 
 router = APIRouter(prefix="/research-engine", tags=["research-engine"])
 service = ResearchEngineService()
 orchestrator = ResearchEngineOrchestrator()
 readiness_service = ResearchEngineReadinessService()
 package_service = AlgorithmPackageService()
+remote_interface_service = RemoteInterfaceService()
 handoff_service = AlgorithmHandoffService()
 algorithm_resource_service = AlgorithmManagedResourceService()
 requirement_doc_service = AlgorithmRequirementDocService()
@@ -162,10 +172,158 @@ def _ensure_version_access(
     raise HTTPException(status_code=403, detail="无权限访问该算法版本")
 
 
+def _ensure_interface_access(
+    algorithm_id: str,
+    current_user: dict[str, str] | None,
+    *,
+    manage: bool = False,
+) -> AlgorithmRegistryEntry:
+    """校验接口模型的查看、调用或治理权限。"""
+    entry = service.get_algorithm(algorithm_id)
+    if entry.source != "remote_interface":
+        raise HTTPException(status_code=409, detail="目标算法不是接口调用模型")
+    if _has_full_access(current_user) or entry.owner == _access_user_id(current_user):
+        return entry
+    if not manage and entry.visibility == "public":
+        return entry
+    raise HTTPException(status_code=403, detail="无权限访问该接口模型")
+
+
+def _is_remote_interface_algorithm(algorithm_id: str) -> bool:
+    """判断注册表中是否已经登记为远程接口模型。
+
+    上传包在首次部署前可能尚未写入注册表，因此这里不能调用通用详情服务。
+    """
+    entry = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+    return bool(entry and entry.get("source") == "remote_interface")
+
+
 @router.get("/readiness", response_model=ApiResponse[ResearchEngineReadinessData])
 def get_research_engine_readiness() -> ApiResponse[ResearchEngineReadinessData]:
     """获取 AutoResearch 启动前集成可用性摘要。"""
     return ApiResponse(code=0, message="ok", data=readiness_service.get_readiness())
+
+
+# =============================================================================
+# Remote interface algorithm API
+# =============================================================================
+
+
+@router.post("/algorithm-interfaces", response_model=ApiResponse[AlgorithmInterfaceDetails])
+def create_algorithm_interface(
+    payload: AlgorithmInterfaceCreate,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmInterfaceDetails]:
+    """创建远程接口型垂类模型。"""
+    data = remote_interface_service.create_interface(
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post(
+    "/algorithm-interfaces/{algorithm_id}/versions",
+    response_model=ApiResponse[AlgorithmVersion],
+)
+def create_algorithm_interface_version(
+    algorithm_id: str,
+    payload: AlgorithmInterfaceVersionCreate,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
+    """创建远程接口模型的新版本。"""
+    _ensure_interface_access(algorithm_id, current_user, manage=True)
+    data = remote_interface_service.create_version(
+        algorithm_id,
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.patch(
+    "/algorithm-interfaces/{algorithm_id}/versions/{version_id}",
+    response_model=ApiResponse[AlgorithmVersion],
+)
+def update_algorithm_interface_version(
+    algorithm_id: str,
+    version_id: str,
+    payload: AlgorithmInterfaceVersionUpdate,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
+    """更新尚未激活的远程接口模型版本草稿。"""
+    _ensure_interface_access(algorithm_id, current_user, manage=True)
+    data = remote_interface_service.update_version(algorithm_id, version_id, payload)
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/algorithm-interfaces", response_model=ApiResponse[AlgorithmInterfaceListData])
+def list_algorithm_interfaces(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmInterfaceListData]:
+    """分页查询可见的远程接口模型。"""
+    data = remote_interface_service.list_interfaces(created_by=None, page=page, page_size=page_size)
+    if not _has_full_access(current_user):
+        user_id = _access_user_id(current_user)
+        visible = [
+            item for item in data.items
+            if item.owner == user_id or item.visibility == "public"
+        ]
+        data = AlgorithmInterfaceListData(items=visible, page=page, page_size=page_size, total=len(visible))
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get(
+    "/algorithm-interfaces/{algorithm_id}",
+    response_model=ApiResponse[AlgorithmInterfaceDetails],
+)
+def get_algorithm_interface(
+    algorithm_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmInterfaceDetails]:
+    """获取远程接口模型详情。"""
+    _ensure_interface_access(algorithm_id, current_user)
+    return ApiResponse(code=0, message="ok", data=remote_interface_service.get_interface(algorithm_id))
+
+
+@router.post(
+    "/algorithm-interfaces/{algorithm_id}/versions/{version_id}:test",
+    response_model=ApiResponse[AlgorithmInterfaceTestResult],
+)
+def test_algorithm_interface(
+    algorithm_id: str,
+    version_id: str,
+    payload: AlgorithmInterfaceTestRequest | None = Body(default=None),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmInterfaceTestResult]:
+    """使用样例输入测试远程接口版本。"""
+    _ensure_interface_access(algorithm_id, current_user, manage=True)
+    result = remote_interface_service.test_version(
+        algorithm_id,
+        version_id,
+        input_snapshot=payload.input_snapshot if payload else None,
+    )
+    return ApiResponse(code=0, message="ok", data=result)
+
+
+@router.post(
+    "/algorithm-interfaces/{algorithm_id}/versions/{version_id}:activate",
+    response_model=ApiResponse[AlgorithmVersion],
+)
+def activate_algorithm_interface_version(
+    algorithm_id: str,
+    version_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
+    """激活远程接口模型版本。"""
+    _ensure_interface_access(algorithm_id, current_user, manage=True)
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=remote_interface_service.activate_version(algorithm_id, version_id),
+    )
 
 
 # =============================================================================
@@ -609,13 +767,23 @@ def list_algorithm_versions(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmVersionListData]:
     """查询指定算法的版本。"""
+    registry = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+    public_registry = bool(registry and registry.get("visibility") == "public")
     data = package_service.list_versions(
         algorithm_id=algorithm_id,
         status=status,
-        created_by=None if _has_full_access(current_user) else _access_user_id(current_user),
+        created_by=None if _has_full_access(current_user) or public_registry else _access_user_id(current_user),
         page=page,
         page_size=page_size,
     )
+    if public_registry and not _has_full_access(current_user):
+        visible_items = [item for item in data.items if item.visibility == "public"]
+        data = AlgorithmVersionListData(
+            items=visible_items,
+            page=data.page,
+            page_size=data.page_size,
+            total=len(visible_items),
+        )
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -627,6 +795,8 @@ def deploy_algorithm_version(
 ) -> ApiResponse[AlgorithmVersion]:
     """部署算法版本到 P0 本地 runtime。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        raise HTTPException(status_code=409, detail="远程接口版本无需部署，请先完成样例测试")
     return ApiResponse(code=0, message="ok", data=package_service.deploy_version(algorithm_id, version_id))
 
 
@@ -638,6 +808,8 @@ def redeploy_algorithm_version(
 ) -> ApiResponse[AlgorithmVersion]:
     """重新部署算法版本到 P0 本地 runtime。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        raise HTTPException(status_code=409, detail="远程接口版本无需重部署，请创建新接口版本")
     return ApiResponse(code=0, message="ok", data=package_service.redeploy_version(algorithm_id, version_id))
 
 
@@ -649,6 +821,8 @@ def get_algorithm_version_health(
 ) -> ApiResponse[dict]:
     """查看算法版本 runtime health。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        return ApiResponse(code=0, message="ok", data=remote_interface_service.version_health(algorithm_id, version_id))
     return ApiResponse(code=0, message="ok", data=package_service.version_health(algorithm_id, version_id))
 
 
@@ -660,6 +834,8 @@ def get_algorithm_version_logs(
 ) -> ApiResponse[dict]:
     """查看算法版本生命周期和 runtime 日志。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        return ApiResponse(code=0, message="ok", data=remote_interface_service.version_logs(algorithm_id, version_id))
     return ApiResponse(code=0, message="ok", data=package_service.version_logs(algorithm_id, version_id))
 
 
@@ -671,6 +847,8 @@ def activate_algorithm_version(
 ) -> ApiResponse[AlgorithmVersion]:
     """激活算法版本。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        return ApiResponse(code=0, message="ok", data=remote_interface_service.activate_version(algorithm_id, version_id))
     return ApiResponse(code=0, message="ok", data=package_service.activate_version(algorithm_id, version_id))
 
 
@@ -682,6 +860,8 @@ def rollback_algorithm_version(
 ) -> ApiResponse[AlgorithmVersion]:
     """回滚到指定历史版本。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        return ApiResponse(code=0, message="ok", data=remote_interface_service.activate_version(algorithm_id, version_id))
     return ApiResponse(code=0, message="ok", data=package_service.rollback_version(algorithm_id, version_id))
 
 
@@ -693,6 +873,8 @@ def freeze_algorithm_version(
 ) -> ApiResponse[AlgorithmVersion]:
     """冻结指定算法版本。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        return ApiResponse(code=0, message="ok", data=remote_interface_service.freeze_version(algorithm_id, version_id))
     return ApiResponse(code=0, message="ok", data=package_service.freeze_version(algorithm_id, version_id))
 
 
@@ -707,6 +889,8 @@ def decommission_algorithm_version(
 ) -> ApiResponse[AlgorithmVersion]:
     """下线指定算法版本。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        return ApiResponse(code=0, message="ok", data=remote_interface_service.decommission_version(algorithm_id, version_id))
     return ApiResponse(code=0, message="ok", data=package_service.decommission_version(algorithm_id, version_id))
 
 
@@ -718,6 +902,8 @@ def delete_decommissioned_algorithm_version(
 ) -> ApiResponse[dict]:
     """删除已下线算法版本及其上传包记录。"""
     _ensure_version_access(algorithm_id, version_id, current_user)
+    if _is_remote_interface_algorithm(algorithm_id):
+        return ApiResponse(code=0, message="ok", data=remote_interface_service.delete_version(algorithm_id, version_id))
     data = package_service.delete_decommissioned_version(algorithm_id, version_id)
     return ApiResponse(code=0, message="ok", data=data)
 
@@ -929,6 +1115,7 @@ def list_algorithms(
     material_scope: str | None = Query(default=None),
     trigger_mode: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    source: str | None = Query(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmRegistryListData]:
     """查询算法能力清单。
@@ -942,6 +1129,7 @@ def list_algorithms(
         material_scope=material_scope,
         trigger_mode=trigger_mode,
         status=status,
+        source=source,
         page=page,
         page_size=page_size,
     )
@@ -950,7 +1138,9 @@ def list_algorithms(
         items = [
             item
             for item in data.items
-            if item.source != "uploaded_package" or item.owner == user_id or item.visibility == "public"
+            if item.source not in {"uploaded_package", "remote_interface"}
+            or item.owner == user_id
+            or item.visibility == "public"
         ]
         data = AlgorithmRegistryListData(
             items=items,
@@ -973,7 +1163,7 @@ def get_algorithm(
     data = service.get_algorithm(algorithm_id)
     if (
         not _has_full_access(current_user)
-        and data.source == "uploaded_package"
+        and data.source in {"uploaded_package", "remote_interface"}
         and data.owner != _access_user_id(current_user)
         and data.visibility != "public"
     ):

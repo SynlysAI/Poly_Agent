@@ -36,7 +36,8 @@ def _get_auth_database() -> Database:
 @lru_cache(maxsize=1)
 def get_data_asset_client() -> MongoClient:
     """获取只读材料数据资产 MongoDB 客户端。"""
-    return MongoClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
+    uri = settings.data_asset_mongodb_uri or settings.mongodb_uri
+    return MongoClient(uri, serverSelectionTimeoutMS=5000)
 
 
 def get_data_asset_database() -> Database:
@@ -147,6 +148,21 @@ def get_algorithm_resources_collection() -> Collection:
 def get_algorithm_runs_collection() -> Collection:
     """获取 algorithm_runs 集合。"""
     return get_database()["algorithm_runs"]
+
+
+def get_experiment_dispatches_collection() -> Collection:
+    """获取 experiment_dispatches 集合。"""
+    return get_database()["experiment_dispatches"]
+
+
+def get_experiment_dispatch_profiles_collection() -> Collection:
+    """获取 experiment_dispatch_profiles 集合。"""
+    return get_database()["experiment_dispatch_profiles"]
+
+
+def get_experiment_dispatch_targets_collection() -> Collection:
+    """获取 experiment_dispatch_targets 集合。"""
+    return get_database()["experiment_dispatch_targets"]
 
 
 def get_algorithm_handoffs_collection() -> Collection:

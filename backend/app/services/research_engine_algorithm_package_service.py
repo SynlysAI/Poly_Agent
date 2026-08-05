@@ -444,6 +444,7 @@ class AlgorithmPackageService:
             version_doc = {
                 "version_id": version_id,
                 "package_id": package_id,
+                "source_kind": "uploaded_package",
                 "algorithm_id": contract["algorithm_id"],
                 "name": contract["name"],
                 "version": contract["version"],
@@ -730,6 +731,7 @@ class AlgorithmPackageService:
             "description": display_metadata("description", contract.get("description")),
             "active_version_id": version_id,
             "source": "uploaded_package",
+            "source_kind": "uploaded_package",
             "deployment_status": "active",
             "visibility": self._normalize_visibility(display_metadata(
                 "visibility",

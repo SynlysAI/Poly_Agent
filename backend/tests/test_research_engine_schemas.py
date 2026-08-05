@@ -42,6 +42,7 @@ from app.schemas.research_engine import (
     StageApprovalRequest,
     ResearchRunStatusChangeRequest,
     TriggerSource,
+    RemoteInterfaceConfig,
     validate_research_run_transition,
     validate_stage_transition,
 )
@@ -275,6 +276,26 @@ class AlgorithmRegistrySchemaTest(ComputationTestCase):
         self.assertEqual(entry.type, "simulator")
         self.assertIn("human_workflow", entry.trigger_modes)
         self.assertEqual(entry.developer_attribution.organization, "测试机构")
+
+    def test_persisted_metadata_fields_are_supported(self) -> None:
+        """数据库中的算法元数据可以安全还原为注册表条目。"""
+        now = datetime(2026, 8, 5, 9, 23, 50, 234000)
+        entry = AlgorithmRegistryEntry(
+            algorithm_id="remote_property_predictor",
+            name="Remote Property Predictor",
+            source="remote_interface",
+            source_kind="remote_interface",
+            developer_contact=None,
+            interface_config=RemoteInterfaceConfig(
+                protocol="fastapi",
+                endpoint_url="https://model.example.com/predict",
+            ),
+            created_at=now,
+            updated_at=now,
+        )
+        self.assertEqual(entry.source_kind, "remote_interface")
+        self.assertEqual(entry.interface_config.protocol, "fastapi")
+        self.assertEqual(entry.created_at, now)
 
     def test_rejects_empty_algorithm_id(self) -> None:
         """空算法 ID 被拒绝。"""

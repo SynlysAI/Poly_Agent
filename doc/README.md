@@ -11,6 +11,7 @@
 | 使用实验优化 | [optimization-workflow-user-guide.md](optimization-workflow-user-guide.md) | [compute-engine-computation-product-design.md](compute-engine-computation-product-design.md) |
 | 使用 AutoResearch | [autoresearch-user-guide.md](autoresearch-user-guide.md) | [research-engine-progress-and-plan.md](research-engine-progress-and-plan.md) |
 | 上传垂类算法 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) |
+| 配置远程接口模型 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) |
 | 了解知识库服务 | [knowledge-base-rag-kg-product-design.md](knowledge-base-rag-kg-product-design.md) | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) |
 | 维护来源标注 | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) | [../README.md#框架方法与机构来源](../README.md#框架方法与机构来源) |
 
@@ -22,6 +23,7 @@
 | [computation-workflows-user-guide.md](computation-workflows-user-guide.md) | 本地结构生成、xTB/CREST 粗优化和 ORCA 精加工工作流使用说明 |
 | [autoresearch-user-guide.md](autoresearch-user-guide.md) | ResearchEngine / AutoResearch 的任务创建、运行推进、Gate 审批和追溯查看 |
 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | 垂类算法包结构、打包、上传、测试和上线流程 |
+| [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | HTTP/FastAPI/MCP 远程接口模型的配置、测试、激活、调用和安全边界 |
 
 ## 产品与架构设计
 

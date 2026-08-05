@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   CircleCheck, Clock, View, Cpu, SetUp,
-  DataAnalysis, Promotion,
+  DataAnalysis, Link, Promotion, Upload, DocumentChecked,
 } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, getIntegrationStatus, listCampaigns, listComputations } from '../api/polyAgentApi'
@@ -52,19 +52,29 @@ const taskCategories = [
     entries: [
       {
         id: 'vertical-upload',
-        name: '垂类模型上传部署',
+        name: '垂类模型（算法上传）',
         description: '上传垂类模型需求文档生成接入草案，再完成接入包、自测、部署与激活。',
         actionText: '上传垂类模型',
         route: '/vertical-prediction?tab=doc',
-        tags: ['垂类模型', '接入草案', '自测', '部署激活'],
+        icon: Upload,
+        tags: ['算法上传', '接入草案', '自测', '部署激活'],
+      },
+      {
+        id: 'vertical-interface-config',
+        name: '垂类模型（接口配置）',
+        description: '登记远程预测接口，定义输入输出、HTTP/FastAPI 请求方式、凭据引用与响应提取规则。',
+        actionText: '配置模型接口',
+        route: '/vertical-prediction?tab=interface-config',
+        icon: Link,
+        tags: ['接口调用', 'HTTP', 'FastAPI', 'MCP 配置'],
       },
       {
         id: 'vertical-management',
-        name: '模型管理中心',
-        description: '统一管理算法版本、指定版本发起预测调用，并追溯输入、输出、artifact 与运行状态。',
+        name: '垂类模型管理中心',
+        description: '统一管理算法上传与接口调用模型，指定激活版本发起预测并追溯输入、输出和运行状态。',
         actionText: '进入管理中心',
         route: '/vertical-prediction?tab=center',
-        tags: ['算法管理', '任务调用', '运行记录', '版本治理'],
+        tags: ['统一管理', '模型调用', '运行记录', '版本治理'],
       },
     ],
   },
@@ -88,6 +98,15 @@ const taskCategories = [
         actionText: '进入 Alchemist',
         route: '/optimization/alchemist',
         tags: ['变量定义', 'GP 建模', '采集优化'],
+      },
+      {
+        id: 'wetlab-experiment-dispatch',
+        name: '实验方案转发台',
+        description: '筛选已完成 Run，按版本化下发配置生成可保存、可追溯、可导出的实验执行清单。',
+        actionText: '生成实验清单',
+        route: '/optimization/experiment-dispatch',
+        icon: DocumentChecked,
+        tags: ['级联筛选', '配置映射', '接口预览'],
       },
     ],
   },
@@ -192,7 +211,7 @@ onMounted(() => {
             >
               <div class="entry-card-top">
                 <div class="entry-icon">
-                  <el-icon :size="20"><component :is="cat.icon" /></el-icon>
+                  <el-icon :size="20"><component :is="entry.icon || cat.icon" /></el-icon>
                 </div>
                 <div class="entry-tags">
                   <el-tag

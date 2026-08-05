@@ -1,0 +1,72 @@
+{
+  "schema_version": "experiment_template.v1",
+  "template_id": "pi_synthesis",
+  "template_version": "1.0.0",
+  "name": "PI 聚酰亚胺合成",
+  "description": "低温溶液缩聚或低温一锅法的实验方案模板。评分由上游算法提供。",
+  "parameter_bindings": [
+    {
+      "name": "diamine",
+      "label": "二胺",
+      "source_paths": [
+        "/output_summary/recommended_parameters/diamine",
+        "/output_summary/diamine",
+        "/input_snapshot/diamine"
+      ],
+      "value_type": "string",
+      "required": true
+    },
+    {
+      "name": "dianhydride",
+      "label": "二酐",
+      "source_paths": [
+        "/output_summary/recommended_parameters/dianhydride",
+        "/output_summary/dianhydride",
+        "/input_snapshot/dianhydride"
+      ],
+      "value_type": "string",
+      "required": true
+    },
+    {
+      "name": "solvent",
+      "label": "溶剂",
+      "source_paths": [
+        "/output_summary/recommended_parameters/solvent",
+        "/output_summary/solvent",
+        "/input_snapshot/solvent"
+      ],
+      "value_type": "string",
+      "required": true
+    },
+    {
+      "name": "difficulty_score",
+      "label": "合成难度评分",
+      "source_paths": [
+        "/output_summary/difficulty_score",
+        "/output_summary/score",
+        "/output_summary/prediction/difficulty_score"
+      ],
+      "value_type": "number",
+      "required": false
+    }
+  ],
+  "selector": {
+    "override_key": "difficulty_score",
+    "value_paths": [
+      "/output_summary/difficulty_score",
+      "/output_summary/score",
+      "/output_summary/prediction/difficulty_score"
+    ],
+    "variants": [
+      {"variant_id": "P01", "min_score": 0, "max_score": 11, "instruction_set_path": "ChASM/PI-P01.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "极高活性、放热快、易快速增黏"},
+      {"variant_id": "P02", "min_score": 12, "max_score": 22, "instruction_set_path": "ChASM/PI-P02.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "高活性、溶解性较好"},
+      {"variant_id": "P03", "min_score": 23, "max_score": 33, "instruction_set_path": "ChASM/PI-P03.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "较易合成组合"},
+      {"variant_id": "P04", "min_score": 34, "max_score": 44, "instruction_set_path": "ChASM/PI-P04.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "常规偏易组合"},
+      {"variant_id": "P05", "min_score": 45, "max_score": 55, "instruction_set_path": "ChASM/PI-P05.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "默认通用组合"},
+      {"variant_id": "P06", "min_score": 56, "max_score": 66, "instruction_set_path": "ChASM/PI-P06.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "中等偏难、轻中度位阻"},
+      {"variant_id": "P07", "min_score": 67, "max_score": 77, "instruction_set_path": "ChASM/PI-P07.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "低活性或溶解性偏差"},
+      {"variant_id": "P08", "min_score": 78, "max_score": 88, "instruction_set_path": "ChASM/PI-P08.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "高位阻、高刚性、低溶解性"},
+      {"variant_id": "P09", "min_score": 89, "max_score": 100, "instruction_set_path": "ChASM/PI-P09.chasm", "hardware_graph_path": "graph/test_ClosedLoop_PI_1024.graphml", "reason": "极难组合的边界尝试"}
+    ]
+  }
+}
