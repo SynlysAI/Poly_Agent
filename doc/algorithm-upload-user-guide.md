@@ -1,12 +1,12 @@
 # Poly Agent 算法上传部署用户指南
 
-当前入口：`任务提交 -> 垂类预测模型`，对应路由 `/vertical-prediction`。
+当前入口：`任务提交 -> 垂类预测模型（算法上传）`，对应路由 `/vertical-prediction?tab=doc`。远程接口模型请参阅 [远程接口型垂类模型用户指南](vertical-model-interface-user-guide.md)。两类模型最终都进入 `/vertical-prediction?tab=center` 统一管理和调用。
 
-工作台包含四个 Tab：
+算法上传工作台包含以下能力：
 
 - `上传部署`：上传 Python 脚本或标准 ZIP，下载模板，完成校验、构建、部署和激活。
 - `算法管理`：查看版本、状态和追溯信息，执行部署、激活、回滚、冻结和下线；SHA256 默认放在折叠追溯区里。
-- `测试调用`：根据版本 `input_schema` 填写参数，调用指定版本并查看输出、artifact 和耗时。
+- `测试调用`：根据版本 `input_schema` 填写参数，调用指定版本并查看输出、artifact 和耗时；接口模型也复用同一个调用面板。
 - `运行记录`：按算法、版本、状态和日期查找 AlgorithmRun，并查看输入输出与 digest。
 
 ResearchEngine 只调用已治理的算法，不再提供算法上传入口。

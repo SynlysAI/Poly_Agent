@@ -65,6 +65,12 @@ class Settings:
         self.xtb_executable: str = os.getenv("XTB_EXECUTABLE", "xtb").strip() or "xtb"
         self.orca_executable: str = os.getenv("ORCA_EXECUTABLE", "orca").strip() or "orca"
         self.max_upload_size_mb: int = 100
+        self.remote_interface_allow_private_network: bool = os.getenv(
+            "REMOTE_INTERFACE_ALLOW_PRIVATE_NETWORK", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.remote_interface_max_response_bytes: int = int(
+            os.getenv("REMOTE_INTERFACE_MAX_RESPONSE_BYTES", str(2 * 1024 * 1024))
+        )
         self.api_prefix: str = "/api/v1"
         self.app_env: str = os.getenv("APP_ENV", "dev")
         self.cors_allowed_origins: list[str] = self._parse_csv(
@@ -241,7 +247,8 @@ class Settings:
         # 统一认证（AI4MS）数据库名，与主业务库共用 MongoDB 连接。
         self.auth_database: str = os.getenv("AUTH_MONGODB_DATABASE", "ai4ms")
 
-        # 只读材料数据资产数据库名，与主业务库共用 MongoDB 连接。
+        # 只读材料数据资产 MongoDB 配置；未设置时回退到主业务库连接。
+        self.data_asset_mongodb_uri: str = os.getenv("DATA_ASSET_MONGODB_URI", "").strip()
         self.data_asset_mongodb_database: str = os.getenv("DATA_ASSET_MONGODB_DATABASE", "poly_data").strip() or "poly_data"
 
         # MinIO / S3 数据目录配置

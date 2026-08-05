@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { Document } from '@element-plus/icons-vue'
+import { Document, Download } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
 import JsonTreeView from '../../components/json/JsonTreeView.vue'
@@ -9,6 +10,8 @@ import {
   buildBatchHighlights as buildAllBatchHighlights,
   paginateRows,
 } from '../../utils/verticalPredictionJson.mjs'
+import { downloadArtifact, getApiErrorMessage } from '../../api/polyAgentApi'
+import { downloadArtifactToBrowser } from '../../utils/artifactDownload.mjs'
 
 const props = defineProps({
   outputSummary: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
@@ -22,6 +25,7 @@ const props = defineProps({
 })
 
 const tablePagination = ref({})
+const downloadingArtifactId = ref('')
 
 const priorityValueKeys = ['value', 'predicted_value', 'prediction', 'score']
 const uncertaintyKeys = ['uncertainty', 'std', 'stddev', 'confidence', 'probability']
@@ -79,7 +83,7 @@ const artifactRows = computed(() => {
     description: item.description || '-',
     contentType: item.content_type || item.mime_type || '-',
     contentSummary: item.content === undefined ? '-' : summarizeValue(item.content),
-    downloadUrl: item.download_url || item.downloadUrl || '',
+    downloadable: Boolean(item.artifact_id || item.id),
   }))
   if (rows.length || isEmptyValue(props.outputSummary)) return rows
   return [{
@@ -104,6 +108,23 @@ const hasStructuredContent = computed(() => Boolean(
   artifactRows.value.length,
 ))
 const inputHighlights = computed(() => scalarEntries(inputObject.value).slice(0, 4))
+
+async function handleDownloadArtifact(row) {
+  if (!row.downloadable || !row.id || row.id === 'output_summary') return
+  downloadingArtifactId.value = row.id
+  try {
+    await downloadArtifactToBrowser({
+      artifactId: row.id,
+      fallbackName: row.name,
+      download: downloadArtifact,
+    })
+  } catch (error) {
+    ElMessage.error(`下载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    downloadingArtifactId.value = ''
+  }
+}
+
 function artifactGroup(item) {
   const stepKey = item.step_key || item.stepKey || ''
   const type = item.artifact_type || item.type || ''
@@ -556,7 +577,14 @@ function stringifyJson(value) {
         <el-table-column prop="contentSummary" label="内容摘要" width="120" show-overflow-tooltip />
         <el-table-column label="下载" width="86">
           <template #default="{ row }">
-            <el-link v-if="row.downloadUrl" :href="row.downloadUrl" type="primary">下载</el-link>
+            <el-button
+              v-if="row.downloadable"
+              text
+              type="primary"
+              :icon="Download"
+              :loading="downloadingArtifactId === row.id"
+              @click="handleDownloadArtifact(row)"
+            >下载</el-button>
             <span v-else>-</span>
           </template>
         </el-table-column>

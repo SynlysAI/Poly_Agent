@@ -123,8 +123,11 @@ export function getApiErrorMessage(error) {
     if (error.kind === 'network') return '网络连接失败，请检查网络'
     if (error.kind === 'timeout') return '请求超时'
     if (error.kind === 'canceled') return '请求已取消'
-    const statusMsgMap = { 400: '参数有误', 401: '登录已过期', 403: '无权限', 404: '资源未找到', 422: '参数校验失败', 500: '服务器内部错误', 502: '上游服务异常', 504: '上游服务超时' }
+    const statusMsgMap = { 400: '参数有误', 401: '登录已过期', 403: '无权限', 404: '资源未找到', 409: '状态冲突', 422: '参数校验失败', 500: '服务器内部错误', 501: '功能暂不支持', 502: '上游服务异常', 504: '上游服务超时' }
     if (error.status && statusMsgMap[error.status]) {
+      const structuredDetail = error.detail && typeof error.detail === 'object'
+        ? (error.detail.message || error.detail.code || JSON.stringify(error.detail))
+        : error.detail
       const genericMessages = new Set([
         'internal error',
         'invalid parameter',
@@ -137,7 +140,7 @@ export function getApiErrorMessage(error) {
       if (Array.isArray(error.errors) && error.errors.length) {
         message = error.errors.map(e => `[${(e.loc || []).join('.')}] ${e.msg}`).join('；')
       } else {
-        message = error.detail && genericMessages.has(error.message) ? error.detail : (error.message || error.detail || '')
+        message = structuredDetail && genericMessages.has(error.message) ? structuredDetail : (error.message && error.message !== '[object Object]' ? error.message : (structuredDetail || ''))
       }
       return `${statusMsgMap[error.status]}：${message}`
     }
@@ -632,6 +635,35 @@ export function listAlgorithms(params = {}) {
   return apiClient.get('/research-engine/algorithms', { params }).then(unwrapResponse)
 }
 
+export function createAlgorithmInterface(payload) {
+  return apiClient.post('/research-engine/algorithm-interfaces', payload).then(unwrapResponse)
+}
+
+export function createAlgorithmInterfaceVersion(algorithmId, payload) {
+  return apiClient.post(`/research-engine/algorithm-interfaces/${algorithmId}/versions`, payload).then(unwrapResponse)
+}
+
+export function updateAlgorithmInterfaceVersion(algorithmId, versionId, payload) {
+  return apiClient.patch(`/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}`, payload).then(unwrapResponse)
+}
+
+export function listAlgorithmInterfaces(params = {}) {
+  return apiClient.get('/research-engine/algorithm-interfaces', { params }).then(unwrapResponse)
+}
+
+export function getAlgorithmInterface(algorithmId) {
+  return apiClient.get(`/research-engine/algorithm-interfaces/${algorithmId}`).then(unwrapResponse)
+}
+
+export function testAlgorithmInterface(algorithmId, versionId, inputSnapshot = null) {
+  const payload = inputSnapshot ? { input_snapshot: inputSnapshot } : undefined
+  return apiClient.post(`/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:test`, payload).then(unwrapResponse)
+}
+
+export function activateAlgorithmInterfaceVersion(algorithmId, versionId) {
+  return apiClient.post(`/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:activate`).then(unwrapResponse)
+}
+
 export function getAlgorithm(algorithmId) {
   return apiClient.get(`/research-engine/algorithms/${algorithmId}`).then(unwrapResponse)
 }
@@ -847,6 +879,84 @@ export function getAlgorithmRunTraceability(runId) {
 
 export function listAlgorithmRunArtifacts(runId) {
   return apiClient.get(`/research-engine/algorithm-runs/${runId}/artifacts`).then(unwrapResponse)
+}
+
+// ── 实验方案转发 ──
+
+export function listExperimentTemplates() {
+  return apiClient.get('/experiment-templates').then(unwrapResponse)
+}
+
+export function listExperimentDispatchProfiles(params = {}) {
+  return apiClient.get('/experiment-dispatch-profiles', { params }).then(unwrapResponse)
+}
+
+export function getExperimentDispatchProfile(profileId, version = null) {
+  return apiClient.get(`/experiment-dispatch-profiles/${encodeURIComponent(profileId)}`, {
+    params: version ? { version } : {},
+  }).then(unwrapResponse)
+}
+
+export function createExperimentDispatchProfile(payload) {
+  return apiClient.post('/experiment-dispatch-profiles', payload).then(unwrapResponse)
+}
+
+export function updateExperimentDispatchProfile(profileId, version, payload) {
+  return apiClient.patch(`/experiment-dispatch-profiles/${encodeURIComponent(profileId)}/versions/${encodeURIComponent(version)}`, payload).then(unwrapResponse)
+}
+
+export function publishExperimentDispatchProfile(profileId, version) {
+  return apiClient.post(`/experiment-dispatch-profiles/${encodeURIComponent(profileId)}/versions/${encodeURIComponent(version)}/publication`).then(unwrapResponse)
+}
+
+export function cloneExperimentDispatchProfile(profileId, version, nextVersion) {
+  return apiClient.post(`/experiment-dispatch-profiles/${encodeURIComponent(profileId)}/versions/${encodeURIComponent(version)}/copies`, { version: nextVersion }).then(unwrapResponse)
+}
+
+export function updateExperimentDispatchProfileVisibility(profileId, version, visibility) {
+  return apiClient.patch(`/experiment-dispatch-profiles/${encodeURIComponent(profileId)}/versions/${encodeURIComponent(version)}/visibility`, { visibility }).then(unwrapResponse)
+}
+
+export function listExperimentDispatchTargets() {
+  return apiClient.get('/experiment-dispatch-targets').then(unwrapResponse)
+}
+
+export function listExperimentDispatchCandidates(params = {}) {
+  return apiClient.get('/experiment-dispatch-candidates', { params }).then(unwrapResponse)
+}
+
+export function evaluateExperimentDispatchProfile(payload) {
+  return apiClient.post('/experiment-dispatch-profile-evaluations', payload).then(unwrapResponse)
+}
+
+export function saveProfileExperimentDispatch(payload) {
+  return apiClient.post('/experiment-dispatches', payload).then(unwrapResponse)
+}
+
+export function previewExperimentDispatch(runId, payload) {
+  return apiClient.post(`/algorithm-runs/${encodeURIComponent(runId)}/experiment-dispatches/preview`, payload).then(unwrapResponse)
+}
+
+export function createExperimentDispatch(runId, payload) {
+  return apiClient.post(`/algorithm-runs/${encodeURIComponent(runId)}/experiment-dispatches`, payload).then(unwrapResponse)
+}
+
+export function listExperimentDispatches(params = {}) {
+  return apiClient.get('/experiment-dispatches', { params }).then(unwrapResponse)
+}
+
+export function getExperimentDispatch(dispatchId) {
+  return apiClient.get(`/experiment-dispatches/${encodeURIComponent(dispatchId)}`).then(unwrapResponse)
+}
+
+export function downloadExperimentDispatch(dispatchId) {
+  return apiClient
+    .get(`/experiment-dispatches/${encodeURIComponent(dispatchId)}/export`, { responseType: 'blob' })
+    .then((response) => ({
+      blob: response.data,
+      filename: parseDownloadFilename(response.headers['content-disposition'], `${dispatchId}.json`),
+      contentType: response.headers['content-type'] || 'application/json',
+    }))
 }
 
 // ── ManualWorkflow / WorkflowRun ──

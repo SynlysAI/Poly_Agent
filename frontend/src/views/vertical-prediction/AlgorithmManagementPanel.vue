@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Medal, Refresh, View as ViewIcon } from '@element-plus/icons-vue'
+import { Edit, Medal, Refresh, View as ViewIcon } from '@element-plus/icons-vue'
 
 import {
   activateAlgorithmVersion,
@@ -20,14 +20,14 @@ import AlgorithmCreditDrawer from '../../components/algorithm/AlgorithmCreditDra
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
 import { formatApiDateTime } from '../../utils/datetime'
 import { authState } from '../../auth/authState'
-import { canManageUploadedAlgorithm, versionLifecycleLabel } from '../../utils/verticalPredictionState.mjs'
+import { algorithmSourceLabel, canEditRemoteInterfaceVersion, canManageUploadedAlgorithm, interfaceProtocolLabel, versionLifecycleLabel } from '../../utils/verticalPredictionState.mjs'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
   algorithmId: { type: String, default: '' },
   showSelector: { type: Boolean, default: true },
 })
-const emit = defineEmits(['changed'])
+const emit = defineEmits(['changed', 'edit-interface-config'])
 
 const loading = ref(false)
 const actionVersionId = ref('')
@@ -49,7 +49,7 @@ async function loadAlgorithms() {
   loading.value = true
   try {
     const data = await listAlgorithms({ algorithm_family: 'vertical_prediction', page: 1, page_size: 100 })
-    algorithms.value = (data.items || []).filter((item) => item.source === 'uploaded_package')
+    algorithms.value = (data.items || []).filter((item) => ['uploaded_package', 'remote_interface'].includes(item.source))
     const preferredId = props.algorithmId || selectedAlgorithmId.value
     if (!algorithms.value.some((item) => item.algorithm_id === preferredId)) {
       selectedAlgorithmId.value = algorithms.value[0]?.algorithm_id || ''
@@ -118,6 +118,10 @@ function openCredit() {
   creditVisible.value = true
 }
 
+function openInterfaceConfig(version) {
+  emit('edit-interface-config', version)
+}
+
 function statusType(status) {
   const map = { active: 'success', deployed_staging: 'warning', built: 'info', validated: 'info', frozen: 'info', decommissioned: 'danger' }
   return map[status] || 'info'
@@ -128,10 +132,12 @@ function statusLabel(status) {
 }
 
 function runtimeBackend(row) {
+  if (selectedAlgorithm.value?.source === 'remote_interface') return `${interfaceProtocolLabel(row.interface_config?.protocol || selectedAlgorithm.value.interface_config?.protocol)} remote`
   return row.deployment?.backend || row.deployment?.kind || '未部署'
 }
 
 function runtimeHealth(row) {
+  if (selectedAlgorithm.value?.source === 'remote_interface') return row.status === 'active' ? 'ready' : (row.status || '-')
   return row.deployment?.health || (row.status === 'built' ? 'built' : '-')
 }
 
@@ -158,7 +164,7 @@ onMounted(loadAlgorithms)
     <div class="management-toolbar">
       <div v-if="showSelector">
         <label for="algorithm-select">算法资产</label>
-        <el-select id="algorithm-select" v-model="selectedAlgorithmId" filterable placeholder="选择已上传算法" style="width: 320px">
+        <el-select id="algorithm-select" v-model="selectedAlgorithmId" filterable placeholder="选择垂类模型" style="width: 320px">
           <el-option v-for="item in algorithms" :key="item.algorithm_id" :label="`${item.name} · ${item.algorithm_id}`" :value="item.algorithm_id" />
         </el-select>
       </div>
@@ -180,7 +186,11 @@ onMounted(loadAlgorithms)
     <el-alert v-if="selectedAlgorithm && !canManage" :closable="false" type="warning" show-icon title="当前账号仅可访问和调用该模型，不能修改版本或发布状态。" />
     <AttributionBadges v-if="selectedAlgorithm" :attributions="rowAttributions(selectedAlgorithm)" />
 
-    <el-table v-loading="loading" :data="versions" border empty-text="暂无上传版本">
+    <el-alert v-if="selectedAlgorithm?.source === 'remote_interface'" :closable="false" type="info" show-icon>
+      <template #title>来源：{{ algorithmSourceLabel(selectedAlgorithm.source) }} · 接口版本需先完成样例连通性测试，再激活。</template>
+    </el-alert>
+
+    <el-table v-loading="loading" :data="versions" border empty-text="暂无可治理版本">
       <el-table-column prop="version" label="Version" width="100" />
       <el-table-column prop="status" label="状态" width="105"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row) }}</el-tag></template></el-table-column>
       <el-table-column label="Runtime" min-width="165"><template #default="{ row }"><code>{{ runtimeBackend(row) }}</code></template></el-table-column>
@@ -217,13 +227,23 @@ onMounted(loadAlgorithms)
         </template>
       </el-table-column>
       <el-table-column label="来源" min-width="170"><template #default="{ row }"><AttributionBadges :attributions="rowAttributions(row)" /></template></el-table-column>
-      <el-table-column prop="created_by" label="创建人" width="110" />
+      <el-table-column label="创建人" width="110">
+        <template #default="{ row }">
+          {{ (selectedAlgorithm?.developer || selectedAlgorithm?.owner || row.uploaded_by || row.created_by) }}
+        </template>
+      </el-table-column>
       <el-table-column label="创建时间" width="170"><template #default="{ row }">{{ formatDate(row.created_at) }}</template></el-table-column>
       <el-table-column label="操作" min-width="290" fixed="right">
         <template #default="{ row }">
           <template v-if="canManage">
-            <el-button v-if="row.status === 'built'" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, deployAlgorithmVersion)">部署</el-button>
-            <el-button v-if="['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, redeployAlgorithmVersion)">重部署</el-button>
+            <el-button
+              v-if="selectedAlgorithm?.source === 'remote_interface' && canEditRemoteInterfaceVersion(row)"
+              size="small"
+              :icon="Edit"
+              @click="openInterfaceConfig(row)"
+            >编辑配置</el-button>
+            <el-button v-if="selectedAlgorithm?.source !== 'remote_interface' && row.status === 'built'" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, deployAlgorithmVersion)">部署</el-button>
+            <el-button v-if="selectedAlgorithm?.source !== 'remote_interface' && ['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, redeployAlgorithmVersion)">重部署</el-button>
             <el-button v-if="row.status === 'deployed_staging'" type="primary" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, activateAlgorithmVersion)">激活</el-button>
             <el-button v-if="row.status !== 'active' && selectedAlgorithm?.active_version_id !== row.version_id" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, rollbackAlgorithmVersion, `确认回滚到 ${row.version}？`)">回滚</el-button>
             <el-button v-if="['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, freezeAlgorithmVersion, `冻结版本 ${row.version} 后，新任务将不能选择它。`)">冻结</el-button>
@@ -236,8 +256,8 @@ onMounted(loadAlgorithms)
     </el-table>
 
     <div v-if="!loading && !algorithms.length" class="empty-state">
-      <strong>还没有已上传的垂类预测算法</strong>
-      <span>先到“上传部署”完成脚本或标准 ZIP 上传。</span>
+      <strong>还没有可治理的垂类模型</strong>
+      <span>先完成算法上传或接口配置。</span>
     </div>
 
     <el-drawer v-model="logsVisible" title="版本运行日志" size="min(720px, 94vw)">

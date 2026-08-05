@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ArrowRight, Box, Clock, Cpu, DataAnalysis, Document, Edit, Key, Refresh, Search, UploadFilled, VideoPlay,
+  ArrowRight, Box, Clock, DataAnalysis, Document, Edit, Key, Link, Refresh, Search, UploadFilled, VideoPlay,
 } from '@element-plus/icons-vue'
 
 import {
@@ -15,20 +15,27 @@ import {
 } from '../api/polyAgentApi'
 import AlgorithmManagementPanel from './vertical-prediction/AlgorithmManagementPanel.vue'
 import AlgorithmHandoffPanel from './vertical-prediction/AlgorithmHandoffPanel.vue'
+import AlgorithmInterfaceConfigPanel from './vertical-prediction/AlgorithmInterfaceConfigPanel.vue'
 import AlgorithmMetadataEditor from './vertical-prediction/AlgorithmMetadataEditor.vue'
 import AlgorithmRunHistoryPanel from './vertical-prediction/AlgorithmRunHistoryPanel.vue'
 import AlgorithmTestPanel from './vertical-prediction/AlgorithmTestPanel.vue'
 import AlgorithmUploadPanel from './vertical-prediction/AlgorithmUploadPanel.vue'
 import AttributionBadges from '../components/attribution/AttributionBadges.vue'
 import { formatApiDateTime } from '../utils/datetime'
-import { canManageUploadedAlgorithm } from '../utils/verticalPredictionState.mjs'
+import {
+  algorithmSourceLabel,
+  canEditRemoteInterfaceVersion,
+  canManageUploadedAlgorithm,
+  interfaceProtocolLabel,
+  shouldReturnToCenterAfterSelectionReconciliation,
+} from '../utils/verticalPredictionState.mjs'
 import { authState } from '../auth/authState'
 
 const route = useRoute()
 const router = useRouter()
 
 const detailTabMap = { management: 'api', test: 'experience', runs: 'api' }
-const routeModes = new Set(['center', 'doc', 'upload', 'detail'])
+const routeModes = new Set(['center', 'doc', 'upload', 'interface-config', 'detail'])
 const connectedPackageStatuses = ['built', 'deployed_staging', 'active']
 
 const activeMode = ref(normalizeMode(route.query.tab))
@@ -37,12 +44,14 @@ const loading = ref(false)
 const refreshKey = ref(0)
 const algorithms = ref([])
 const versionMap = ref({})
-const summary = ref({ packages: 0, activeAlgorithms: 0, recentRuns: 0, failedRuns: 0 })
+const summary = ref({ packages: 0, interfaces: 0, activeAlgorithms: 0, recentRuns: 0 })
 const searchText = ref('')
+const sourceFilter = ref('')
 const statusFilter = ref('')
 const typeFilter = ref('')
 const materialFilter = ref('')
 const selectedAlgorithmId = ref(normalizeQueryString(route.query.algorithm_id))
+const interfaceConfigVersionId = ref(normalizeQueryString(route.query.version_id))
 const selectedHandoffId = ref(normalizeQueryString(route.query.handoff_id))
 const docEntryMode = ref(normalizeQueryString(route.query.doc_mode) === 'download' ? 'download' : 'upload')
 const uploadContextMode = ref(normalizeQueryString(route.query.upload_mode) === 'new_version' ? 'new_version' : 'new_algorithm')
@@ -56,22 +65,39 @@ const activeVersion = computed(() =>
   || selectedVersions.value[0]
   || null,
 )
+const interfaceConfigTargetVersion = computed(() =>
+  selectedVersions.value.find((item) => item.version_id === interfaceConfigVersionId.value)
+  || activeVersion.value
+  || null,
+)
+const interfaceConfigMode = computed(() => {
+  if (interfaceConfigVersionId.value) return 'edit_version'
+  return selectedAlgorithmId.value ? 'new_version' : 'new_interface'
+})
+const editableInterfaceVersion = computed(() => {
+  if (selectedAlgorithm.value?.source !== 'remote_interface') return null
+  return [...selectedVersions.value]
+    .filter((version) => canEditRemoteInterfaceVersion(version))
+    .sort((left, right) => new Date(right.updated_at || right.created_at || 0) - new Date(left.updated_at || left.created_at || 0))[0]
+    || null
+})
 
 const statusItems = computed(() => [
-  { label: '已接入模型', value: summary.value.packages, icon: UploadFilled },
+  { label: '算法上传', value: summary.value.packages, icon: UploadFilled },
+  { label: '接口调用', value: summary.value.interfaces, icon: Link },
   { label: '可用模型', value: summary.value.activeAlgorithms, icon: Box },
   { label: '最近运行', value: summary.value.recentRuns, icon: Clock },
-  { label: '运行环境', value: '隔离执行', icon: Cpu },
 ])
 
 const filteredAlgorithms = computed(() => {
   const keyword = searchText.value.trim().toLowerCase()
   return algorithms.value.filter((item) => {
     const textMatch = !keyword || [item.name, item.algorithm_id, item.description, item.mentor_team].some((value) => String(value || '').toLowerCase().includes(keyword))
+    const sourceMatch = !sourceFilter.value || item.source === sourceFilter.value
     const statusMatch = !statusFilter.value || item.status === statusFilter.value
     const typeMatch = !typeFilter.value || item.type === typeFilter.value
     const materialMatch = !materialFilter.value || (item.material_scope || []).includes(materialFilter.value)
-    return textMatch && statusMatch && typeMatch && materialMatch
+    return textMatch && sourceMatch && statusMatch && typeMatch && materialMatch
   })
 })
 
@@ -121,6 +147,7 @@ function syncRoute() {
     delete query.handoff_id
     delete query.doc_mode
     delete query.upload_mode
+    delete query.version_id
   } else if (activeMode.value === 'doc') {
     query.tab = 'doc'
     delete query.algorithm_id
@@ -128,6 +155,7 @@ function syncRoute() {
     if (selectedHandoffId.value) query.handoff_id = selectedHandoffId.value
     else delete query.handoff_id
     query.doc_mode = docEntryMode.value
+    delete query.version_id
   } else if (activeMode.value === 'upload') {
     query.tab = 'upload'
     if (uploadContextMode.value === 'new_version' && selectedAlgorithmId.value) {
@@ -139,12 +167,23 @@ function syncRoute() {
     }
     delete query.handoff_id
     delete query.doc_mode
+    delete query.version_id
+  } else if (activeMode.value === 'interface-config') {
+    query.tab = 'interface-config'
+    if (selectedAlgorithm.value?.source === 'remote_interface') query.algorithm_id = selectedAlgorithmId.value
+    else delete query.algorithm_id
+    if (interfaceConfigVersionId.value) query.version_id = interfaceConfigVersionId.value
+    else delete query.version_id
+    delete query.handoff_id
+    delete query.doc_mode
+    delete query.upload_mode
   } else {
     query.tab = 'detail'
     if (selectedAlgorithmId.value) query.algorithm_id = selectedAlgorithmId.value
     delete query.handoff_id
     delete query.doc_mode
     delete query.upload_mode
+    delete query.version_id
   }
   if (JSON.stringify(query) !== JSON.stringify(route.query)) router.replace({ query })
 }
@@ -155,13 +194,14 @@ watch(
     activeMode.value = normalizeMode(query.tab)
     detailActiveTab.value = normalizeDetailTab(query.tab)
     selectedAlgorithmId.value = normalizeQueryString(query.algorithm_id)
+    interfaceConfigVersionId.value = normalizeQueryString(query.version_id)
     selectedHandoffId.value = normalizeQueryString(query.handoff_id)
     docEntryMode.value = normalizeQueryString(query.doc_mode) === 'download' ? 'download' : 'upload'
     uploadContextMode.value = normalizeQueryString(query.upload_mode) === 'new_version' ? 'new_version' : 'new_algorithm'
   },
 )
 
-watch([activeMode, selectedAlgorithmId, selectedHandoffId, docEntryMode, uploadContextMode], syncRoute)
+watch([activeMode, selectedAlgorithmId, interfaceConfigVersionId, selectedHandoffId, docEntryMode, uploadContextMode], syncRoute)
 
 async function loadData() {
   loading.value = true
@@ -171,13 +211,13 @@ async function loadData() {
       listAlgorithms({ algorithm_family: 'vertical_prediction', page: 1, page_size: 100 }),
       listAlgorithmRuns({ page: 1, page_size: 100 }),
     ])
-    algorithms.value = (algorithmData.items || []).filter((item) => item.source === 'uploaded_package')
-    const uploadedRuns = (runs.items || []).filter((item) => item.algorithm_version_id)
+    algorithms.value = (algorithmData.items || []).filter((item) => ['uploaded_package', 'remote_interface'].includes(item.source))
+    const governedRuns = (runs.items || []).filter((item) => item.algorithm_version_id)
     summary.value = {
       packages: connectedAlgorithmCount(connectedPackages),
+      interfaces: algorithms.value.filter((item) => item.source === 'remote_interface').length,
       activeAlgorithms: algorithms.value.filter((item) => item.status === 'active').length,
-      recentRuns: uploadedRuns.length,
-      failedRuns: uploadedRuns.filter((item) => item.status === 'failed').length,
+      recentRuns: governedRuns.length,
     }
     reconcileSelectedAlgorithm()
     await loadVersionsForCards()
@@ -235,13 +275,16 @@ async function loadVersionsForCards() {
 function reconcileSelectedAlgorithm() {
   const currentId = selectedAlgorithmId.value
   const currentExists = currentId && algorithms.value.some((item) => item.algorithm_id === currentId)
-  if (currentExists) return
+  if (!shouldReturnToCenterAfterSelectionReconciliation({
+    activeMode: activeMode.value,
+    uploadContextMode: uploadContextMode.value,
+    selectedAlgorithmId: currentId,
+    selectedAlgorithmExists: currentExists,
+  })) return
 
   selectedAlgorithmId.value = ''
-  if (activeMode.value === 'detail' || (activeMode.value === 'upload' && uploadContextMode.value === 'new_version')) {
-    activeMode.value = 'center'
-    if (currentId) ElMessage.info('模型已删除，已返回模型中心')
-  }
+  activeMode.value = 'center'
+  ElMessage.info('模型已删除，已返回模型中心')
 }
 
 function handleChanged(packageInfo) {
@@ -265,8 +308,25 @@ function openUpload() {
   activeMode.value = 'upload'
 }
 
+function openInterfaceConfig(algorithmId = '') {
+  selectedAlgorithmId.value = algorithmId
+  interfaceConfigVersionId.value = ''
+  activeMode.value = 'interface-config'
+}
+
+function openEditInterfaceConfig(version) {
+  if (!selectedAlgorithmId.value || !canEditRemoteInterfaceVersion(version)) return
+  interfaceConfigVersionId.value = version.version_id
+  activeMode.value = 'interface-config'
+}
+
 function openNewVersion() {
   if (!selectedAlgorithmId.value) return
+  if (selectedAlgorithm.value?.source === 'remote_interface') {
+    interfaceConfigVersionId.value = ''
+    activeMode.value = 'interface-config'
+    return
+  }
   uploadContextMode.value = 'new_version'
   activeMode.value = 'upload'
 }
@@ -353,11 +413,17 @@ function buildSummaryFallback(algorithm, version) {
       materialScope.length ? `适用范围：${materialScope.join('、')}` : '',
       version?.resource_assets?.length ? `支持 ${version.resource_assets.length} 项受管资源绑定` : '',
     ].filter(Boolean),
-    practices: [
-      '先用样例输入完成一次自测，确认字段名和类型一致。',
-      `版本 ${versionLabel} 上线后保留旧版本一段时间，再冻结或下线。`,
-      version?.resource_assets?.length ? '大资源通过资源管理绑定，不要直接打进 ZIP 包。' : '',
-    ].filter(Boolean),
+    practices: algorithm.source === 'remote_interface'
+      ? [
+        '先完成连通性测试，确认响应提取路径和输出字段一致。',
+        `版本 ${versionLabel} 激活后保留旧版本一段时间，再冻结或下线。`,
+        '凭据只填写环境变量或密钥引用名，不在配置中保存明文。',
+      ]
+      : [
+        '先用样例输入完成一次自测，确认字段名和类型一致。',
+        `版本 ${versionLabel} 上线后保留旧版本一段时间，再冻结或下线。`,
+        version?.resource_assets?.length ? '大资源通过资源管理绑定，不要直接打进 ZIP 包。' : '',
+      ].filter(Boolean),
     generated_by: 'rule',
   }
 }
@@ -378,9 +444,25 @@ function sourceLine(algorithm) {
 function algorithmAttributions(algorithm) {
   if (!algorithm) return []
   return [
+    algorithm.developer_attribution,
     ...(algorithm.framework_attributions || []),
     ...(algorithm.method_attributions || []),
   ].filter(isPublicAttribution)
+}
+
+function protocolLabel(algorithm, version = null) {
+  return interfaceProtocolLabel(version?.interface_config?.protocol || algorithm?.interface_config?.protocol)
+}
+
+function endpointSummary(algorithm, version = null) {
+  const value = version?.interface_config?.endpoint_url || algorithm?.interface_config?.endpoint_url
+  if (!value) return '-'
+  try {
+    const url = new URL(value)
+    return `${url.protocol}//${url.host}${url.pathname}`
+  } catch {
+    return value
+  }
 }
 
 function authorLabel(algorithm) {
@@ -467,10 +549,25 @@ onMounted(() => {
       <el-skeleton v-else :rows="8" animated />
     </template>
 
+    <template v-if="activeMode === 'interface-config'">
+      <div class="subnav-row">
+        <el-button text @click="openCenter">返回模型中心</el-button>
+      </div>
+      <AlgorithmInterfaceConfigPanel
+        :mode="interfaceConfigMode"
+        :target-algorithm="selectedAlgorithm"
+        :target-version="interfaceConfigTargetVersion"
+        :target-versions="selectedVersions"
+        @changed="handleChanged"
+        @view-detail="openDetail"
+        @cancel="openCenter"
+      />
+    </template>
+
     <template v-else-if="activeMode === 'detail' && selectedAlgorithm">
       <div class="subnav-row">
         <el-button text @click="openCenter">返回模型中心</el-button>
-        <el-button v-if="canManageSelectedAlgorithm" text type="primary" @click="openNewVersion">上传新版本</el-button>
+        <el-button v-if="canManageSelectedAlgorithm" text type="primary" @click="openNewVersion">{{ selectedAlgorithm.source === 'remote_interface' ? '新建接口版本' : '上传新版本' }}</el-button>
       </div>
       <section class="detail-banner">
         <div class="model-avatar"><el-icon><DataAnalysis /></el-icon></div>
@@ -484,6 +581,8 @@ onMounted(() => {
           <AttributionBadges :attributions="selectedAlgorithmAttributions" />
           <div class="detail-meta">
             <span>{{ selectedAlgorithm.algorithm_id }}</span>
+            <span>{{ algorithmSourceLabel(selectedAlgorithm.source) }}</span>
+            <span v-if="selectedAlgorithm.source === 'remote_interface'">{{ protocolLabel(selectedAlgorithm, activeVersion) }}</span>
             <span>{{ typeLabel(selectedAlgorithm.type) }}</span>
             <span>{{ visibilityLabel(selectedAlgorithm.visibility) }}</span>
             <span>版本 {{ activeVersion?.version || selectedAlgorithm.version || '-' }}</span>
@@ -491,6 +590,11 @@ onMounted(() => {
           </div>
         </div>
         <div class="detail-actions">
+          <el-button
+            v-if="selectedAlgorithm.source === 'remote_interface' && canManageSelectedAlgorithm && editableInterfaceVersion"
+            :icon="Edit"
+            @click="openEditInterfaceConfig(editableInterfaceVersion)"
+          >编辑接口配置</el-button>
           <el-button v-if="canManageSelectedAlgorithm" :icon="Edit" @click="openMetadataEditor">编辑信息</el-button>
           <el-button :icon="VideoPlay" type="primary" @click="detailActiveTab = 'experience'">立即体验</el-button>
           <el-button :icon="Key" @click="detailActiveTab = 'api'">版本治理</el-button>
@@ -550,13 +654,14 @@ onMounted(() => {
               </section>
               <section class="api-note">
                 <el-icon><Document /></el-icon>
-                <span>外部集成时按输入字段提交请求，并记录模型 ID 与版本 ID，便于结果追溯。</span>
+                <span v-if="selectedAlgorithm.source === 'remote_interface'">{{ protocolLabel(selectedAlgorithm, activeVersion) }} · {{ endpointSummary(selectedAlgorithm, activeVersion) }}。调用时仅使用已登记的版本，凭据不会展示在页面中。</span>
+                <span v-else>外部集成时按输入字段提交请求，并记录模型 ID 与版本 ID，便于结果追溯。</span>
               </section>
             </div>
           </el-tab-pane>
           <el-tab-pane label="API Key / 版本治理" name="api">
             <div class="governance-layout">
-              <AlgorithmManagementPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-selector="false" @changed="handleChanged" />
+              <AlgorithmManagementPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-selector="false" @changed="handleChanged" @edit-interface-config="openEditInterfaceConfig" />
               <section class="history-panel">
                 <h3>运行记录</h3>
                 <AlgorithmRunHistoryPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" />
@@ -585,6 +690,14 @@ onMounted(() => {
         <aside class="filter-panel">
           <div class="filter-title">筛选</div>
           <el-input v-model="searchText" :prefix-icon="Search" placeholder="搜索模型名称、ID" clearable />
+          <div class="filter-group">
+            <span>模型来源</span>
+            <el-radio-group v-model="sourceFilter">
+              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button value="uploaded_package">算法上传</el-radio-button>
+              <el-radio-button value="remote_interface">接口调用</el-radio-button>
+            </el-radio-group>
+          </div>
           <div class="filter-group">
             <span>状态</span>
             <el-radio-group v-model="statusFilter">
@@ -617,6 +730,7 @@ onMounted(() => {
             <div class="list-actions">
               <el-button type="primary" plain :icon="Document" @click="openDoc('upload')">需求文档导入</el-button>
               <el-button type="primary" plain :icon="UploadFilled" @click="openUpload">高级导入</el-button>
+              <el-button type="primary" plain :icon="Link" @click="openInterfaceConfig()">接口配置</el-button>
             </div>
           </div>
 
@@ -630,10 +744,12 @@ onMounted(() => {
                 </div>
                 <el-tag :type="statusType(item.status)" size="small">{{ statusLabel(item.status) }}</el-tag>
               </div>
-              <p>{{ item.description || '已上传的垂类预测模型，可在详情页进行测试调用、版本治理和运行追溯。' }}</p>
+              <p>{{ item.description || (item.source === 'remote_interface' ? '已登记的远程接口模型，可在详情页完成连通性测试和版本调用。' : '已上传的垂类预测模型，可在详情页进行测试调用、版本治理和运行追溯。') }}</p>
               <div class="author-line compact">来源：{{ sourceLine(item) }}</div>
               <AttributionBadges :attributions="algorithmAttributions(item)" />
               <div class="model-tags">
+                <el-tag size="small" effect="plain">{{ algorithmSourceLabel(item.source) }}</el-tag>
+                <el-tag v-if="item.source === 'remote_interface'" size="small" effect="plain">{{ protocolLabel(item) }}</el-tag>
                 <el-tag size="small" effect="plain">{{ typeLabel(item.type) }}</el-tag>
                 <el-tag size="small" effect="plain">{{ visibilityLabel(item.visibility) }}</el-tag>
                 <el-tag v-for="scope in item.material_scope" :key="scope" size="small" effect="plain">{{ materialLabel(scope) }}</el-tag>
@@ -652,6 +768,7 @@ onMounted(() => {
             <div class="empty-actions">
               <el-button type="primary" plain :icon="Document" @click="openDoc('upload')">需求文档导入</el-button>
               <el-button type="primary" plain :icon="UploadFilled" @click="openUpload">高级导入</el-button>
+              <el-button type="primary" plain :icon="Link" @click="openInterfaceConfig()">接口配置</el-button>
             </div>
           </div>
         </main>

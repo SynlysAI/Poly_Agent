@@ -13,7 +13,7 @@ import {
   listAlgorithmVersions,
 } from '../../api/polyAgentApi'
 import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
-import { predictionStepState } from '../../utils/verticalPredictionState.mjs'
+import { algorithmSourceLabel, interfaceProtocolLabel, predictionStepState } from '../../utils/verticalPredictionState.mjs'
 import {
   addFieldToRecords,
   inferValueKind,
@@ -61,6 +61,8 @@ const activeRegistryVersion = computed(() => {
     algorithm_id: algorithm.algorithm_id,
     version: algorithm.version,
     status: algorithm.status === 'active' ? 'active' : algorithm.status,
+    source_kind: algorithm.source_kind || algorithm.source,
+    interface_config: algorithm.interface_config || null,
     input_schema: algorithm.input_schema || {},
     output_schema: algorithm.output_schema || {},
     input_assets: algorithm.input_assets || [],
@@ -131,7 +133,7 @@ async function loadAlgorithms() {
   loading.value = true
   try {
     const data = await listAlgorithms({ algorithm_family: 'vertical_prediction', page: 1, page_size: 100 })
-    algorithms.value = (data.items || []).filter((item) => item.source === 'uploaded_package')
+    algorithms.value = (data.items || []).filter((item) => ['uploaded_package', 'remote_interface'].includes(item.source))
     const preferredId = props.algorithmId || algorithmId.value
     if (!algorithms.value.some((item) => item.algorithm_id === preferredId)) {
       algorithmId.value = algorithms.value[0]?.algorithm_id || ''
@@ -845,6 +847,21 @@ function isPublicAttribution(item) {
   return Boolean(item && (name || organization))
 }
 
+function protocolLabel(algorithm, version) {
+  return interfaceProtocolLabel(version?.interface_config?.protocol || algorithm?.interface_config?.protocol)
+}
+
+function endpointSummary(algorithm, version) {
+  const value = version?.interface_config?.endpoint_url || algorithm?.interface_config?.endpoint_url
+  if (!value) return '-'
+  try {
+    const url = new URL(value)
+    return `${url.protocol}//${url.host}${url.pathname}`
+  } catch {
+    return value
+  }
+}
+
 onMounted(loadAlgorithms)
 </script>
 
@@ -866,6 +883,8 @@ onMounted(loadAlgorithms)
           <div>
             <h3>预测输入</h3>
             <span>{{ selectedVersion.algorithm_id }} / {{ selectedVersion.version }}</span>
+            <small>来源：{{ algorithmSourceLabel(selectedAlgorithm?.source) }}<template v-if="selectedAlgorithm?.source === 'remote_interface'"> · {{ protocolLabel(selectedAlgorithm, selectedVersion) }}</template></small>
+            <small v-if="selectedAlgorithm?.source === 'remote_interface'">Endpoint：{{ endpointSummary(selectedAlgorithm, selectedVersion) }}</small>
             <small>作者：{{ authorLabel(selectedAlgorithm) }}</small>
             <small>导师课题组：{{ mentorTeamLabel(selectedAlgorithm, selectedVersion) }}</small>
           </div>

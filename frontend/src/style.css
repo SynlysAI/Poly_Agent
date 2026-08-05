@@ -500,3 +500,51 @@ body {
     padding: 10px;
   }
 }
+
+@media (max-width: 640px) {
+  .app-header {
+    padding: 0 10px;
+    overflow: hidden;
+  }
+
+  .header-left {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .header-breadcrumb {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .header-breadcrumb .el-breadcrumb__item:last-child {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .header-right {
+    flex: 0 0 auto;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .header-right .header-date,
+  .header-right .el-tag,
+  .header-right > span[style] {
+    display: none;
+  }
+
+  .logout-btn {
+    width: 30px;
+    min-width: 30px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .logout-btn .el-icon {
+    margin: 0;
+    font-size: 16px;
+  }
+}

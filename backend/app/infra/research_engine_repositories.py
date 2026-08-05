@@ -173,6 +173,7 @@ class AlgorithmRegistryRepository(BaseRepository):
         material_scope: str | None = None,
         trigger_mode: str | None = None,
         status: str | None = None,
+        source: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> tuple[list[dict[str, Any]], int]:
@@ -205,6 +206,8 @@ class AlgorithmRegistryRepository(BaseRepository):
                 filters["trigger_modes"] = {"$in": [trigger_mode]}
         if status:
             filters["status"] = status
+        if source:
+            filters["source"] = source
 
         skip = (page - 1) * page_size
         if cls._can_use_mongo():
@@ -229,6 +232,8 @@ class AlgorithmRegistryRepository(BaseRepository):
             simple_filters["algorithm_family"] = algorithm_family
         if status:
             simple_filters["status"] = status
+        if source:
+            simple_filters["source"] = source
 
         data_demo = demo_store.load()
         rows = [

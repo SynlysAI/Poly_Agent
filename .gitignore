@@ -8,4 +8,6 @@ __pycache__/
 .vite/
 refer/
 .playwright-cli/
-backend/config/
+backend/config/*
+!backend/config/experiment_templates/
+!backend/config/experiment_templates/*.json

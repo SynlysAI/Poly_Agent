@@ -58,11 +58,11 @@ export const TASK_MODULES = [
     status: 'online',
     statusText: '在线',
     icon: DataAnalysis,
-    description: '上传、部署、管理和调用聚合物热、力学、流变等垂类预测算法，追溯运行版本和结果。',
+    description: '通过算法包上传或远程接口配置接入聚合物热、力学、流变等垂类预测能力，在统一模型中心完成治理、调用和运行追溯。',
     primaryActionText: '进入预测工作台',
     centerActionText: '算法与运行管理',
     routes: {
-      submit: '/vertical-prediction?tab=doc',
+      submit: '/vertical-prediction?tab=center',
       center: '/vertical-prediction?tab=center',
     },
   },

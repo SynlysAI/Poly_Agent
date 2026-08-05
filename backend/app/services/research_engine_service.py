@@ -1258,6 +1258,7 @@ class ResearchEngineService:
         material_scope: str | None = None,
         trigger_mode: str | None = None,
         status: str | None = None,
+        source: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> AlgorithmRegistryListData:
@@ -1282,6 +1283,7 @@ class ResearchEngineService:
             material_scope=material_scope,
             trigger_mode=trigger_mode,
             status=status,
+            source=source,
             page=page,
             page_size=page_size,
         )
@@ -1328,6 +1330,8 @@ class ResearchEngineService:
 
         normalized["integration_kind"] = integration_kind
         normalized["capability_group"] = capability_group
+        if not normalized.get("source_kind") and normalized.get("source") in {"uploaded_package", "remote_interface"}:
+            normalized["source_kind"] = normalized["source"]
         if not normalized.get("developer_attribution"):
             source = normalized.get("source")
             owner = str(normalized.get("owner") or "")
@@ -1345,7 +1349,7 @@ class ResearchEngineService:
                     logo_alt=owner,
                     visibility="prominent",
                 ).model_dump(mode="python")
-            elif source != "uploaded_package":
+            elif source not in {"uploaded_package", "remote_interface"}:
                 normalized["developer_attribution"] = AttributionItem(
                     name="PolyAgent",
                     role="implementation_source",
@@ -1376,8 +1380,8 @@ class ResearchEngineService:
         actor_user_id: str,
         is_admin: bool,
     ) -> None:
-        if doc.get("source") != "uploaded_package":
-            raise HTTPException(status_code=409, detail="仅支持维护用户上传算法的展示信息")
+        if doc.get("source") not in {"uploaded_package", "remote_interface"}:
+            raise HTTPException(status_code=409, detail="仅支持维护用户接入算法的展示信息")
         if is_admin or doc.get("owner") == actor_user_id:
             return
         raise HTTPException(status_code=403, detail="无权限修改该算法信息")
@@ -1435,7 +1439,7 @@ class ResearchEngineService:
     ) -> None:
         if is_admin or not actor_user_id:
             return
-        if doc.get("source") != "uploaded_package":
+        if doc.get("source") not in {"uploaded_package", "remote_interface"}:
             return
         if doc.get("owner") == actor_user_id:
             return
@@ -1721,6 +1725,7 @@ class ResearchEngineService:
             ComputationSubmitAdapter,
             get_runner,
         )
+        from app.services.remote_interface_service import RemoteInterfaceService
 
         # 1. 校验 algorithm_id 存在
         algo_doc = AlgorithmRegistryRepository.find_one({"algorithm_id": payload.algorithm_id})
@@ -1731,7 +1736,7 @@ class ResearchEngineService:
             )
         if (
             not is_admin
-            and algo_doc.get("source") == "uploaded_package"
+            and algo_doc.get("source") in {"uploaded_package", "remote_interface"}
             and algo_doc.get("owner") != actor_user_id
             and str(algo_doc.get("visibility") or "private") != "public"
         ):
@@ -1757,6 +1762,12 @@ class ResearchEngineService:
         )
         if algorithm_version and algorithm_version.algorithm_id != payload.algorithm_id:
             raise HTTPException(status_code=409, detail="算法版本与 algorithm_id 不匹配")
+        expected_source = algo_doc.get("source")
+        if algorithm_version and expected_source in {"uploaded_package", "remote_interface"}:
+            if algorithm_version.source_kind != expected_source:
+                raise HTTPException(status_code=409, detail="算法版本来源与算法登记类型不匹配")
+            if expected_source == "remote_interface" and algorithm_version.status != "active":
+                raise HTTPException(status_code=409, detail="远程接口只有 active 版本可正式调用")
         if algorithm_version and not is_admin and algorithm_version.created_by != actor_user_id:
             if algorithm_version.visibility != "public":
                 raise HTTPException(status_code=403, detail="无权限调用该算法版本")
@@ -1779,6 +1790,7 @@ class ResearchEngineService:
             "research_run_id": payload.research_run_id,
             "stage_run_id": payload.stage_run_id,
             "algorithm_version_id": algorithm_version.version_id if algorithm_version else None,
+            "source_kind": algorithm_version.source_kind if algorithm_version else None,
             "package_sha256": algorithm_version.package_sha256 if algorithm_version else None,
             "image_digest": algorithm_version.image_digest if algorithm_version else None,
             "package_digest": algorithm_version.package_digest if algorithm_version else None,
@@ -1842,7 +1854,28 @@ class ResearchEngineService:
                     detail=f"算法 '{payload.algorithm_id}' 尚未实现执行器",
                 )
 
-            if runner is None and algorithm_version is not None:
+            if algorithm_version is not None and algorithm_version.source_kind == "remote_interface":
+                remote_service = RemoteInterfaceService()
+                output_summary, remote_metadata = remote_service.invoke(
+                    algorithm_version,
+                    payload.input_snapshot,
+                )
+                if isinstance(output_summary, dict):
+                    output_summary = dict(output_summary)
+                run_doc["runtime_snapshot"] = {
+                    **run_doc.get("runtime_snapshot", {}),
+                    **remote_metadata,
+                }
+                artifact_specs = [
+                    {
+                        "type": "json_artifact",
+                        "name": f"{payload.algorithm_id}_{algorithm_version.version}_output",
+                        "content": output_summary,
+                        "content_type": "application/json",
+                        "description": "远程接口运行输出",
+                    }
+                ]
+            elif runner is None and algorithm_version is not None:
                 self._validate_uploaded_algorithm_input(
                     payload.input_snapshot,
                     algorithm_version.input_schema.model_dump(),
@@ -3022,6 +3055,7 @@ class ResearchEngineService:
             research_run_id=doc.get("research_run_id"),
             stage_run_id=doc.get("stage_run_id"),
             algorithm_version_id=doc.get("algorithm_version_id"),
+            source_kind=doc.get("source_kind"),
             package_sha256=doc.get("package_sha256"),
             image_digest=doc.get("image_digest"),
             package_digest=doc.get("package_digest"),

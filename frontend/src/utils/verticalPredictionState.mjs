@@ -8,6 +8,21 @@ export function predictionStepState({ running = false, lastRun = null } = {}) {
   return { activeStep: 2, inputLabel: '填写输入', hasResult: false }
 }
 
+/**
+ * 判断缺失的模型选择是否需要退出当前工作流。
+ */
+export function shouldReturnToCenterAfterSelectionReconciliation({
+  activeMode,
+  uploadContextMode,
+  selectedAlgorithmId,
+  selectedAlgorithmExists,
+}) {
+  if (!selectedAlgorithmId || selectedAlgorithmExists) return false
+  return activeMode === 'detail'
+    || activeMode === 'interface-config'
+    || (activeMode === 'upload' && uploadContextMode === 'new_version')
+}
+
 export function suggestNextPatch(versions = []) {
   const parsed = versions
     .map((item) => String(item?.version || item || '').trim())
@@ -26,13 +41,31 @@ export function suggestNextPatch(versions = []) {
 }
 
 export function canManageUploadedAlgorithm(algorithm, user) {
-  if (!algorithm || algorithm.source !== 'uploaded_package') {
+  if (!algorithm || !['uploaded_package', 'remote_interface'].includes(algorithm.source)) {
     return false
   }
   if (!user?.authEnabled) {
     return true
   }
   return user.role === 'admin' || String(algorithm.owner || algorithm.owner_user_id || '') === String(user.userId || '')
+}
+
+export function canEditRemoteInterfaceVersion(version) {
+  return ['validated', 'deployed_staging'].includes(String(version?.status || ''))
+}
+
+export function algorithmSourceLabel(source) {
+  if (source === 'uploaded_package') return '算法上传'
+  if (source === 'remote_interface') return '接口调用'
+  return '内置能力'
+}
+
+export function interfaceProtocolLabel(protocol) {
+  const value = String(protocol || '').toLowerCase()
+  if (value === 'fastapi') return 'FastAPI'
+  if (value === 'mcp') return 'MCP'
+  if (value === 'http') return 'HTTP'
+  return value ? value.toUpperCase() : '-'
 }
 
 export function versionLifecycleLabel(version) {

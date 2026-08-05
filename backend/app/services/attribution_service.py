@@ -89,6 +89,31 @@ class AttributionService:
                 attributions=[alchemist],
             ),
             ModuleAttribution(
+                module_id="experiment_dispatch",
+                title="实验方案转发台",
+                page_path="/optimization/experiment-dispatch",
+                summary="实验清单按版本化实验下发配置生成；目标接口契约与声明式映射由配置管理。",
+                implementation_boundary="本模块当前只生成和保存实验清单，不代表目标系统已接收或设备已执行。",
+                attributions=[
+                    AttributionItem(
+                        name="SpecLabOS",
+                        role="implementation_source",
+                        organization="SpecLabOS",
+                        description="未来用于参数化调用实验硬件和工作流。",
+                        logo_alt="SpecLabOS",
+                        visibility="prominent",
+                    ),
+                    AttributionItem(
+                        name="声明式映射",
+                        role="implementation_source",
+                        organization="PolyAgent",
+                        description="以 JSON Pointer、受控转换和条件分支生成目标请求参数。",
+                        logo_alt="声明式映射",
+                        visibility="prominent",
+                    ),
+                ],
+            ),
+            ModuleAttribution(
                 module_id="computation",
                 title="ComputeEngine 计算智能",
                 page_path="/computations/submit",

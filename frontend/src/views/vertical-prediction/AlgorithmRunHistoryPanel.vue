@@ -1,7 +1,8 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, View } from '@element-plus/icons-vue'
+import { DocumentChecked, Refresh, View } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, listAlgorithmRuns } from '../../api/polyAgentApi'
 import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
@@ -11,6 +12,7 @@ const props = defineProps({
   refreshKey: { type: Number, default: 0 },
   algorithmId: { type: String, default: '' },
 })
+const router = useRouter()
 
 const loading = ref(false)
 const runs = ref([])
@@ -86,6 +88,10 @@ function runtimeBackend(run) {
   return run.runtime_snapshot?.backend || run.runtime_snapshot?.deployment?.backend || '-'
 }
 
+function openExperimentDispatch(run) {
+  router.push({ path: '/optimization/experiment-dispatch', query: { run_id: run.run_id } })
+}
+
 onMounted(() => {
   filters.algorithm_id = lockedAlgorithmId.value
   loadRuns()
@@ -106,7 +112,7 @@ onMounted(() => {
       <el-button :icon="Refresh" :loading="loading" aria-label="刷新运行记录" @click="loadRuns" />
     </div>
 
-    <el-table v-loading="loading" :data="filteredRuns" border empty-text="暂无上传算法运行记录">
+    <el-table v-loading="loading" :data="filteredRuns" border empty-text="暂无垂类模型运行记录">
       <el-table-column prop="run_id" label="Run ID" min-width="190" />
       <el-table-column prop="algorithm_id" label="算法" min-width="180" />
       <el-table-column label="版本" min-width="210"><template #default="{ row }"><code>{{ row.algorithm_version_id }}</code></template></el-table-column>
@@ -139,6 +145,9 @@ onMounted(() => {
           :error="detail.error"
           :run-id="detail.run_id"
         />
+        <div class="detail-actions">
+          <el-button type="primary" :icon="DocumentChecked" :disabled="detail.status !== 'completed'" @click="openExperimentDispatch(detail)">生成实验清单</el-button>
+        </div>
       </template>
     </el-drawer>
   </div>
@@ -150,5 +159,6 @@ onMounted(() => {
 code { font-family: var(--app-mono-font); font-size: 12px; }
 .runtime-log { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--app-mono-font); font-size: 12px; }
 .detail-result-view { margin-top: 16px; }
+.detail-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 @media (max-width: 720px) { .history-toolbar { align-items: stretch; flex-direction: column; } .history-toolbar > * { width: 100% !important; } }
 </style>

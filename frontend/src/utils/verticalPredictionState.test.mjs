@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 
 import {
   canManageUploadedAlgorithm,
+  canEditRemoteInterfaceVersion,
+  algorithmSourceLabel,
+  interfaceProtocolLabel,
   predictionStepState,
+  shouldReturnToCenterAfterSelectionReconciliation,
   suggestNextPatch,
   versionLifecycleLabel,
 } from './verticalPredictionState.mjs'
@@ -31,6 +35,33 @@ assert.equal(
 )
 assert.equal(
   canManageUploadedAlgorithm(
+    { source: 'remote_interface', owner: 'user-a' },
+    { authEnabled: true, userId: 'user-a', role: 'user' },
+  ),
+  true,
+)
+assert.equal(algorithmSourceLabel('uploaded_package'), '算法上传')
+assert.equal(algorithmSourceLabel('remote_interface'), '接口调用')
+assert.equal(interfaceProtocolLabel('fastapi'), 'FastAPI')
+assert.equal(interfaceProtocolLabel('mcp'), 'MCP')
+assert.equal(
+  shouldReturnToCenterAfterSelectionReconciliation({
+    activeMode: 'interface-config',
+    selectedAlgorithmId: '',
+    selectedAlgorithmExists: false,
+  }),
+  false,
+)
+assert.equal(
+  shouldReturnToCenterAfterSelectionReconciliation({
+    activeMode: 'interface-config',
+    selectedAlgorithmId: 'missing-interface-model',
+    selectedAlgorithmExists: false,
+  }),
+  true,
+)
+assert.equal(
+  canManageUploadedAlgorithm(
     { source: 'uploaded_package', owner: 'user-a' },
     { authEnabled: true, userId: 'user-b', role: 'user' },
   ),
@@ -53,5 +84,9 @@ assert.equal(
 assert.equal(versionLifecycleLabel({ status: 'active', rollback_status: 'completed' }), '回滚完成')
 assert.equal(versionLifecycleLabel({ status: 'active' }), '已激活')
 assert.equal(versionLifecycleLabel({ status: 'deployed_staging' }), '待激活')
+assert.equal(canEditRemoteInterfaceVersion({ status: 'validated' }), true)
+assert.equal(canEditRemoteInterfaceVersion({ status: 'deployed_staging' }), true)
+assert.equal(canEditRemoteInterfaceVersion({ status: 'active' }), false)
+assert.equal(canEditRemoteInterfaceVersion({ status: 'frozen' }), false)
 
 console.log('vertical prediction state tests passed')

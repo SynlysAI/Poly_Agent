@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from urllib.parse import parse_qs
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.attribution import AttributionItem
 from app.schemas.common import UtcDatetimeJsonModel
@@ -79,6 +81,15 @@ AlgorithmStatus = Literal[
 AlgorithmIntegrationKind = Literal["real", "builtin", "simulated", "pending"]
 """算法接入形态，用于区分真实能力、内置能力、模拟演示和待接入能力。"""
 
+AlgorithmSourceKind = Literal["uploaded_package", "remote_interface"]
+"""可部署垂类模型的来源类型。"""
+
+RemoteInterfaceProtocol = Literal["http", "fastapi", "mcp"]
+"""远程接口协议类型；fastapi 首期按 HTTP 兼容接口执行。"""
+
+RemoteInterfaceHttpMethod = Literal["GET", "POST", "PUT", "PATCH"]
+"""首期支持的远程接口 HTTP 方法。"""
+
 CapabilityLevel = Literal[
     "production_ready",
     "configured_pending_verification",
@@ -122,6 +133,237 @@ class AlgorithmContributor(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+
+class RemoteInterfaceConfig(BaseModel):
+    """远程垂类模型接口配置，不保存明文凭据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    protocol: RemoteInterfaceProtocol = "http"
+    endpoint_url: str = Field(min_length=1, max_length=1000)
+    http_method: RemoteInterfaceHttpMethod = "POST"
+    body_mode: Literal["json"] = "json"
+    query_bindings: dict[str, str] = Field(default_factory=dict)
+    header_bindings: dict[str, str] = Field(default_factory=dict)
+    static_headers: dict[str, str] = Field(default_factory=dict)
+    response_selector: str | None = Field(default=None, max_length=300)
+    timeout_seconds: int = Field(default=30, ge=1, le=60)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("endpoint_url")
+    @classmethod
+    def validate_endpoint_url(cls, value: str) -> str:
+        """校验 endpoint URL，不允许把凭据放进 URL。"""
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("endpoint_url 必须是 http(s) URL")
+        if parsed.username or parsed.password:
+            raise ValueError("endpoint_url 不能包含用户名或密码")
+        query_keys = {key.lower() for key in parse_qs(parsed.query)}
+        sensitive_markers = ("token", "password", "api_key", "secret", "credential", "auth", "signature", "key")
+        if any(any(marker in key for marker in sensitive_markers) for key in query_keys):
+            raise ValueError("endpoint_url query 不能包含敏感凭据字段")
+        return normalized
+
+    @field_validator("http_method", mode="before")
+    @classmethod
+    def normalize_http_method(cls, value: str) -> str:
+        """统一 HTTP 方法大小写。"""
+        return str(value or "POST").strip().upper()
+
+    @field_validator("query_bindings", "header_bindings")
+    @classmethod
+    def validate_bindings(cls, value: dict[str, str]) -> dict[str, str]:
+        """确保请求映射键和值均为非空文本。"""
+        normalized = {}
+        for key, field in value.items():
+            key_text = str(key).strip()
+            field_text = str(field).strip()
+            if not key_text or not field_text:
+                raise ValueError("请求字段映射不能包含空键或空值")
+            normalized[key_text] = field_text
+        return normalized
+
+    @field_validator("query_bindings")
+    @classmethod
+    def reject_sensitive_query_bindings(cls, value: dict[str, str]) -> dict[str, str]:
+        """认证信息不得通过输入字段映射到 URL query。"""
+        sensitive_markers = ("token", "password", "api_key", "apikey", "secret", "credential", "auth", "signature")
+        for key in value:
+            if any(marker in key.lower() for marker in sensitive_markers):
+                raise ValueError(f"query_bindings.{key} 不能映射敏感凭据")
+        return value
+
+    @field_validator("header_bindings")
+    @classmethod
+    def reject_sensitive_header_bindings(cls, value: dict[str, str]) -> dict[str, str]:
+        """认证 Header 必须使用 secret_refs，避免凭据进入运行输入快照。"""
+        sensitive_markers = ("authorization", "token", "password", "api-key", "api_key", "apikey", "secret", "credential")
+        for key in value:
+            if any(marker in key.lower() for marker in sensitive_markers):
+                raise ValueError(f"header_bindings.{key} 必须改用 secret_refs")
+        return value
+
+    @field_validator("static_headers")
+    @classmethod
+    def validate_static_headers(cls, value: dict[str, str]) -> dict[str, str]:
+        """拒绝在静态 header 中保存敏感凭据。"""
+        sensitive_markers = ("authorization", "token", "password", "api-key", "api_key", "secret")
+        normalized = {}
+        for key, header_value in value.items():
+            key_text = str(key).strip()
+            value_text = str(header_value).strip()
+            if not key_text or not value_text:
+                raise ValueError("静态 header 不能包含空键或空值")
+            if any(marker in key_text.lower() for marker in sensitive_markers):
+                raise ValueError(f"static_headers.{key_text} 不能保存敏感字段")
+            normalized[key_text] = value_text
+        return normalized
+
+    @field_validator("secret_refs")
+    @classmethod
+    def validate_secret_refs(cls, value: dict[str, str]) -> dict[str, str]:
+        """仅允许保存环境变量或密钥引用名。"""
+        normalized = {}
+        for key, ref in value.items():
+            key_text = str(key).strip()
+            ref_text = str(ref).strip()
+            if not key_text or not ref_text:
+                raise ValueError("secret_refs 不能包含空键或空值")
+            if ref_text != ref_text.upper() or not ref_text.replace("_", "").isalnum():
+                raise ValueError(f"secret_refs.{key_text} 必须是环境变量或密钥引用名")
+            normalized[key_text] = ref_text
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_header_sources(self) -> "RemoteInterfaceConfig":
+        """同一个 Header 只能由一种来源提供，避免静默覆盖。"""
+        sources = {
+            "header_bindings": {str(key).strip().lower() for key in self.header_bindings},
+            "static_headers": {str(key).strip().lower() for key in self.static_headers},
+            "secret_refs": {str(key).strip().lower() for key in self.secret_refs},
+        }
+        conflicts = set()
+        source_items = list(sources.items())
+        for index, (_name, values) in enumerate(source_items):
+            for _other_name, other_values in source_items[index + 1:]:
+                conflicts.update(values & other_values)
+        if conflicts:
+            raise ValueError(f"Header 同时配置了多个来源: {', '.join(sorted(conflicts))}")
+        return self
+
+    @field_validator("response_selector")
+    @classmethod
+    def validate_response_selector(cls, value: str | None) -> str | None:
+        """限制响应提取路径为简单点号路径。"""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if any(not part or not part.replace("_", "").isalnum() for part in normalized.split(".")):
+            raise ValueError("response_selector 必须是简单点号路径")
+        return normalized
+
+
+class AlgorithmInterfaceCreate(BaseModel):
+    """创建远程接口型垂类模型及首个版本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm_id: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=120)
+    version: str = Field(default="0.1.0", min_length=1, max_length=40)
+    algorithm_family: AlgorithmFamily = "vertical_prediction"
+    type: AlgorithmType = "predictor"
+    material_scope: list[MaterialScope] = Field(default_factory=lambda: ["universal"], min_length=1)
+    task_scope: list[ResearchStageKey] = Field(default_factory=lambda: ["COMPUTE_PREDICT"])
+    trigger_modes: list[TriggerSource] = Field(default_factory=lambda: ["human_workflow"])
+    input_schema: AlgorithmIOSchema = Field(default_factory=lambda: AlgorithmIOSchema())
+    output_schema: AlgorithmIOSchema = Field(default_factory=lambda: AlgorithmIOSchema())
+    interface_config: RemoteInterfaceConfig
+    sample_input: dict = Field(default_factory=dict)
+    description: str | None = Field(default=None, max_length=1000)
+    developer: str | None = Field(default=None, max_length=160)
+    developer_organization: str | None = Field(default=None, max_length=160)
+    mentor_team: str | None = Field(default=None, max_length=160)
+    developer_contact: str | None = Field(default=None, max_length=160)
+    source_url: str | None = Field(default=None, max_length=600)
+    citation: str | None = Field(default=None, max_length=1000)
+    contributors: list[AlgorithmContributor] = Field(default_factory=list)
+    method_attributions: list[AttributionItem] = Field(default_factory=list)
+    logo_url: str | None = Field(default=None, max_length=300)
+    visibility: AlgorithmVisibility = "private"
+
+    @field_validator("algorithm_id", "name", "version")
+    @classmethod
+    def normalize_interface_text(cls, value: str) -> str:
+        """规范化接口模型标识文本。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("接口模型标识不能为空")
+        return normalized
+
+
+class AlgorithmInterfaceVersionCreate(BaseModel):
+    """创建远程接口型垂类模型新版本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = Field(min_length=1, max_length=40)
+    input_schema: AlgorithmIOSchema = Field(default_factory=lambda: AlgorithmIOSchema())
+    output_schema: AlgorithmIOSchema = Field(default_factory=lambda: AlgorithmIOSchema())
+    interface_config: RemoteInterfaceConfig
+    sample_input: dict = Field(default_factory=dict)
+    description: str | None = Field(default=None, max_length=1000)
+    visibility: AlgorithmVisibility | None = None
+
+    @field_validator("version")
+    @classmethod
+    def normalize_interface_version(cls, value: str) -> str:
+        """规范化接口版本号。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("接口版本不能为空")
+        return normalized
+
+
+class AlgorithmInterfaceVersionUpdate(BaseModel):
+    """更新尚未激活的远程接口版本草稿。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_schema: AlgorithmIOSchema | None = None
+    output_schema: AlgorithmIOSchema | None = None
+    interface_config: RemoteInterfaceConfig | None = None
+    sample_input: dict | None = None
+    description: str | None = Field(default=None, max_length=1000)
+    visibility: AlgorithmVisibility | None = None
+
+    @field_validator("description")
+    @classmethod
+    def normalize_interface_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class AlgorithmInterfaceTestResult(BaseModel):
+    """远程接口样例测试结果。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm_id: str
+    version_id: str
+    protocol: RemoteInterfaceProtocol
+    ok: bool
+    status_code: int | None = None
+    latency_ms: int | None = None
+    output_preview: object | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class AlgorithmCreditMetrics(BaseModel):
@@ -815,6 +1057,8 @@ class AlgorithmRegistryEntry(BaseModel):
     resource_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
     result_envelope: str | None = Field(default=None, max_length=120)
     call_method: str = Field(default="REST", max_length=40)
+    source_kind: AlgorithmSourceKind | None = None
+    interface_config: RemoteInterfaceConfig | None = None
     trigger_modes: list[TriggerSource] = Field(default_factory=lambda: ["human_workflow"])
     runtime_dependency: str | None = Field(default=None, max_length=200)
     version: str = Field(default="1.0.0", max_length=40)
@@ -829,12 +1073,15 @@ class AlgorithmRegistryEntry(BaseModel):
     capability_group: str | None = Field(default=None, max_length=80)
     visibility: AlgorithmVisibility = "private"
     mentor_team: str | None = Field(default=None, max_length=160)
+    developer_contact: str | None = Field(default=None, max_length=160)
     contributors: list[AlgorithmContributor] = Field(default_factory=list)
     developer_attribution: AttributionItem | None = None
     framework_attributions: list[AttributionItem] = Field(default_factory=list)
     method_attributions: list[AttributionItem] = Field(default_factory=list)
     implementation_notes: str | None = Field(default=None, max_length=1000)
     algorithm_summary: AlgorithmSummary | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @field_validator("algorithm_id")
     @classmethod
@@ -947,11 +1194,12 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     model_config = ConfigDict(extra="forbid")
 
     version_id: str
-    package_id: str
+    package_id: str | None = None
+    source_kind: AlgorithmSourceKind = "uploaded_package"
     algorithm_id: str
     name: str
     version: str
-    package_sha256: str
+    package_sha256: str | None = None
     image_digest: str | None = None
     package_digest: str | None = None
     environment_digest: str | None = None
@@ -965,9 +1213,10 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     resource_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
     resource_bindings: list[AlgorithmResourceBinding] = Field(default_factory=list)
     result_envelope: str | None = Field(default=None, max_length=120)
-    entrypoint: str
+    entrypoint: str = ""
     loader: str | None = None
-    package_path: str
+    package_path: str = ""
+    interface_config: RemoteInterfaceConfig | None = None
     deployment: dict = Field(default_factory=dict)
     runtime_logs: list[dict] = Field(default_factory=list)
     contract: dict = Field(default_factory=dict)
@@ -986,6 +1235,30 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     rollback_status: Literal["completed"] | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AlgorithmInterfaceTestRequest(BaseModel):
+    """远程接口样例测试请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_snapshot: dict | None = None
+
+
+class AlgorithmInterfaceDetails(BaseModel):
+    """远程接口模型详情，包含注册表条目和目标版本。"""
+
+    algorithm: AlgorithmRegistryEntry
+    version: AlgorithmVersion | None = None
+
+
+class AlgorithmInterfaceListData(BaseModel):
+    """远程接口模型分页响应。"""
+
+    items: list[AlgorithmRegistryEntry]
+    page: int
+    page_size: int
+    total: int
 
 
 class AlgorithmPackageListData(BaseModel):
@@ -1219,6 +1492,7 @@ class AlgorithmRun(UtcDatetimeJsonModel):
     research_run_id: str | None = None
     stage_run_id: str | None = None
     algorithm_version_id: str | None = None
+    source_kind: AlgorithmSourceKind | None = None
     package_sha256: str | None = None
     image_digest: str | None = None
     package_digest: str | None = None

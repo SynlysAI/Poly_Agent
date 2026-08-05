@@ -1,6 +1,6 @@
 <script setup>
 import { useRouter } from 'vue-router'
-import { Connection, DataAnalysis, MagicStick, SetUp, Star } from '@element-plus/icons-vue'
+import { Connection, DataAnalysis, DocumentChecked, MagicStick, SetUp, Star } from '@element-plus/icons-vue'
 
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 
@@ -36,6 +36,16 @@ const entries = [
     actionText: '进入 Alchemist',
     route: '/optimization/alchemist',
     metrics: ['变量定义', 'GP 建模', '采集优化'],
+  },
+  {
+    key: 'experiment-dispatch',
+    title: '实验方案转发台',
+    category: '实验闭环',
+    description: '筛选已完成 Run，按版本化实验下发配置生成可追溯、可导出的执行清单。',
+    icon: DocumentChecked,
+    actionText: '进入转发台',
+    route: '/optimization/experiment-dispatch',
+    metrics: ['级联筛选', '参数映射', '目标契约'],
   },
 ]
 
