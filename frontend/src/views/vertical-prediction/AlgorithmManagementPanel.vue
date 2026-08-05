@@ -217,7 +217,11 @@ onMounted(loadAlgorithms)
         </template>
       </el-table-column>
       <el-table-column label="来源" min-width="170"><template #default="{ row }"><AttributionBadges :attributions="rowAttributions(row)" /></template></el-table-column>
-      <el-table-column prop="created_by" label="创建人" width="110" />
+      <el-table-column label="创建人" width="110">
+        <template #default="{ row }">
+          {{ (selectedAlgorithm?.developer || selectedAlgorithm?.owner || row.uploaded_by || row.created_by) }}
+        </template>
+      </el-table-column>
       <el-table-column label="创建时间" width="170"><template #default="{ row }">{{ formatDate(row.created_at) }}</template></el-table-column>
       <el-table-column label="操作" min-width="290" fixed="right">
         <template #default="{ row }">
