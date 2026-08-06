@@ -8,6 +8,7 @@ import {
   downloadAlgorithmPackage,
   downloadAlgorithmPackageTemplate,
   getApiErrorMessage,
+  inspectAlgorithmPackage,
   listAlgorithmResources,
   packAlgorithmPackage,
   packAlgorithmVersionPackage,
@@ -30,6 +31,9 @@ const loading = ref(false)
 const sourceFiles = ref([])
 const requirementsFiles = ref([])
 const zipFiles = ref([])
+const zipInspect = ref(null)
+const zipInspectError = ref('')
+const zipInspecting = ref(false)
 const currentPackage = ref(null)
 const sourceUploadRef = ref(null)
 const requirementsUploadRef = ref(null)
@@ -40,6 +44,9 @@ const selectedResourceIds = reactive({})
 const resourceDrafts = reactive({})
 const registeringResourceKey = ref('')
 const isNewVersion = computed(() => props.mode === 'new_version')
+const submitVersion = computed(() => (
+  uploadMode.value === 'zip' ? (zipInspect.value?.version || '—') : form.version
+))
 const declaredResourceAssets = computed(() => currentPackage.value?.resource_assets || [])
 const unresolvedRequiredBindings = computed(() => declaredResourceAssets.value.filter(
   (spec) => spec.binding_required && !selectedResourceIds[spec.key],
@@ -437,10 +444,18 @@ async function downloadGeneratedPackage() {
 function validateBeforeSubmit() {
   if (isNewVersion.value) {
     if (!props.targetAlgorithm?.algorithm_id) return '未找到目标模型，请返回模型详情后重试'
+    if (uploadMode.value === 'zip') {
+      if (!zipFiles.value[0]?.raw) return '请选择标准 ZIP 文件'
+      if (zipInspecting.value) return '正在读取 ZIP 内契约，请稍候'
+      if (!zipInspect.value?.version) return zipInspectError.value || '无法读取 ZIP 内契约，请检查 polyagent.algorithm.yaml'
+      if (!/^\d+\.\d+\.\d+$/.test(zipInspect.value.version)) return 'ZIP 内版本号必须是 x.y.z 格式，请修改 polyagent.algorithm.yaml 后重试'
+      if (props.targetVersions.some((item) => item.version === zipInspect.value.version)) return `该语义版本 ${zipInspect.value.version} 已存在，请修改 ZIP 内 YAML 的 version 后重试`
+      if (zipInspect.value.algorithm_id && zipInspect.value.algorithm_id !== props.targetAlgorithm.algorithm_id) return 'ZIP 内算法 ID 与目标模型不一致，请检查 polyagent.algorithm.yaml'
+      return ''
+    }
     if (!/^\d+\.\d+\.\d+$/.test(form.version.trim())) return '版本号必须是 x.y.z 格式'
     if (props.targetVersions.some((item) => item.version === form.version.trim())) return '该语义版本已存在，请修改版本号'
-    if (uploadMode.value === 'zip' && !zipFiles.value[0]?.raw) return '请选择标准 ZIP 文件'
-    if (uploadMode.value === 'script' && !sourceFiles.value.length) return '请至少选择一个 Python 源文件'
+    if (!sourceFiles.value.length) return '请至少选择一个 Python 源文件'
     return ''
   }
   if (uploadMode.value === 'zip') {
@@ -454,6 +469,28 @@ function validateBeforeSubmit() {
   if (sampleJsonError.value) return sampleJsonError.value
   if (assetJsonError.value) return assetJsonError.value
   return ''
+}
+
+async function inspectSelectedZip() {
+  const raw = zipFiles.value[0]?.raw
+  zipInspect.value = null
+  zipInspectError.value = ''
+  if (!raw) return
+  zipInspecting.value = true
+  try {
+    const data = new FormData()
+    data.append('file', raw)
+    zipInspect.value = await inspectAlgorithmPackage(data)
+  } catch (error) {
+    zipInspectError.value = getApiErrorMessage(error)
+  } finally {
+    zipInspecting.value = false
+  }
+}
+
+function onZipFileChange() {
+  currentStep.value = Math.max(currentStep.value, 1)
+  inspectSelectedZip()
 }
 
 function goNext() {
@@ -570,7 +607,6 @@ async function submit() {
       data.append('file', zipFiles.value[0].raw)
       if (isNewVersion.value) {
         data.append('target_algorithm_id', props.targetAlgorithm.algorithm_id)
-        data.append('target_version', form.version.trim())
       } else {
         data.append('visibility', form.visibility)
       }
@@ -647,6 +683,8 @@ function resetForNextUpload() {
   sourceFiles.value = []
   requirementsFiles.value = []
   zipFiles.value = []
+  zipInspect.value = null
+  zipInspectError.value = ''
   clearResourceBindingState()
 }
 
@@ -710,7 +748,7 @@ function viewModelDetail() {
       <div class="section-heading">
         <div>
           <h3>{{ isNewVersion ? '上传文件并确认版本' : (uploadMode === 'zip' ? '上传标准 ZIP' : '填写必要信息') }}</h3>
-          <p>{{ isNewVersion ? '模型信息和契约均从当前活动版本继承。' : (uploadMode === 'zip' ? 'ZIP 内需要包含 polyagent.algorithm.yaml。' : '这几项会生成模型卡片、版本记录和测试表单。') }}</p>
+          <p>{{ isNewVersion ? '模型信息和契约均从当前活动版本继承；ZIP 模式的版本以包内 polyagent.algorithm.yaml 为准。' : (uploadMode === 'zip' ? 'ZIP 内需要包含 polyagent.algorithm.yaml，版本以包内 YAML 为准。' : '这几项会生成模型卡片、版本记录和测试表单。') }}</p>
         </div>
       </div>
 
@@ -1035,7 +1073,9 @@ function viewModelDetail() {
           <div class="simple-form-grid">
             <el-form-item label="目标模型"><el-input :model-value="form.name" disabled /></el-form-item>
             <el-form-item label="算法 ID"><el-input :model-value="form.algorithm_id" disabled /></el-form-item>
-            <el-form-item label="新版本"><el-input v-model="form.version" placeholder="0.1.1" /></el-form-item>
+            <el-form-item label="ZIP 内版本">
+              <el-input :model-value="zipInspecting ? '读取中…' : (zipInspect?.version || '请选择 ZIP')" disabled />
+            </el-form-item>
           </div>
         </el-form>
         <el-form v-else label-position="top" class="metadata-form">
@@ -1054,7 +1094,7 @@ function viewModelDetail() {
           :limit="1"
           :show-file-list="false"
           accept=".zip"
-          @change="currentStep = Math.max(currentStep, 1)"
+          @change="onZipFileChange"
         >
           <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
           <div class="el-upload__text">拖入标准 ZIP，或点击选择</div>
@@ -1071,6 +1111,20 @@ function viewModelDetail() {
             </div>
           </div>
         </div>
+        <el-alert
+          v-if="zipInspectError"
+          :title="zipInspectError"
+          type="error"
+          :closable="false"
+          show-icon
+        />
+        <el-alert
+          v-else-if="zipInspect?.version"
+          :title="isNewVersion ? `将以 ZIP 内版本 ${zipInspect.version} 登记为新版本（以 polyagent.algorithm.yaml 为准）` : `ZIP 内版本：${zipInspect.version}`"
+          type="info"
+          :closable="false"
+          show-icon
+        />
       </section>
     </section>
 
@@ -1084,7 +1138,7 @@ function viewModelDetail() {
       <div class="deploy-summary">
         <span>上传方式：{{ uploadMode === 'zip' ? '标准 ZIP' : 'Python 脚本' }}</span>
         <span v-if="!isNewVersion">发布范围：{{ form.visibility === 'public' ? '公开发布' : '非公开发布' }}</span>
-        <span v-if="isNewVersion">目标：{{ form.algorithm_id }} / {{ form.version }}</span>
+        <span v-if="isNewVersion">目标：{{ form.algorithm_id }} / {{ submitVersion }}</span>
         <span v-if="uploadMode === 'script'">模型：{{ form.name }} / {{ form.version }}</span>
         <span v-if="uploadMode === 'zip'">文件：{{ zipFiles[0]?.name || '已选择 ZIP' }}</span>
       </div>

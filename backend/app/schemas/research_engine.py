@@ -1188,6 +1188,17 @@ class AlgorithmPackage(UtcDatetimeJsonModel):
     updated_at: datetime
 
 
+class AlgorithmPackageInspect(BaseModel):
+    """标准 ZIP 算法包契约只读预览，上传前展示给用户。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm_id: str | None = None
+    name: str | None = None
+    version: str | None = None
+    contract_version: str | None = None
+
+
 class AlgorithmVersion(UtcDatetimeJsonModel):
     """不可变算法版本记录。"""
 

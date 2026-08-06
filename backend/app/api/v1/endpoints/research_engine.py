@@ -39,6 +39,7 @@ from app.schemas.research_engine import (
     AlgorithmPackage,
     AlgorithmPackageCreate,
     AlgorithmPackageExampleListData,
+    AlgorithmPackageInspect,
     AlgorithmPackageListData,
     AlgorithmRun,
     AlgorithmRunCreate,
@@ -614,7 +615,6 @@ async def upload_algorithm_package(
     visibility: str | None = Form(default=None),
     handoff_id: str | None = Form(default=None),
     target_algorithm_id: str | None = Form(default=None),
-    target_version: str | None = Form(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmPackage]:
     """上传标准 ZIP 算法包。"""
@@ -634,7 +634,6 @@ async def upload_algorithm_package(
         actor_user_id=_actor_user_id(current_user),
         visibility=visibility,
         target_algorithm_id=target_algorithm_id,
-        target_version=target_version,
         owner_user_id=(
             package_service.resolve_algorithm_owner(target_algorithm_id)
             if target_algorithm_id
@@ -642,6 +641,19 @@ async def upload_algorithm_package(
         ),
     )
     return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post("/algorithm-packages:inspect", response_model=ApiResponse[AlgorithmPackageInspect])
+async def inspect_algorithm_package(
+    file: UploadFile = File(...),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmPackageInspect]:
+    """只读预览标准 ZIP 算法包契约元数据，不落库、不触发校验。"""
+    if not (file.filename or "").endswith(".zip"):
+        raise HTTPException(status_code=422, detail="仅支持 .zip 算法包")
+    content = await file.read()
+    metadata = package_service.inspect_package(content)
+    return ApiResponse(code=0, message="ok", data=AlgorithmPackageInspect(**metadata))
 
 
 @router.post("/algorithm-packages:pack-version", response_model=ApiResponse[AlgorithmPackage])

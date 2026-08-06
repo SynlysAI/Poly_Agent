@@ -764,6 +764,10 @@ export function packAlgorithmVersionPackage(formData) {
   return apiClient.post('/research-engine/algorithm-packages:pack-version', formData).then(unwrapResponse)
 }
 
+export function inspectAlgorithmPackage(formData) {
+  return apiClient.post('/research-engine/algorithm-packages:inspect', formData).then(unwrapResponse)
+}
+
 export function uploadAlgorithmPackage(formData) {
   return apiClient.post('/research-engine/algorithm-packages', formData).then(unwrapResponse)
 }
