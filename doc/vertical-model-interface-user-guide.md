@@ -2,6 +2,14 @@
 
 远程接口型垂类模型用于登记已经部署在其他服务上的预测接口。入口是“任务提交 -> 垂类预测模型 -> 垂类模型（接口配置）”，配置保存后统一进入“垂类模型管理中心”；这里也是接口模型唯一的调用入口。
 
+## 快速开始：10 分钟接入一个远程接口
+
+1. 启动本地 Demo 服务：`cd examples/interface_config/demo_service && pip install -r requirements.txt && uvicorn app:app --host 127.0.0.1 --port 8301`。开发环境联调需开启私网访问（`REMOTE_INTERFACE_ALLOW_PRIVATE_NETWORK=true`）。
+2. 打开“任务提交 -> 垂类预测模型 -> 垂类模型（接口配置）”。进入页面会提示是否开始教学，可跳过，也可随时展开或重新播放引导；页面顶部的“示例场景 · 一键填入”内置 5 个可直接使用的教学场景。
+3. 点击“填入此示例”（例如 FastAPI 单分子性质预测），向导会自动填好协议、endpoint、输入输出字段、映射和样例输入；确认后把 endpoint 保留为 `http://127.0.0.1:8301/predict` 或替换成你的真实服务地址。
+4. 依次点击“下一步”完成各步校验，最后点击“保存配置” -> “样例测试”。测试通过后版本进入待激活状态，再点击“激活并进入管理中心”。
+5. 在模型中心打开该模型，点击“立即体验”完成一次真实调用。
+
 ## 配置流程
 
 1. 填写模型 ID、名称、版本、开发者、开发机构、来源 URL 和引用信息。
@@ -31,3 +39,24 @@
 ## 来源标注
 
 开发者、开发机构、来源 URL 和引用会在卡片、详情和调用结果附近以结构化来源牌展示。未提供授权 Logo 时使用文字来源牌，不生成或冒用机构 Logo；平台的治理和调用能力不归属远程模型开发者。
+
+## 示例场景对照表
+
+页面“示例场景 · 一键填入”内置 5 个教学场景，只预填技术字段；开发者、机构、来源 URL 与 Logo 需按真实模型填写。
+
+| 场景 id | 名称 | 协议/方法 | 输入 | 输出 | 关键配置 |
+| --- | --- | --- | --- | --- | --- |
+| `fastapi_smiles` | FastAPI 单分子性质预测 | FastAPI POST | `smiles` | `prediction` | 响应提取路径 `data.prediction`，endpoint 指向本地 demo 服务 |
+| `http_batch` | HTTP 批量配方预测 | HTTP POST | `formulations` | `results` | endpoint 为占位地址，需替换为真实服务 |
+| `http_get_binding` | GET 查询参数绑定 | HTTP GET | `smiles` | `prediction` | Query 绑定 `smiles → smiles` |
+| `auth_header_secret` | 带鉴权的接口接入 | FastAPI POST | `smiles` | `prediction` | 密钥引用 `Authorization → MODEL_API_TOKEN` |
+| `mcp_preview` | MCP 接口（仅配置） | MCP POST | `smiles` | `prediction` | 可保存，暂不支持测试、激活与调用 |
+
+## 常见问题
+
+- **样例测试返回 502**：上游非 2xx、响应非法 JSON、响应提取路径缺失或输出契约不匹配。先用 curl 直接调用上游确认响应结构，再检查 `response_selector` 与输出字段。
+- **样例测试返回 504**：上游在配置的超时（1-60 秒）内未返回。检查上游处理耗时，必要时调大超时。
+- **上游返回 401**：接口要求鉴权。确认“密钥引用”中的环境变量/密钥名已在平台侧配置且值正确；认证 Header 不能从普通输入映射。
+- **MCP 场景无法激活**：当前版本 MCP 只支持配置和展示，测试、激活与调用返回 `REMOTE_PROTOCOL_NOT_SUPPORTED`（HTTP 501）。
+- **本地 127.0.0.1 无法访问**：生产环境默认阻断 loopback/私网地址；仅开发环境可通过 `REMOTE_INTERFACE_ALLOW_PRIVATE_NETWORK=true` 放行。
+- **修改 endpoint 后不生效**：接口版本不可变；请在模型详情中创建新接口版本，active 版本不会被覆盖。
