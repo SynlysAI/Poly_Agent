@@ -1,6 +1,6 @@
 # 实验方案转发台
 
-实验方案转发台只负责把已完成的 `AlgorithmRun` 按版本化声明式配置转换成目标接口 payload。它不计算 PI 评分、不调用 LLM、不解释具体实验领域逻辑，也不会向 SpecLabOS 发起请求。
+实验方案转发台负责把已完成的 `AlgorithmRun` 按版本化声明式配置转换成目标接口 payload，并在用户确认后调用 SpecLabOS 外部实验任务接收接口。它不计算 PI 评分、不调用 LLM，也不解释具体实验领域逻辑。
 
 ## 核心概念
 
@@ -49,4 +49,6 @@ GET    /api/v1/experiment-dispatches/{dispatch_id}/export
 
 ## 下发状态
 
-保存后的清单状态为 `prepared`，页面显示“已保存、未下发”。`payload` 和目标契约请求预览仅用于审计和后续适配器；本期不会生成虚假接收回执，现有 Alchemist 下发流程不受影响。
+用户点击“一键解析并下发”后，服务端会先保存本地清单，再将清单 payload 包装为 SpecLabOS 外部实验任务请求体并下发。SpecLabOS 返回接收回执后，本地清单状态更新为 `accepted`，并保存 `external_receipt`；如果下发失败，本地清单状态更新为 `failed`，并保存 `dispatch_error` 供页面展示和排查。
+
+旧模板清单接口仍可生成 `prepared` 状态的本地清单，用于兼容历史导出和审计流程。

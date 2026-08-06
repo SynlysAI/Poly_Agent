@@ -157,6 +157,14 @@ class ExperimentDispatchProvenance(BaseModel):
     target_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExperimentDispatchExternalReceipt(BaseModel):
+    """SpecLabOS 接收回执。"""
+
+    dispatch_id: str
+    status: str
+    received_at: str
+
+
 class ExperimentDispatchManifest(UtcDatetimeJsonModel):
     """可审计的实验方案转发清单。"""
 
@@ -179,6 +187,8 @@ class ExperimentDispatchManifest(UtcDatetimeJsonModel):
     matched_rules: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     preview_digest: str | None = None
+    external_receipt: ExperimentDispatchExternalReceipt | None = None
+    dispatch_error: str | None = None
     provenance: ExperimentDispatchProvenance
     created_by: str
     created_at: datetime
@@ -197,6 +207,8 @@ class ExperimentDispatchListItem(UtcDatetimeJsonModel):
     target_id: str | None = None
     experiment_name: str
     parameter_count: int
+    external_receipt: ExperimentDispatchExternalReceipt | None = None
+    dispatch_error: str | None = None
     created_by: str
     created_at: datetime
 

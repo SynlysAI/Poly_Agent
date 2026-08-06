@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -34,6 +35,7 @@ from app.schemas.experiment_dispatch_profile import (
     ExperimentDispatchProfileUpdateRequest,
 )
 from app.schemas.experiment_dispatch import (
+    ExperimentDispatchExternalReceipt,
     ExperimentDispatchManifest,
     ExperimentDispatchProfileRef,
     ExperimentDispatchProvenance,
@@ -42,6 +44,7 @@ from app.schemas.experiment_dispatch import (
 )
 from app.services.experiment_dispatch_profile_engine import ExperimentDispatchProfileEngine, _MISSING
 from app.services.research_engine_access import ensure_research_engine_doc_access
+from app.services.speclabos_dispatch_service import SpecLabOSDispatchError, speclabos_dispatch_service
 
 
 class ExperimentDispatchProfileService:
@@ -335,6 +338,17 @@ class ExperimentDispatchProfileService:
             created_at=created_at,
         )
         ExperimentDispatchRepository.save("dispatch_id", manifest.model_dump(mode="python"))
+        try:
+            receipt = speclabos_dispatch_service.dispatch(self._build_speclabos_payload(manifest))
+        except SpecLabOSDispatchError as exc:
+            manifest.status = "failed"
+            manifest.dispatch_error = str(exc)
+            ExperimentDispatchRepository.save("dispatch_id", manifest.model_dump(mode="python"))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        manifest.status = "accepted"
+        manifest.external_receipt = ExperimentDispatchExternalReceipt(**receipt)
+        ExperimentDispatchRepository.save("dispatch_id", manifest.model_dump(mode="python"))
         return manifest
 
     def validate_profile(self, profile: ExperimentDispatchProfile, target: DispatchTargetDefinition) -> list[str]:
@@ -394,6 +408,150 @@ class ExperimentDispatchProfileService:
             "run_id", "algorithm_id", "algorithm_version_id", "trigger_source", "source_kind",
             "created_at", "finished_at",
         )}
+
+    @staticmethod
+    def _build_speclabos_payload(manifest: ExperimentDispatchManifest) -> dict[str, Any]:
+        """构建 SpecLabOS 外部实验任务接收接口请求体。
+
+        Args:
+            manifest: 已完成解析和校验的本地实验转发清单。
+
+        Returns:
+            符合 SpecLabOS 外部实验任务契约的请求体。
+        """
+        if ExperimentDispatchProfileService._is_speclabos_payload(manifest.payload):
+            payload = deepcopy(manifest.payload)
+            payload.setdefault("source_system", "polyagent")
+            payload.setdefault("source_module", "experiment_dispatch")
+            source_reference = payload.get("source_reference")
+            if not isinstance(source_reference, dict):
+                source_reference = {}
+            source_reference.update(ExperimentDispatchProfileService._local_reference(manifest))
+            payload["source_reference"] = source_reference
+            payload.setdefault("experiment_name", manifest.experiment_name)
+            experiment_object = payload.get("experiment_object")
+            if not isinstance(experiment_object, dict):
+                experiment_object = {}
+            experiment_object.setdefault("name", manifest.experiment_name)
+            payload["experiment_object"] = experiment_object
+            payload["conditions"] = ExperimentDispatchProfileService._normalize_speclabos_conditions(
+                payload.get("conditions") or [],
+                manifest,
+            )
+            optimization_context = payload.get("optimization_context")
+            if not isinstance(optimization_context, dict):
+                optimization_context = {}
+            optimization_context.setdefault("source_module", "experiment_dispatch")
+            optimization_context.setdefault("warnings", manifest.warnings)
+            optimization_context.setdefault("preview_digest", manifest.preview_digest)
+            payload["optimization_context"] = optimization_context
+            extra_metadata = payload.get("extra_metadata")
+            if not isinstance(extra_metadata, dict):
+                extra_metadata = {}
+            extra_metadata.setdefault("mapping_trace", manifest.mapping_trace)
+            payload["extra_metadata"] = extra_metadata
+            return payload
+
+        return {
+            "source_system": "polyagent",
+            "source_module": "experiment_dispatch",
+            "source_reference": ExperimentDispatchProfileService._local_reference(manifest),
+            "experiment_name": manifest.experiment_name,
+            "experiment_object": {
+                "name": manifest.experiment_name,
+                "type": manifest.target.target_id if manifest.target else "experiment_dispatch",
+                "description": manifest.experiment_notes,
+            },
+            "experiment_content": manifest.experiment_notes,
+            "conditions": [
+                {
+                    "condition_id": f"{manifest.dispatch_id}-condition-1",
+                    "parameters": manifest.payload or manifest.parameters,
+                    "metadata": {
+                        "local_dispatch_id": manifest.dispatch_id,
+                        "matched_rules": manifest.matched_rules,
+                    },
+                }
+            ],
+            "optimization_context": {
+                "source_module": "experiment_dispatch",
+                "warnings": manifest.warnings,
+                "preview_digest": manifest.preview_digest,
+            },
+            "extra_metadata": {
+                "mapping_trace": manifest.mapping_trace,
+            },
+        }
+
+    @staticmethod
+    def _normalize_speclabos_conditions(
+        conditions: list[Any],
+        manifest: ExperimentDispatchManifest,
+    ) -> list[dict[str, Any]]:
+        """规范化 SpecLabOS 条件列表。
+
+        Args:
+            conditions: 配置产物中的条件列表，支持标准结构或参数对象简写。
+            manifest: 已完成解析和校验的本地实验转发清单。
+
+        Returns:
+            符合 SpecLabOS `ExternalExperimentCondition` 的条件列表。
+        """
+        normalized: list[dict[str, Any]] = []
+        for index, item in enumerate(conditions, start=1):
+            if isinstance(item, dict) and isinstance(item.get("parameters"), dict):
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                metadata.setdefault("local_dispatch_id", manifest.dispatch_id)
+                normalized.append({
+                    "condition_id": str(item.get("condition_id") or f"{manifest.dispatch_id}-condition-{index}"),
+                    "parameters": deepcopy(item["parameters"]),
+                    "metadata": metadata,
+                })
+                continue
+            if isinstance(item, dict):
+                normalized.append({
+                    "condition_id": f"{manifest.dispatch_id}-condition-{index}",
+                    "parameters": deepcopy(item),
+                    "metadata": {"local_dispatch_id": manifest.dispatch_id},
+                })
+        return normalized
+
+    @staticmethod
+    def _is_speclabos_payload(payload: dict[str, Any]) -> bool:
+        """判断配置产物是否已经是 SpecLabOS 外部实验任务请求体。
+
+        Args:
+            payload: 实验下发配置执行后生成的 payload。
+
+        Returns:
+            若 payload 已包含 SpecLabOS 顶层任务字段则返回 True。
+        """
+        return (
+            isinstance(payload, dict)
+            and isinstance(payload.get("conditions"), list)
+            and isinstance(payload.get("experiment_object"), dict)
+        )
+
+    @staticmethod
+    def _local_reference(manifest: ExperimentDispatchManifest) -> dict[str, Any]:
+        """构建 PolyAgent 本地清单追踪信息。
+
+        Args:
+            manifest: 已完成解析和校验的本地实验转发清单。
+
+        Returns:
+            可写入 SpecLabOS `source_reference` 的追踪字段。
+        """
+        return {
+            "local_dispatch_id": manifest.dispatch_id,
+            "run_id": manifest.source.run_id,
+            "algorithm_id": manifest.source.algorithm_id,
+            "algorithm_version_id": manifest.source.algorithm_version_id,
+            "profile_id": manifest.profile.profile_id if manifest.profile else None,
+            "profile_version": manifest.profile.profile_version if manifest.profile else None,
+            "target_id": manifest.target.target_id if manifest.target else None,
+            "target_version": manifest.target.target_version if manifest.target else None,
+        }
 
     def _owned_profile(self, profile_id: str, version: str, actor_user_id: str) -> ExperimentDispatchProfile:
         profile = self.get(profile_id, version, actor_user_id=actor_user_id, is_admin=False)
