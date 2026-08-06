@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Download, DocumentChecked, Files, Refresh, Setting } from '@element-plus/icons-vue'
+import { Download, DocumentChecked, Files, Fold, Refresh, Setting } from '@element-plus/icons-vue'
 
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 import {
@@ -192,7 +192,7 @@ onMounted(loadReference)
       <div v-if="selectedCandidate" class="selection-summary"><strong>{{ selectedCandidate.algorithm_name || selectedCandidate.algorithm_id }}</strong><span>{{ selectedCandidate.algorithm_type || '未分类' }} · {{ selectedCandidate.algorithm_family || '未分族' }}</span><code>{{ selectedCandidate.run_id }}</code><el-tag type="success" size="small">已完成</el-tag></div>
     </section>
 
-    <div class="main-layout">
+    <div class="main-layout" :class="{ 'sidebar-docked': !sidebarVisible }">
       <main class="main-workspace">
         <section class="panel profile-panel">
           <div class="panel-header"><div><h3 class="panel-title">选择实验下发配置</h3><p class="panel-caption">配置包含参数映射、条件分支和目标接口版本</p></div><el-button type="primary" plain @click="openProfiles">新建下发配置</el-button></div>
@@ -215,7 +215,42 @@ onMounted(loadReference)
         </section>
       </main>
 
-      <aside v-if="sidebarVisible" class="saved-sidebar panel"><div class="sidebar-header"><div><h3 class="panel-title">工作区侧栏</h3><span class="panel-caption">可隐藏 · 详情抽屉</span></div><el-button text aria-label="隐藏侧栏" @click="toggleSidebar">×</el-button></div><el-tabs v-model="sidebarTab"><el-tab-pane label="已保存" name="saved"><el-input v-model="historyKeyword" clearable placeholder="筛选清单" class="sidebar-search" /><el-table v-loading="historyLoading" :data="historyItems" size="small" :show-header="false" empty-text="暂无已保存清单"><el-table-column><template #default="{ row }"><button class="saved-item" type="button" @click="openDetail(row)"><strong>{{ row.experiment_name || row.profile_id || row.template_id || '未命名实验' }}</strong><span>{{ row.run_id }} · {{ formatDate(row.created_at) }}</span><el-tag :type="statusType(row.status)" size="small">{{ row.status === 'prepared' ? '已保存、未下发' : row.status }}</el-tag></button></template></el-table-column></el-table></el-tab-pane><el-tab-pane label="接口预览" name="interface"><div class="interface-preview"><el-alert title="本期不会发起 SpecLabOS 请求" type="info" :closable="false" /><dl><dt>目标系统</dt><dd>{{ selectedTarget?.name || '未选择' }}</dd><dt>HTTP</dt><dd>{{ selectedTarget?.method || 'POST' }} {{ selectedTarget?.path || '-' }}</dd><dt>服务配置</dt><dd>{{ integration?.endpoint ? maskEndpoint(integration.endpoint) : '由工具服务配置管理' }}</dd></dl><h4>请求 payload</h4><pre class="json-view">{{ JSON.stringify(outputPayload, null, 2) }}</pre><h4>预期响应</h4><pre class="json-view">{{ JSON.stringify(selectedTarget?.response_schema || {}, null, 2) }}</pre></div></el-tab-pane></el-tabs></aside>
+      <aside class="saved-sidebar panel" :class="{ docked: !sidebarVisible }">
+        <template v-if="sidebarVisible">
+          <div class="sidebar-header">
+            <div><h3 class="panel-title">工作区侧栏</h3><span class="panel-caption">可收起 · 详情抽屉</span></div>
+            <el-tooltip content="收起至侧边" placement="left">
+              <el-button text aria-label="收起至侧边" @click="toggleSidebar">×</el-button>
+            </el-tooltip>
+          </div>
+          <el-tabs v-model="sidebarTab">
+            <el-tab-pane label="已保存" name="saved">
+              <el-input v-model="historyKeyword" clearable placeholder="筛选清单" class="sidebar-search" />
+              <el-table v-loading="historyLoading" :data="historyItems" size="small" :show-header="false" empty-text="暂无已保存清单">
+                <el-table-column>
+                  <template #default="{ row }">
+                    <button class="saved-item" type="button" @click="openDetail(row)"><strong>{{ row.experiment_name || row.profile_id || row.template_id || '未命名实验' }}</strong><span>{{ row.run_id }} · {{ formatDate(row.created_at) }}</span><el-tag :type="statusType(row.status)" size="small">{{ row.status === 'prepared' ? '已保存、未下发' : row.status }}</el-tag></button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="接口预览" name="interface">
+              <div class="interface-preview">
+                <el-alert title="本期不会发起 SpecLabOS 请求" type="info" :closable="false" />
+                <dl><dt>目标系统</dt><dd>{{ selectedTarget?.name || '未选择' }}</dd><dt>HTTP</dt><dd>{{ selectedTarget?.method || 'POST' }} {{ selectedTarget?.path || '-' }}</dd><dt>服务配置</dt><dd>{{ integration?.endpoint ? maskEndpoint(integration.endpoint) : '由工具服务配置管理' }}</dd></dl>
+                <h4>请求 payload</h4><pre class="json-view">{{ JSON.stringify(outputPayload, null, 2) }}</pre>
+                <h4>预期响应</h4><pre class="json-view">{{ JSON.stringify(selectedTarget?.response_schema || {}, null, 2) }}</pre>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+        </template>
+        <el-tooltip v-else content="展开侧栏" placement="left">
+          <button type="button" class="sidebar-dock" aria-label="展开侧栏" @click="toggleSidebar">
+            <el-icon><Fold /></el-icon>
+            <span class="sidebar-dock-label">已保存</span>
+          </button>
+        </el-tooltip>
+      </aside>
     </div>
 
     <el-drawer v-model="detailVisible" title="已保存清单详情" size="min(760px, 94vw)"><template v-if="detail"><el-descriptions :column="1" border size="small"><el-descriptions-item label="Dispatch ID">{{ detail.dispatch_id }}</el-descriptions-item><el-descriptions-item label="Run ID">{{ detail.source?.run_id }}</el-descriptions-item><el-descriptions-item label="配置">{{ detail.profile?.profile_id || detail.template?.template_id }} · v{{ detail.profile?.profile_version || detail.template?.template_version }}</el-descriptions-item><el-descriptions-item label="状态"><el-tag type="info">已保存、未下发</el-tag></el-descriptions-item></el-descriptions><h4>请求 payload</h4><pre class="json-view">{{ JSON.stringify(detail.payload || detail.parameters || {}, null, 2) }}</pre><el-button :icon="Download" @click="downloadDispatch(detail.dispatch_id)">导出 JSON</el-button></template></el-drawer>
@@ -232,7 +267,13 @@ onMounted(loadReference)
 .selection-summary,.profile-summary { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 12px; border:1px solid var(--app-border-soft); border-radius:var(--app-radius-sm); background:#f8fbff; color:var(--app-ink-body); }.selection-summary strong,.profile-summary strong { color:var(--app-ink); }.selection-summary code { margin-left:auto; }.run-option,.profile-option { display:flex; flex-direction:column; gap:2px; }.run-option span,.profile-option span { color:var(--app-ink-muted); font-size:12px; }
 .main-layout { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:16px; align-items:start; }.main-workspace { min-width:0; display:flex; flex-direction:column; gap:16px; }.profile-select { width:100%; }.profile-summary { margin-top:12px; justify-content:space-between; }.profile-summary p { margin:5px 0 0; color:var(--app-ink-muted); font-size:12px; }.profile-notes { width:100%; padding-top:8px; border-top:1px solid var(--app-border-soft); }
 .summary-tags { display:flex; gap:6px; flex-wrap:wrap; }.form-grid,.manual-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.full-width { width:100%; }.action-row { display:flex; align-items:center; justify-content:flex-end; gap:8px; }.action-hint { margin-left:auto; color:var(--app-ink-muted); font-size:12px; }.preview-body { display:flex; flex-direction:column; gap:14px; }.preview-grid { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(220px,.7fr); gap:18px; }.preview-body h4 { margin:0 0 8px; font-size:13px; }.result-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }.result-facts div { display:flex; flex-direction:column; gap:4px; padding:10px; border:1px solid var(--app-border-soft); border-radius:var(--app-radius-sm); }.result-facts span { color:var(--app-ink-muted); font-size:12px; }.result-facts strong { font-size:18px; }.json-view { margin:0; padding:10px; max-height:300px; overflow:auto; border:1px solid var(--app-border-soft); border-radius:var(--app-radius-sm); background:#f8fafc; color:var(--app-ink-body); font:12px/1.6 var(--app-mono-font); white-space:pre-wrap; word-break:break-word; }.saved-sidebar { position:sticky; top:16px; min-width:0; overflow:hidden; }.sidebar-header { padding:16px 16px 8px; }.sidebar-search { margin:0 12px 10px; width:calc(100% - 24px); }.saved-item { width:100%; display:flex; flex-direction:column; align-items:flex-start; gap:5px; padding:10px 12px; border:0; border-top:1px solid var(--app-border-soft); background:transparent; color:inherit; text-align:left; cursor:pointer; }.saved-item:hover { background:#f5f8fc; }.saved-item span { color:var(--app-ink-muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }.interface-preview { padding:2px 12px 16px; }.interface-preview dl { display:grid; grid-template-columns:90px 1fr; gap:8px; margin:14px 0; font-size:12px; }.interface-preview dt { color:var(--app-ink-muted); }.interface-preview dd { margin:0; word-break:break-all; }.interface-preview h4 { margin:14px 0 6px; font-size:12px; }
+.main-layout.sidebar-docked { grid-template-columns:minmax(0,1fr) 32px; }
+.saved-sidebar.docked { width:32px; padding:0; display:flex; align-items:stretch; align-self:stretch; box-shadow:none; }
+.saved-sidebar.docked :deep(.el-tooltip__trigger) { flex:1; display:flex; min-height:140px; }
+.sidebar-dock { flex:1; width:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:0; border:0; background:transparent; color:var(--app-ink-muted); cursor:pointer; font:inherit; }
+.sidebar-dock:hover { color:var(--app-primary); background:#f5f8fc; }
+.sidebar-dock-label { writing-mode:vertical-rl; letter-spacing:3px; font-size:12px; }
 @media (max-width:1200px) { .cascade-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-@media (max-width:900px) { .main-layout { grid-template-columns:1fr; }.saved-sidebar { position:fixed; z-index:20; inset:72px 0 0 auto; width:min(360px,92vw); box-shadow:-8px 0 24px rgba(25,45,75,.16); }.preview-grid { grid-template-columns:1fr; } }
+@media (max-width:900px) { .main-layout { grid-template-columns:1fr; }.main-layout.sidebar-docked { grid-template-columns:1fr; }.saved-sidebar { position:fixed; z-index:20; inset:72px 0 0 auto; width:min(360px,92vw); box-shadow:-8px 0 24px rgba(25,45,75,.16); }.saved-sidebar.docked { width:32px; box-shadow:none; }.preview-grid { grid-template-columns:1fr; } }
 @media (max-width:640px) { .page-heading,.action-row { align-items:stretch; flex-direction:column; }.heading-actions .el-button { flex:1; }.cascade-grid,.form-grid,.manual-grid { grid-template-columns:1fr; }.action-hint { margin-left:0; }.selection-summary code { margin-left:0; } }
 </style>

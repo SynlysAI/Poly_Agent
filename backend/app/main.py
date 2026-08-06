@@ -104,6 +104,8 @@ def _map_http_error(status_code: int) -> tuple[int, str]:
         return 40101, "unauthorized"
     if status_code == 404:
         return 40401, "resource not found"
+    if status_code == 409:
+        return 40901, "conflict"
     if status_code == 422:
         return 42201, "validation failed"
     if status_code == 502:

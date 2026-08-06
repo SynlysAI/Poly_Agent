@@ -233,17 +233,12 @@ class AlgorithmPackageService:
         owner_user_id: str | None = None,
         visibility: str | None = None,
         target_algorithm_id: str | None = None,
-        target_version: str | None = None,
     ) -> AlgorithmPackage:
         """保存上传 ZIP，返回包记录。"""
         if not filename.endswith(".zip"):
             raise HTTPException(status_code=422, detail="仅支持 .zip 算法包")
         if len(content) > MAX_PACKAGE_BYTES:
             raise HTTPException(status_code=413, detail="算法包超过 20MB 限制")
-        if target_version:
-            content = self._rewrite_contract_version(content, target_version)
-        if len(content) > MAX_PACKAGE_BYTES:
-            raise HTTPException(status_code=413, detail="重写版本后的算法包超过 20MB 限制")
         contract_metadata = self._peek_contract_metadata(content)
         normalized_visibility = self._normalize_visibility(
             visibility or contract_metadata.get("visibility") or "private"
@@ -285,39 +280,52 @@ class AlgorithmPackageService:
         AlgorithmPackageRepository.save("package_id", doc)
         return AlgorithmPackage(**doc)
 
-    def _rewrite_contract_version(self, content: bytes, version: str) -> bytes:
-        """Rewrite only the semantic version in a targeted standard ZIP upload."""
-        try:
-            source_buffer = io.BytesIO(content)
-            output = io.BytesIO()
-            with zipfile.ZipFile(source_buffer) as source_zip:
-                if CONTRACT_FILENAME not in source_zip.namelist():
-                    raise HTTPException(status_code=422, detail=f"算法包缺少 {CONTRACT_FILENAME}")
-                contract = yaml.safe_load(source_zip.read(CONTRACT_FILENAME)) or {}
-                contract["version"] = version.strip()
-                with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
-                    for member in source_zip.infolist():
-                        if member.is_dir():
-                            continue
-                        if member.filename == CONTRACT_FILENAME:
-                            target_zip.writestr(
-                                CONTRACT_FILENAME,
-                                yaml.safe_dump(contract, allow_unicode=True, sort_keys=False),
-                            )
-                        else:
-                            target_zip.writestr(member, source_zip.read(member.filename))
-            return output.getvalue()
-        except HTTPException:
-            raise
-        except (zipfile.BadZipFile, yaml.YAMLError) as exc:
-            raise HTTPException(status_code=422, detail=f"无法读取算法包契约: {exc}") from exc
-
     def get_package(self, package_id: str) -> AlgorithmPackage:
         """获取算法包记录。"""
         doc = AlgorithmPackageRepository.find_one({"package_id": package_id})
         if not doc:
             raise HTTPException(status_code=404, detail=f"算法包 '{package_id}' 不存在")
         return AlgorithmPackage(**doc)
+
+    def inspect_package(self, content: bytes) -> dict[str, Any]:
+        """只读检查算法包契约元数据，不落库、不触发校验。
+
+        Args:
+            content: 用户上传的算法包 ZIP 字节内容。
+
+        Returns:
+            契约元数据字典，包含 algorithm_id/name/version/contract_version/visibility。
+
+        Raises:
+            HTTPException: 包超过 20MB 限制返回 413；ZIP 非法、缺少契约文件或
+                契约缺少 version 时返回 422。
+        """
+        if len(content) > MAX_PACKAGE_BYTES:
+            raise HTTPException(status_code=413, detail="算法包超过 20MB 限制")
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as source_zip:
+                if CONTRACT_FILENAME not in source_zip.namelist():
+                    raise HTTPException(status_code=422, detail=f"算法包缺少 {CONTRACT_FILENAME}")
+                contract = yaml.safe_load(source_zip.read(CONTRACT_FILENAME)) or {}
+        except HTTPException:
+            raise
+        except (zipfile.BadZipFile, yaml.YAMLError) as exc:
+            raise HTTPException(status_code=422, detail=f"无法读取算法包契约: {exc}") from exc
+        if not isinstance(contract, dict):
+            raise HTTPException(status_code=422, detail="算法包契约格式非法")
+        version = str(contract.get("version") or "").strip()
+        if not version:
+            raise HTTPException(status_code=422, detail="算法包契约缺少 version 字段")
+        visibility = str(contract.get("visibility") or "").strip().lower() or None
+        if visibility is not None:
+            visibility = self._normalize_visibility(visibility)
+        return {
+            "algorithm_id": str(contract.get("algorithm_id") or "").strip() or None,
+            "name": str(contract.get("name") or "").strip() or None,
+            "version": version,
+            "contract_version": str(contract.get("contract_version") or "").strip() or None,
+            "visibility": visibility,
+        }
 
     def download_package(self, package_id: str) -> tuple[str, bytes]:
         """读取已上传或平台生成的标准算法 ZIP。"""
@@ -1537,7 +1545,9 @@ class AlgorithmPackageService:
                 continue
         return {
             "algorithm_id": str(contract.get("algorithm_id") or "").strip() or None,
+            "name": str(contract.get("name") or "").strip() or None,
             "version": str(contract.get("version") or "").strip() or None,
+            "contract_version": str(contract.get("contract_version") or "").strip() or None,
             "visibility": str(contract.get("visibility") or "").strip().lower() or None,
             "resource_assets": resource_assets,
             "contributors": [
