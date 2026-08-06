@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -32,6 +33,13 @@ from app.schemas.experiment_dispatch_profile import (  # noqa: E402
     ExperimentDispatchProfileEvaluationRequest,
     ExperimentDispatchProfileSaveRequest,
     ExperimentDispatchProfileUpdateRequest,
+)
+from app.schemas.experiment_dispatch import (  # noqa: E402
+    ExperimentDispatchManifest,
+    ExperimentDispatchProfileRef,
+    ExperimentDispatchProvenance,
+    ExperimentDispatchSource,
+    ExperimentDispatchTargetRef,
 )
 from app.services.experiment_dispatch_profile_service import (  # noqa: E402
     ExperimentDispatchProfileService,
@@ -186,16 +194,141 @@ class ExperimentDispatchProfileServiceTest(TestCase):
             )
         self.assertEqual(ctx.exception.status_code, 409)
 
-        saved = self.service.save_dispatch(
-            ExperimentDispatchProfileSaveRequest(
-                **evaluation_request.model_dump(),
-                preview_digest=evaluation.preview_digest,
-            ),
-            actor_user_id="owner-a",
-            is_admin=False,
-        )
-        self.assertEqual(saved.status, "prepared")
+        with patch(
+            "app.services.experiment_dispatch_profile_service.speclabos_dispatch_service.dispatch",
+            return_value={
+                "dispatch_id": "speclabos_dispatch_1",
+                "status": "received",
+                "received_at": "2026-08-06T12:00:00Z",
+            },
+        ) as dispatch_mock:
+            saved = self.service.save_dispatch(
+                ExperimentDispatchProfileSaveRequest(
+                    **evaluation_request.model_dump(),
+                    preview_digest=evaluation.preview_digest,
+                ),
+                actor_user_id="owner-a",
+                is_admin=False,
+            )
+        self.assertEqual(saved.status, "accepted")
         self.assertEqual(saved.payload, {"result": 42})
+        self.assertEqual(saved.external_receipt.dispatch_id, "speclabos_dispatch_1")
+        dispatch_payload = dispatch_mock.call_args.args[0]
+        self.assertEqual(dispatch_payload["source_module"], "experiment_dispatch")
+        self.assertEqual(dispatch_payload["source_reference"]["run_id"], "arun_profile_test")
+        self.assertEqual(dispatch_payload["conditions"][0]["parameters"], {"result": 42})
+
+    def test_speclabos_payload_keeps_configured_external_request_shape(self) -> None:
+        external_payload = {
+            "source_system": "polyagent",
+            "source_module": "pi_synthesis_dispatch",
+            "source_reference": {},
+            "experiment_name": "PI synthesis",
+            "experiment_object": {"name": "PI synthesis", "type": "synthesis"},
+            "experiment_content": "下发 PI 合成实验清单",
+            "conditions": [
+                {
+                    "condition_id": "condition-1",
+                    "parameters": {"selected_process": "P05", "temperature_c": 30},
+                    "metadata": {},
+                }
+            ],
+            "optimization_context": {"instruction_set_path": "ChASM/PI-P05.chasm"},
+            "extra_metadata": {},
+        }
+        manifest = ExperimentDispatchManifest(
+            dispatch_id="edsp_external_shape",
+            status="prepared",
+            source=ExperimentDispatchSource(
+                run_id="arun_profile_test",
+                algorithm_id="example_predictor",
+                algorithm_version_id="aiv_1",
+            ),
+            profile=ExperimentDispatchProfileRef(
+                profile_id="pi_synthesis_dispatch",
+                profile_version="1.0.0",
+            ),
+            target=ExperimentDispatchTargetRef(
+                target_id="speclabos_external_experiment_dispatch",
+                target_version="1.0.0",
+            ),
+            experiment_name="PI synthesis",
+            payload=external_payload,
+            provenance=ExperimentDispatchProvenance(),
+            created_by="owner-a",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        dispatch_payload = self.service._build_speclabos_payload(manifest)
+
+        self.assertEqual(dispatch_payload["source_module"], "pi_synthesis_dispatch")
+        self.assertEqual(
+            dispatch_payload["conditions"][0]["parameters"],
+            {"selected_process": "P05", "temperature_c": 30},
+        )
+        self.assertEqual(
+            dispatch_payload["source_reference"]["local_dispatch_id"],
+            "edsp_external_shape",
+        )
+
+    def test_speclabos_payload_normalizes_shorthand_conditions(self) -> None:
+        external_payload = {
+            "source_system": "polyagent",
+            "source_module": "pi_synthesis_dispatch",
+            "source_reference": {},
+            "experiment_name": "PI synthesis",
+            "experiment_object": {"name": "PI synthesis", "type": "synthesis"},
+            "conditions": [
+                {
+                    "process_id": "PI-P08",
+                    "temperature_c": 55,
+                    "reaction_time_h": 42,
+                    "solvent_volume_ml": 60,
+                }
+            ],
+            "optimization_context": {},
+            "extra_metadata": {},
+        }
+        manifest = ExperimentDispatchManifest(
+            dispatch_id="edsp_shorthand_conditions",
+            status="prepared",
+            source=ExperimentDispatchSource(
+                run_id="arun_profile_test",
+                algorithm_id="example_predictor",
+                algorithm_version_id="aiv_1",
+            ),
+            profile=ExperimentDispatchProfileRef(
+                profile_id="pi_synthesis_dispatch",
+                profile_version="1.0.0",
+            ),
+            target=ExperimentDispatchTargetRef(
+                target_id="speclabos_external_experiment_dispatch",
+                target_version="1.0.0",
+            ),
+            experiment_name="PI synthesis",
+            payload=external_payload,
+            provenance=ExperimentDispatchProvenance(),
+            created_by="owner-a",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        dispatch_payload = self.service._build_speclabos_payload(manifest)
+
+        self.assertEqual(
+            dispatch_payload["conditions"],
+            [
+                {
+                    "condition_id": "edsp_shorthand_conditions-condition-1",
+                    "parameters": {
+                        "process_id": "PI-P08",
+                        "temperature_c": 55,
+                        "reaction_time_h": 42,
+                        "solvent_volume_ml": 60,
+                    },
+                    "metadata": {"local_dispatch_id": "edsp_shorthand_conditions"},
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

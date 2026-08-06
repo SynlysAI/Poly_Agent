@@ -76,7 +76,9 @@ const historyItems = computed(() => {
 const outputPayload = computed(() => evaluation.value?.result?.payload || {})
 const outputRows = computed(() => Object.entries(outputPayload.value).map(([key, value]) => ({ key, value })))
 const outputPreviewRows = computed(() => outputRows.value.slice(0, 5))
-const dispatchId = computed(() => evaluation.value?.saved_manifest?.dispatch_id || '')
+const savedManifest = computed(() => evaluation.value?.saved_manifest || null)
+const dispatchId = computed(() => savedManifest.value?.dispatch_id || '')
+const externalReceipt = computed(() => savedManifest.value?.external_receipt || null)
 const globalSearching = computed(() => filters.keyword.trim().length > 0)
 const integration = computed(() => {
   const serviceKey = selectedTarget.value?.service_key
@@ -164,8 +166,11 @@ async function runDispatch() {
     const saved = await saveProfileExperimentDispatch({ run_id: form.runId, profile_id: selectedProfile.value.profile_id, profile_version: selectedProfile.value.version, manual_values: form.manualValues, preview_digest: evaluationData.preview_digest, experiment_name: form.experimentName || null, experiment_notes: form.experimentNotes || null })
     await loadHistory()
     evaluation.value = { ...evaluationData, saved_manifest: saved }
-    ElMessage.success('已解析并下发保存，状态为“已保存、未下发”')
-  } catch (error) { ElMessage.error(getApiErrorMessage(error)) } finally { saveLoading.value = false }
+    ElMessage.success(`已解析并下发，SpecLabOS 已接收：${saved.external_receipt?.dispatch_id || saved.dispatch_id}`)
+  } catch (error) {
+    await loadHistory().catch(() => {})
+    ElMessage.error(`下发失败：${getApiErrorMessage(error)}`)
+  } finally { saveLoading.value = false }
 }
 
 function openProfiles() { router.push('/optimization/experiment-dispatch/profiles') }
@@ -189,7 +194,8 @@ function handleTourFinish() { tourVisible.value = false }
 function handleTourChange(current) { tourIndex.value = current }
 function formatDate(value) { return formatApiDateTime(value) }
 function displayValue(value) { return typeof value === 'object' ? JSON.stringify(value) : String(value ?? '-') }
-function statusType(status) { return { prepared: 'success', sent: 'warning', accepted: 'success', failed: 'danger' }[status] || 'info' }
+function statusType(status) { return { prepared: 'info', sent: 'warning', accepted: 'success', failed: 'danger' }[status] || 'info' }
+function statusLabel(status) { return { prepared: '已保存、未下发', sent: '下发中', accepted: 'SpecLabOS 已接收', failed: '下发失败' }[status] || status }
 function maskEndpoint(value) {
   try { const url = new URL(value); return `${url.protocol}//${url.host}${url.pathname}` } catch { return String(value || '').replace(/([?&](?:key|token|secret)=)[^&]+/ig, '$1***') }
 }
@@ -293,10 +299,10 @@ onMounted(loadReference)
         <section class="panel step-card">
           <div class="step-card-header"><span class="step-badge">3</span><div class="step-card-title"><h3 class="panel-title">解析并下发</h3><p class="panel-caption">选好 Run 和下发配置后，一键生成可追溯的执行清单</p></div><el-tag v-if="evaluation" :type="evaluation.result?.is_valid ? 'success' : 'danger'">{{ evaluation.result?.is_valid ? '校验通过' : '禁止保存' }}</el-tag></div>
           <div class="panel-body">
-            <div class="action-row"><div class="action-info"><strong>一键解析并下发</strong><span>保存后状态为“已保存、未下发”，不会发起外部请求</span></div><div class="action-buttons"><el-button :loading="previewLoading" :disabled="!form.runId || !selectedProfile" @click="generatePreview">仅预览</el-button><el-button type="primary" class="primary-action tour-step-action" :loading="saveLoading" :disabled="!form.runId || !selectedProfile" @click="runDispatch"><el-icon><DocumentChecked /></el-icon>一键解析并下发</el-button></div></div>
+          <div class="action-row"><div class="action-info"><strong>一键解析并下发</strong><span>保存清单后调用 SpecLabOS，成功后记录接收回执</span></div><div class="action-buttons"><el-button :loading="previewLoading" :disabled="!form.runId || !selectedProfile" @click="generatePreview">仅预览</el-button><el-button type="primary" class="primary-action tour-step-action" :loading="saveLoading" :disabled="!form.runId || !selectedProfile" @click="runDispatch"><el-icon><DocumentChecked /></el-icon>一键解析并下发</el-button></div></div>
             <div v-if="evaluation" class="preview-block">
               <p class="preview-target">目标接口：{{ selectedTarget?.name || evaluation.target_id }} · v{{ evaluation.target_version }}</p>
-          <div class="panel-body preview-body"><el-alert v-if="evaluation.result?.errors?.length" type="error" :closable="false" show-icon><template #title>阻断问题，未保存</template><template #default><div v-for="error in evaluation.result.errors" :key="error">{{ error }}</div></template></el-alert><el-alert v-if="evaluation.result?.warnings?.length" type="warning" :closable="false" show-icon><template #default><div v-for="warning in evaluation.result.warnings" :key="warning">{{ warning }}</div></template></el-alert><div class="preview-grid"><div><h4>输出摘要</h4><ul v-if="outputPreviewRows.length" class="output-list"><li v-for="row in outputPreviewRows" :key="row.key"><code>{{ row.key }}</code><span>{{ displayValue(row.value) }}</span></li></ul><p class="output-count">共 {{ outputRows.length }} 个输出参数</p><el-collapse><el-collapse-item :title="`查看全部参数（${outputRows.length}）`" name="all"><el-table :data="outputRows" size="small" border><el-table-column prop="key" label="参数" min-width="170" /><el-table-column label="值"><template #default="{ row }"><code>{{ displayValue(row.value) }}</code></template></el-table-column></el-table></el-collapse-item><el-collapse-item title="映射追踪与原始 JSON" name="trace"><pre class="json-view">{{ JSON.stringify({ trace: evaluation.result?.trace || [], matched_rules: evaluation.result?.matched_rules || [], payload: evaluation.result?.payload || {} }, null, 2) }}</pre></el-collapse-item></el-collapse></div><div><h4>执行状态</h4><div class="result-facts"><div><span>目标接口</span><strong>{{ selectedTarget?.name || evaluation.target_id }}<small>v{{ evaluation.target_version }}</small></strong></div><div><span>命中分支</span><strong>{{ evaluation.result?.matched_rules?.length || 0 }}</strong></div><div><span>输出参数</span><strong>{{ outputRows.length }}</strong></div><div><span>下发状态</span><el-tag :type="dispatchId ? 'success' : 'info'" size="small">{{ dispatchId ? '已保存、未下发' : '未保存' }}</el-tag></div><div v-if="dispatchId" class="fact-wide"><span>清单 ID</span><code>{{ dispatchId }}</code></div></div></div></div></div>
+          <div class="panel-body preview-body"><el-alert v-if="evaluation.result?.errors?.length" type="error" :closable="false" show-icon><template #title>阻断问题，未保存</template><template #default><div v-for="error in evaluation.result.errors" :key="error">{{ error }}</div></template></el-alert><el-alert v-if="evaluation.result?.warnings?.length" type="warning" :closable="false" show-icon><template #default><div v-for="warning in evaluation.result.warnings" :key="warning">{{ warning }}</div></template></el-alert><div class="preview-grid"><div><h4>输出摘要</h4><ul v-if="outputPreviewRows.length" class="output-list"><li v-for="row in outputPreviewRows" :key="row.key"><code>{{ row.key }}</code><span>{{ displayValue(row.value) }}</span></li></ul><p class="output-count">共 {{ outputRows.length }} 个输出参数</p><el-collapse><el-collapse-item :title="`查看全部参数（${outputRows.length}）`" name="all"><el-table :data="outputRows" size="small" border><el-table-column prop="key" label="参数" min-width="170" /><el-table-column label="值"><template #default="{ row }"><code>{{ displayValue(row.value) }}</code></template></el-table-column></el-table></el-collapse-item><el-collapse-item title="映射追踪与原始 JSON" name="trace"><pre class="json-view">{{ JSON.stringify({ trace: evaluation.result?.trace || [], matched_rules: evaluation.result?.matched_rules || [], payload: evaluation.result?.payload || {} }, null, 2) }}</pre></el-collapse-item></el-collapse></div><div><h4>执行状态</h4><div class="result-facts"><div><span>目标接口</span><strong>{{ selectedTarget?.name || evaluation.target_id }}<small>v{{ evaluation.target_version }}</small></strong></div><div><span>命中分支</span><strong>{{ evaluation.result?.matched_rules?.length || 0 }}</strong></div><div><span>输出参数</span><strong>{{ outputRows.length }}</strong></div><div><span>下发状态</span><el-tag :type="savedManifest ? statusType(savedManifest.status) : 'info'" size="small">{{ savedManifest ? statusLabel(savedManifest.status) : '未保存' }}</el-tag></div><div v-if="dispatchId" class="fact-wide"><span>本地清单 ID</span><code>{{ dispatchId }}</code></div><div v-if="externalReceipt" class="fact-wide"><span>SpecLabOS 接收 ID</span><code>{{ externalReceipt.dispatch_id }}</code></div></div></div></div></div>
             </div>
           </div>
         </section>
@@ -316,14 +322,14 @@ onMounted(loadReference)
               <el-table v-loading="historyLoading" :data="historyItems" size="small" :show-header="false" empty-text="暂无已保存清单">
                 <el-table-column>
                   <template #default="{ row }">
-                    <button class="saved-item" type="button" @click="openDetail(row)"><strong>{{ row.experiment_name || row.profile_id || row.template_id || '未命名实验' }}</strong><span>{{ row.run_id }} · {{ formatDate(row.created_at) }}</span><el-tag :type="statusType(row.status)" size="small">{{ row.status === 'prepared' ? '已保存、未下发' : row.status }}</el-tag></button>
+                    <button class="saved-item" type="button" @click="openDetail(row)"><strong>{{ row.experiment_name || row.profile_id || row.template_id || '未命名实验' }}</strong><span>{{ row.run_id }} · {{ formatDate(row.created_at) }}</span><el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag></button>
                   </template>
                 </el-table-column>
               </el-table>
             </el-tab-pane>
             <el-tab-pane label="接口预览" name="interface">
               <div class="interface-preview">
-                <el-alert title="本期不会发起 SpecLabOS 请求" type="info" :closable="false" />
+                <el-alert title="点击一键解析并下发后会调用 SpecLabOS 接收接口" type="info" :closable="false" />
                 <dl><dt>目标系统</dt><dd>{{ selectedTarget?.name || '未选择' }}</dd><dt>HTTP</dt><dd>{{ selectedTarget?.method || 'POST' }} {{ selectedTarget?.path || '-' }}</dd><dt>服务配置</dt><dd>{{ integration?.endpoint ? maskEndpoint(integration.endpoint) : '由工具服务配置管理' }}</dd></dl>
                 <h4>请求 payload</h4><pre class="json-view">{{ JSON.stringify(outputPayload, null, 2) }}</pre>
                 <h4>预期响应</h4><pre class="json-view">{{ JSON.stringify(selectedTarget?.response_schema || {}, null, 2) }}</pre>
@@ -340,13 +346,13 @@ onMounted(loadReference)
       </aside>
     </div>
 
-    <el-drawer v-model="detailVisible" title="已保存清单详情" size="min(760px, 94vw)"><template v-if="detail"><el-descriptions :column="1" border size="small"><el-descriptions-item label="Dispatch ID">{{ detail.dispatch_id }}</el-descriptions-item><el-descriptions-item label="Run ID">{{ detail.source?.run_id }}</el-descriptions-item><el-descriptions-item label="配置">{{ detail.profile?.profile_id || detail.template?.template_id }} · v{{ detail.profile?.profile_version || detail.template?.template_version }}</el-descriptions-item><el-descriptions-item label="状态"><el-tag type="info">已保存、未下发</el-tag></el-descriptions-item></el-descriptions><h4>请求 payload</h4><pre class="json-view">{{ JSON.stringify(detail.payload || detail.parameters || {}, null, 2) }}</pre><el-button :icon="Download" @click="downloadDispatch(detail.dispatch_id)">导出 JSON</el-button></template></el-drawer>
+    <el-drawer v-model="detailVisible" title="已保存清单详情" size="min(760px, 94vw)"><template v-if="detail"><el-descriptions :column="1" border size="small"><el-descriptions-item label="Dispatch ID">{{ detail.dispatch_id }}</el-descriptions-item><el-descriptions-item label="Run ID">{{ detail.source?.run_id }}</el-descriptions-item><el-descriptions-item label="配置">{{ detail.profile?.profile_id || detail.template?.template_id }} · v{{ detail.profile?.profile_version || detail.template?.template_version }}</el-descriptions-item><el-descriptions-item label="状态"><el-tag :type="statusType(detail.status)">{{ statusLabel(detail.status) }}</el-tag></el-descriptions-item><el-descriptions-item v-if="detail.external_receipt" label="SpecLabOS ID">{{ detail.external_receipt.dispatch_id }} · {{ detail.external_receipt.received_at }}</el-descriptions-item><el-descriptions-item v-if="detail.dispatch_error" label="失败原因">{{ detail.dispatch_error }}</el-descriptions-item></el-descriptions><h4>请求 payload</h4><pre class="json-view">{{ JSON.stringify(detail.payload || detail.parameters || {}, null, 2) }}</pre><el-button :icon="Download" @click="downloadDispatch(detail.dispatch_id)">导出 JSON</el-button></template></el-drawer>
 
     <el-tour v-model="tourVisible" :mask="true" @close="handleTourClose" @finish="handleTourFinish" @change="handleTourChange">
       <el-tour-step title="欢迎使用实验方案转发台" :target="guideBannerRef" description="这里会把已完成 Run 转换为实验接口的执行清单，全程可追溯；流程分三步完成。" :next-button-props="tourNextButtonProps" :prev-button-props="tourPrevButtonProps" />
       <el-tour-step title="第 1 步 · 选择已完成 Run" target=".tour-step-run" description="支持关键词全局搜索，也可按算法族与算法筛选；选中后自动进入下一步。" :next-button-props="tourNextButtonProps" :prev-button-props="tourPrevButtonProps" />
       <el-tour-step title="第 2 步 · 选择下发配置" target=".tour-step-profile" description="配置内含参数映射、条件分支与目标接口版本；可在下方展开附加信息。" :next-button-props="tourNextButtonProps" :prev-button-props="tourPrevButtonProps" />
-      <el-tour-step title="第 3 步 · 解析并下发" target=".tour-step-action" description="先“仅预览”校验结果，通过后一键解析并保存为执行清单，不会发起外部请求。" :next-button-props="tourNextButtonProps" :prev-button-props="tourPrevButtonProps" />
+      <el-tour-step title="第 3 步 · 解析并下发" target=".tour-step-action" description="先“仅预览”校验结果，通过后一键解析、保存清单并调用 SpecLabOS 接收接口。" :next-button-props="tourNextButtonProps" :prev-button-props="tourPrevButtonProps" />
       <el-tour-step title="工作区侧栏" target=".saved-sidebar" description="展开侧栏可查看已保存清单、接口预览与请求 payload。" :next-button-props="tourNextButtonProps" :prev-button-props="tourPrevButtonProps" />
     </el-tour>
   </div>

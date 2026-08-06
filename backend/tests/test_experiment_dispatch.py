@@ -24,8 +24,10 @@ from app.services.experiment_dispatch_service import experiment_dispatch_service
 class ExperimentDispatchTest(TestCase):
     def setUp(self) -> None:
         self.original_require_mongodb = settings.require_mongodb
+        self.original_auth_enabled = settings.auth_enabled
         self.original_demo_store_path = demo_store.path
         settings.require_mongodb = False
+        settings.auth_enabled = False
         demo_store.path = Path(self.id().replace(".", "_") + ".json").resolve()
         self.mongo_unavailable = patch("app.infra.computation_repositories._mongo_unavailable", True)
         self.mongo_unavailable.start()
@@ -47,6 +49,7 @@ class ExperimentDispatchTest(TestCase):
     def tearDown(self) -> None:
         self.mongo_unavailable.stop()
         settings.require_mongodb = self.original_require_mongodb
+        settings.auth_enabled = self.original_auth_enabled
         demo_store.path.unlink(missing_ok=True)
         demo_store.path = self.original_demo_store_path
 
