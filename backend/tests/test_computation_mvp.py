@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 import os
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,8 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import HTTPException
 
+from app.core.auth import build_access_token
 from app.core.config import settings
 from app.schemas.computation import ComputationCreateRequest
+from app.schemas.identity_runtime import UserRecord
 from app.schemas.optimization import CampaignCreateRequest
 from app.schemas.optimization import CandidateImportRequest
 from app.schemas.optimization import ObservationCreateRequest
@@ -159,6 +163,77 @@ class ComputationMvpSmokeTest(ComputationTestCase):
         relative_path = artifact_path.relative_to(settings.outputs_root)
         static_resp = self.client.get(f"/static/outputs/{relative_path.as_posix()}")
         self.assertEqual(static_resp.status_code, 404)
+
+    def test_artifact_download_endpoint_supports_query_token_when_auth_enabled(self) -> None:
+        service = ComputationService()
+        created = service.create_run(
+            ComputationCreateRequest(
+                workflow_type="LOCAL_STRUCTURE",
+                engine="LOCAL",
+                molecule={"smiles": "CCO", "name": "query-token-owned"},
+            ),
+            actor_user_id="owner_query",
+            request_id="req-query-token-create",
+        )
+        self._run_local_structure_worker()
+        artifacts = service.list_artifacts(created.run_id, actor_user_id="owner_query", is_admin=False)
+        artifact = next(item for item in artifacts if item.artifact_type == "structure_json")
+        url = f"/api/v1/artifacts/{artifact.artifact_id}/download"
+
+        owner_token, _ = build_access_token("owner_query", "Owner", "user")
+        other_token, _ = build_access_token("other_query", "Other", "user")
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+
+        def fake_find_by_user_id(user_id: str) -> UserRecord | None:
+            if user_id not in {"owner_query", "other_query"}:
+                return None
+            return UserRecord(
+                user_id=user_id,
+                username="Owner" if user_id == "owner_query" else "Other",
+                password_hash="unused",
+                role="user",
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
+
+        original_auth_enabled = settings.auth_enabled
+        settings.auth_enabled = True
+        try:
+            with patch(
+                "app.infra.repositories.UserRepository.find_by_user_id",
+                side_effect=fake_find_by_user_id,
+            ):
+                no_creds_resp = self.client.get(url)
+                self.assertEqual(no_creds_resp.status_code, 401)
+
+                header_resp = self.client.get(url, headers={"Authorization": f"Bearer {owner_token}"})
+                self.assertEqual(header_resp.status_code, 200)
+
+                query_resp = self.client.get(f"{url}?token={owner_token}")
+                self.assertEqual(query_resp.status_code, 200)
+                audits = service.list_audit_events(
+                    entity_type=None,
+                    entity_id=artifact.artifact_id,
+                    event_type="artifact.downloaded",
+                    page=1,
+                    page_size=20,
+                ).items
+                self.assertTrue(any(item.actor_user_id == "owner_query" for item in audits))
+
+                invalid_resp = self.client.get(f"{url}?token=not-a-valid-token")
+                self.assertEqual(invalid_resp.status_code, 401)
+
+                non_owner_resp = self.client.get(f"{url}?token={other_token}")
+                self.assertEqual(non_owner_resp.status_code, 403)
+
+                header_wins_resp = self.client.get(
+                    f"{url}?token={other_token}",
+                    headers={"Authorization": f"Bearer {owner_token}"},
+                )
+                self.assertEqual(header_wins_resp.status_code, 200)
+        finally:
+            settings.auth_enabled = original_auth_enabled
 
     def test_auth_enabled_scopes_runs_artifacts_campaigns_and_audit(self) -> None:
         computation_service = ComputationService()

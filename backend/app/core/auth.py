@@ -10,6 +10,7 @@ import time
 
 from fastapi import Header
 from fastapi import HTTPException
+from fastapi import Query
 
 from app.core.config import settings
 from app.infra.repositories import UserRepository
@@ -170,6 +171,33 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict[s
         return None
     token = _parse_authorization_token(authorization)
     payload = parse_access_token(token)
+    return _build_current_user_context(str(payload["sub"]))
+
+
+def get_current_user_with_query_token(
+    authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+) -> dict[str, str] | None:
+    """解析当前请求对应的登录用户，支持 query token 直链降级。
+
+    Authorization 头优先；头缺失时兼容 ``?token=<access_token>``，
+    用于原生链接/新标签页等无法携带请求头的下载场景。
+
+    Args:
+        authorization: 请求头中的 Authorization 值。
+        token: query 参数中的访问令牌；仅在头缺失时作为降级来源。
+
+    Returns:
+        当前登录用户信息；未启用登录时返回 `None`。
+    """
+    if not settings.auth_enabled:
+        return None
+    if not authorization:
+        if not token:
+            raise HTTPException(status_code=401, detail="未登录或登录已失效")
+        authorization = f"{AUTH_SCHEME} {token}"
+    parsed = _parse_authorization_token(authorization)
+    payload = parse_access_token(parsed)
     return _build_current_user_context(str(payload["sub"]))
 
 

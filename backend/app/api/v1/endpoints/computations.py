@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
 
-from app.core.auth import get_current_user, require_admin
+from app.core.auth import get_current_user, get_current_user_with_query_token, require_admin
 from app.core.config import settings
 from app.schemas.common import ApiResponse
 from app.schemas.computation import (
@@ -261,7 +261,7 @@ def get_artifact_spectrum(
 def download_artifact(
     artifact_id: str,
     request: Request,
-    current_user: dict[str, str] | None = Depends(get_current_user),
+    current_user: dict[str, str] | None = Depends(get_current_user_with_query_token),
 ) -> FileResponse:
     """下载 artifact 文件。"""
     artifact = service.get_artifact(
