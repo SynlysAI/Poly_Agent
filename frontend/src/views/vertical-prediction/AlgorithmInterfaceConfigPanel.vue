@@ -1,7 +1,7 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Check, Delete, Link, Plus, Promotion } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Check, Delete, Link, MagicStick, Plus, Promotion, VideoPlay } from '@element-plus/icons-vue'
 
 import {
   activateAlgorithmInterfaceVersion,
@@ -11,6 +11,7 @@ import {
   testAlgorithmInterface,
   updateAlgorithmInterfaceVersion,
 } from '../../api/polyAgentApi'
+import { INTERFACE_CONFIG_EXAMPLES } from '../../utils/interfaceConfigExamples.mjs'
 import { interfaceProtocolLabel, suggestNextPatch } from '../../utils/verticalPredictionState.mjs'
 
 const props = defineProps({
@@ -37,8 +38,108 @@ const stepItems = [
   { title: '请求映射', description: '绑定参数、Header 和密钥引用' },
   { title: '样例测试', description: '保存、验证并激活版本' },
 ]
+const examples = INTERFACE_CONFIG_EXAMPLES
+const activeExampleId = ref('')
+const showGuide = computed(() => sessionMode.value === 'new_interface')
+const tourVisible = ref(false)
+const guideExpanded = ref(false)
+const guidePromptVisible = ref(true)
+const guideBannerRef = ref(null)
+const wizardShellRef = ref(null)
+const desktopStepsVisible = ref(true)
+const tourStepTargets = [
+  () => guideBannerRef.value,
+  () => (desktopStepsVisible.value ? '.desktop-steps .el-step:nth-child(1)' : wizardShellRef.value),
+  () => (desktopStepsVisible.value ? '.desktop-steps .el-step:nth-child(2)' : wizardShellRef.value),
+  () => (desktopStepsVisible.value ? '.desktop-steps .el-step:nth-child(3)' : wizardShellRef.value),
+  () => (desktopStepsVisible.value ? '.desktop-steps .el-step:nth-child(4)' : wizardShellRef.value),
+  () => (desktopStepsVisible.value ? '.desktop-steps .el-step:nth-child(5)' : wizardShellRef.value),
+]
+const tourSteps = [
+  { title: '欢迎使用接口配置', description: '从示例场景一键填入，或直接手动填写。' },
+  { title: '第 1 步 · 模型信息', description: '登记模型身份与来源，来源会在模型中心展示。' },
+  { title: '第 2 步 · 接口地址', description: '选择协议，填写 endpoint 与响应提取路径。' },
+  { title: '第 3 步 · 输入输出', description: '声明输入输出字段，必填字段须在样例中给出。' },
+  { title: '第 4 步 · 请求映射', description: '绑定参数与 Header；密钥只填引用名，不存明文。' },
+  { title: '第 5 步 · 样例测试', description: '保存后测试，通过即可激活进入管理中心。' },
+]
 const canTest = computed(() => Boolean(savedVersion.value && form.protocol !== 'mcp'))
 const canActivate = computed(() => Boolean(canTest.value && testResult.value?.ok))
+
+function syncDesktopStepsVisibility() {
+  if (typeof window === 'undefined') return
+  desktopStepsVisible.value = window.matchMedia('(max-width: 680px)').matches === false
+}
+
+async function startTeaching() {
+  guideExpanded.value = true
+  guidePromptVisible.value = false
+  await nextTick()
+  tourVisible.value = true
+}
+
+function skipTeaching() {
+  guidePromptVisible.value = false
+}
+
+function toggleGuide() {
+  guideExpanded.value = !guideExpanded.value
+  guidePromptVisible.value = false
+}
+
+async function playTour() {
+  guideExpanded.value = true
+  guidePromptVisible.value = false
+  await nextTick()
+  tourVisible.value = true
+}
+
+function applyExample(example) {
+  const fill = example.form
+  form.algorithm_id = fill.algorithm_id
+  form.name = fill.name
+  form.version = fill.version
+  form.protocol = fill.protocol
+  form.endpoint_url = fill.endpoint_url
+  form.http_method = fill.http_method
+  form.timeout_seconds = fill.timeout_seconds
+  form.response_selector = fill.response_selector || ''
+  form.description = fill.description || ''
+  form.visibility = fill.visibility || 'private'
+  form.sample_input = JSON.stringify(fill.sample_input, null, 2)
+  form.developer = ''
+  form.developer_organization = ''
+  form.mentor_team = ''
+  form.developer_contact = ''
+  form.source_url = ''
+  form.citation = ''
+  form.logo_url = ''
+  inputFields.value = example.input_fields.map((row) => ({ ...row }))
+  outputFields.value = example.output_fields.map((row) => ({ ...row }))
+  queryBindings.value = rowsFromMap(example.query_bindings)
+  headerBindings.value = rowsFromMap(example.header_bindings)
+  staticHeaders.value = rowsFromMap(example.static_headers)
+  secretRefs.value = rowsFromMap(example.secret_refs)
+  savedVersion.value = null
+  testResult.value = null
+  currentStep.value = 0
+  activeExampleId.value = example.id
+  ElMessage.success(`已填入示例「${example.title}」，请确认接口地址后继续`)
+  if (example.notes?.length) ElMessage.info(example.notes.join('；'))
+}
+
+onMounted(() => {
+  syncDesktopStepsVisibility()
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', syncDesktopStepsVisibility)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', syncDesktopStepsVisibility)
+  }
+})
 
 const form = reactive({
   algorithm_id: 'remote_property_predictor',
@@ -372,7 +473,67 @@ async function activateConfig() {
       <el-button @click="emit('cancel')">返回管理中心</el-button>
     </header>
 
-    <section class="wizard-shell" aria-label="接口配置流程">
+    <template v-if="showGuide">
+      <section ref="guideBannerRef" class="guide-banner">
+        <div class="guide-bar" role="button" tabindex="0" :aria-expanded="guideExpanded" @click="toggleGuide" @keydown.enter="toggleGuide">
+          <div class="guide-icon"><el-icon><VideoPlay /></el-icon></div>
+          <div class="guide-copy">
+            <h2>教学引导</h2>
+            <p v-if="guidePromptVisible" class="guide-prompt">需要引导吗？</p>
+          </div>
+          <div class="guide-actions" @click.stop>
+            <template v-if="guidePromptVisible">
+              <el-button size="small" type="primary" :icon="VideoPlay" @click="startTeaching">开始教学</el-button>
+              <el-button size="small" text @click="skipTeaching">跳过</el-button>
+            </template>
+            <el-button v-else size="small" text type="primary" :icon="VideoPlay" @click="playTour">重新播放引导</el-button>
+            <el-button
+              size="small"
+              text
+              :aria-label="guideExpanded ? '收起引导' : '展开引导'"
+              :icon="guideExpanded ? ArrowUp : ArrowDown"
+              @click="toggleGuide"
+            />
+          </div>
+        </div>
+        <div v-show="guideExpanded" class="guide-body">
+          <p class="guide-intro">四步完成配置；可一键填入示例，再替换成你的真实服务。</p>
+          <div class="guide-examples">
+            <div class="examples-head">
+              <h3>示例场景 · 一键填入</h3>
+              <span>仅预填技术字段，来源与归属请在正式接入时填写</span>
+            </div>
+            <div class="example-cards">
+              <article
+                v-for="example in examples"
+                :key="example.id"
+                class="example-card"
+                :class="{ active: activeExampleId === example.id }"
+              >
+                <div class="example-card-head">
+                  <strong>{{ example.title }}</strong>
+                  <span>{{ example.tags.join(' · ') }}</span>
+                </div>
+                <p>{{ example.description }}</p>
+                <el-button size="small" type="primary" plain :icon="MagicStick" @click="applyExample(example)">
+                  {{ activeExampleId === example.id ? '已填入' : '填入此示例' }}
+                </el-button>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+    </template>
+    <el-alert
+      v-else
+      class="mode-tip"
+      type="info"
+      :closable="false"
+      show-icon
+      title="该模式沿用已登记模型信息与来源字段，仅可修改接口定义、输入输出、映射与样例；修改地址或协议请新建接口版本。"
+    />
+
+    <section ref="wizardShellRef" class="wizard-shell" aria-label="接口配置流程">
       <el-steps class="desktop-steps" :active="currentStep" finish-status="success" simple>
         <el-step v-for="(step, index) in stepItems" :key="step.title" :title="step.title">
           <template #description>{{ index === currentStep ? step.description : '' }}</template>
@@ -398,6 +559,13 @@ async function activateConfig() {
     <el-form label-position="top" class="config-form">
       <section v-if="currentStep === 0" class="form-band step-card">
         <div class="band-heading"><span>1</span><h2>模型信息</h2></div>
+        <el-alert
+          class="step-tip"
+          type="info"
+          :closable="false"
+          show-icon
+          title="来源与归属字段会展示在模型中心、详情页和结果附近；正式接入请填写真实开发者与机构，未提供授权 Logo 时使用文字来源牌。"
+        />
         <div class="form-grid three-cols">
         <el-form-item label="模型 ID"><el-input v-model="form.algorithm_id" :disabled="isNewVersion || isEditVersion" /></el-form-item>
           <el-form-item label="模型名称"><el-input v-model="form.name" :disabled="isNewVersion || isEditVersion" /></el-form-item>
@@ -419,6 +587,13 @@ async function activateConfig() {
       <section v-else-if="currentStep === 1" class="form-band step-card">
         <div class="band-heading"><span>2</span><h2>接口定义</h2></div>
         <p class="step-copy">接口配置会作为不可变版本保存；修改地址或协议时，请创建新的接口版本。</p>
+        <el-alert
+          class="step-tip"
+          type="info"
+          :closable="false"
+          show-icon
+          title="生产环境要求 HTTPS；本地调试可指向 127.0.0.1（需开发环境允许私网访问）。响应提取路径示例：data.prediction；留空表示使用完整 JSON。"
+        />
         <div class="form-grid three-cols">
           <el-form-item label="接口类型">
             <el-select v-model="form.protocol">
@@ -440,6 +615,13 @@ async function activateConfig() {
       <section v-else-if="currentStep === 2" class="form-band step-card">
         <div class="band-heading"><span>3</span><h2>输入输出</h2></div>
         <p class="step-copy">字段名会用于输入表单、请求映射和结果校验；必填字段必须出现在样例输入中。</p>
+        <el-alert
+          class="step-tip"
+          type="info"
+          :closable="false"
+          show-icon
+          title="字段名会生成输入表单并用于请求映射；必填字段必须出现在样例输入中，建议先想清楚请求与响应结构再配置。"
+        />
         <div class="schema-columns">
           <div class="schema-editor">
             <div class="editor-heading"><h3>输入字段</h3><el-button text :icon="Plus" @click="addField(inputFields)">添加</el-button></div>
@@ -467,6 +649,13 @@ async function activateConfig() {
       <section v-else-if="currentStep === 3" class="form-band step-card">
         <div class="band-heading"><span>4</span><h2>请求映射与凭据</h2></div>
         <p class="step-copy">密钥只填写环境变量或密钥引用名，平台不会保存或回显明文凭据。</p>
+        <el-alert
+          class="step-tip"
+          type="info"
+          :closable="false"
+          show-icon
+          title="密钥只填写环境变量或密钥引用名（如 MODEL_API_TOKEN），平台不保存明文；认证 Query/Header 不能从普通输入映射。"
+        />
         <div class="mapping-columns">
           <div v-for="group in [
             { title: 'Query 绑定', rows: queryBindings, keyPlaceholder: '远程参数', valuePlaceholder: '输入字段' },
@@ -487,6 +676,13 @@ async function activateConfig() {
 
       <section v-else class="form-band step-card">
         <div class="band-heading"><span>5</span><h2>样例测试与激活</h2></div>
+        <el-alert
+          class="step-tip"
+          type="info"
+          :closable="false"
+          show-icon
+          title="流程：保存配置 → 样例测试 → 激活并进入管理中心。接口版本不可变，修改地址或协议请新建版本。"
+        />
         <el-form-item label="样例输入" :error="sampleInputError"><el-input v-model="form.sample_input" type="textarea" :rows="8" class="json-input" /></el-form-item>
         <el-alert v-if="testResult?.ok" type="success" :closable="false" show-icon :title="`调用成功 · HTTP ${testResult.status_code} · ${testResult.latency_ms} ms`" />
         <el-alert v-else-if="testResult && !testResult.ok" type="error" :closable="false" show-icon :title="testResult.error_message || '样例测试未通过'" />
@@ -503,6 +699,16 @@ async function activateConfig() {
         <el-button type="primary" :icon="Promotion" :disabled="!canActivate" :loading="activating" @click="activateConfig">激活并进入管理中心</el-button>
       </template>
     </footer>
+
+    <el-tour v-model="tourVisible" :mask="true">
+      <el-tour-step
+        v-for="(step, index) in tourSteps"
+        :key="step.title"
+        :title="step.title"
+        :description="step.description"
+        :target="tourStepTargets[index]()"
+      />
+    </el-tour>
   </section>
 </template>
 
@@ -539,6 +745,29 @@ h3 { font-size: 14px; }
 .json-input :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .test-status { margin-top: 12px; color: var(--app-ink-muted); font-size: 13px; }
 .wizard-footer { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; padding: 2px 2px 8px; }
+.guide-banner { overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: linear-gradient(180deg, #ffffff 0%, #f4f8ff 100%); }
+.guide-bar { display: flex; align-items: center; gap: 14px; padding: 14px 18px; cursor: pointer; user-select: none; }
+.guide-icon { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: var(--app-radius-sm); background: var(--app-primary-light); color: var(--app-primary-active); font-size: 20px; }
+.guide-copy { min-width: 0; flex: 1 1 auto; }
+.guide-copy h2 { font-size: 16px; }
+.guide-copy p { margin: 4px 0 0; color: var(--app-ink-muted); font-size: 13px; line-height: 1.5; }
+.guide-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.guide-body { display: grid; gap: 20px; padding: 18px 18px 20px; border-top: 1px solid var(--app-border-soft); }
+.guide-intro { margin: 0; color: var(--app-ink-muted); font-size: 13px; line-height: 1.6; }
+.guide-examples { display: grid; gap: 12px; }
+.examples-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.examples-head h3 { font-size: 14px; }
+.examples-head span { color: var(--app-ink-muted); font-size: 12px; }
+.example-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.example-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
+.example-card.active { border-color: var(--app-primary-active); box-shadow: 0 0 0 1px var(--app-primary-active); }
+.example-card-head strong { display: block; color: var(--app-ink); font-size: 13px; }
+.example-card-head span { color: var(--app-primary-active); font-size: 11px; }
+.example-card p { margin: 0; flex: 1 1 auto; color: var(--app-ink-muted); font-size: 12px; line-height: 1.5; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.step-tip { margin-bottom: 16px; }
+.mode-tip { margin-bottom: 14px; }
+@media (max-width: 1200px) { .example-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { .guide-bar { flex-wrap: wrap; row-gap: 10px; } .guide-actions { flex: 1 1 100%; justify-content: flex-end; } .example-cards { grid-template-columns: 1fr; } }
 @media (max-width: 1024px) { .three-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } .schema-columns, .mapping-columns { grid-template-columns: 1fr; } }
 @media (max-width: 680px) { .config-header { flex-direction: column; } .desktop-steps { display: none; } .mobile-progress-track { display: block; } .three-cols { grid-template-columns: 1fr; } .field-row { grid-template-columns: minmax(0, 1fr) 100px; } .field-row > :nth-child(n + 3) { grid-column: auto; } .wizard-progress { align-items: flex-start; flex-direction: column; } .wizard-footer { justify-content: stretch; } .wizard-footer .el-button { flex: 1 1 100%; margin-left: 0; } }
 </style>

@@ -1,0 +1,1005 @@
+{
+  "config_name": "PI_Synthesis_Difficulty_Scoring_Rules",
+  "config_version": "1.0.0",
+  "language": "zh-CN",
+  "scope": {
+    "applicable_process": "聚酰亚胺低温溶液缩聚或低温一锅法工艺筛选",
+    "temperature_range_c": [
+      0,
+      60
+    ],
+    "reaction_time_range_h": [
+      4,
+      48
+    ],
+    "solvent_volume_options_ml": [
+      40,
+      50,
+      60
+    ],
+    "notes": [
+      "本规则用于二胺-二酐体系的工程启发式评分和工艺包选择。",
+      "本规则不适用于必须在高于60℃条件下完成的典型高温一步热亚胺化。",
+      "溶剂体积的比较仅在单体总投料规模、反应器规格和溶剂种类基本固定时有效。"
+    ]
+  },
+  "required_inputs": {
+    "diamine": {
+      "required": true,
+      "fields": [
+        "structure",
+        "monomer_id",
+        "functional_group_count",
+        "electronic_features",
+        "steric_features",
+        "predicted_or_measured_solubility"
+      ]
+    },
+    "dianhydride": {
+      "required": true,
+      "fields": [
+        "structure",
+        "monomer_id",
+        "functional_group_count",
+        "electronic_features",
+        "steric_features",
+        "predicted_or_measured_solubility"
+      ]
+    },
+    "process_context": {
+      "required": true,
+      "fields": [
+        "solvent",
+        "monomer_scale",
+        "reactor_volume",
+        "water_content_status",
+        "inert_atmosphere_status",
+        "historical_similar_experiment"
+      ]
+    }
+  },
+  "score_formula": {
+    "total_difficulty": "D = R + H + S + U",
+    "chemical_difficulty": "C = R + H",
+    "physical_execution_difficulty": "P = S + U",
+    "ranges": {
+      "R": [
+        0,
+        35
+      ],
+      "H": [
+        0,
+        25
+      ],
+      "S": [
+        0,
+        25
+      ],
+      "U": [
+        0,
+        15
+      ],
+      "D": [
+        0,
+        100
+      ],
+      "C": [
+        0,
+        60
+      ],
+      "P": [
+        0,
+        40
+      ]
+    }
+  },
+  "general_scoring_rules": [
+    "必须逐项计算R、H、S、U，不允许直接凭整体印象给出D。",
+    "每一个加分或减分项必须输出对应结构或实验依据。",
+    "同一物理或化学效应不得在多个维度重复计分。",
+    "电子效应只进入R。",
+    "官能团局部空间阻碍只进入H。",
+    "单体溶解、聚合物析出、增黏和混合困难只进入S。",
+    "水解、氧化、热敏感和多官能凝胶风险只进入U。",
+    "已有实验数据优先级高于结构推断。",
+    "信息缺失时使用规定的默认中性分，并降低confidence。"
+  ],
+  "scoring_dimensions": {
+    "R": {
+      "name": "反应活性难度",
+      "range": [
+        0,
+        35
+      ],
+      "formula": "R = R_DI + R_DA",
+      "subscores": {
+        "R_DI": {
+          "name": "二胺活性难度",
+          "range": [
+            0,
+            20
+          ],
+          "base_score_rule": "必须且只能选择一个基础类型分",
+          "base_scores": [
+            {
+              "condition": "脂肪族伯二胺，两个氨基充分暴露",
+              "score": 2
+            },
+            {
+              "condition": "脂环族伯二胺",
+              "score": 4
+            },
+            {
+              "condition": "电子丰富的芳香二胺",
+              "score": 5
+            },
+            {
+              "condition": "普通对位芳香二胺",
+              "score": 7
+            },
+            {
+              "condition": "普通间位芳香二胺",
+              "score": 9
+            },
+            {
+              "condition": "强吸电子芳香二胺或缺电子杂芳二胺",
+              "score": 12
+            },
+            {
+              "condition": "氨基亲核性明显受抑制的特殊二胺",
+              "score": 15
+            }
+          ],
+          "corrections": [
+            {
+              "condition": "氨基所在芳环有一个明显给电子基团",
+              "score_delta": -1
+            },
+            {
+              "condition": "氨基所在芳环有两个及以上给电子基团",
+              "score_delta": -2
+            },
+            {
+              "condition": "氨基所在芳环直接连接醚桥",
+              "score_delta": -1
+            },
+            {
+              "condition": "氨基所在芳环连接一个弱吸电子基团",
+              "score_delta": 1
+            },
+            {
+              "condition": "氨基附近有一个CF3、羰基或砜基",
+              "score_delta": 2
+            },
+            {
+              "condition": "氨基附近有多个强吸电子基团",
+              "score_delta": 3
+            },
+            {
+              "condition": "氨基位于明显缺电子杂芳环",
+              "score_delta": 3
+            },
+            {
+              "condition": "两个氨基电子环境轻度不一致",
+              "score_delta": 1
+            },
+            {
+              "condition": "一个氨基明显比另一个活性低",
+              "score_delta": 2
+            },
+            {
+              "condition": "一个氨基几乎失去正常伯胺反应性",
+              "score_delta": 4
+            }
+          ],
+          "calculation": "R_DI = clip(base_score + sum(corrections), 0, 20)",
+          "anti_double_counting": "邻位取代造成的空间位阻不得在R_DI计分，应进入H_DI。"
+        },
+        "R_DA": {
+          "name": "二酐活性难度",
+          "range": [
+            0,
+            15
+          ],
+          "base_score_rule": "必须且只能选择一个基础类型分",
+          "base_scores": [
+            {
+              "condition": "小体积、电子缺陷明显、酸酐羰基亲电性高",
+              "score": 2
+            },
+            {
+              "condition": "常规芳香二酐",
+              "score": 5
+            },
+            {
+              "condition": "含柔性桥键的芳香二酐",
+              "score": 5
+            },
+            {
+              "condition": "电子密度较高的芳香二酐",
+              "score": 7
+            },
+            {
+              "condition": "半脂环族或亲电性偏低的二酐",
+              "score": 8
+            },
+            {
+              "condition": "酸酐羰基亲电性明显较低的特殊二酐",
+              "score": 10
+            }
+          ],
+          "corrections": [
+            {
+              "condition": "酸酐附近存在明显吸电子结构",
+              "score_delta": -1
+            },
+            {
+              "condition": "两个酸酐基团高度对称且电子环境一致",
+              "score_delta": -1
+            },
+            {
+              "condition": "酸酐附近存在一个给电子基团",
+              "score_delta": 1
+            },
+            {
+              "condition": "酸酐附近存在多个给电子基团",
+              "score_delta": 2
+            },
+            {
+              "condition": "两个酸酐基团电子环境明显不同",
+              "score_delta": 2
+            },
+            {
+              "condition": "一个酸酐基团明显比另一个反应性低",
+              "score_delta": 3
+            }
+          ],
+          "calculation": "R_DA = clip(base_score + sum(corrections), 0, 15)",
+          "anti_double_counting": "酸酐湾区、邻位大体积取代和空间遮蔽不得在R_DA计分，应进入H_DA。"
+        }
+      }
+    },
+    "H": {
+      "name": "位阻与官能团可接近性难度",
+      "range": [
+        0,
+        25
+      ],
+      "formula": "H = clip(H_DI + H_DA + H_conf + H_asym, 0, 25)",
+      "subscores": {
+        "H_DI": {
+          "name": "二胺局部位阻",
+          "range": [
+            0,
+            8
+          ],
+          "per_amino_group_scores": [
+            {
+              "condition": "两个邻位均为氢",
+              "score": 0
+            },
+            {
+              "condition": "一个邻位有小体积取代基",
+              "score": 1
+            },
+            {
+              "condition": "一个邻位有大体积取代基",
+              "score": 2
+            },
+            {
+              "condition": "两个邻位均有取代基",
+              "score": 3
+            },
+            {
+              "condition": "氨基位于湾区、凹陷或笼状遮蔽位置",
+              "score": 4
+            }
+          ],
+          "calculation": "两个氨基分别评分后相加，最高8分"
+        },
+        "H_DA": {
+          "name": "二酐局部位阻",
+          "range": [
+            0,
+            8
+          ],
+          "per_anhydride_region_scores": [
+            {
+              "condition": "羰基充分暴露",
+              "score": 0
+            },
+            {
+              "condition": "邻近有一个小体积取代基",
+              "score": 1
+            },
+            {
+              "condition": "存在明显非共面扭转或中等遮蔽",
+              "score": 2
+            },
+            {
+              "condition": "位于稠环湾区或邻近大体积取代基",
+              "score": 3
+            },
+            {
+              "condition": "反应区域严重包埋或空间受限",
+              "score": 4
+            }
+          ],
+          "calculation": "两个酸酐反应区域分别评分后相加，最高8分"
+        },
+        "H_conf": {
+          "name": "整体构象遮蔽",
+          "range": [
+            0,
+            5
+          ],
+          "scores": [
+            {
+              "condition": "线性或官能团充分外露",
+              "score": 0
+            },
+            {
+              "condition": "轻微联苯扭转但不遮蔽官能团",
+              "score": 1
+            },
+            {
+              "condition": "一个单体存在明显非共面构象并降低可接近性",
+              "score": 2
+            },
+            {
+              "condition": "两个单体均存在明显空间拥挤",
+              "score": 3
+            },
+            {
+              "condition": "螺环、笼状或稠环结构部分遮蔽官能团",
+              "score": 4
+            },
+            {
+              "condition": "官能团严重被整体构象遮蔽",
+              "score": 5
+            }
+          ],
+          "special_rule": "非共面但仅改善溶解性、未遮蔽官能团时，本项不得加分。"
+        },
+        "H_asym": {
+          "name": "官能团反应不对称性",
+          "range": [
+            0,
+            4
+          ],
+          "scores": [
+            {
+              "condition": "两个氨基和两个酸酐环境均近似一致",
+              "score": 0
+            },
+            {
+              "condition": "一个单体轻度不对称",
+              "score": 1
+            },
+            {
+              "condition": "一个单体两个官能团反应环境明显不同",
+              "score": 2
+            },
+            {
+              "condition": "二胺和二酐均明显不对称",
+              "score": 3
+            },
+            {
+              "condition": "存在强烈顺序反应倾向，可能导致局部计量失衡",
+              "score": 4
+            }
+          ]
+        }
+      }
+    },
+    "S": {
+      "name": "溶解与传质难度",
+      "range": [
+        0,
+        25
+      ],
+      "formula": "S = clip(S_monomer + S_polymer + S_viscosity, 0, 25)",
+      "subscores": {
+        "S_monomer": {
+          "name": "单体溶解难度",
+          "range": [
+            0,
+            10
+          ],
+          "rule": "二胺和二酐分别评分，每种0至5分",
+          "per_monomer_scores": [
+            {
+              "condition": "室温下快速完全溶解",
+              "score": 0
+            },
+            {
+              "condition": "室温下经正常搅拌可完全溶解",
+              "score": 1
+            },
+            {
+              "condition": "需要长时间搅拌或轻微升温",
+              "score": 2
+            },
+            {
+              "condition": "只能在较高温度或低浓度下完全溶解",
+              "score": 3
+            },
+            {
+              "condition": "加料过程中长期存在悬浊或颗粒",
+              "score": 4
+            },
+            {
+              "condition": "在60mL溶剂上限下仍基本不溶",
+              "score": 5,
+              "risk_tag": "OUT_OF_DOMAIN"
+            }
+          ],
+          "structure_inference_guidance": [
+            "多个柔性醚键、非共面连接或大体积侧基通常降低溶解难度。",
+            "高度刚性、平面、对称或稠环结构通常增加溶解难度。",
+            "强分子间氢键或电荷作用通常增加溶解难度。",
+            "存在实验溶解度数据时必须以实验数据为准。"
+          ]
+        },
+        "S_polymer": {
+          "name": "生成PAA的析出风险",
+          "range": [
+            0,
+            8
+          ],
+          "scores": [
+            {
+              "condition": "多柔性桥键、明显非共面、堆积能力弱",
+              "score": 0
+            },
+            {
+              "condition": "柔性结构占优",
+              "score": 1
+            },
+            {
+              "condition": "普通芳香PAA",
+              "score": 2
+            },
+            {
+              "condition": "刚性或平面性较高",
+              "score": 4
+            },
+            {
+              "condition": "高度刚性、线性、对称",
+              "score": 6
+            },
+            {
+              "condition": "高度平面稠环、强链间作用或已有析出先例",
+              "score": 8
+            }
+          ]
+        },
+        "S_viscosity": {
+          "name": "增黏与混合风险",
+          "range": [
+            0,
+            7
+          ],
+          "scores": [
+            {
+              "condition": "黏度缓慢上升且机械搅拌充足",
+              "score": 0
+            },
+            {
+              "condition": "中等增黏但可保持稳定流场",
+              "score": 1
+            },
+            {
+              "condition": "预计形成较高黏度PAA",
+              "score": 3
+            },
+            {
+              "condition": "高活性与高刚性同时存在，可能快速增黏",
+              "score": 4,
+              "risk_tag": "FAST_VISCOSITY"
+            },
+            {
+              "condition": "相似体系出现过搅拌困难、爬杆或局部结团",
+              "score": 5,
+              "risk_tag": "FAST_VISCOSITY"
+            },
+            {
+              "condition": "相似体系出现过包轴或局部凝胶",
+              "score": 7,
+              "risk_tag": "GEL_RISK"
+            }
+          ]
+        }
+      }
+    },
+    "U": {
+      "name": "副反应与稳定性难度",
+      "range": [
+        0,
+        15
+      ],
+      "formula": "U = clip(U_water + U_oxidation + U_thermal + U_gel, 0, 15)",
+      "subscores": {
+        "U_water": {
+          "name": "含水与水解风险",
+          "range": [
+            0,
+            5
+          ],
+          "scores": [
+            {
+              "condition": "溶剂和单体有可靠干燥记录且在线水分合格",
+              "score": 0
+            },
+            {
+              "condition": "原料刚开封但没有水分测量值",
+              "score": 1
+            },
+            {
+              "condition": "二酐储存时间较长或转移过程可能吸湿",
+              "score": 2
+            },
+            {
+              "condition": "溶剂水分或二酐含水状态未知",
+              "score": 3
+            },
+            {
+              "condition": "明确检测到较高水分但仍尝试执行",
+              "score": 5,
+              "risk_tag": "HYDROLYSIS_RISK"
+            }
+          ],
+          "default_if_unknown": 3
+        },
+        "U_oxidation": {
+          "name": "氧化稳定性",
+          "range": [
+            0,
+            3
+          ],
+          "scores": [
+            {
+              "condition": "常规稳定芳香二胺且惰性气氛可靠",
+              "score": 0
+            },
+            {
+              "condition": "二胺轻度易氧化或溶液容易变色",
+              "score": 1
+            },
+            {
+              "condition": "二胺明显易氧化，必须严格隔绝空气",
+              "score": 2,
+              "risk_tag": "OXIDATION_RISK"
+            },
+            {
+              "condition": "当前处理条件下快速氧化或失活",
+              "score": 3,
+              "risk_tag": "OXIDATION_RISK"
+            }
+          ],
+          "default_if_unknown": 1
+        },
+        "U_thermal": {
+          "name": "0至60℃范围内的温度稳定性",
+          "range": [
+            0,
+            3
+          ],
+          "scores": [
+            {
+              "condition": "0至60℃范围内稳定",
+              "score": 0
+            },
+            {
+              "condition": "高于45℃可能发生轻微变色或副反应",
+              "score": 1
+            },
+            {
+              "condition": "高于30℃存在明显副反应风险",
+              "score": 2,
+              "risk_tag": "THERMAL_SENSITIVE"
+            },
+            {
+              "condition": "只能在低温下安全执行",
+              "score": 3,
+              "risk_tag": "THERMAL_SENSITIVE"
+            }
+          ]
+        },
+        "U_gel": {
+          "name": "支化与凝胶风险",
+          "range": [
+            0,
+            4
+          ],
+          "scores": [
+            {
+              "condition": "两种单体均为高纯度双官能单体",
+              "score": 0
+            },
+            {
+              "condition": "可能存在少量多官能杂质",
+              "score": 1
+            },
+            {
+              "condition": "单体含少量三官能组分或潜在交联点",
+              "score": 2
+            },
+            {
+              "condition": "实际平均官能度明显大于2",
+              "score": 4,
+              "risk_tag": "GEL_RISK"
+            }
+          ],
+          "out_of_domain_rule": "实际平均官能度明显大于2且目标不是交联PI时，添加OUT_OF_DOMAIN。"
+        }
+      }
+    }
+  },
+  "missing_information_defaults": {
+    "unknown_solubility": {
+      "S_monomer_per_unknown_monomer": 2,
+      "confidence_penalty": 0.1
+    },
+    "unknown_water_status": {
+      "U_water": 3,
+      "confidence_penalty": 0.1
+    },
+    "unknown_oxidation_stability": {
+      "U_oxidation": 1,
+      "confidence_penalty": 0.05
+    },
+    "unknown_viscosity_history": {
+      "S_viscosity": 2,
+      "confidence_penalty": 0.05
+    }
+  },
+  "process_packages": [
+    {
+      "process_id": "PI-P01",
+      "D_range": [
+        0,
+        11
+      ],
+      "temperature_c": 0,
+      "reaction_time_h": 4,
+      "solvent_volume_ml": 50,
+      "positioning": "极高活性、快速反应"
+    },
+    {
+      "process_id": "PI-P02",
+      "D_range": [
+        12,
+        22
+      ],
+      "temperature_c": 10,
+      "reaction_time_h": 8,
+      "solvent_volume_ml": 40,
+      "positioning": "高活性、低传质难度"
+    },
+    {
+      "process_id": "PI-P03",
+      "D_range": [
+        23,
+        33
+      ],
+      "temperature_c": 20,
+      "reaction_time_h": 12,
+      "solvent_volume_ml": 40,
+      "positioning": "较易合成"
+    },
+    {
+      "process_id": "PI-P04",
+      "D_range": [
+        34,
+        44
+      ],
+      "temperature_c": 25,
+      "reaction_time_h": 18,
+      "solvent_volume_ml": 50,
+      "positioning": "常规偏易"
+    },
+    {
+      "process_id": "PI-P05",
+      "D_range": [
+        45,
+        55
+      ],
+      "temperature_c": 30,
+      "reaction_time_h": 24,
+      "solvent_volume_ml": 50,
+      "positioning": "通用中心工艺"
+    },
+    {
+      "process_id": "PI-P06",
+      "D_range": [
+        56,
+        66
+      ],
+      "temperature_c": 40,
+      "reaction_time_h": 30,
+      "solvent_volume_ml": 50,
+      "positioning": "中等偏难"
+    },
+    {
+      "process_id": "PI-P07",
+      "D_range": [
+        67,
+        77
+      ],
+      "temperature_c": 45,
+      "reaction_time_h": 36,
+      "solvent_volume_ml": 60,
+      "positioning": "低活性或高传质风险"
+    },
+    {
+      "process_id": "PI-P08",
+      "D_range": [
+        78,
+        88
+      ],
+      "temperature_c": 55,
+      "reaction_time_h": 42,
+      "solvent_volume_ml": 60,
+      "positioning": "高位阻、高刚性或难溶"
+    },
+    {
+      "process_id": "PI-P09",
+      "D_range": [
+        89,
+        100
+      ],
+      "temperature_c": 60,
+      "reaction_time_h": 48,
+      "solvent_volume_ml": 60,
+      "positioning": "当前工艺窗口的边界条件"
+    }
+  ],
+  "risk_tags": [
+    "HIGH_EXOTHERM",
+    "FAST_VISCOSITY",
+    "POOR_SOLUBILITY",
+    "HIGH_STERIC",
+    "LOW_REACTIVITY",
+    "HYDROLYSIS_RISK",
+    "OXIDATION_RISK",
+    "GEL_RISK",
+    "THERMAL_SENSITIVE",
+    "OUT_OF_DOMAIN"
+  ],
+  "override_rules": [
+    {
+      "priority": 1,
+      "name": "超出适用范围",
+      "trigger": [
+        "OUT_OF_DOMAIN"
+      ],
+      "action": {
+        "applicability": "OUT_OF_DOMAIN",
+        "selected_process": null
+      }
+    },
+    {
+      "priority": 2,
+      "name": "凝胶或多官能风险",
+      "trigger_any": [
+        "GEL_RISK"
+      ],
+      "action": {
+        "minimum_solvent_volume_ml": 60,
+        "require_low_temperature_addition": true,
+        "require_controlled_addition": true,
+        "require_torque_monitoring": true
+      }
+    },
+    {
+      "priority": 3,
+      "name": "热敏感限制",
+      "trigger_any": [
+        "THERMAL_SENSITIVE"
+      ],
+      "action": {
+        "maximum_temperature_c": 25,
+        "preferred_solvent_volume_ml": [
+          50,
+          60
+        ],
+        "compensation": "延长反应时间而不是提高温度"
+      }
+    },
+    {
+      "priority": 4,
+      "name": "高放热或快速增黏限制",
+      "trigger_any": [
+        "HIGH_EXOTHERM",
+        "FAST_VISCOSITY"
+      ],
+      "additional_trigger": "R <= 8也视为高活性警报",
+      "action": {
+        "maximum_temperature_c": 20,
+        "minimum_solvent_volume_ml": 50,
+        "require_controlled_addition": true
+      }
+    },
+    {
+      "priority": 5,
+      "name": "溶解与传质困难",
+      "trigger_any": [
+        "POOR_SOLUBILITY"
+      ],
+      "additional_trigger": "S >= 17",
+      "action": {
+        "required_solvent_volume_ml": 60,
+        "temperature_time_basis": "根据C = R + H决定，不得仅因难溶自动提高到55至60℃"
+      }
+    }
+  ],
+  "out_of_domain_conditions": [
+    "任一单体在60mL溶剂中仍不能形成可搅拌体系",
+    "要求的反应温度明显高于60℃",
+    "属于典型高温一步热亚胺化而不是低温溶液缩聚",
+    "实际平均官能度大于2且目标不是交联材料",
+    "已知在现有条件下发生不可控放热",
+    "聚合初期立即不可逆析出",
+    "当前溶剂与单体体系明显不相容",
+    "反应需要压力条件"
+  ],
+  "selection_algorithm": {
+    "steps": [
+      "检查输入完整性并应用缺失信息默认分。",
+      "计算R_DI和R_DA，得到R。",
+      "计算H_DI、H_DA、H_conf和H_asym，得到H。",
+      "计算S_monomer、S_polymer和S_viscosity，得到S。",
+      "计算U_water、U_oxidation、U_thermal和U_gel，得到U。",
+      "计算C = R + H、P = S + U、D = R + H + S + U。",
+      "根据D区间初选PI-P01至PI-P09。",
+      "按priority从小到大执行覆盖规则。",
+      "若触发OUT_OF_DOMAIN，则selected_process必须为null。",
+      "输出结构化JSON结果。"
+    ],
+    "initial_mapping": [
+      {
+        "D_min": 0,
+        "D_max": 11,
+        "process_id": "PI-P01"
+      },
+      {
+        "D_min": 12,
+        "D_max": 22,
+        "process_id": "PI-P02"
+      },
+      {
+        "D_min": 23,
+        "D_max": 33,
+        "process_id": "PI-P03"
+      },
+      {
+        "D_min": 34,
+        "D_max": 44,
+        "process_id": "PI-P04"
+      },
+      {
+        "D_min": 45,
+        "D_max": 55,
+        "process_id": "PI-P05"
+      },
+      {
+        "D_min": 56,
+        "D_max": 66,
+        "process_id": "PI-P06"
+      },
+      {
+        "D_min": 67,
+        "D_max": 77,
+        "process_id": "PI-P07"
+      },
+      {
+        "D_min": 78,
+        "D_max": 88,
+        "process_id": "PI-P08"
+      },
+      {
+        "D_min": 89,
+        "D_max": 100,
+        "process_id": "PI-P09"
+      }
+    ]
+  },
+  "required_model_output_schema": {
+    "assessment_version": "string",
+    "input": {
+      "diamine_id": "string",
+      "dianhydride_id": "string",
+      "solvent": "string"
+    },
+    "score_details": {
+      "R": {
+        "R_DI_base": "integer",
+        "R_DI_corrections": [
+          {
+            "feature": "string",
+            "score_delta": "integer",
+            "evidence": "string"
+          }
+        ],
+        "R_DI": "integer",
+        "R_DA_base": "integer",
+        "R_DA_corrections": [
+          {
+            "feature": "string",
+            "score_delta": "integer",
+            "evidence": "string"
+          }
+        ],
+        "R_DA": "integer",
+        "R_total": "integer"
+      },
+      "H": {
+        "H_DI": "integer",
+        "H_DA": "integer",
+        "H_conf": "integer",
+        "H_asym": "integer",
+        "H_total": "integer",
+        "evidence": [
+          "string"
+        ]
+      },
+      "S": {
+        "S_monomer": "integer",
+        "S_polymer": "integer",
+        "S_viscosity": "integer",
+        "S_total": "integer",
+        "evidence": [
+          "string"
+        ]
+      },
+      "U": {
+        "U_water": "integer",
+        "U_oxidation": "integer",
+        "U_thermal": "integer",
+        "U_gel": "integer",
+        "U_total": "integer",
+        "evidence": [
+          "string"
+        ]
+      }
+    },
+    "calculation": {
+      "chemical_difficulty_C": "integer",
+      "physical_execution_difficulty_P": "integer",
+      "total_difficulty_D": "integer",
+      "formula_check": "string"
+    },
+    "risk_tags": [
+      "string"
+    ],
+    "initial_process": "string_or_null",
+    "override_applied": "boolean",
+    "override_reason": [
+      "string"
+    ],
+    "selected_process": {
+      "process_id": "string_or_null",
+      "temperature_c": "integer_or_null",
+      "reaction_time_h": "integer_or_null",
+      "solvent_volume_ml": "integer_or_null"
+    },
+    "confidence": "number_between_0_and_1",
+    "applicability": "IN_DOMAIN_or_OUT_OF_DOMAIN"
+  },
+  "validation_rules": [
+    "R_total必须等于R_DI加R_DA。",
+    "H_total必须等于H_DI加H_DA加H_conf加H_asym，并限制在0至25。",
+    "S_total必须等于S_monomer加S_polymer加S_viscosity，并限制在0至25。",
+    "U_total必须等于U_water加U_oxidation加U_thermal加U_gel，并限制在0至15。",
+    "C必须等于R_total加H_total。",
+    "P必须等于S_total加U_total。",
+    "D必须等于R_total加H_total加S_total加U_total。",
+    "risk_tags只能从预定义标签中选择。",
+    "触发OUT_OF_DOMAIN时selected_process.process_id必须为null。",
+    "未触发覆盖规则时selected_process必须等于initial_process。",
+    "所有评分修正必须包含evidence。",
+    "输出必须是合法JSON，不得包含Markdown代码围栏或额外说明文字。"
+  ],
+  "llm_system_instruction": "你是聚酰亚胺低温溶液缩聚工艺评分器。严格依据本JSON规则对二胺和二酐组合进行评分。必须逐项计算R、H、S、U，不得凭整体印象直接给总分。必须避免重复计分，并为每项分数提供结构或实验依据。先依据D映射初始工艺包，再执行风险覆盖规则。若超出适用范围，必须返回OUT_OF_DOMAIN且不得强行选择PI-P09。最终只输出符合required_model_output_schema的合法JSON。"
+}

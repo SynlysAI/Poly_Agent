@@ -1,0 +1,9 @@
+{
+  "diamine": "ODA",
+  "dianhydride": "PMDA",
+  "solvent": "NMP",
+  "diamine_solubility": 4,
+  "dianhydride_solubility": 3,
+  "water_content_status": "low",
+  "inert_atmosphere_status": true
+}
