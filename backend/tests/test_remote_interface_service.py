@@ -90,11 +90,152 @@ class RemoteInterfaceSchemaTest(ComputationTestCase):
                 query_bindings={"api_key": "api_token"},
             )
 
+    def test_accepts_multipart_and_artifact_manifest_config(self) -> None:
+        config = RemoteInterfaceConfig(
+            endpoint_url="https://example.test/predict",
+            body_mode="multipart",
+            multipart_json_field="payload",
+            file_bindings={"spectrum": "spectrum_file"},
+            result_mode="artifact_manifest",
+            artifact_allowed_hosts=["downloads.example.test"],
+        )
+
+        self.assertEqual(config.body_mode, "multipart")
+        self.assertEqual(config.file_bindings["spectrum"], "spectrum_file")
+        self.assertEqual(config.result_mode, "artifact_manifest")
+
 
 class RemoteInterfaceApiTest(ComputationTestCase):
     """覆盖接口模型 API 和统一 AlgorithmRun 调用。"""
 
     base_url = "/api/v1/research-engine"
+
+    def test_interface_contract_accepts_input_and_output_assets(self) -> None:
+        payload = interface_payload(
+            input_assets=[{
+                "key": "spectrum",
+                "label": "光谱文件",
+                "required": True,
+                "extensions": [".csv"],
+                "mime_types": ["text/csv"],
+                "max_size_bytes": 1024,
+            }],
+            output_assets=[{
+                "key": "report",
+                "label": "预测报告",
+                "required": True,
+                "artifact_type": "report_pdf",
+                "mime_type": "application/pdf",
+                "extensions": [".pdf"],
+            }],
+            interface_config={
+                "protocol": "fastapi",
+                "endpoint_url": "https://model.example.test/predict",
+                "http_method": "POST",
+                "body_mode": "multipart",
+                "multipart_json_field": "payload",
+                "file_bindings": {"spectrum": "spectrum_file"},
+                "result_mode": "artifact_manifest",
+            },
+        )
+
+        created = self.client.post(f"{self.base_url}/algorithm-interfaces", json=payload)
+
+        self.assertEqual(created.status_code, 200, created.text)
+        data = created.json()["data"]
+        self.assertEqual(data["version"]["input_assets"][0]["key"], "spectrum")
+        self.assertEqual(data["algorithm"]["output_assets"][0]["key"], "report")
+
+    def test_multipart_sample_test_accepts_declared_file_and_returns_previews(self) -> None:
+        payload = interface_payload(
+            input_assets=[{
+                "key": "spectrum",
+                "required": True,
+                "extensions": [".csv"],
+                "mime_types": ["text/csv"],
+            }],
+            output_assets=[{
+                "key": "report",
+                "required": True,
+                "artifact_type": "report_pdf",
+                "mime_type": "application/pdf",
+            }],
+            interface_config={
+                "protocol": "fastapi",
+                "endpoint_url": "https://model.example.test/predict",
+                "http_method": "POST",
+                "body_mode": "multipart",
+                "file_bindings": {"spectrum": "spectrum_file"},
+                "result_mode": "artifact_manifest",
+            },
+        )
+        created = self.client.post(f"{self.base_url}/algorithm-interfaces", json=payload)
+        self.assertEqual(created.status_code, 200, created.text)
+        version_id = created.json()["data"]["version"]["version_id"]
+
+        with patch(
+            "app.services.remote_interface_service.RemoteInterfaceService.invoke",
+            return_value=(
+                {"prediction": 123.4},
+                {
+                    "status_code": 200,
+                    "latency_ms": 12,
+                    "protocol": "fastapi",
+                    "artifact_previews": [{
+                        "key": "report",
+                        "name": "report.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 128,
+                        "sha256": "a" * 64,
+                    }],
+                },
+            ),
+        ):
+            tested = self.client.post(
+                f"{self.base_url}/algorithm-interfaces/{payload['algorithm_id']}/versions/{version_id}:test-multipart",
+                data={"input_snapshot": '{"smiles":"CCO"}'},
+                files={"spectrum": ("sample.csv", b"x,y\n1,2\n", "text/csv")},
+            )
+
+        self.assertEqual(tested.status_code, 200, tested.text)
+        result = tested.json()["data"]
+        self.assertEqual(result["output_preview"]["prediction"], 123.4)
+        self.assertEqual(result["artifact_previews"][0]["key"], "report")
+
+    def test_algorithm_id_availability_guides_owner_to_new_interface_version(self) -> None:
+        created = self.client.post(f"{self.base_url}/algorithm-interfaces", json=interface_payload())
+        self.assertEqual(created.status_code, 200, created.text)
+
+        response = self.client.get(
+            f"{self.base_url}/algorithms/id-availability",
+            params={"algorithm_id": "remote_tg_predictor"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertFalse(data["available"])
+        self.assertEqual(data["recommended_action"], "create_interface_version")
+        self.assertTrue(data["can_create_version"])
+        self.assertEqual(len(data["suggestions"]), 3)
+
+    def test_model_delete_removes_registry_and_versions_but_reports_preserved_runs(self) -> None:
+        created = self.client.post(f"{self.base_url}/algorithm-interfaces", json=interface_payload())
+        self.assertEqual(created.status_code, 200, created.text)
+
+        deleted = self.client.delete(
+            f"{self.base_url}/algorithms/remote_tg_predictor",
+            params={"confirm_algorithm_id": "remote_tg_predictor"},
+        )
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        data = deleted.json()["data"]
+        self.assertEqual(data["deleted_versions"], 1)
+        self.assertEqual(data["preserved_runs"], 0)
+        self.assertTrue(data["registry_deleted"])
+        self.assertEqual(
+            self.client.get(f"{self.base_url}/algorithms/remote_tg_predictor").status_code,
+            404,
+        )
 
     def test_mcp_config_is_saved_but_cannot_be_activated(self) -> None:
         payload = interface_payload(

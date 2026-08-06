@@ -30,6 +30,7 @@ from app.schemas.research_engine import (
     AlgorithmInterfaceTestResult,
     AlgorithmInterfaceVersionCreate,
     AlgorithmInterfaceVersionUpdate,
+    AlgorithmIdAvailability,
     AlgorithmManagedResource,
     AlgorithmManagedResourceCreate,
     AlgorithmManagedResourceListData,
@@ -306,6 +307,43 @@ def test_algorithm_interface(
         version_id,
         input_snapshot=payload.input_snapshot if payload else None,
     )
+    return ApiResponse(code=0, message="ok", data=result)
+
+
+@router.post(
+    "/algorithm-interfaces/{algorithm_id}/versions/{version_id}:test-multipart",
+    response_model=ApiResponse[AlgorithmInterfaceTestResult],
+)
+async def test_algorithm_interface_multipart(
+    algorithm_id: str,
+    version_id: str,
+    request: Request,
+    input_snapshot: str = Form(default="{}"),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmInterfaceTestResult]:
+    """使用 multipart 文件和 JSON 输入测试远程接口版本。"""
+    _ensure_interface_access(algorithm_id, current_user, manage=True)
+    try:
+        snapshot = json.loads(input_snapshot)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="input_snapshot 必须是合法 JSON") from exc
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=422, detail="input_snapshot 必须是 JSON object")
+    form = await request.form()
+    temp_root = settings.outputs_root / "interface-tests" / f"{algorithm_id}-{version_id}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    uploads: dict[str, dict[str, str]] = {}
+    for key, value in form.multi_items():
+        if key == "input_snapshot" or not hasattr(value, "read"):
+            continue
+        content = await value.read(MAX_MULTIPART_ASSET_BYTES + 1)
+        if len(content) > MAX_MULTIPART_ASSET_BYTES:
+            raise HTTPException(status_code=413, detail=f"输入文件 {key} 超过平台上传上限")
+        filename = value.filename or key
+        target = temp_root / f"{version_id}-{key}-{filename.replace('/', '_')}"
+        target.write_bytes(content)
+        uploads[key] = {"path": str(target), "filename": filename, "mime_type": value.content_type or "application/octet-stream"}
+    result = remote_interface_service.test_version(algorithm_id, version_id, input_snapshot=snapshot, input_files=uploads)
     return ApiResponse(code=0, message="ok", data=result)
 
 
@@ -1165,6 +1203,39 @@ def list_algorithms(
             page_size=data.page_size,
             total=len(items),
         )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/algorithms/id-availability", response_model=ApiResponse[AlgorithmIdAvailability])
+def get_algorithm_id_availability(
+    algorithm_id: str = Query(default="", min_length=1, max_length=80),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmIdAvailability]:
+    """检查模型 ID 是否可用，并返回安全的下一步建议。"""
+    data = remote_interface_service.get_id_availability(
+        algorithm_id,
+        actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+    )
+    return ApiResponse(code=0, message="ok", data=AlgorithmIdAvailability(**data))
+
+
+@router.delete("/algorithms/{algorithm_id}", response_model=ApiResponse[dict])
+def delete_algorithm(
+    algorithm_id: str,
+    confirm_algorithm_id: str = Query(..., min_length=1, max_length=80),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[dict]:
+    """删除接口模型及全部版本，历史运行与 Artifact 保留。"""
+    entry = service.get_algorithm(algorithm_id)
+    if entry.source != "remote_interface":
+        raise HTTPException(status_code=409, detail="算法包模型请使用版本治理删除")
+    data = remote_interface_service.delete_algorithm(
+        algorithm_id,
+        actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+        confirm_algorithm_id=confirm_algorithm_id,
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 

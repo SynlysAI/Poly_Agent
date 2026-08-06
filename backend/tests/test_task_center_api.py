@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,6 +17,13 @@ from app.core.auth import get_current_user
 from app.main import app
 from app.schemas.computation import ComputationCreateRequest
 from app.services.computation_service import ComputationService
+from app.services.research_engine_service import ResearchEngineService
+from app.schemas.research_engine import AlgorithmRunCreate
+
+try:
+    from .test_remote_interface_service import interface_payload
+except ImportError:
+    from test_remote_interface_service import interface_payload
 
 
 class TaskCenterApiTest(ComputationTestCase):
@@ -86,3 +94,36 @@ class TaskCenterApiTest(ComputationTestCase):
         self.assertEqual(admin_resp.status_code, 200)
         admin_titles = {item["title"] for item in admin_resp.json()["data"]["items"]}
         self.assertEqual(admin_titles, {"user-a-task", "user-b-task"})
+
+    def test_remote_algorithm_run_routes_to_vertical_prediction_detail(self) -> None:
+        created = self.client.post(
+            "/api/v1/research-engine/algorithm-interfaces",
+            json=interface_payload(),
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        version_id = created.json()["data"]["version"]["version_id"]
+        self.client.post(
+            f"/api/v1/research-engine/algorithm-interfaces/remote_tg_predictor/versions/{version_id}:activate"
+        )
+        with patch(
+            "app.services.remote_interface_service.RemoteInterfaceService.invoke",
+            return_value=({"prediction": 123.4}, {"status_code": 200, "latency_ms": 5}),
+        ):
+            run = ResearchEngineService().create_algorithm_run(
+                AlgorithmRunCreate(
+                    algorithm_id="remote_tg_predictor",
+                    algorithm_version_id=version_id,
+                    input_snapshot={"smiles": "CCO"},
+                ),
+                actor_user_id="demo_user",
+            )
+
+        response = self.client.get("/api/v1/tasks/center")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        task = next(item for item in response.json()["data"]["items"] if item["task_id"] == run.run_id)
+        self.assertEqual(task["module_id"], "vertical-prediction")
+        self.assertEqual(task["module_name"], "垂类预测模型")
+        self.assertEqual(task["route"]["path"], "/vertical-prediction")
+        self.assertEqual(task["route"]["query"]["algorithm_id"], "remote_tg_predictor")
+        self.assertEqual(task["route"]["query"]["run_id"], run.run_id)

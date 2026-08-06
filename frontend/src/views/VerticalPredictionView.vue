@@ -1,13 +1,14 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ArrowRight, Box, Clock, DataAnalysis, Document, Edit, Key, Link, Refresh, Search, UploadFilled, VideoPlay,
+  ArrowRight, Box, Clock, DataAnalysis, Delete, Document, Edit, Key, Link, Refresh, Search, UploadFilled, VideoPlay,
 } from '@element-plus/icons-vue'
 
 import {
   getApiErrorMessage,
+  deleteAlgorithm,
   listAlgorithmPackages,
   listAlgorithmRuns,
   listAlgorithms,
@@ -351,6 +352,24 @@ function openMetadataEditor() {
   metadataEditorVisible.value = true
 }
 
+async function removeSelectedAlgorithm() {
+  if (!selectedAlgorithm.value || !canManageSelectedAlgorithm.value) return
+  try {
+    await ElMessageBox.confirm(
+      `删除模型将移除全部接口版本，但保留历史运行、Artifact 和审计记录。请输入模型 ID「${selectedAlgorithm.value.algorithm_id}」确认。`,
+      '删除模型确认',
+      { type: 'warning', inputPattern: new RegExp(`^${selectedAlgorithm.value.algorithm_id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), inputErrorMessage: '模型 ID 不匹配' },
+    )
+    await deleteAlgorithm(selectedAlgorithm.value.algorithm_id, selectedAlgorithm.value.algorithm_id)
+    ElMessage.success('模型及其版本已删除，历史运行记录已保留')
+    selectedAlgorithmId.value = ''
+    activeMode.value = 'center'
+    await loadData()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(getApiErrorMessage(error))
+  }
+}
+
 function handleMetadataSaved(updated) {
   const index = algorithms.value.findIndex((item) => item.algorithm_id === updated?.algorithm_id)
   if (index >= 0) algorithms.value[index] = updated
@@ -611,6 +630,7 @@ onMounted(() => {
             @click="openEditInterfaceConfig(editableInterfaceVersion)"
           >编辑接口配置</el-button>
           <el-button v-if="canManageSelectedAlgorithm" :icon="Edit" @click="openMetadataEditor">编辑信息</el-button>
+          <el-button v-if="canManageSelectedAlgorithm" type="danger" plain :icon="Delete" @click="removeSelectedAlgorithm">删除模型</el-button>
           <el-button :icon="VideoPlay" type="primary" @click="detailActiveTab = 'experience'">立即体验</el-button>
           <el-button :icon="Key" @click="detailActiveTab = 'api'">版本治理</el-button>
         </div>

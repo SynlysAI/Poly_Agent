@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import json
 import os
 import socket
 import time
+from contextlib import ExitStack
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
@@ -17,10 +20,12 @@ from fastapi import HTTPException
 from app.core.config import settings
 from app.infra.computation_repositories import utc_now
 from app.infra.research_engine_repositories import (
+    AlgorithmRunRepository,
     AlgorithmRegistryRepository,
     AlgorithmVersionRepository,
 )
 from app.schemas.research_engine import (
+    AlgorithmAssetSpec,
     AlgorithmInterfaceCreate,
     AlgorithmInterfaceDetails,
     AlgorithmInterfaceListData,
@@ -31,6 +36,10 @@ from app.schemas.research_engine import (
     AlgorithmVersion,
     RemoteInterfaceConfig,
 )
+
+
+DEFAULT_REMOTE_ARTIFACT_MAX_BYTES = 50 * 1024 * 1024
+DEFAULT_REMOTE_ARTIFACT_TOTAL_BYTES = 100 * 1024 * 1024
 
 
 class RemoteInterfaceService:
@@ -49,6 +58,8 @@ class RemoteInterfaceService:
             version=payload.version,
             input_schema=payload.input_schema.model_dump(mode="python"),
             output_schema=payload.output_schema.model_dump(mode="python"),
+            input_assets=[item.model_dump(mode="python") for item in payload.input_assets],
+            output_assets=[item.model_dump(mode="python") for item in payload.output_assets],
             interface_config=payload.interface_config,
             sample_input=payload.sample_input,
             description=payload.description,
@@ -61,6 +72,8 @@ class RemoteInterfaceService:
             payload.output_schema.model_dump(mode="python"),
             payload.interface_config,
             payload.sample_input,
+            payload.input_assets,
+            payload.output_assets,
         )
         registry_doc = self._registry_document(
             payload=payload,
@@ -95,6 +108,8 @@ class RemoteInterfaceService:
             version=payload.version,
             input_schema=payload.input_schema.model_dump(mode="python"),
             output_schema=payload.output_schema.model_dump(mode="python"),
+            input_assets=[item.model_dump(mode="python") for item in payload.input_assets],
+            output_assets=[item.model_dump(mode="python") for item in payload.output_assets],
             interface_config=payload.interface_config,
             sample_input=payload.sample_input,
             description=payload.description if payload.description is not None else registry.get("description"),
@@ -107,6 +122,8 @@ class RemoteInterfaceService:
             payload.output_schema.model_dump(mode="python"),
             payload.interface_config,
             payload.sample_input,
+            payload.input_assets,
+            payload.output_assets,
         )
         AlgorithmVersionRepository.save("version_id", version_doc)
         has_active_version = bool(registry.get("active_version_id"))
@@ -136,6 +153,8 @@ class RemoteInterfaceService:
         requested = payload.model_dump(mode="python", exclude_unset=True)
         input_schema = payload.input_schema or version.input_schema
         output_schema = payload.output_schema or version.output_schema
+        input_assets = payload.input_assets if payload.input_assets is not None else version.input_assets
+        output_assets = payload.output_assets if payload.output_assets is not None else version.output_assets
         interface_config = payload.interface_config or version.interface_config
         if interface_config is None:
             raise HTTPException(status_code=409, detail="接口版本缺少接口配置")
@@ -148,6 +167,8 @@ class RemoteInterfaceService:
             output_schema.model_dump(mode="python"),
             interface_config,
             sample_input or {},
+            input_assets,
+            output_assets,
         )
         now = utc_now()
         runtime_logs = [
@@ -159,6 +180,8 @@ class RemoteInterfaceService:
             {
                 "input_schema": input_schema.model_dump(mode="python"),
                 "output_schema": output_schema.model_dump(mode="python"),
+                "input_assets": [item.model_dump(mode="python") for item in input_assets],
+                "output_assets": [item.model_dump(mode="python") for item in output_assets],
                 "interface_config": interface_config.model_dump(mode="python"),
                 "contract": {"sample_input": sample_input or {}, "description": description},
                 "visibility": visibility,
@@ -179,6 +202,8 @@ class RemoteInterfaceService:
                     "integration_kind": "pending",
                     "input_schema": input_schema.model_dump(mode="python"),
                     "output_schema": output_schema.model_dump(mode="python"),
+                    "input_assets": [item.model_dump(mode="python") for item in input_assets],
+                    "output_assets": [item.model_dump(mode="python") for item in output_assets],
                     "interface_config": interface_config.model_dump(mode="python"),
                     "call_method": interface_config.protocol.upper(),
                     "version": version.version,
@@ -240,6 +265,8 @@ class RemoteInterfaceService:
         version_id: str,
         *,
         input_snapshot: dict | None = None,
+        input_files: dict[str, dict[str, str]] | None = None,
+        output_dir: Path | None = None,
     ) -> AlgorithmInterfaceTestResult:
         """对接口版本执行一次样例调用，不创建 AlgorithmRun。"""
         version = self._get_version(algorithm_id, version_id)
@@ -255,7 +282,13 @@ class RemoteInterfaceService:
                 },
             )
         try:
-            output, metadata = self.invoke(version, input_snapshot if input_snapshot is not None else version.contract.get("sample_input", {}))
+            output, metadata = self.invoke(
+                version,
+                input_snapshot if input_snapshot is not None else version.contract.get("sample_input", {}),
+                input_files=input_files,
+                output_dir=output_dir,
+            )
+            metadata.pop("_downloaded_artifacts", None)
             now = utc_now()
             registry = self._get_registry(algorithm_id)
             is_active_version = registry.get("active_version_id") == version_id
@@ -284,6 +317,7 @@ class RemoteInterfaceService:
                 status_code=metadata.get("status_code"),
                 latency_ms=metadata.get("latency_ms"),
                 output_preview=output,
+                artifact_previews=metadata.get("artifact_previews") or [],
             )
         except HTTPException as exc:
             detail = exc.detail
@@ -312,7 +346,14 @@ class RemoteInterfaceService:
                 error_message=str(exc)[:300],
             )
 
-    def invoke(self, version: AlgorithmVersion, input_snapshot: dict) -> tuple[object, dict[str, Any]]:
+    def invoke(
+        self,
+        version: AlgorithmVersion,
+        input_snapshot: dict,
+        *,
+        input_files: dict[str, dict[str, str]] | None = None,
+        output_dir: Path | None = None,
+    ) -> tuple[object, dict[str, Any]]:
         """同步调用远程接口并返回已提取的输出和非敏感运行元数据。"""
         config = version.interface_config
         if version.source_kind != "remote_interface" or config is None:
@@ -326,6 +367,7 @@ class RemoteInterfaceService:
                 },
             )
         self._validate_input(input_snapshot, version.input_schema.model_dump(mode="python"))
+        normalized_files = self._validate_input_files(version.input_assets, input_files or {})
         self._guard_endpoint(config.endpoint_url)
         query = self._mapped_values(config.query_bindings, input_snapshot)
         headers = dict(config.static_headers)
@@ -335,27 +377,43 @@ class RemoteInterfaceService:
             if not secret_value:
                 raise HTTPException(status_code=422, detail=f"接口凭据引用未配置: {secret_ref}")
             headers[header_name] = secret_value
-        body = None if config.http_method == "GET" else input_snapshot
         started = time.monotonic()
         try:
             with httpx.Client(follow_redirects=False, timeout=config.timeout_seconds) as client:
-                with client.stream(
-                    config.http_method,
-                    config.endpoint_url,
-                    params=query or None,
-                    headers=headers or None,
-                    json=body,
-                ) as response:
-                    if response.status_code < 200 or response.status_code >= 300:
-                        raise HTTPException(status_code=502, detail=f"远程接口返回 HTTP {response.status_code}")
-                    chunks: list[bytes] = []
-                    response_size = 0
-                    for chunk in response.iter_bytes():
-                        response_size += len(chunk)
-                        if response_size > settings.remote_interface_max_response_bytes:
-                            raise HTTPException(status_code=502, detail="远程接口响应超过平台限制")
-                        chunks.append(chunk)
-                    response_content = b"".join(chunks)
+                with ExitStack() as stack:
+                    request_files = None
+                    request_json = None if config.http_method == "GET" else input_snapshot
+                    request_data = None
+                    if config.body_mode == "multipart":
+                        request_json = None
+                        request_data = {config.multipart_json_field: json.dumps(input_snapshot, ensure_ascii=False)}
+                        request_files = {}
+                        for key, item in normalized_files.items():
+                            handle = stack.enter_context(Path(item["path"]).open("rb"))
+                            request_files[config.file_bindings[key]] = (
+                                item["filename"],
+                                handle,
+                                item["mime_type"],
+                            )
+                    with client.stream(
+                        config.http_method,
+                        config.endpoint_url,
+                        params=query or None,
+                        headers=headers or None,
+                        json=request_json,
+                        data=request_data,
+                        files=request_files,
+                    ) as response:
+                        if response.status_code < 200 or response.status_code >= 300:
+                            raise HTTPException(status_code=502, detail=f"远程接口返回 HTTP {response.status_code}")
+                        chunks: list[bytes] = []
+                        response_size = 0
+                        for chunk in response.iter_bytes():
+                            response_size += len(chunk)
+                            if response_size > settings.remote_interface_max_response_bytes:
+                                raise HTTPException(status_code=502, detail="远程接口响应超过平台限制")
+                            chunks.append(chunk)
+                        response_content = b"".join(chunks)
         except httpx.TimeoutException as exc:
             raise HTTPException(status_code=504, detail="远程接口调用超时") from exc
         except httpx.RequestError as exc:
@@ -365,13 +423,30 @@ class RemoteInterfaceService:
             raw_output = json.loads(response_content)
         except (ValueError, json.JSONDecodeError) as exc:
             raise HTTPException(status_code=502, detail="远程接口未返回合法 JSON") from exc
-        output = self._select_output(raw_output, config.response_selector)
+        selected_output = self._select_output(raw_output, config.response_selector)
+        artifact_previews: list[dict[str, Any]] = []
+        downloaded_artifacts: list[dict[str, Any]] = []
+        if config.result_mode == "artifact_manifest":
+            output, manifest_items = self._parse_artifact_manifest(selected_output, version.output_assets)
+            if output_dir is not None:
+                downloaded_artifacts, artifact_previews = self._download_manifest_artifacts(
+                    config,
+                    manifest_items,
+                    version.output_assets,
+                    output_dir,
+                )
+            else:
+                artifact_previews = self._artifact_previews(manifest_items)
+        else:
+            output = selected_output
         self._validate_output(output, version.output_schema.model_dump(mode="python"))
         return self._sanitize_output(output), {
             "status_code": response.status_code,
             "latency_ms": latency_ms,
             "protocol": config.protocol,
             "endpoint_host": urlparse(config.endpoint_url).hostname,
+            "artifact_previews": artifact_previews,
+            "_downloaded_artifacts": downloaded_artifacts,
         }
 
     def activate_version(self, algorithm_id: str, version_id: str) -> AlgorithmVersion:
@@ -457,6 +532,37 @@ class RemoteInterfaceService:
             "deleted": True,
         }
 
+    def get_id_availability(self, algorithm_id: str, *, actor_user_id: str, is_admin: bool) -> dict[str, Any]:
+        """检查算法 ID 是否可用，并返回不泄露模型详情的操作建议。"""
+        normalized = algorithm_id.strip()
+        registry = AlgorithmRegistryRepository.find_one({"algorithm_id": normalized}) if normalized else None
+        if not registry:
+            return {"algorithm_id": normalized, "available": True, "recommended_action": "create_algorithm", "can_create_version": False, "suggestions": []}
+        is_owner = is_admin or registry.get("owner") == actor_user_id
+        return {
+            "algorithm_id": normalized,
+            "available": False,
+            "recommended_action": "create_interface_version" if is_owner and registry.get("source") == "remote_interface" else "choose_another_id",
+            "can_create_version": bool(is_owner and registry.get("source") == "remote_interface"),
+            "suggestions": [f"{normalized}_v2", f"{normalized}_model", f"{normalized}_predictor"],
+        }
+
+    def delete_algorithm(self, algorithm_id: str, *, actor_user_id: str, is_admin: bool, confirm_algorithm_id: str) -> dict[str, Any]:
+        """删除接口模型注册表和全部版本，保留历史运行与审计记录。"""
+        if confirm_algorithm_id.strip() != algorithm_id:
+            raise HTTPException(status_code=422, detail="确认模型 ID 不匹配")
+        registry = self._get_registry(algorithm_id)
+        if not is_admin and registry.get("owner") != actor_user_id:
+            raise HTTPException(status_code=403, detail="无权限删除该接口模型")
+        runs, _ = AlgorithmRunRepository.list_runs(algorithm_id=algorithm_id, page=1, page_size=1000)
+        if any(item.get("status") in {"queued", "running"} for item in runs):
+            raise HTTPException(status_code=409, detail="模型存在排队中或运行中的任务，请完成后再删除")
+        versions, _ = AlgorithmVersionRepository.list_versions(algorithm_id=algorithm_id, page=1, page_size=1000)
+        for version in versions:
+            AlgorithmVersionRepository.delete(version["version_id"])
+        AlgorithmRegistryRepository.delete(algorithm_id)
+        return {"algorithm_id": algorithm_id, "deleted_versions": len(versions), "preserved_runs": len(runs), "registry_deleted": True, "deleted": True}
+
     def version_health(self, algorithm_id: str, version_id: str) -> dict[str, Any]:
         """返回远程接口版本的非敏感健康摘要。"""
         version = self._get_version(algorithm_id, version_id)
@@ -516,6 +622,8 @@ class RemoteInterfaceService:
         version: str,
         input_schema: dict,
         output_schema: dict,
+        input_assets: list[dict],
+        output_assets: list[dict],
         interface_config: RemoteInterfaceConfig,
         sample_input: dict,
         description: str | None,
@@ -539,8 +647,8 @@ class RemoteInterfaceService:
             "runtime": {"backend": "remote_http", "timeout_seconds": interface_config.timeout_seconds},
             "input_schema": input_schema,
             "output_schema": output_schema,
-            "input_assets": [],
-            "output_assets": [],
+            "input_assets": input_assets,
+            "output_assets": output_assets,
             "resource_assets": [],
             "resource_bindings": [],
             "result_envelope": None,
@@ -593,8 +701,8 @@ class RemoteInterfaceService:
             "task_scope": payload.task_scope,
             "input_schema": payload.input_schema.model_dump(mode="python"),
             "output_schema": payload.output_schema.model_dump(mode="python"),
-            "input_assets": [],
-            "output_assets": [],
+            "input_assets": [item.model_dump(mode="python") for item in payload.input_assets],
+            "output_assets": [item.model_dump(mode="python") for item in payload.output_assets],
             "resource_assets": [],
             "result_envelope": None,
             "call_method": payload.interface_config.protocol.upper(),
@@ -652,6 +760,8 @@ class RemoteInterfaceService:
         output_schema: dict,
         config: RemoteInterfaceConfig,
         sample_input: dict,
+        input_assets: list,
+        output_assets: list,
     ) -> None:
         """在保存时校验映射字段，避免把配置错误拖到真实调用阶段。"""
         input_fields = set((input_schema.get("fields") or {}).keys())
@@ -666,9 +776,163 @@ class RemoteInterfaceService:
                         status_code=422,
                         detail=f"{mapping_name}.{remote_name} 引用了未声明的输入字段: {field_path}",
                     )
-        if not (output_schema.get("fields") or output_schema.get("required")):
-            raise HTTPException(status_code=422, detail="输出契约至少需要声明一个字段")
+        input_asset_keys = {item.key for item in input_assets}
+        unknown_bindings = sorted(set(config.file_bindings) - input_asset_keys)
+        if unknown_bindings:
+            raise HTTPException(status_code=422, detail=f"file_bindings 引用了未声明的输入文件: {', '.join(unknown_bindings)}")
+        if config.body_mode == "multipart":
+            missing_bindings = sorted(input_asset_keys - set(config.file_bindings))
+            if missing_bindings:
+                raise HTTPException(status_code=422, detail=f"输入文件缺少远程 part 映射: {', '.join(missing_bindings)}")
+        elif input_assets:
+            raise HTTPException(status_code=422, detail="声明输入文件时 body_mode 必须是 multipart")
+        if config.result_mode == "artifact_manifest" and not output_assets:
+            raise HTTPException(status_code=422, detail="文件产物模式至少需要声明一个输出文件")
+        if not (output_schema.get("fields") or output_schema.get("required") or output_assets):
+            raise HTTPException(status_code=422, detail="至少需要声明一个结构化输出字段或输出文件")
         RemoteInterfaceService._validate_input(sample_input, input_schema)
+
+    @staticmethod
+    def _validate_input_files(
+        specs: list[AlgorithmAssetSpec],
+        input_files: dict[str, dict[str, str]],
+    ) -> dict[str, dict[str, str]]:
+        """校验远程调用上传文件并返回受控文件元数据。"""
+        declared = {spec.key: spec for spec in specs}
+        unknown = sorted(set(input_files) - set(declared))
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"未声明的输入文件: {', '.join(unknown)}")
+        missing = sorted(spec.key for spec in specs if spec.required and spec.key not in input_files)
+        if missing:
+            raise HTTPException(status_code=422, detail=f"缺少必填输入文件: {', '.join(missing)}")
+        normalized = {}
+        for key, item in input_files.items():
+            spec = declared[key]
+            path = Path(str(item.get("path") or "")).resolve()
+            if not path.is_file():
+                raise HTTPException(status_code=422, detail=f"输入文件不存在: {key}")
+            size = path.stat().st_size
+            if spec.max_size_bytes and size > spec.max_size_bytes:
+                raise HTTPException(status_code=413, detail=f"输入文件 {key} 超过大小限制")
+            filename = str(item.get("filename") or key)
+            mime_type = str(item.get("mime_type") or spec.mime_type or "application/octet-stream")
+            suffix = path.suffix.lower()
+            if spec.extensions and suffix not in {str(value).lower() for value in spec.extensions}:
+                raise HTTPException(status_code=422, detail=f"输入文件 {key} 扩展名不受支持")
+            if spec.mime_types and mime_type not in spec.mime_types:
+                raise HTTPException(status_code=422, detail=f"输入文件 {key} MIME 类型不受支持")
+            normalized[key] = {"path": str(path), "filename": filename, "mime_type": mime_type}
+        return normalized
+
+    @classmethod
+    def _parse_artifact_manifest(
+        cls,
+        value: object,
+        specs: list[AlgorithmAssetSpec],
+    ) -> tuple[object, list[dict[str, Any]]]:
+        """解析 polyagent_remote_result.v1 产物清单并校验声明。"""
+        if not isinstance(value, dict) or value.get("output_summary") is None:
+            raise HTTPException(status_code=502, detail="远程接口文件产物响应缺少 output_summary")
+        raw_items = value.get("artifacts")
+        if not isinstance(raw_items, list):
+            raise HTTPException(status_code=502, detail="远程接口文件产物响应缺少 artifacts 列表")
+        declared = {spec.key: spec for spec in specs}
+        seen: set[str] = set()
+        normalized: list[dict[str, Any]] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                raise HTTPException(status_code=502, detail="远程接口产物清单项必须是 object")
+            key = str(raw.get("key") or "").strip()
+            if key not in declared:
+                raise HTTPException(status_code=502, detail=f"远程接口返回了未声明的输出文件: {key}")
+            if key in seen:
+                raise HTTPException(status_code=502, detail=f"远程接口重复返回输出文件: {key}")
+            url = str(raw.get("url") or "").strip()
+            name = str(raw.get("name") or Path(urlparse(url).path).name or key)
+            mime_type = str(raw.get("mime_type") or declared[key].mime_type or "application/octet-stream")
+            size_bytes = int(raw.get("size_bytes") or 0)
+            if not url or size_bytes < 0:
+                raise HTTPException(status_code=502, detail=f"输出文件 {key} 缺少合法 url 或 size_bytes")
+            normalized.append({"key": key, "url": url, "name": name, "mime_type": mime_type, "size_bytes": size_bytes, "sha256": raw.get("sha256")})
+            seen.add(key)
+        missing = sorted(spec.key for spec in specs if spec.required and spec.key not in seen)
+        if missing:
+            raise HTTPException(status_code=502, detail=f"远程接口缺少必填输出文件: {', '.join(missing)}")
+        return cls._sanitize_output(value.get("output_summary")), normalized
+
+    @staticmethod
+    def _artifact_previews(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "key": item["key"],
+                "name": item["name"],
+                "mime_type": item["mime_type"],
+                "size_bytes": item["size_bytes"],
+                "sha256": item.get("sha256"),
+            }
+            for item in items
+        ]
+
+    @classmethod
+    def _download_manifest_artifacts(
+        cls,
+        config: RemoteInterfaceConfig,
+        items: list[dict[str, Any]],
+        specs: list[AlgorithmAssetSpec],
+        output_dir: Path,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """安全下载远程产物并返回内部 ArtifactSpec 所需元数据。"""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        allowed_hosts = set(config.artifact_allowed_hosts) or {urlparse(config.endpoint_url).hostname or ""}
+        declared = {spec.key: spec for spec in specs}
+        total_bytes = 0
+        downloaded: list[dict[str, Any]] = []
+        for index, item in enumerate(items):
+            target_url = urljoin(config.endpoint_url, item["url"])
+            parsed = urlparse(target_url)
+            if parsed.scheme != "https" and settings.app_env not in {"dev", "development", "local", "test", "testing", "ci"}:
+                raise HTTPException(status_code=502, detail="远程产物 URL 必须使用 HTTPS")
+            if parsed.username or parsed.password or parsed.hostname not in allowed_hosts:
+                raise HTTPException(status_code=502, detail="远程产物 URL 主机不在允许范围内")
+            cls._guard_endpoint(target_url)
+            spec = declared[item["key"]]
+            max_size = spec.max_size_bytes or DEFAULT_REMOTE_ARTIFACT_MAX_BYTES
+            target = output_dir / f"{index + 1:02d}_{cls._safe_filename(item['name'])}"
+            digest = hashlib.sha256()
+            received = 0
+            try:
+                with httpx.Client(follow_redirects=False, timeout=60.0) as client:
+                    with client.stream("GET", target_url) as response:
+                        if response.status_code < 200 or response.status_code >= 300:
+                            raise HTTPException(status_code=502, detail=f"远程产物下载失败: HTTP {response.status_code}")
+                        with target.open("wb") as handle:
+                            for chunk in response.iter_bytes():
+                                received += len(chunk)
+                                total_bytes += len(chunk)
+                                if received > max_size or total_bytes > DEFAULT_REMOTE_ARTIFACT_TOTAL_BYTES:
+                                    raise HTTPException(status_code=502, detail="远程产物超过平台大小限制")
+                                digest.update(chunk)
+                                handle.write(chunk)
+            except httpx.TimeoutException as exc:
+                raise HTTPException(status_code=504, detail="远程产物下载超时") from exc
+            except httpx.RequestError as exc:
+                raise HTTPException(status_code=502, detail="远程产物下载失败") from exc
+            expected_size = item.get("size_bytes")
+            expected_sha = str(item.get("sha256") or "").lower()
+            actual_sha = digest.hexdigest()
+            if expected_size and received != expected_size:
+                raise HTTPException(status_code=502, detail=f"输出文件 {item['key']} 大小校验失败")
+            if expected_sha and actual_sha != expected_sha:
+                raise HTTPException(status_code=502, detail=f"输出文件 {item['key']} 校验和不匹配")
+            downloaded.append({"key": item["key"], "path": str(target), "name": item["name"], "mime_type": item["mime_type"], "size_bytes": received, "sha256": actual_sha, "artifact_type": spec.artifact_type or "binary_file"})
+        return downloaded, [
+            {"key": item["key"], "name": item["name"], "mime_type": item["mime_type"], "size_bytes": item["size_bytes"], "sha256": item.get("sha256")}
+            for item in downloaded
+        ]
+
+    @staticmethod
+    def _safe_filename(value: str) -> str:
+        return "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in value) or "artifact.dat"
 
     @staticmethod
     def _read_path(value: object, path: str) -> object:

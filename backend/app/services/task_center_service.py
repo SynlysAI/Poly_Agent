@@ -130,23 +130,43 @@ class TaskCenterService:
             page_size=MAX_AGGREGATE_PAGE_SIZE,
             created_by=None if is_admin else actor_user_id,
         )
-        return [
-            GlobalTaskItem(
-                task_id=run.run_id,
-                task_type="算法运行",
-                module_id="research-engine",
-                module_name="ResearchEngine",
-                title=f"算法运行: {run.algorithm_id}",
-                summary=json.dumps(run.input_snapshot, ensure_ascii=False)[:80] if run.input_snapshot else "-",
-                status=run.status,
-                status_text=run.status,
-                created_at=run.created_at,
-                updated_at=run.updated_at,
-                route={"path": "/research-engine", "query": {"run_id": run.run_id}},
-                raw=run.model_dump(mode="python"),
+        rows: list[GlobalTaskItem] = []
+        for run in data.items:
+            raw = run.model_dump(mode="python")
+            source_kind = str(raw.get("source_kind") or "")
+            is_vertical_model_run = source_kind in {"uploaded_package", "remote_interface"}
+            if is_vertical_model_run:
+                module_id = "vertical-prediction"
+                module_name = "垂类预测模型"
+                route = {
+                    "path": "/vertical-prediction",
+                    "query": {
+                        "tab": "detail",
+                        "algorithm_id": run.algorithm_id,
+                        "run_id": run.run_id,
+                    },
+                }
+            else:
+                module_id = "research-engine"
+                module_name = "ResearchEngine"
+                route = {"path": "/research-engine", "query": {"run_id": run.run_id}}
+            rows.append(
+                GlobalTaskItem(
+                    task_id=run.run_id,
+                    task_type="算法运行",
+                    module_id=module_id,
+                    module_name=module_name,
+                    title=f"算法运行: {run.algorithm_id}",
+                    summary=json.dumps(run.input_snapshot, ensure_ascii=False)[:80] if run.input_snapshot else "-",
+                    status=run.status,
+                    status_text=run.status,
+                    created_at=run.created_at,
+                    updated_at=run.updated_at,
+                    route=route,
+                    raw=raw,
+                )
             )
-            for run in data.items
-        ]
+        return rows
 
     def _research_run_tasks(self, *, actor_user_id: str | None, is_admin: bool) -> list[GlobalTaskItem]:
         data = self.research_orchestrator.list_research_runs(

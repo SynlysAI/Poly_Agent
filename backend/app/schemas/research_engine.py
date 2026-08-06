@@ -143,11 +143,15 @@ class RemoteInterfaceConfig(BaseModel):
     protocol: RemoteInterfaceProtocol = "http"
     endpoint_url: str = Field(min_length=1, max_length=1000)
     http_method: RemoteInterfaceHttpMethod = "POST"
-    body_mode: Literal["json"] = "json"
+    body_mode: Literal["json", "multipart"] = "json"
+    multipart_json_field: str = Field(default="payload", min_length=1, max_length=120)
+    file_bindings: dict[str, str] = Field(default_factory=dict)
     query_bindings: dict[str, str] = Field(default_factory=dict)
     header_bindings: dict[str, str] = Field(default_factory=dict)
     static_headers: dict[str, str] = Field(default_factory=dict)
     response_selector: str | None = Field(default=None, max_length=300)
+    result_mode: Literal["json", "artifact_manifest"] = "json"
+    artifact_allowed_hosts: list[str] = Field(default_factory=list)
     timeout_seconds: int = Field(default=30, ge=1, le=60)
     secret_refs: dict[str, str] = Field(default_factory=dict)
 
@@ -184,6 +188,45 @@ class RemoteInterfaceConfig(BaseModel):
             if not key_text or not field_text:
                 raise ValueError("请求字段映射不能包含空键或空值")
             normalized[key_text] = field_text
+        return normalized
+
+    @field_validator("file_bindings")
+    @classmethod
+    def validate_file_bindings(cls, value: dict[str, str]) -> dict[str, str]:
+        """校验输入资产 key 与远程 multipart part 的映射。"""
+        normalized = {}
+        remote_parts = set()
+        for key, remote_part in value.items():
+            key_text = str(key).strip()
+            part_text = str(remote_part).strip()
+            if not key_text or not part_text:
+                raise ValueError("file_bindings 不能包含空键或空值")
+            if part_text in remote_parts:
+                raise ValueError("file_bindings 不能映射到重复的远程 part")
+            normalized[key_text] = part_text
+            remote_parts.add(part_text)
+        return normalized
+
+    @field_validator("multipart_json_field")
+    @classmethod
+    def normalize_multipart_json_field(cls, value: str) -> str:
+        """规范化 multipart 中承载结构化输入的字段名。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("multipart_json_field 不能为空")
+        return normalized
+
+    @field_validator("artifact_allowed_hosts")
+    @classmethod
+    def validate_artifact_allowed_hosts(cls, value: list[str]) -> list[str]:
+        """规范化远程产物下载主机白名单。"""
+        normalized = []
+        for host in value:
+            host_text = str(host).strip().lower().rstrip(".")
+            if not host_text or "://" in host_text or "/" in host_text or "@" in host_text:
+                raise ValueError("artifact_allowed_hosts 只能填写主机名")
+            if host_text not in normalized:
+                normalized.append(host_text)
         return normalized
 
     @field_validator("query_bindings")
@@ -283,6 +326,8 @@ class AlgorithmInterfaceCreate(BaseModel):
     trigger_modes: list[TriggerSource] = Field(default_factory=lambda: ["human_workflow"])
     input_schema: AlgorithmIOSchema = Field(default_factory=lambda: AlgorithmIOSchema())
     output_schema: AlgorithmIOSchema = Field(default_factory=lambda: AlgorithmIOSchema())
+    input_assets: list["AlgorithmAssetSpec"] = Field(default_factory=list)
+    output_assets: list["AlgorithmAssetSpec"] = Field(default_factory=list)
     interface_config: RemoteInterfaceConfig
     sample_input: dict = Field(default_factory=dict)
     description: str | None = Field(default=None, max_length=1000)
@@ -315,6 +360,8 @@ class AlgorithmInterfaceVersionCreate(BaseModel):
     version: str = Field(min_length=1, max_length=40)
     input_schema: AlgorithmIOSchema = Field(default_factory=lambda: AlgorithmIOSchema())
     output_schema: AlgorithmIOSchema = Field(default_factory=lambda: AlgorithmIOSchema())
+    input_assets: list["AlgorithmAssetSpec"] = Field(default_factory=list)
+    output_assets: list["AlgorithmAssetSpec"] = Field(default_factory=list)
     interface_config: RemoteInterfaceConfig
     sample_input: dict = Field(default_factory=dict)
     description: str | None = Field(default=None, max_length=1000)
@@ -337,6 +384,8 @@ class AlgorithmInterfaceVersionUpdate(BaseModel):
 
     input_schema: AlgorithmIOSchema | None = None
     output_schema: AlgorithmIOSchema | None = None
+    input_assets: list["AlgorithmAssetSpec"] | None = None
+    output_assets: list["AlgorithmAssetSpec"] | None = None
     interface_config: RemoteInterfaceConfig | None = None
     sample_input: dict | None = None
     description: str | None = Field(default=None, max_length=1000)
@@ -362,6 +411,7 @@ class AlgorithmInterfaceTestResult(BaseModel):
     status_code: int | None = None
     latency_ms: int | None = None
     output_preview: object | None = None
+    artifact_previews: list[dict] = Field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None
 
@@ -1271,6 +1321,16 @@ class AlgorithmInterfaceListData(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+class AlgorithmIdAvailability(BaseModel):
+    """算法 ID 可用性及冲突后的安全操作建议。"""
+
+    algorithm_id: str
+    available: bool
+    recommended_action: Literal["create_algorithm", "create_interface_version", "choose_another_id"]
+    can_create_version: bool = False
+    suggestions: list[str] = Field(default_factory=list)
 
 
 class AlgorithmPackageListData(BaseModel):
