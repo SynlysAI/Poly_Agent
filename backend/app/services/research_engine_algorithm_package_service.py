@@ -294,7 +294,7 @@ class AlgorithmPackageService:
             content: 用户上传的算法包 ZIP 字节内容。
 
         Returns:
-            契约元数据字典，包含 algorithm_id/name/version/contract_version。
+            契约元数据字典，包含 algorithm_id/name/version/contract_version/visibility。
 
         Raises:
             HTTPException: 包超过 20MB 限制返回 413；ZIP 非法、缺少契约文件或
@@ -316,11 +316,15 @@ class AlgorithmPackageService:
         version = str(contract.get("version") or "").strip()
         if not version:
             raise HTTPException(status_code=422, detail="算法包契约缺少 version 字段")
+        visibility = str(contract.get("visibility") or "").strip().lower() or None
+        if visibility is not None:
+            visibility = self._normalize_visibility(visibility)
         return {
             "algorithm_id": str(contract.get("algorithm_id") or "").strip() or None,
             "name": str(contract.get("name") or "").strip() or None,
             "version": version,
             "contract_version": str(contract.get("contract_version") or "").strip() or None,
+            "visibility": visibility,
         }
 
     def download_package(self, package_id: str) -> tuple[str, bytes]:

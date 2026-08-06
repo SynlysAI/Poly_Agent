@@ -81,6 +81,8 @@ python scripts/pack_algorithm.py \
 
 上传新版本时，版本号只有一个来源：脚本模式在上传页填写（平台代生成 YAML）；标准 ZIP 模式不再提供版本号输入框，平台直接读取 ZIP 内 `polyagent.algorithm.yaml` 的 `version` 作为登记版本，选择 ZIP 后页面会展示包内版本。需要调整版本号时，请修改 ZIP 内 YAML 的 `version` 后重新上传。
 
+新版本上传的发布范围（`visibility`）同样以包内 `polyagent.algorithm.yaml` 为准：标准 ZIP 模式直接读取 YAML 的 `visibility`，未声明时默认 `private`；脚本模式克隆当前活跃版本包，因此继承其 YAML 中的 `visibility`。上传页只读展示最终生效的发布范围，不提供修改按钮。
+
 ## 来源、引用与机构 Logo
 
 新算法包应尽量提供开发者来源，字段会显示在模型中心、详情页、版本治理和预测结果页：

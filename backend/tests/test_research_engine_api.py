@@ -1729,6 +1729,31 @@ sample_input_path: tests/sample_input.json
         self.assertEqual(upload_resp.status_code, 409)
         self.assertIn("活动版本", upload_resp.text)
 
+    def test_targeted_version_upload_rejects_explicit_visibility(self) -> None:
+        """新版本 ZIP 上传显式传 visibility 时返回 422，YAML 为唯一来源且不落库。"""
+        self._pack_activate_simple_algorithm("vertical_tg_predictor_demo")
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+        before_resp = self.client.get(
+            f"{self.base_url}/algorithm-packages", params={"page_size": 100}
+        )
+        before_total = before_resp.json()["data"]["total"]
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={
+                "target_algorithm_id": "vertical_tg_predictor_demo",
+                "visibility": "public",
+            },
+            files={"file": ("first.zip", template_resp.content, "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 422, upload_resp.text)
+        self.assertIn("不允许单独指定", upload_resp.text)
+
+        after_resp = self.client.get(
+            f"{self.base_url}/algorithm-packages", params={"page_size": 100}
+        )
+        self.assertEqual(after_resp.json()["data"]["total"], before_total)
+
     def test_targeted_version_upload_registers_zip_yaml_version(self) -> None:
         """新版 ZIP 上传以包内 YAML 的 version 登记，不再被表单值覆盖。"""
         self._pack_activate_simple_algorithm("vertical_tg_predictor_demo")
@@ -1757,6 +1782,66 @@ sample_input_path: tests/sample_input.json
             f"{self.base_url}/algorithm-packages/{package['package_id']}:validate"
         )
         self.assertEqual(validate_resp.status_code, 200, validate_resp.text)
+
+    def test_targeted_zip_upload_visibility_comes_from_yaml(self) -> None:
+        """新版本 ZIP 上传的 visibility 以包内 YAML 为准：public 生效，缺失默认 private。"""
+        self._pack_activate_simple_algorithm("vertical_tg_predictor_demo")
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+
+        def zip_with_visibility(value: str | None, version: str = "0.1.1") -> bytes:
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(template_resp.content)) as source_zip:
+                with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                    for member in source_zip.infolist():
+                        if member.is_dir():
+                            continue
+                        content = source_zip.read(member.filename)
+                        if member.filename == "polyagent.algorithm.yaml":
+                            contract = yaml.safe_load(content)
+                            contract["version"] = version
+                            if value is None:
+                                contract.pop("visibility", None)
+                            else:
+                                contract["visibility"] = value
+                            content = yaml.safe_dump(
+                                contract, allow_unicode=True, sort_keys=False
+                            ).encode("utf-8")
+                        target_zip.writestr(member, content)
+            return buffer.getvalue()
+
+        public_upload = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={"target_algorithm_id": "vertical_tg_predictor_demo"},
+            files={"file": ("public.zip", zip_with_visibility("public"), "application/zip")},
+        )
+        self.assertEqual(public_upload.status_code, 200, public_upload.text)
+        public_package = public_upload.json()["data"]
+        self.assertEqual(public_package["visibility"], "public")
+        public_validate = self.client.post(
+            f"{self.base_url}/algorithm-packages/{public_package['package_id']}:validate"
+        )
+        self.assertEqual(public_validate.status_code, 200, public_validate.text)
+        self.assertEqual(public_validate.json()["data"]["visibility"], "public")
+
+        private_upload = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={"target_algorithm_id": "vertical_tg_predictor_demo"},
+            files={
+                "file": (
+                    "missing.zip",
+                    zip_with_visibility(None, version="0.1.2"),
+                    "application/zip",
+                )
+            },
+        )
+        self.assertEqual(private_upload.status_code, 200, private_upload.text)
+        private_package = private_upload.json()["data"]
+        self.assertEqual(private_package["visibility"], "private")
+        private_validate = self.client.post(
+            f"{self.base_url}/algorithm-packages/{private_package['package_id']}:validate"
+        )
+        self.assertEqual(private_validate.status_code, 200, private_validate.text)
+        self.assertEqual(private_validate.json()["data"]["visibility"], "private")
 
     def test_targeted_version_upload_rejects_duplicate_semantic_version(self) -> None:
         """相同 YAML version 的 ZIP 二次上传在校验阶段返回 409。"""
@@ -1811,6 +1896,52 @@ sample_input_path: tests/sample_input.json
         self.assertEqual(data["name"], "Polymer Tg Predictor Demo")
         self.assertEqual(data["version"], "0.1.0")
         self.assertEqual(data["contract_version"], "0.1")
+        self.assertEqual(data["visibility"], "private")
+
+    def test_inspect_algorithm_package_returns_yaml_visibility(self) -> None:
+        """inspect 返回 YAML 中 visibility：public 正常返回、缺失为 null、非法值 422。"""
+        template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")
+
+        def zip_with_visibility(value: str | None) -> bytes:
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(template_resp.content)) as source_zip:
+                with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                    for member in source_zip.infolist():
+                        if member.is_dir():
+                            continue
+                        content = source_zip.read(member.filename)
+                        if member.filename == "polyagent.algorithm.yaml":
+                            contract = yaml.safe_load(content)
+                            if value is None:
+                                contract.pop("visibility", None)
+                            else:
+                                contract["visibility"] = value
+                            content = yaml.safe_dump(
+                                contract, allow_unicode=True, sort_keys=False
+                            ).encode("utf-8")
+                        target_zip.writestr(member, content)
+            return buffer.getvalue()
+
+        public_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:inspect",
+            files={"file": ("public.zip", zip_with_visibility("public"), "application/zip")},
+        )
+        self.assertEqual(public_resp.status_code, 200, public_resp.text)
+        self.assertEqual(public_resp.json()["data"]["visibility"], "public")
+
+        missing_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:inspect",
+            files={"file": ("missing.zip", zip_with_visibility(None), "application/zip")},
+        )
+        self.assertEqual(missing_resp.status_code, 200, missing_resp.text)
+        self.assertIsNone(missing_resp.json()["data"]["visibility"])
+
+        invalid_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages:inspect",
+            files={"file": ("invalid.zip", zip_with_visibility("foo"), "application/zip")},
+        )
+        self.assertEqual(invalid_resp.status_code, 422, invalid_resp.text)
+        self.assertIn("visibility", invalid_resp.text)
 
     def test_inspect_algorithm_package_rejects_invalid_packages(self) -> None:
         """非法 ZIP、缺契约、缺 version、超限与非 zip 后缀返回明确错误。"""
@@ -1916,6 +2047,7 @@ sample_input_path: tests/sample_input.json
         package = upload_resp.json()["data"]
         self.assertEqual(package["created_by"], "original-owner")
         self.assertEqual(package["uploaded_by"], "system-admin")
+        self.assertEqual(package["visibility"], "public")
 
         release_resp = self.client.post(
             f"{self.base_url}/algorithm-packages/{package['package_id']}:release"
@@ -2016,6 +2148,7 @@ sample_input_path: tests/sample_input.json
         self.assertEqual(contract["algorithm_id"], "vertical_tg_predictor_demo")
         self.assertEqual(contract["name"], "Polymer Tg Predictor Demo")
         self.assertEqual(contract["version"], "0.1.1")
+        self.assertEqual(contract["visibility"], "private")
         self.assertEqual(contract["input_schema"]["required"], ["smiles"])
         self.assertIn(b"321", source)
         self.assertEqual(weights, b"new-weights")

@@ -1197,6 +1197,7 @@ class AlgorithmPackageInspect(BaseModel):
     name: str | None = None
     version: str | None = None
     contract_version: str | None = None
+    visibility: AlgorithmVisibility | None = None
 
 
 class AlgorithmVersion(UtcDatetimeJsonModel):

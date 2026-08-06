@@ -618,6 +618,11 @@ async def upload_algorithm_package(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AlgorithmPackage]:
     """上传标准 ZIP 算法包。"""
+    if target_algorithm_id and visibility is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="新版本上传时 visibility 由包内 polyagent.algorithm.yaml 决定，不允许单独指定",
+        )
     if target_algorithm_id:
         active_version = package_service.resolve_active_version(target_algorithm_id)
         if active_version is None:

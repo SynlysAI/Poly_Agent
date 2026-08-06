@@ -47,6 +47,15 @@ const isNewVersion = computed(() => props.mode === 'new_version')
 const submitVersion = computed(() => (
   uploadMode.value === 'zip' ? (zipInspect.value?.version || '—') : form.version
 ))
+const effectiveVisibilityText = computed(() => {
+  const label = (value) => (value === 'public' ? '公开发布' : '非公开发布')
+  if (isNewVersion.value && uploadMode.value === 'zip') {
+    if (!zipInspect.value?.version) return { label: '待选择 ZIP 后确定', hint: '以包内 polyagent.algorithm.yaml 为准' }
+    if (zipInspect.value.visibility) return { label: label(zipInspect.value.visibility), hint: '以 polyagent.algorithm.yaml 为准' }
+    return { label: label('private'), hint: 'YAML 未声明，默认非公开' }
+  }
+  return { label: label(form.visibility || 'private'), hint: '继承自活跃版本' }
+})
 const declaredResourceAssets = computed(() => currentPackage.value?.resource_assets || [])
 const unresolvedRequiredBindings = computed(() => declaredResourceAssets.value.filter(
   (spec) => spec.binding_required && !selectedResourceIds[spec.key],
@@ -223,6 +232,7 @@ watch(
     form.algorithm_id = props.targetAlgorithm.algorithm_id
     form.name = props.targetAlgorithm.name || contract.name || props.targetAlgorithm.algorithm_id
     form.version = suggestNextPatch(props.targetVersions)
+    form.visibility = props.targetVersion?.visibility || props.targetAlgorithm?.visibility || 'private'
     if (currentStep.value === 0) currentStep.value = 1
   },
   { immediate: true, deep: true },
@@ -775,6 +785,9 @@ function viewModelDetail() {
               <el-form-item label="新版本">
                 <el-input v-model="form.version" placeholder="0.1.1" />
               </el-form-item>
+              <el-form-item label="发布范围">
+                <el-input :model-value="`${effectiveVisibilityText.label}（${effectiveVisibilityText.hint}）`" disabled />
+              </el-form-item>
             </div>
           </el-form>
           <div class="source-grid new-version-source">
@@ -1121,6 +1134,7 @@ function viewModelDetail() {
         <el-alert
           v-else-if="zipInspect?.version"
           :title="isNewVersion ? `将以 ZIP 内版本 ${zipInspect.version} 登记为新版本（以 polyagent.algorithm.yaml 为准）` : `ZIP 内版本：${zipInspect.version}`"
+          :description="isNewVersion ? `发布范围：${effectiveVisibilityText.label}（${effectiveVisibilityText.hint}）` : ''"
           type="info"
           :closable="false"
           show-icon
@@ -1137,7 +1151,7 @@ function viewModelDetail() {
       </div>
       <div class="deploy-summary">
         <span>上传方式：{{ uploadMode === 'zip' ? '标准 ZIP' : 'Python 脚本' }}</span>
-        <span v-if="!isNewVersion">发布范围：{{ form.visibility === 'public' ? '公开发布' : '非公开发布' }}</span>
+        <span>发布范围：{{ effectiveVisibilityText.label }}<template v-if="isNewVersion">（{{ effectiveVisibilityText.hint }}）</template></span>
         <span v-if="isNewVersion">目标：{{ form.algorithm_id }} / {{ submitVersion }}</span>
         <span v-if="uploadMode === 'script'">模型：{{ form.name }} / {{ form.version }}</span>
         <span v-if="uploadMode === 'zip'">文件：{{ zipFiles[0]?.name || '已选择 ZIP' }}</span>
