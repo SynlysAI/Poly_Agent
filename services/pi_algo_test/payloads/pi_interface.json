@@ -1,0 +1,77 @@
+{
+  "algorithm_id": "pi_synthesis_mock",
+  "name": "PI 合成难度评分 Mock",
+  "version": "0.1.0",
+  "algorithm_family": "vertical_prediction",
+  "type": "predictor",
+  "material_scope": ["universal"],
+  "task_scope": ["COMPUTE_PREDICT"],
+  "trigger_modes": ["human_workflow"],
+  "input_schema": {
+    "fields": {
+      "diamine": "string",
+      "dianhydride": "string",
+      "solvent": "string",
+      "diamine_structure": "string",
+      "dianhydride_structure": "string",
+      "diamine_solubility": "number",
+      "dianhydride_solubility": "number",
+      "water_content_status": "string",
+      "inert_atmosphere_status": "boolean"
+    },
+    "required": ["diamine", "dianhydride", "solvent"]
+  },
+  "output_schema": {
+    "fields": {
+      "assessment_version": "string",
+      "input": "object",
+      "score_details": "object",
+      "calculation": "object",
+      "risk_tags": "array",
+      "initial_process": "object",
+      "override_applied": "boolean",
+      "override_reason": "array",
+      "selected_process": "object",
+      "confidence": "number",
+      "applicability": "string",
+      "difficulty_score": "integer",
+      "recommended_parameters": "object"
+    },
+    "required": [
+      "assessment_version",
+      "calculation",
+      "difficulty_score",
+      "recommended_parameters",
+      "selected_process",
+      "applicability"
+    ]
+  },
+  "interface_config": {
+    "protocol": "fastapi",
+    "endpoint_url": "http://127.0.0.1:8300/predict",
+    "http_method": "POST",
+    "body_mode": "json",
+    "query_bindings": {},
+    "header_bindings": {},
+    "static_headers": {},
+    "response_selector": null,
+    "timeout_seconds": 30,
+    "secret_refs": {}
+  },
+  "sample_input": {
+    "diamine": "ODA",
+    "dianhydride": "PMDA",
+    "solvent": "NMP",
+    "diamine_solubility": 4,
+    "dianhydride_solubility": 3,
+    "water_content_status": "low",
+    "inert_atmosphere_status": true
+  },
+  "description": "PI 低温溶液缩聚合成难度评分的轻量确定性 mock 接口，用于垂类算法上传与实验转发的仿真验证。",
+  "developer": "PI 合成难度评分 Mock 算法团队",
+  "developer_organization": "PolyAgent 内部测试",
+  "developer_contact": "polyagent-dev@local.test",
+  "source_url": "refer/pi/PI_synthesis_difficulty_scoring_rules_v1.0.json",
+  "citation": "评分规则参考 refer/pi/PI_synthesis_difficulty_scoring_rules_v1.0.json 与 PI自动实验对接规则.docx",
+  "visibility": "private"
+}

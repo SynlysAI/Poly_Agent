@@ -1,0 +1,85 @@
+{
+    "assessment_version": "pi_synthesis_mock@1.0.0",
+    "input": {
+        "diamine_id": "ODA",
+        "dianhydride_id": "PMDA",
+        "solvent": "NMP"
+    },
+    "score_details": {
+        "R": {
+            "R_DI_base": 15,
+            "R_DI_corrections": [],
+            "R_DI": 15,
+            "R_DA_base": 12,
+            "R_DA_corrections": [],
+            "R_DA": 12,
+            "R_total": 27
+        },
+        "H": {
+            "H_DI": 6,
+            "H_DA": 6,
+            "H_conf": 4,
+            "H_asym": 4,
+            "H_total": 20,
+            "evidence": [
+                "mock 确定性评分：由 diamine='ODA', dianhydride='PMDA', solvent='NMP' 派生基础分",
+                "评分规则来源：PI_synthesis_difficulty_scoring_rules_v1.0.json（随服务分发）"
+            ]
+        },
+        "S": {
+            "S_monomer": 9,
+            "S_polymer": 7,
+            "S_viscosity": 6,
+            "S_total": 22,
+            "evidence": [
+                "mock 确定性评分：由 diamine='ODA', dianhydride='PMDA', solvent='NMP' 派生基础分",
+                "评分规则来源：PI_synthesis_difficulty_scoring_rules_v1.0.json（随服务分发）"
+            ]
+        },
+        "U": {
+            "U_water": 4,
+            "U_oxidation": 2,
+            "U_thermal": 2,
+            "U_gel": 3,
+            "U_total": 11,
+            "evidence": [
+                "mock 确定性评分：由 diamine='ODA', dianhydride='PMDA', solvent='NMP' 派生基础分",
+                "评分规则来源：PI_synthesis_difficulty_scoring_rules_v1.0.json（随服务分发）"
+            ]
+        }
+    },
+    "calculation": {
+        "chemical_difficulty_C": 47,
+        "physical_execution_difficulty_P": 33,
+        "total_difficulty_D": 80,
+        "formula_check": "R(27)+H(20)+S(22)+U(11)=80"
+    },
+    "risk_tags": [
+        "POOR_SOLUBILITY",
+        "FAST_VISCOSITY",
+        "OXIDATION_RISK",
+        "HIGH_STERIC"
+    ],
+    "initial_process": {
+        "process_id": "PI-P08",
+        "temperature_c": 55,
+        "reaction_time_h": 42,
+        "solvent_volume_ml": 60
+    },
+    "override_applied": false,
+    "override_reason": [],
+    "selected_process": {
+        "process_id": "PI-P08",
+        "temperature_c": 55,
+        "reaction_time_h": 42,
+        "solvent_volume_ml": 60
+    },
+    "confidence": 0.85,
+    "applicability": "IN_DOMAIN",
+    "difficulty_score": 80,
+    "recommended_parameters": {
+        "diamine": "ODA",
+        "dianhydride": "PMDA",
+        "solvent": "NMP"
+    }
+}
