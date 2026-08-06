@@ -56,6 +56,7 @@ const selectedHandoffId = ref(normalizeQueryString(route.query.handoff_id))
 const docEntryMode = ref(normalizeQueryString(route.query.doc_mode) === 'download' ? 'download' : 'upload')
 const uploadContextMode = ref(normalizeQueryString(route.query.upload_mode) === 'new_version' ? 'new_version' : 'new_algorithm')
 const metadataEditorVisible = ref(false)
+const targetRunId = ref(normalizeQueryString(route.query.run_id))
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === selectedAlgorithmId.value) || null)
 const selectedVersions = computed(() => versionMap.value[selectedAlgorithmId.value] || [])
@@ -148,6 +149,7 @@ function syncRoute() {
     delete query.doc_mode
     delete query.upload_mode
     delete query.version_id
+    delete query.run_id
   } else if (activeMode.value === 'doc') {
     query.tab = 'doc'
     delete query.algorithm_id
@@ -156,6 +158,7 @@ function syncRoute() {
     else delete query.handoff_id
     query.doc_mode = docEntryMode.value
     delete query.version_id
+    delete query.run_id
   } else if (activeMode.value === 'upload') {
     query.tab = 'upload'
     if (uploadContextMode.value === 'new_version' && selectedAlgorithmId.value) {
@@ -168,6 +171,7 @@ function syncRoute() {
     delete query.handoff_id
     delete query.doc_mode
     delete query.version_id
+    delete query.run_id
   } else if (activeMode.value === 'interface-config') {
     query.tab = 'interface-config'
     if (selectedAlgorithm.value?.source === 'remote_interface') query.algorithm_id = selectedAlgorithmId.value
@@ -177,6 +181,7 @@ function syncRoute() {
     delete query.handoff_id
     delete query.doc_mode
     delete query.upload_mode
+    delete query.run_id
   } else {
     query.tab = 'detail'
     if (selectedAlgorithmId.value) query.algorithm_id = selectedAlgorithmId.value
@@ -198,10 +203,17 @@ watch(
     selectedHandoffId.value = normalizeQueryString(query.handoff_id)
     docEntryMode.value = normalizeQueryString(query.doc_mode) === 'download' ? 'download' : 'upload'
     uploadContextMode.value = normalizeQueryString(query.upload_mode) === 'new_version' ? 'new_version' : 'new_algorithm'
+    targetRunId.value = normalizeQueryString(query.run_id)
   },
 )
 
 watch([activeMode, selectedAlgorithmId, interfaceConfigVersionId, selectedHandoffId, docEntryMode, uploadContextMode], syncRoute)
+
+watch(targetRunId, (value) => {
+  if (activeMode.value === 'detail' && value && selectedAlgorithm.value) {
+    detailActiveTab.value = 'api'
+  }
+})
 
 async function loadData() {
   loading.value = true
@@ -220,6 +232,9 @@ async function loadData() {
       recentRuns: governedRuns.length,
     }
     reconcileSelectedAlgorithm()
+    if (activeMode.value === 'detail' && targetRunId.value && selectedAlgorithm.value) {
+      detailActiveTab.value = 'api'
+    }
     await loadVersionsForCards()
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -664,7 +679,7 @@ onMounted(() => {
               <AlgorithmManagementPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-selector="false" @changed="handleChanged" @edit-interface-config="openEditInterfaceConfig" />
               <section class="history-panel">
                 <h3>运行记录</h3>
-                <AlgorithmRunHistoryPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" />
+                <AlgorithmRunHistoryPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :focus-run-id="targetRunId" />
               </section>
             </div>
           </el-tab-pane>

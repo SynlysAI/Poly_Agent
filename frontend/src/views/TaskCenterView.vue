@@ -177,6 +177,19 @@ function openTaskSource(row) {
   router.push(target)
 }
 
+function taskAlgorithmResultTarget(row) {
+  const algorithmId = row?.raw?.algorithm_id
+  const runId = row?.raw?.run_id || row?.task_id
+  if (!algorithmId || !runId) return null
+  return { algorithmId, runId }
+}
+
+function openTaskAlgorithmResult(row) {
+  const target = taskAlgorithmResultTarget(row)
+  if (!target) return
+  router.push({ path: '/vertical-prediction', query: { tab: 'detail', algorithm_id: target.algorithmId, run_id: target.runId } })
+}
+
 function openTaskReport(row) {
   const routeQuery = row?.route?.query || {}
   if (routeQuery.run_id) {
@@ -328,6 +341,7 @@ onMounted(() => {
           <el-descriptions-item label="更新时间">{{ formatDate(selectedTask.updated_at) }}</el-descriptions-item>
         </el-descriptions>
         <div class="task-detail-shortcuts">
+          <el-button :icon="DataAnalysis" :disabled="!taskAlgorithmResultTarget(selectedTask)" @click="openTaskAlgorithmResult(selectedTask)">算法结果</el-button>
           <el-button :icon="Document" :disabled="!taskSourceRoute(selectedTask)" @click="openTaskSource(selectedTask)">来源页</el-button>
           <el-button :icon="Document" :disabled="!selectedTask?.route?.query?.run_id && !selectedTask?.route?.query?.research_run_id" @click="openTaskReport(selectedTask)">报告</el-button>
         </div>

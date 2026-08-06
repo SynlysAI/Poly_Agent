@@ -4,13 +4,14 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { DocumentChecked, Refresh, View } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, listAlgorithmRuns } from '../../api/polyAgentApi'
+import { getAlgorithmRun, getApiErrorMessage, listAlgorithmRuns } from '../../api/polyAgentApi'
 import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
 import AlgorithmResultView from './AlgorithmResultView.vue'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
   algorithmId: { type: String, default: '' },
+  focusRunId: { type: String, default: '' },
 })
 const router = useRouter()
 
@@ -18,6 +19,8 @@ const loading = ref(false)
 const runs = ref([])
 const detail = ref(null)
 const detailVisible = ref(false)
+const highlightRunId = ref('')
+const handledFocusRunId = ref('')
 const filters = reactive({ algorithm_id: '', version_id: '', status: '', date_range: null })
 const lockedAlgorithmId = computed(() => String(props.algorithmId || '').trim())
 
@@ -37,6 +40,9 @@ watch(lockedAlgorithmId, (value) => {
   filters.algorithm_id = value
   loadRuns()
 })
+watch(() => props.focusRunId, (value) => {
+  if (value) focusRun(value)
+}, { immediate: true })
 
 async function loadRuns() {
   loading.value = true
@@ -65,6 +71,29 @@ function resetFilters() {
 function openDetail(run) {
   detail.value = run
   detailVisible.value = true
+}
+
+async function focusRun(runId) {
+  if (!runId || handledFocusRunId.value === runId) return
+  const found = runs.value.find((item) => item.run_id === runId)
+  if (found) {
+    handledFocusRunId.value = runId
+    highlightRunId.value = runId
+    openDetail(found)
+    return
+  }
+  try {
+    const run = await getAlgorithmRun(runId)
+    handledFocusRunId.value = runId
+    highlightRunId.value = runId
+    openDetail(run)
+  } catch (error) {
+    ElMessage.warning(getApiErrorMessage(error))
+  }
+}
+
+function rowClassName({ row }) {
+  return row.run_id === highlightRunId.value ? 'focused-run-row' : ''
 }
 
 function formatDate(value) {
@@ -112,7 +141,7 @@ onMounted(() => {
       <el-button :icon="Refresh" :loading="loading" aria-label="刷新运行记录" @click="loadRuns" />
     </div>
 
-    <el-table v-loading="loading" :data="filteredRuns" border empty-text="暂无垂类模型运行记录">
+    <el-table v-loading="loading" :data="filteredRuns" border empty-text="暂无垂类模型运行记录" :row-class-name="rowClassName">
       <el-table-column prop="run_id" label="Run ID" min-width="190" />
       <el-table-column prop="algorithm_id" label="算法" min-width="180" />
       <el-table-column label="版本" min-width="210"><template #default="{ row }"><code>{{ row.algorithm_version_id }}</code></template></el-table-column>
@@ -160,5 +189,6 @@ code { font-family: var(--app-mono-font); font-size: 12px; }
 .runtime-log { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--app-mono-font); font-size: 12px; }
 .detail-result-view { margin-top: 16px; }
 .detail-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+:deep(.focused-run-row) { background-color: var(--app-primary-light, #dbeafe); }
 @media (max-width: 720px) { .history-toolbar { align-items: stretch; flex-direction: column; } .history-toolbar > * { width: 100% !important; } }
 </style>
