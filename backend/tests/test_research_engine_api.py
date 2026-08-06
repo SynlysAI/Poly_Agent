@@ -2021,8 +2021,11 @@ sample_input_path: tests/sample_input.json
             f"{self.base_url}/algorithm-packages/{upload_resp.json()['data']['package_id']}:validate"
         )
         self.assertEqual(validate_resp.status_code, 409, validate_resp.text)
-        self.assertIn("模型 ID", validate_resp.text)
-        self.assertIn("上传新版本", validate_resp.text)
+        validate_body = validate_resp.json()
+        self.assertEqual(validate_body["code"], 40901)
+        self.assertEqual(validate_body["message"], "conflict")
+        self.assertIn("模型 ID", validate_body["data"]["detail"])
+        self.assertIn("上传新版本", validate_body["data"]["detail"])
 
     def test_admin_release_preserves_owner_and_owner_can_rollback(self) -> None:
         """管理员代发新版本不转移归属，原上传者仍可管理并看到回滚状态。"""
