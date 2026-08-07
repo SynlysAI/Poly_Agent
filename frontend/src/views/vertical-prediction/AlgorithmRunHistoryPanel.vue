@@ -12,6 +12,7 @@ const props = defineProps({
   refreshKey: { type: Number, default: 0 },
   algorithmId: { type: String, default: '' },
   focusRunId: { type: String, default: '' },
+  outputSchema: { type: Object, default: null },
 })
 const router = useRouter()
 
@@ -170,9 +171,11 @@ onMounted(() => {
           :output-summary="detail.output_summary"
           :input-snapshot="detail.input_snapshot"
           :artifact-refs="detail.artifact_refs"
+          :output-schema="outputSchema"
           :status="detail.status"
           :error="detail.error"
           :run-id="detail.run_id"
+          :show-input="true"
         />
         <div class="detail-actions">
           <el-button type="primary" :icon="DocumentChecked" :disabled="detail.status !== 'completed'" @click="openExperimentDispatch(detail)">生成实验清单</el-button>

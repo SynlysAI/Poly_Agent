@@ -128,6 +128,7 @@ onMounted(() => {
           :output-summary="run.output_summary"
           :input-snapshot="run.input_snapshot"
           :artifact-refs="run.artifact_refs"
+          :output-schema="null"
           :status="run.status"
           :error="run.error"
           :run-id="run.run_id"

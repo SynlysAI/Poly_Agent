@@ -1224,6 +1224,7 @@ onMounted(loadAlgorithms)
             :output-summary="lastRun.output_summary"
             :input-snapshot="lastRun.input_snapshot"
             :artifact-refs="lastRun.artifact_refs"
+            :output-schema="selectedVersion?.output_schema"
             :status="lastRun.status"
             :error="lastRun.error"
             :attributions="selectedAttributions"
