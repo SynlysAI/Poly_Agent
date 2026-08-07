@@ -9,6 +9,7 @@ import {
   createAlgorithmInterfaceVersion,
   getApiErrorMessage,
   testAlgorithmInterface,
+  testAlgorithmInterfaceMultipart,
   updateAlgorithmInterfaceVersion,
 } from '../../api/polyAgentApi'
 import { INTERFACE_CONFIG_EXAMPLES } from '../../utils/interfaceConfigExamples.mjs'
@@ -116,6 +117,9 @@ function applyExample(example) {
   form.logo_url = ''
   inputFields.value = example.input_fields.map((row) => ({ ...row }))
   outputFields.value = example.output_fields.map((row) => ({ ...row }))
+  inputAssets.value = []
+  outputAssets.value = []
+  sampleFiles.value = {}
   queryBindings.value = rowsFromMap(example.query_bindings)
   headerBindings.value = rowsFromMap(example.header_bindings)
   staticHeaders.value = rowsFromMap(example.static_headers)
@@ -148,6 +152,8 @@ const form = reactive({
   protocol: 'fastapi',
   endpoint_url: 'https://model.example.com/predict',
   http_method: 'POST',
+  body_mode: 'json',
+  result_mode: 'json',
   timeout_seconds: 30,
   response_selector: '',
   description: '',
@@ -164,6 +170,9 @@ const form = reactive({
 
 const inputFields = ref([{ name: 'smiles', type: 'string', required: true, unit: '' }])
 const outputFields = ref([{ name: 'prediction', type: 'number', required: true, unit: '' }])
+const inputAssets = ref([])
+const outputAssets = ref([])
+const sampleFiles = ref({})
 const queryBindings = ref([])
 const headerBindings = ref([])
 const staticHeaders = ref([])
@@ -209,6 +218,9 @@ function hydrateFromTarget() {
   form.sample_input = JSON.stringify(version.contract?.sample_input || {}, null, 2)
   inputFields.value = rowsFromSchema(version.input_schema || algorithm.input_schema)
   outputFields.value = rowsFromSchema(version.output_schema || algorithm.output_schema)
+  inputAssets.value = (version.input_assets || algorithm.input_assets || []).map((item) => ({ ...item }))
+  outputAssets.value = (version.output_assets || algorithm.output_assets || []).map((item) => ({ ...item }))
+  sampleFiles.value = {}
   queryBindings.value = rowsFromMap(config.query_bindings)
   headerBindings.value = rowsFromMap(config.header_bindings)
   staticHeaders.value = rowsFromMap(config.static_headers)
@@ -240,6 +252,25 @@ function addMapping(rows) {
   rows.push({ key: '', value: '' })
 }
 
+function addAsset(rows, role) {
+  rows.push({ key: '', label: '', required: false, mime_type: '', extensions: [], artifact_type: role === 'output' ? 'binary_file' : null, max_size_bytes: null })
+}
+
+function removeAsset(rows, index) {
+  rows.splice(index, 1)
+}
+
+function assetListPayload(rows) {
+  return rows.filter((row) => String(row.key || '').trim()).map((row) => ({
+    ...row,
+    key: String(row.key).trim(),
+    label: String(row.label || '').trim() || null,
+    extensions: Array.isArray(row.extensions)
+      ? row.extensions
+      : String(row.extensions || '').split(',').map((value) => value.trim()).filter(Boolean),
+  }))
+}
+
 function removeRow(rows, index) {
   rows.splice(index, 1)
 }
@@ -265,11 +296,14 @@ function interfaceConfig() {
     protocol: form.protocol,
     endpoint_url: form.endpoint_url.trim(),
     http_method: form.http_method,
-    body_mode: 'json',
+    body_mode: inputAssets.value.length ? 'multipart' : form.body_mode,
+    multipart_json_field: 'payload',
+    file_bindings: Object.fromEntries(inputAssets.value.filter((row) => String(row.key || '').trim()).map((row) => [String(row.key).trim(), String(row.key).trim()])),
     query_bindings: mapFromRows(queryBindings.value),
     header_bindings: mapFromRows(headerBindings.value),
     static_headers: mapFromRows(staticHeaders.value),
     response_selector: form.response_selector.trim() || null,
+    result_mode: outputAssets.value.length ? 'artifact_manifest' : form.result_mode,
     timeout_seconds: Number(form.timeout_seconds),
     secret_refs: mapFromRows(secretRefs.value),
   }
@@ -280,6 +314,8 @@ function versionPayload({ includeVersion = true } = {}) {
     ...(includeVersion ? { version: form.version.trim() } : {}),
     input_schema: schemaFromRows(inputFields.value),
     output_schema: schemaFromRows(outputFields.value),
+    input_assets: assetListPayload(inputAssets.value),
+    output_assets: assetListPayload(outputAssets.value),
     interface_config: interfaceConfig(),
     sample_input: JSON.parse(form.sample_input),
     description: form.description.trim() || null,
@@ -314,7 +350,11 @@ function validateStep(step = currentStep.value) {
     }
     return ''
   }
-  if (step === 2) return validateRows(inputFields.value, '输入字段') || validateRows(outputFields.value, '输出字段')
+  if (step === 2) {
+    const inputError = inputAssets.value.length ? '' : validateRows(inputFields.value, '输入字段')
+    const outputError = outputAssets.value.length ? '' : validateRows(outputFields.value, '输出字段')
+    return inputError || outputError
+  }
   if (step === 3) {
     const inputNames = new Set(inputFields.value.map((row) => String(row.name || '').trim()).filter(Boolean))
     for (const [label, rows, usesInputField] of [
@@ -345,6 +385,8 @@ function validateStep(step = currentStep.value) {
       .filter((row) => row.required && row.name.trim() && (sample[row.name.trim()] === undefined || sample[row.name.trim()] === null))
       .map((row) => row.name.trim())
     if (missing.length) return `样例输入缺少必填字段：${missing.join('、')}`
+    const missingFiles = inputAssets.value.filter((row) => row.required && !sampleFiles.value[row.key]).map((row) => row.label || row.key)
+    if (missingFiles.length) return `样例输入缺少必填文件：${missingFiles.join('、')}`
   }
   return ''
 }
@@ -394,6 +436,8 @@ async function saveConfig() {
         trigger_modes: ['human_workflow', 'autoresearch'],
         input_schema: schemaFromRows(inputFields.value),
         output_schema: schemaFromRows(outputFields.value),
+        input_assets: assetListPayload(inputAssets.value),
+        output_assets: assetListPayload(outputAssets.value),
         interface_config: interfaceConfig(),
         sample_input: JSON.parse(form.sample_input),
         description: form.description.trim() || null,
@@ -430,11 +474,10 @@ async function testConfig() {
   }
   testing.value = true
   try {
-    testResult.value = await testAlgorithmInterface(
-      form.algorithm_id,
-      savedVersion.value.version_id,
-      JSON.parse(form.sample_input),
-    )
+    const sample = JSON.parse(form.sample_input)
+    testResult.value = inputAssets.value.length
+      ? await testAlgorithmInterfaceMultipart(form.algorithm_id, savedVersion.value.version_id, sample, sampleFiles.value)
+      : await testAlgorithmInterface(form.algorithm_id, savedVersion.value.version_id, sample)
     if (testResult.value.ok) ElMessage.success('接口样例测试通过')
   } catch (error) {
     testResult.value = null
@@ -595,13 +638,19 @@ async function activateConfig() {
           title="生产环境要求 HTTPS；本地调试可指向 127.0.0.1（需开发环境允许私网访问）。响应提取路径示例：data.prediction；留空表示使用完整 JSON。"
         />
         <div class="form-grid three-cols">
-          <el-form-item label="接口类型">
+        <el-form-item label="接口类型">
             <el-select v-model="form.protocol">
               <el-option label="HTTP" value="http" />
               <el-option label="FastAPI" value="fastapi" />
               <el-option label="MCP（暂不可调用）" value="mcp" />
             </el-select>
-          </el-form-item>
+        </el-form-item>
+        <el-form-item label="请求体模式">
+          <el-select v-model="form.body_mode"><el-option label="JSON" value="json" /><el-option label="Multipart 文件" value="multipart" /></el-select>
+        </el-form-item>
+        <el-form-item label="输出模式">
+          <el-select v-model="form.result_mode"><el-option label="JSON 输出" value="json" /><el-option label="JSON + 文件产物清单" value="artifact_manifest" /></el-select>
+        </el-form-item>
           <el-form-item label="请求方法">
             <el-select v-model="form.http_method"><el-option v-for="method in ['GET', 'POST', 'PUT', 'PATCH']" :key="method" :label="method" :value="method" /></el-select>
           </el-form-item>
@@ -631,6 +680,24 @@ async function activateConfig() {
               <el-checkbox v-model="row.required">必填</el-checkbox>
               <el-input v-model="row.unit" placeholder="单位" />
               <el-button :icon="Delete" circle text aria-label="删除输入字段" @click="removeRow(inputFields, index)" />
+            </div>
+          </div>
+          <div class="schema-editor asset-editor">
+            <div class="editor-heading"><h3>输入文件</h3><el-button text :icon="Plus" @click="addAsset(inputAssets, 'input')">添加</el-button></div>
+            <div v-for="(row, index) in inputAssets" :key="`input-asset-${index}`" class="asset-row">
+              <el-input v-model="row.key" placeholder="文件 key" />
+              <el-input v-model="row.label" placeholder="显示名称" />
+              <el-checkbox v-model="row.required">必填</el-checkbox>
+              <el-button :icon="Delete" circle text aria-label="删除输入文件规格" @click="removeAsset(inputAssets, index)" />
+            </div>
+          </div>
+          <div class="schema-editor asset-editor">
+            <div class="editor-heading"><h3>输出文件</h3><el-button text :icon="Plus" @click="addAsset(outputAssets, 'output')">添加</el-button></div>
+            <div v-for="(row, index) in outputAssets" :key="`output-asset-${index}`" class="asset-row">
+              <el-input v-model="row.key" placeholder="文件 key" />
+              <el-input v-model="row.label" placeholder="显示名称" />
+              <el-checkbox v-model="row.required">必填</el-checkbox>
+              <el-button :icon="Delete" circle text aria-label="删除输出文件规格" @click="removeAsset(outputAssets, index)" />
             </div>
           </div>
           <div class="schema-editor">
@@ -684,8 +751,23 @@ async function activateConfig() {
           title="流程：保存配置 → 样例测试 → 激活并进入管理中心。接口版本不可变，修改地址或协议请新建版本。"
         />
         <el-form-item label="样例输入" :error="sampleInputError"><el-input v-model="form.sample_input" type="textarea" :rows="8" class="json-input" /></el-form-item>
+        <div v-if="inputAssets.length" class="sample-assets">
+          <div v-for="asset in inputAssets" :key="asset.key" class="sample-asset-row">
+            <span>{{ asset.label || asset.key }}<small v-if="asset.required"> · 必填</small></span>
+            <input type="file" @change="sampleFiles[asset.key] = $event.target.files?.[0] || null" />
+          </div>
+        </div>
         <el-alert v-if="testResult?.ok" type="success" :closable="false" show-icon :title="`调用成功 · HTTP ${testResult.status_code} · ${testResult.latency_ms} ms`" />
         <el-alert v-else-if="testResult && !testResult.ok" type="error" :closable="false" show-icon :title="testResult.error_message || '样例测试未通过'" />
+        <div v-if="testResult?.ok" class="sample-result">
+          <h3>样例输出</h3>
+          <pre>{{ JSON.stringify(testResult.output_preview, null, 2) }}</pre>
+          <div v-if="testResult.artifact_previews?.length" class="artifact-preview-list">
+            <div v-for="item in testResult.artifact_previews" :key="item.key" class="artifact-preview-row">
+              <span>{{ item.name || item.key }}</span><small>{{ item.mime_type }} · {{ item.size_bytes }} bytes</small>
+            </div>
+          </div>
+        </div>
         <div class="test-status">{{ savedVersion ? `已保存版本 ${savedVersion.version || form.version}，可开始样例测试。` : '先保存配置，再进行样例测试。' }}</div>
       </section>
     </el-form>
@@ -739,11 +821,16 @@ h3 { font-size: 14px; }
 .schema-editor, .mapping-editor { min-width: 0; padding-top: 12px; border-top: 1px solid var(--app-border-soft); }
 .editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .field-row { display: grid; grid-template-columns: minmax(110px, 1fr) 110px 64px 90px 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.asset-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) 64px 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .mapping-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(130px, 1fr) 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .mapping-empty { color: var(--app-ink-muted); font-size: 12px; }
 .protocol-summary { color: var(--app-ink-muted); font-size: 12px; }
 .json-input :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .test-status { margin-top: 12px; color: var(--app-ink-muted); font-size: 13px; }
+.sample-assets, .sample-result { display: grid; gap: 8px; margin: 12px 0; }
+.sample-asset-row, .artifact-preview-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; }
+.sample-asset-row small, .artifact-preview-row small { color: var(--app-ink-muted); }
+.sample-result pre { margin: 0; max-height: 260px; overflow: auto; padding: 12px; border-radius: var(--app-radius-sm); background: #0f172a; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; }
 .wizard-footer { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; padding: 2px 2px 8px; }
 .guide-banner { overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: linear-gradient(180deg, #ffffff 0%, #f4f8ff 100%); }
 .guide-bar { display: flex; align-items: center; gap: 14px; padding: 14px 18px; cursor: pointer; user-select: none; }
@@ -770,4 +857,5 @@ h3 { font-size: 14px; }
 @media (max-width: 680px) { .guide-bar { flex-wrap: wrap; row-gap: 10px; } .guide-actions { flex: 1 1 100%; justify-content: flex-end; } .example-cards { grid-template-columns: 1fr; } }
 @media (max-width: 1024px) { .three-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } .schema-columns, .mapping-columns { grid-template-columns: 1fr; } }
 @media (max-width: 680px) { .config-header { flex-direction: column; } .desktop-steps { display: none; } .mobile-progress-track { display: block; } .three-cols { grid-template-columns: 1fr; } .field-row { grid-template-columns: minmax(0, 1fr) 100px; } .field-row > :nth-child(n + 3) { grid-column: auto; } .wizard-progress { align-items: flex-start; flex-direction: column; } .wizard-footer { justify-content: stretch; } .wizard-footer .el-button { flex: 1 1 100%; margin-left: 0; } }
+@media (max-width: 680px) { .asset-row { grid-template-columns: minmax(0, 1fr) 32px; } .asset-row > :nth-child(2), .asset-row > :nth-child(3) { grid-column: 1 / -1; } }
 </style>

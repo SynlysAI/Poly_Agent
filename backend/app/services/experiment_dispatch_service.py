@@ -191,6 +191,8 @@ class ExperimentDispatchService:
                 target_id=(doc.get("target") or {}).get("target_id"),
                 experiment_name=doc.get("experiment_name", ""),
                 parameter_count=len(doc.get("parameters", {})),
+                external_receipt=doc.get("external_receipt"),
+                dispatch_error=doc.get("dispatch_error"),
                 created_by=doc.get("created_by", ""),
                 created_at=doc["created_at"],
             )

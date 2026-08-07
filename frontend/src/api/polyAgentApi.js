@@ -630,6 +630,23 @@ export function testAlgorithmInterface(algorithmId, versionId, inputSnapshot = n
   return apiClient.post(`/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:test`, payload).then(unwrapResponse)
 }
 
+export function testAlgorithmInterfaceMultipart(algorithmId, versionId, inputSnapshot = {}, files = {}) {
+  const formData = new FormData()
+  formData.append('input_snapshot', JSON.stringify(inputSnapshot || {}))
+  Object.entries(files || {}).forEach(([key, file]) => {
+    if (file) formData.append(key, file)
+  })
+  return apiClient.post(`/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:test-multipart`, formData).then(unwrapResponse)
+}
+
+export function getAlgorithmIdAvailability(algorithmId) {
+  return apiClient.get('/research-engine/algorithms/id-availability', { params: { algorithm_id: algorithmId } }).then(unwrapResponse)
+}
+
+export function deleteAlgorithm(algorithmId, confirmAlgorithmId) {
+  return apiClient.delete(`/research-engine/algorithms/${encodeURIComponent(algorithmId)}`, { params: { confirm_algorithm_id: confirmAlgorithmId } }).then(unwrapResponse)
+}
+
 export function activateAlgorithmInterfaceVersion(algorithmId, versionId) {
   return apiClient.post(`/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:activate`).then(unwrapResponse)
 }

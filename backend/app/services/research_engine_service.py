@@ -1856,9 +1856,20 @@ class ResearchEngineService:
 
             if algorithm_version is not None and algorithm_version.source_kind == "remote_interface":
                 remote_service = RemoteInterfaceService()
+                prepared_assets = self._prepare_algorithm_run_assets(
+                    run_id=run_id,
+                    version=algorithm_version,
+                    payload=payload,
+                    input_asset_uploads=input_asset_uploads or {},
+                    actor_user_id=actor_user_id,
+                    is_admin=is_admin,
+                    created_at=now,
+                )
                 output_summary, remote_metadata = remote_service.invoke(
                     algorithm_version,
                     payload.input_snapshot,
+                    input_files=prepared_assets["input_files"],
+                    output_dir=prepared_assets["output_dir"],
                 )
                 if isinstance(output_summary, dict):
                     output_summary = dict(output_summary)
@@ -1866,15 +1877,27 @@ class ResearchEngineService:
                     **run_doc.get("runtime_snapshot", {}),
                     **remote_metadata,
                 }
-                artifact_specs = [
-                    {
+                registered_output_artifacts = self._register_algorithm_output_artifacts(
+                    run_id=run_id,
+                    output_dir=prepared_assets["output_dir"],
+                    output_artifacts=remote_metadata.get("_downloaded_artifacts") or [],
+                    output_asset_specs=algorithm_version.output_assets,
+                    actor_user_id=actor_user_id,
+                    created_at=now,
+                )
+                if prepared_assets["artifact_refs"] or registered_output_artifacts:
+                    artifact_specs = [
+                        *prepared_assets["artifact_refs"],
+                        *self._artifact_refs_from_registered(registered_output_artifacts),
+                    ]
+                else:
+                    artifact_specs = [{
                         "type": "json_artifact",
                         "name": f"{payload.algorithm_id}_{algorithm_version.version}_output",
                         "content": output_summary,
                         "content_type": "application/json",
                         "description": "远程接口运行输出",
-                    }
-                ]
+                    }]
             elif runner is None and algorithm_version is not None:
                 self._validate_uploaded_algorithm_input(
                     payload.input_snapshot,
