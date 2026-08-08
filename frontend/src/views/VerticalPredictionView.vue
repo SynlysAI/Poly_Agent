@@ -699,7 +699,7 @@ onMounted(() => {
               <AlgorithmManagementPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :show-selector="false" @changed="handleChanged" @edit-interface-config="openEditInterfaceConfig" />
               <section class="history-panel">
                 <h3>运行记录</h3>
-                <AlgorithmRunHistoryPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :focus-run-id="targetRunId" />
+                <AlgorithmRunHistoryPanel :refresh-key="refreshKey" :algorithm-id="selectedAlgorithm.algorithm_id" :focus-run-id="targetRunId" :output-schema="selectedAlgorithm?.output_schema" />
               </section>
             </div>
           </el-tab-pane>
