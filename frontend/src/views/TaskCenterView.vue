@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Connection, Cpu, DataAnalysis, Document, Finished, Link, Refresh, Search, View } from '@element-plus/icons-vue'
+import { Connection, Cpu, DataAnalysis, Document, Finished, Refresh, Search, View } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, listGlobalTasks } from '../api/polyAgentApi'
 import {
@@ -131,14 +131,6 @@ function navigateTask(row) {
 function openTask(row) {
   selectedTask.value = row
   taskDrawerVisible.value = true
-}
-
-function openTaskFromTitle(row) {
-  if (row?.route?.path) {
-    navigateTask(row)
-    return
-  }
-  openTask(row)
 }
 
 function actionLabel(row) {
@@ -273,10 +265,8 @@ onMounted(() => {
           <el-table-column label="任务标题" min-width="220">
             <template #default="{ row }">
               <div class="task-title-cell">
-                <el-button class="task-title-link" text type="primary" :icon="Link" @click="openTaskFromTitle(row)">
-                  {{ row.title }}
-                </el-button>
-                <span>{{ row.summary }}</span>
+                <span>{{ row.title }}</span>
+                <span class="task-summary">{{ row.summary }}</span>
               </div>
             </template>
           </el-table-column>
@@ -437,7 +427,7 @@ onMounted(() => {
   gap: 2px;
 }
 
-.task-title-cell span {
+.task-title-cell .task-summary {
   color: var(--app-ink-muted);
   font-family: var(--app-mono-font);
   font-size: 12px;
