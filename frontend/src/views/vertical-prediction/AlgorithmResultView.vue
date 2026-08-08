@@ -17,11 +17,13 @@ const props = defineProps({
   outputSummary: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
   inputSnapshot: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
   artifactRefs: { type: Array, default: () => [] },
+  outputSchema: { type: Object, default: null },
   status: { type: String, default: '' },
   error: { type: Object, default: null },
   attributions: { type: Array, default: () => [] },
   algorithmId: { type: String, default: '' },
   runId: { type: String, default: '' },
+  showInput: { type: Boolean, default: false },
 })
 
 const tablePagination = ref({})
@@ -35,6 +37,12 @@ const metaPredictionKeys = ['property', 'unit', 'target', 'name']
 
 const outputObject = computed(() => normalizeToObject(props.outputSummary))
 const inputObject = computed(() => normalizeToObject(props.inputSnapshot))
+const outputUiHints = computed(() => {
+  const raw = props.outputSchema?.ui_hints
+  if (!raw || !Object.keys(raw).length) return null
+  const hasDisplay = Object.values(raw).some((h) => h && (h.display || h.group))
+  return hasDisplay ? raw : null
+})
 const predictionObject = computed(() => {
   if (isPlainObject(outputObject.value.prediction)) return outputObject.value.prediction
   return outputObject.value
@@ -53,6 +61,19 @@ const batchResultSections = computed(() => buildBatchResultSections(
   isRamanFunctionalGroupModel.value ? new Set(['candidates']) : new Set(),
 ))
 const batchHighlights = computed(() => buildAllBatchHighlights(batchResultSections.value))
+
+const highlightCards = computed(() => {
+  const hints = outputUiHints.value
+  if (!hints) return []
+  return Object.entries(hints)
+    .filter(([, h]) => h?.display === 'highlight')
+    .map(([key, h]) => ({
+      key,
+      label: h?.title || formatLabel(key),
+      value: formatScalar(outputObject.value[key]),
+      caption: '',
+    }))
+})
 const mainPrediction = computed(() => buildMainPrediction(predictionObject.value, outputObject.value))
 const evidence = computed(() => buildEvidence(
   outputObject.value,
@@ -107,7 +128,36 @@ const hasStructuredContent = computed(() => Boolean(
   evidence.value.otherSections.length ||
   artifactRows.value.length,
 ))
+const imageArtifacts = computed(() => artifactRows.value.filter(
+  (row) => row.downloadable && (row.contentType.startsWith('image/') || row.type === 'image_png')
+))
+
+const hasHighlight = computed(() => {
+  const hints = outputUiHints.value
+  if (!hints) return false
+  return Object.values(hints).some((h) => h?.display === 'highlight')
+})
+
 const inputHighlights = computed(() => scalarEntries(inputObject.value).slice(0, 4))
+
+const uiMetricGroups = computed(() => {
+  const hints = outputUiHints.value
+  if (!hints) return []
+  const output = outputObject.value
+  const groupedKeys = new Set(Object.keys(hints))
+  const groups = {}
+  for (const [key, hint] of Object.entries(hints)) {
+    const groupName = hint?.group
+    if (!groupName || !isScalar(output[key])) continue
+    if (!groups[groupName]) groups[groupName] = []
+    groups[groupName].push({ key, label: hint?.label || formatLabel(key), value: output[key] })
+  }
+  const unhandled = Object.entries(output)
+    .filter(([key, value]) => isScalar(value) && !groupedKeys.has(key))
+    .map(([key, value]) => ({ key, label: formatLabel(key), value }))
+  if (unhandled.length) groups['其他'] = unhandled
+  return Object.entries(groups).map(([title, entries]) => ({ title: formatLabel(title), entries }))
+})
 
 async function handleDownloadArtifact(row) {
   if (!row.downloadable || !row.id || row.id === 'output_summary') return
@@ -141,6 +191,24 @@ function buildBatchResultSections(output, hiddenKeys = new Set()) {
 }
 
 function buildMainPrediction(prediction, output) {
+  const hints = outputUiHints.value
+  if (hints) {
+    const primaryField = Object.entries(hints).find(([, h]) => h?.display === 'primary')
+    if (!primaryField) return { key: '', title: '', value: null, unit: '', uncertainty: null, modelInfo: [] }
+    if (isScalar(output[primaryField[0]])) {
+      const key = primaryField[0]
+      const hint = primaryField[1] || {}
+      const secondary = Object.entries(hints)
+        .filter(([, h]) => h?.display === 'secondary')
+        .map(([k, h]) => ({
+          key: k,
+          label: h?.label || formatLabel(k),
+          value: isScalar(output[k]) ? output[k] : null,
+        }))
+        .filter((entry) => entry.value !== null)
+      return { key, title: hint.title || formatLabel(key), value: output[key], unit: hint.unit || '', uncertainty: null, modelInfo: secondary }
+    }
+  }
   const valueEntry = findMainValue(prediction)
   const uncertainty = findFirstKey(prediction, uncertaintyKeys) || findFirstKey(output, uncertaintyKeys)
   const modelInfo = uniqueEntries([
@@ -362,11 +430,6 @@ function stringifyJson(value) {
 
 <template>
   <div class="algorithm-result-view">
-    <section v-if="attributions.length" class="result-attribution">
-      <span>模型开发者来源</span>
-      <AttributionBadges :attributions="attributions" :limit="3" />
-    </section>
-
     <el-alert
       v-if="error"
       class="result-error"
@@ -394,6 +457,27 @@ function stringifyJson(value) {
           <el-tag v-for="item in ramanFunctionalGroups" :key="item" effect="plain">{{ item }}</el-tag>
         </div>
         <div v-else class="empty-result">未检测到官能团</div>
+      </section>
+
+      <section v-if="showInput && inputHighlights.length" class="result-section">
+        <h4>关键输入</h4>
+        <div class="metric-grid compact">
+          <div v-for="entry in inputHighlights" :key="entry.key" class="metric-item">
+            <span>{{ entry.label }}</span>
+            <strong>{{ formatScalar(entry.value) }}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="highlightCards.length" class="result-section">
+        <h4>核心指标</h4>
+        <div class="prediction-dashboard" aria-label="核心指标">
+          <article v-for="item in highlightCards" :key="item.key" class="signal-card">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+            <small>{{ item.caption }}</small>
+          </article>
+        </div>
       </section>
 
       <section v-if="batchHighlights.length" class="prediction-dashboard" aria-label="批量预测概览">
@@ -465,17 +549,17 @@ function stringifyJson(value) {
         />
       </section>
 
-      <section v-if="inputHighlights.length" class="result-section">
-        <h4>关键输入</h4>
-        <div class="metric-grid compact">
-          <div v-for="entry in inputHighlights" :key="entry.key" class="metric-item">
+      <section v-for="group in uiMetricGroups" :key="group.title" class="result-section">
+        <h4>{{ group.title }}</h4>
+        <div class="metric-grid">
+          <div v-for="entry in group.entries" :key="entry.key" class="metric-item">
             <span>{{ entry.label }}</span>
-            <strong>{{ formatScalar(entry.value) }}</strong>
+            <strong>{{ summarizeValue(entry.value) }}</strong>
           </div>
         </div>
       </section>
 
-      <section v-for="section in evidence.metricSections" :key="section.title" class="result-section">
+      <section v-if="!outputUiHints" v-for="section in evidence.metricSections" :key="section.title" class="result-section">
         <h4>{{ section.title }}</h4>
         <div class="metric-grid">
           <div v-for="entry in section.entries" :key="entry.key" class="metric-item">
@@ -562,19 +646,22 @@ function stringifyJson(value) {
       暂无结构化输出
     </div>
 
+    <section v-if="imageArtifacts.length" class="result-section">
+      <h4>图表预览</h4>
+      <div class="image-preview-grid">
+        <div v-for="img in imageArtifacts" :key="img.id" class="image-preview-card">
+          <span class="image-label">{{ img.name }}</span>
+          <img :src="`/api/v1/artifacts/${img.id}/download`" :alt="img.name" class="preview-image" />
+        </div>
+      </div>
+    </section>
+
     <section v-if="artifactRows.length" class="result-section artifact-section">
       <div class="section-heading">
         <h4>运行产物</h4>
         <span>{{ artifactRows.length }} 项</span>
       </div>
       <el-table :data="artifactRows" border size="small" class="result-table">
-        <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="group" label="分组" width="100" show-overflow-tooltip />
-        <el-table-column prop="type" label="类型" width="130" show-overflow-tooltip />
-        <el-table-column prop="stepKey" label="步骤" width="120" show-overflow-tooltip />
-        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="contentType" label="内容类型" width="150" show-overflow-tooltip />
-        <el-table-column prop="contentSummary" label="内容摘要" width="120" show-overflow-tooltip />
         <el-table-column label="下载" width="86">
           <template #default="{ row }">
             <el-button
@@ -588,6 +675,13 @@ function stringifyJson(value) {
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="group" label="分组" width="100" show-overflow-tooltip />
+        <el-table-column prop="type" label="类型" width="130" show-overflow-tooltip />
+        <el-table-column prop="stepKey" label="步骤" width="120" show-overflow-tooltip />
+        <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="contentType" label="内容类型" width="150" show-overflow-tooltip />
+        <el-table-column prop="contentSummary" label="内容摘要" width="120" show-overflow-tooltip />
       </el-table>
     </section>
 
@@ -852,6 +946,35 @@ function stringifyJson(value) {
   max-height: 420px;
   overflow: auto;
   padding: 10px 2px;
+}
+
+.image-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.image-preview-card {
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #fff;
+  overflow: hidden;
+}
+
+.image-label {
+  display: block;
+  padding: 8px 12px;
+  background: #f8fafc;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--app-border-soft);
+}
+
+.preview-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
 }
 
 .empty-result {
