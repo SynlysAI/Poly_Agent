@@ -7,7 +7,7 @@ import {
 } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
-import { BarChart, GraphChart, LineChart, PieChart, SankeyChart, ScatterChart } from 'echarts/charts'
+import { BarChart, LineChart, PieChart, SankeyChart, ScatterChart } from 'echarts/charts'
 import {
   GridComponent, LegendComponent, TitleComponent, TooltipComponent, VisualMapComponent,
 } from 'echarts/components'
@@ -30,7 +30,6 @@ import { buildPolyDataDatasetGroups, polyDataDatasetGroupCount } from '../utils/
 
 use([
   BarChart,
-  GraphChart,
   LineChart,
   PieChart,
   SankeyChart,
@@ -183,26 +182,6 @@ const collectionVolumeRows = computed(() => mongoCollections.value
   })
   .sort((a, b) => b.rawCount - a.rawCount || a.name.localeCompare(b.name)))
 
-const totalStructuredRecords = computed(() => collectionVolumeRows.value.reduce((sum, row) => sum + row.rawCount, 0))
-const collectionDomainRows = computed(() => {
-  const total = Math.max(1, totalStructuredRecords.value)
-  const grouped = collectionVolumeRows.value.reduce((groups, row) => {
-    if (!groups[row.group]) {
-      groups[row.group] = { group: row.group, rawCount: 0, color: row.color, tableCount: 0 }
-    }
-    groups[row.group].rawCount += row.rawCount
-    groups[row.group].tableCount += 1
-    return groups
-  }, {})
-  return Object.values(grouped)
-    .map((row) => ({
-      ...row,
-      percent: Math.round((row.rawCount / total) * 1000) / 10,
-    }))
-    .sort((a, b) => b.rawCount - a.rawCount || a.group.localeCompare(b.group))
-})
-const heroCollectionDomainRows = computed(() => collectionDomainRows.value.slice(0, 3))
-
 const collectionVolumeOption = computed(() => ({
   grid: { left: 164, right: 122, top: 24, bottom: 46 },
   tooltip: {
@@ -286,161 +265,6 @@ const relationshipRows = computed(() => {
       }
     })
     .sort((a, b) => b.linkedCount - a.linkedCount || a.sourceLabel.localeCompare(b.sourceLabel)))
-})
-
-const relationSummary = computed(() => ({
-  nodes: (relationships.value.nodes || []).length,
-  links: relationshipRows.value.length,
-  linked: relationshipRows.value.reduce((sum, row) => sum + row.linkedCount, 0),
-}))
-
-const relationHeroMetrics = computed(() => [
-  {
-    key: 'records',
-    label: '结构化记录',
-    value: formatNumber(totalStructuredRecords.value),
-    meta: `${formatNumber(mongoCollections.value.length)} 张数据表`,
-  },
-  {
-    key: 'nodes',
-    label: '关系节点',
-    value: formatNumber(relationSummary.value.nodes),
-    meta: '已登记集合',
-  },
-  {
-    key: 'links',
-    label: '有效链路',
-    value: formatNumber(relationSummary.value.links),
-    meta: `${formatNumber(relationSummary.value.linked)} 条关联`,
-  },
-])
-
-const relationNodeGroups = {
-  materials: '材料数据资产',
-  computations: '计算任务与产物',
-  computation_artifacts: '计算任务与产物',
-  research_runs: '研发流程与算法',
-  algorithm_runs: '研发流程与算法',
-  report_jobs: '报告产物',
-  report_artifacts: '报告产物',
-}
-
-const relationshipGraphOption = computed(() => {
-  const nodes = relationships.value.nodes || []
-  const edges = relationships.value.edges || []
-  const maxNodeScale = Math.max(1, ...nodes.map((node) => scaleCount(node.record_count)))
-  const maxLinkedCount = Math.max(1, ...edges.map((edge) => Number(edge.linked_count || 0)))
-  const categoryNames = [...new Set(nodes.map((node) => relationNodeGroups[node.node_id] || '其他'))]
-  const categories = categoryNames.map((name) => ({
-    name,
-    itemStyle: { color: collectionGroupColors[name] || '#38bdf8' },
-  }))
-  return {
-    backgroundColor: 'transparent',
-    color: categoryNames.map((name) => collectionGroupColors[name] || '#6b7280'),
-    tooltip: {
-      trigger: 'item',
-      confine: true,
-      backgroundColor: 'rgba(255, 255, 255, 0.98)',
-      borderColor: '#dbe3ea',
-      borderWidth: 1,
-      textStyle: { color: '#243447' },
-      formatter: (params) => {
-        if (params.dataType === 'edge') {
-          return [
-            `${params.data.sourceLabel} → ${params.data.targetLabel}`,
-            `有效关联：${formatNumber(params.data.linkedCount)} 条`,
-            `覆盖率：${params.data.coveragePercent}%`,
-            `<span style="color:#667085">${params.data.sourceField} → ${params.data.targetField}</span>`,
-          ].join('<br/>')
-        }
-        return [
-          params.data.label,
-          `记录量：${formatNumber(params.data.recordCount)} 条`,
-          `数据域：${params.data.group}`,
-        ].join('<br/>')
-      },
-    },
-    legend: {
-      bottom: 2,
-      left: 10,
-      itemWidth: 10,
-      itemHeight: 10,
-      textStyle: { color: '#52606d', fontSize: 12 },
-      data: categoryNames,
-    },
-    series: [{
-      type: 'graph',
-      layout: 'circular',
-      top: 2,
-      bottom: 26,
-      left: 4,
-      right: 4,
-      roam: true,
-      draggable: true,
-      categories,
-      edgeSymbol: ['none', 'arrow'],
-      edgeSymbolSize: [0, 10],
-      circular: { rotateLabel: false },
-      label: {
-        show: true,
-        color: '#243447',
-        fontSize: 13,
-        fontWeight: 600,
-        formatter: '{b}',
-      },
-      edgeLabel: { show: false },
-      emphasis: {
-        focus: 'adjacency',
-        lineStyle: { opacity: 0.92 },
-      },
-      data: nodes.map((node) => {
-        const group = relationNodeGroups[node.node_id] || '其他'
-        const scale = scaleCount(node.record_count) / maxNodeScale
-        const color = collectionGroupColors[group] || '#6b7280'
-        return {
-          id: node.node_id,
-          name: node.label,
-          label: node.label,
-          group,
-          recordCount: Number(node.record_count || 0),
-          category: categoryNames.indexOf(group),
-          symbolSize: Math.round(32 + scale * 48),
-          itemStyle: {
-            color,
-            opacity: 0.93,
-            borderColor: '#ffffff',
-            borderWidth: 2,
-            shadowBlur: 4,
-            shadowColor: 'rgba(15, 23, 42, 0.12)',
-          },
-        }
-      }),
-      links: edges
-        .filter((edge) => Number(edge.linked_count || 0) > 0)
-        .map((edge) => {
-          const sourceNode = nodes.find((node) => node.node_id === edge.source) || {}
-          const targetNode = nodes.find((node) => node.node_id === edge.target) || {}
-          const linkedCount = Number(edge.linked_count || 0)
-          return {
-            source: edge.source,
-            target: edge.target,
-            sourceLabel: sourceNode.label || edge.source,
-            targetLabel: targetNode.label || edge.target,
-            linkedCount,
-            coveragePercent: Math.round(Number(edge.target_coverage || 0) * 1000) / 10,
-            sourceField: edge.source_field,
-            targetField: edge.target_field,
-            lineStyle: {
-              width: Math.max(1.4, Math.round((linkedCount / maxLinkedCount) * 6)),
-              color: 'source',
-              opacity: 0.48,
-              curveness: 0.18,
-            },
-          }
-        }),
-    }],
-  }
 })
 
 const relationshipSankeyOption = computed(() => {
@@ -1281,47 +1105,6 @@ onUnmounted(() => {
     <el-tabs v-model="activeTab" class="catalog-tabs">
       <el-tab-pane label="数据关系" name="relations" lazy>
         <div class="relation-page">
-          <section class="relation-hero" aria-label="数据关系总览">
-            <div class="relation-hero-main">
-              <div class="relation-hero-heading">
-                <div>
-                  <h2>数据关系总览</h2>
-                  <p>节点大小表示记录量，连线粗细表示已验证关联量。</p>
-                </div>
-                <span>{{ relationships.notes?.[0] || '仅展示数据库中可验证的外键关系。' }}</span>
-              </div>
-              <v-chart v-if="relationships.nodes?.length" class="relationship-graph-chart" :option="relationshipGraphOption" autoresize />
-              <div v-else class="relation-graph-empty"><el-empty description="暂无关系节点" /></div>
-            </div>
-            <aside class="relation-hero-side">
-              <div class="relation-hero-metrics">
-                <div v-for="metric in relationHeroMetrics" :key="metric.key" class="relation-hero-metric">
-                  <span>{{ metric.label }}</span>
-                  <strong>{{ metric.value }}</strong>
-                  <small>{{ metric.meta }}</small>
-                </div>
-              </div>
-              <div class="relation-domain-panel">
-                <h3>数据域构成</h3>
-                <div class="relation-domain-list">
-                  <div v-for="row in heroCollectionDomainRows" :key="row.group" class="relation-domain-row">
-                    <div class="relation-domain-line">
-                      <span class="relation-domain-name"><i :style="{ background: row.color }"></i>{{ row.group }}</span>
-                      <strong>{{ formatNumber(row.rawCount) }}</strong>
-                    </div>
-                    <el-progress
-                      :percentage="row.percent"
-                      :show-text="false"
-                      :stroke-width="4"
-                      :color="row.color"
-                    />
-                    <small>{{ row.tableCount }} 张表 · {{ row.percent }}%</small>
-                  </div>
-                </div>
-              </div>
-            </aside>
-          </section>
-
           <section class="catalog-section relation-volume relation-volume-main">
             <div class="section-heading">
               <div>
@@ -1931,182 +1714,6 @@ onUnmounted(() => {
 
 .relation-page { display: flex; flex-direction: column; gap: 12px; }
 
-.relation-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 10px;
-  height: clamp(300px, calc(100vh - 430px), 520px);
-  min-height: 300px;
-  overflow: hidden;
-  border: 1px solid #dbe3ea;
-  border-radius: var(--app-radius-sm);
-  background: #ffffff;
-  box-shadow: var(--app-card-shadow);
-}
-
-.relation-hero-main {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  padding: 10px 12px 8px;
-  background: #fbfcfd;
-}
-
-.relation-hero-heading {
-  position: absolute;
-  top: 10px;
-  left: 12px;
-  right: 12px;
-  z-index: 1;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  pointer-events: none;
-}
-
-.relation-hero-heading h2 {
-  margin: 0;
-  color: #1f2a37;
-  font-size: 19px;
-  line-height: 1.2;
-  letter-spacing: 0;
-}
-
-.relation-hero-heading p {
-  margin: 4px 0 0;
-  color: #667085;
-  font-size: 12px;
-}
-
-.relation-hero-heading > span {
-  max-width: 380px;
-  color: #7b8794;
-  font-size: 12px;
-  line-height: 1.45;
-  text-align: right;
-}
-
-.relationship-graph-chart {
-  width: 100%;
-  height: 100% !important;
-  min-height: 0;
-}
-
-.relation-graph-empty {
-  min-height: 360px;
-  display: grid;
-  place-items: center;
-}
-
-.relation-hero-side {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-  min-height: 0;
-  padding: 10px;
-  background: #ffffff;
-  border-left: 1px solid #e4eaf0;
-}
-
-.relation-hero-metrics {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 6px;
-}
-
-.relation-hero-metric,
-.relation-domain-panel {
-  min-width: 0;
-  border: 1px solid #e4eaf0;
-  border-radius: var(--app-radius-sm);
-  background: #fbfcfd;
-}
-
-.relation-hero-metric {
-  padding: 9px 10px;
-}
-
-.relation-hero-metric span,
-.relation-hero-metric small {
-  display: block;
-  color: #667085;
-  font-size: 12px;
-}
-
-.relation-hero-metric strong {
-  display: block;
-  margin: 2px 0;
-  color: #1f2a37;
-  font-size: 21px;
-  line-height: 1.08;
-  overflow-wrap: anywhere;
-}
-
-.relation-domain-panel {
-  padding: 10px;
-}
-
-.relation-domain-panel h3 {
-  margin: 0 0 8px;
-  color: #243447;
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-.relation-domain-list {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.relation-domain-row {
-  min-width: 0;
-}
-
-.relation-domain-line {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.relation-domain-name {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 6px;
-  color: #344054;
-  font-size: 12px;
-}
-
-.relation-domain-name i {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-}
-
-.relation-domain-row strong,
-.relation-domain-row small {
-  display: block;
-  line-height: 1.2;
-}
-
-.relation-domain-row strong {
-  margin: 0;
-  color: #1f2a37;
-  font-size: 14px;
-  white-space: nowrap;
-}
-
-.relation-domain-row small {
-  margin-top: 2px;
-  color: #7b8794;
-  font-size: 11px;
-}
-
 .relation-heading { align-items: center; }
 .relationship-sankey-chart { width: 100%; height: 460px; }
 .relation-empty { min-height: 360px; display: grid; place-items: center; }
@@ -2671,14 +2278,6 @@ code {
   .relation-lower-grid { grid-template-columns: 1fr; }
 }
 
-@media (max-width: 1100px) {
-  .relation-hero { grid-template-columns: 1fr; height: auto; min-height: auto; }
-  .relation-hero-side { border-left: 0; border-top: 1px solid #e4eaf0; }
-  .relation-hero-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .relation-domain-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .relationship-graph-chart { flex: none; height: 360px !important; }
-}
-
 @media (max-width: 760px) {
   .catalog-header,
   .record-header,
@@ -2707,18 +2306,6 @@ code {
   .dataset-list-stat { display: none; }
   .dataset-list-status { grid-column: 1 / -1; }
   .dataset-list-description { white-space: normal; }
-  .relation-hero { min-height: auto; }
-  .relation-hero-main { padding: 14px 12px 8px; }
-  .relation-hero-heading { position: static; flex-direction: column; min-height: auto; pointer-events: auto; }
-  .relation-hero-heading h2 { font-size: 19px; }
-  .relation-hero-heading > span { max-width: none; text-align: left; }
-  .relationship-graph-chart { height: 320px !important; min-height: 300px; }
-  .relation-hero-side { padding: 12px; }
-  .relation-hero-metrics,
-  .relation-domain-list {
-    grid-template-columns: 1fr;
-  }
-  .relation-hero-metric strong { font-size: 21px; }
   .relation-heading { align-items: flex-start; flex-direction: column; }
   .relationship-sankey-chart { height: 340px; }
 
