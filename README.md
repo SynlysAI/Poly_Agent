@@ -425,6 +425,7 @@ Poly Agent 知识库能力统一通过 WeKnora API 提供；旧版本地 `litera
 | `npm --prefix frontend run test:llm-models` | 运行前端 LLM 模型配置单测 |
 | `python scripts/pack_algorithm.py --help` | 查看垂类算法包打包工具参数 |
 | `python scripts/update_algorithm_visibility.py --dry-run` | 预览上传算法 visibility 回填/修正计划；加 `--apply` 才写入 MongoDB |
+| `python scripts/restore_polymer_mongo_scope.py` | 预览并清理共享库中的金属合金记录；默认 dry-run，确认快照后再加 `--apply` |
 
 如需单独启动 ComputeEngine 参考服务或模拟器，见：
 
