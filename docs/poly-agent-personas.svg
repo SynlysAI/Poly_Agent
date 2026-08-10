@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="800" viewBox="0 0 1440 800" role="img" aria-labelledby="title desc">
+  <title id="title">Poly Agent 面向对象</title>
+  <desc id="desc">Poly Agent 服务材料科学家、算法与计算工程师、实验平台管理员和研发负责人四类角色。</desc>
+  <style>
+    text { font-family: Arial, "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif; }
+    .title { font-size: 34px; font-weight: 700; fill: #0f172a; }
+    .subtitle { font-size: 17px; fill: #475569; }
+    .role { font-size: 21px; font-weight: 700; fill: #0f172a; }
+    .label { font-size: 14px; font-weight: 700; fill: #0f766e; }
+    .body { font-size: 15px; fill: #334155; }
+    .small { font-size: 13px; fill: #64748b; }
+  </style>
+  <rect width="1440" height="800" fill="#f8fafc"/>
+  <text class="title" x="64" y="62">Poly Agent 面向对象</text>
+  <text class="subtitle" x="64" y="94">围绕同一个研发问题，给不同角色提供同一份任务上下文和可追溯结果</text>
+  <g transform="translate(64,142)">
+    <rect width="306" height="470" rx="16" fill="#ffffff" stroke="#5eead4" stroke-width="2"/>
+    <circle cx="48" cy="54" r="24" fill="#ccfbf1"/><text x="40" y="62" font-size="22" font-weight="700" fill="#0f766e">研</text>
+    <text class="role" x="88" y="61">材料科学家</text>
+    <text class="label" x="28" y="122">关注什么</text><text class="body" x="28" y="152">材料体系、性能目标、实验条件</text>
+    <text class="label" x="28" y="204">常用入口</text><text class="body" x="28" y="234">ProblemSpec、Alchemist、知识库</text>
+    <text class="label" x="28" y="286">获得什么</text><text class="body" x="28" y="316">候选条件、证据卡片、实验建议</text>
+    <line x1="28" y1="352" x2="278" y2="352" stroke="#e2e8f0"/><text class="small" x="28" y="388">少写胶水代码，少重复录入，</text><text class="small" x="28" y="411">专注判断与实验。</text>
+  </g>
+  <g transform="translate(388,142)">
+    <rect width="306" height="470" rx="16" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+    <circle cx="48" cy="54" r="24" fill="#dbeafe"/><text x="40" y="62" font-size="22" font-weight="700" fill="#1d4ed8">算</text>
+    <text class="role" x="88" y="61">算法 / 计算工程师</text>
+    <text class="label" x="28" y="122">关注什么</text><text class="body" x="28" y="152">算法契约、运行状态、artifact</text>
+    <text class="label" x="28" y="204">常用入口</text><text class="body" x="28" y="234">ComputeEngine、垂类预测、Registry</text>
+    <text class="label" x="28" y="286">获得什么</text><text class="body" x="28" y="316">统一 adapter、运行审计、结果复用</text>
+    <line x1="28" y1="352" x2="278" y2="352" stroke="#e2e8f0"/><text class="small" x="28" y="388">算法以契约接入，运行过程</text><text class="small" x="28" y="411">可以被复核和重跑。</text>
+  </g>
+  <g transform="translate(712,142)">
+    <rect width="306" height="470" rx="16" fill="#ffffff" stroke="#fbbf24" stroke-width="2"/>
+    <circle cx="48" cy="54" r="24" fill="#fef3c7"/><text x="40" y="62" font-size="22" font-weight="700" fill="#b45309">管</text>
+    <text class="role" x="88" y="61">实验平台管理员</text>
+    <text class="label" x="28" y="122">关注什么</text><text class="body" x="28" y="152">服务健康、权限、数据与集成</text>
+    <text class="label" x="28" y="204">常用入口</text><text class="body" x="28" y="234">任务中心、Tool Services、Admin</text>
+    <text class="label" x="28" y="286">获得什么</text><text class="body" x="28" y="316">状态检查、配置摘要、失败定位</text>
+    <line x1="28" y1="352" x2="278" y2="352" stroke="#e2e8f0"/><text class="small" x="28" y="388">知道哪些能力可用、哪些</text><text class="small" x="28" y="411">仍处于 demo 或规划状态。</text>
+  </g>
+  <g transform="translate(1036,142)">
+    <rect width="306" height="470" rx="16" fill="#ffffff" stroke="#f9a8d4" stroke-width="2"/>
+    <circle cx="48" cy="54" r="24" fill="#fce7f3"/><text x="40" y="62" font-size="22" font-weight="700" fill="#be185d">决</text>
+    <text class="role" x="88" y="61">研发负责人</text>
+    <text class="label" x="28" y="122">关注什么</text><text class="body" x="28" y="152">周期、风险、投入与可交付物</text>
+    <text class="label" x="28" y="204">常用入口</text><text class="body" x="28" y="234">Dashboard、报告、Gate 审批</text>
+    <text class="label" x="28" y="286">获得什么</text><text class="body" x="28" y="316">阶段进展、关键证据、下一步决策</text>
+    <line x1="28" y1="352" x2="278" y2="352" stroke="#e2e8f0"/><text class="small" x="28" y="388">用同一份事实对齐研发</text><text class="small" x="28" y="411">节奏，并保留审批边界。</text>
+  </g>
+  <rect x="64" y="662" width="1278" height="72" rx="12" fill="#0f172a"/>
+  <text x="94" y="697" font-size="17" font-weight="700" fill="#ffffff">共同底座</text>
+  <text x="224" y="697" font-size="16" fill="#cbd5e1">ProblemSpec · AlgorithmRegistry · WorkflowRun · Artifact · AuditEvent · Report</text>
+</svg>

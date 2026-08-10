@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="820" viewBox="0 0 1440 820" role="img" aria-labelledby="title desc">
+  <title id="title">Poly Agent 产品设计闭环</title>
+  <desc id="desc">Poly Agent 以 ProblemSpec 为起点，支持人工工作台和 AutoResearch 两条执行路径，通过计算、知识和预测产出证据，经过人工 Gate 形成报告和下一轮行动。</desc>
+  <style>
+    text { font-family: Arial, "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif; }
+    .title { font-size: 34px; font-weight: 700; fill: #0f172a; }
+    .subtitle { font-size: 17px; fill: #475569; }
+    .node { font-size: 18px; font-weight: 700; fill: #0f172a; }
+    .small { font-size: 14px; fill: #475569; }
+    .micro { font-size: 13px; fill: #64748b; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#0f766e"/></marker>
+    <marker id="arrow-dark" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker>
+  </defs>
+  <rect width="1440" height="820" fill="#f8fafc"/>
+  <text class="title" x="64" y="62">Poly Agent 产品设计闭环</text>
+  <text class="subtitle" x="64" y="94">任务先行，人工可控；每一步都留下输入、输出、artifact 和审计事件</text>
+
+  <rect x="64" y="166" width="246" height="132" rx="16" fill="#ecfdf5" stroke="#14b8a6" stroke-width="2"/>
+  <text class="node" x="96" y="210">1  定义问题</text><text class="small" x="96" y="242">ProblemSpec</text><text class="micro" x="96" y="268">材料体系 · 目标 · 约束 · 测量条件</text>
+  <rect x="350" y="136" width="306" height="192" rx="16" fill="#ffffff" stroke="#60a5fa" stroke-width="2"/>
+  <text class="node" x="382" y="180">2  选择执行路径</text>
+  <rect x="382" y="208" width="112" height="74" rx="10" fill="#eff6ff"/><text class="small" x="400" y="238">人工工作台</text><text class="micro" x="400" y="260">Workflow / Pipeline</text>
+  <rect x="512" y="208" width="112" height="74" rx="10" fill="#fff7ed"/><text class="small" x="532" y="238">AutoResearch</text><text class="micro" x="532" y="260">Stage / Gate</text>
+  <rect x="700" y="166" width="246" height="132" rx="16" fill="#fff7ed" stroke="#f59e0b" stroke-width="2"/>
+  <text class="node" x="732" y="210">3  运行算法</text><text class="small" x="732" y="242">Registry + Adapter + Worker</text><text class="micro" x="732" y="268">计算 · 预测 · 知识检索 · 优化</text>
+  <rect x="990" y="166" width="246" height="132" rx="16" fill="#eff6ff" stroke="#60a5fa" stroke-width="2"/>
+  <text class="node" x="1022" y="210">4  汇聚证据</text><text class="small" x="1022" y="242">Artifact / Audit / Evidence</text><text class="micro" x="1022" y="268">结果、来源、参数和失败原因</text>
+
+  <rect x="1110" y="392" width="246" height="132" rx="16" fill="#fdf2f8" stroke="#f472b6" stroke-width="2"/>
+  <text class="node" x="1142" y="436">5  人工决策</text><text class="small" x="1142" y="468">Gate Review</text><text class="micro" x="1142" y="494">批准 · 拒绝 · 暂停 · 恢复</text>
+  <rect x="818" y="392" width="246" height="132" rx="16" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text class="node" x="850" y="436">6  形成交付物</text><text class="small" x="850" y="468">Report / Dashboard</text><text class="micro" x="850" y="494">研发结论、风险和下一步</text>
+  <rect x="526" y="392" width="246" height="132" rx="16" fill="#ecfdf5" stroke="#14b8a6" stroke-width="2"/>
+  <text class="node" x="558" y="436">7  回到下一轮</text><text class="small" x="558" y="468">Suggestion / Observation</text><text class="micro" x="558" y="494">实验结果进入 campaign 和模型</text>
+
+  <line x1="310" y1="232" x2="350" y2="232" stroke="#0f766e" stroke-width="3" marker-end="url(#arrow)"/>
+  <line x1="656" y1="232" x2="700" y2="232" stroke="#0f766e" stroke-width="3" marker-end="url(#arrow)"/>
+  <line x1="946" y1="232" x2="990" y2="232" stroke="#0f766e" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M1236 298 C1340 320 1370 350 1354 392" fill="none" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow-dark)"/>
+  <line x1="1110" y1="458" x2="1064" y2="458" stroke="#0f766e" stroke-width="3" marker-end="url(#arrow)"/>
+  <line x1="818" y1="458" x2="772" y2="458" stroke="#0f766e" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M526 458 C420 458 338 392 250 298" fill="none" stroke="#0f766e" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="64" y="616" width="1292" height="104" rx="14" fill="#e2e8f0"/>
+  <text class="node" x="94" y="656">产品原则</text>
+  <text class="small" x="224" y="656">任务优先：先定义问题，再选择算法；</text>
+  <text class="small" x="224" y="684">证据驱动：结果必须能追溯到输入、来源和运行；</text>
+  <text class="small" x="224" y="712">人工可控：关键 Gate 保留明确的批准、拒绝、暂停和恢复边界。</text>
+</svg>
