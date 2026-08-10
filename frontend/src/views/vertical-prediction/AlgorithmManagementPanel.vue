@@ -20,7 +20,7 @@ import AlgorithmCreditDrawer from '../../components/algorithm/AlgorithmCreditDra
 import AttributionBadges from '../../components/attribution/AttributionBadges.vue'
 import { formatApiDateTime } from '../../utils/datetime'
 import { authState } from '../../auth/authState'
-import { algorithmSourceLabel, canEditRemoteInterfaceVersion, canManageUploadedAlgorithm, interfaceProtocolLabel, versionLifecycleLabel } from '../../utils/verticalPredictionState.mjs'
+import { algorithmSourceLabel, canEditRemoteInterfaceVersion, canManageUploadedAlgorithm, interfaceProtocolLabel, versionLifecycleLabel, versionListQuery } from '../../utils/verticalPredictionState.mjs'
 
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -34,16 +34,28 @@ const actionVersionId = ref('')
 const algorithms = ref([])
 const selectedAlgorithmId = ref('')
 const versions = ref([])
+const versionsTotal = ref(0)
+const versionPage = ref(1)
+const versionPageSize = ref(10)
+const governanceSections = ref(['versions'])
 const logsVisible = ref(false)
 const creditVisible = ref(false)
 const versionLogs = ref(null)
 
 const selectedAlgorithm = computed(() => algorithms.value.find((item) => item.algorithm_id === selectedAlgorithmId.value) || null)
 const canManage = computed(() => canManageUploadedAlgorithm(selectedAlgorithm.value, authState))
+const activeVersionSummary = computed(() => {
+  const activeVersionId = selectedAlgorithm.value?.active_version_id
+  const active = versions.value.find((item) => item.version_id === activeVersionId || item.status === 'active')
+  return active?.version || activeVersionId || '无 active 版本'
+})
 
 watch(() => props.refreshKey, loadAlgorithms)
 watch(() => props.algorithmId, loadAlgorithms)
-watch(selectedAlgorithmId, loadVersions)
+watch(selectedAlgorithmId, () => {
+  versionPage.value = 1
+  loadVersions()
+})
 
 async function loadAlgorithms() {
   loading.value = true
@@ -68,12 +80,21 @@ async function loadAlgorithms() {
 async function loadVersions() {
   if (!selectedAlgorithmId.value) {
     versions.value = []
+    versionsTotal.value = 0
     return
   }
   loading.value = true
   try {
-    const data = await listAlgorithmVersions(selectedAlgorithmId.value, { page: 1, page_size: 100 })
+    const data = await listAlgorithmVersions(
+      selectedAlgorithmId.value,
+      versionListQuery(versionPage.value, versionPageSize.value),
+    )
     versions.value = data.items || []
+    versionsTotal.value = data.total || 0
+    if (!versions.value.length && versionsTotal.value && versionPage.value > 1) {
+      versionPage.value = Math.max(1, Math.ceil(versionsTotal.value / versionPageSize.value))
+      await loadVersions()
+    }
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
@@ -149,6 +170,21 @@ function visibilityLabel(value) {
   return value === 'public' ? '公开发布' : '非公开'
 }
 
+function creatorLabel(row) {
+  return row.created_by_name || row.created_by || row.uploaded_by || '-'
+}
+
+function changeVersionPage(page) {
+  versionPage.value = page
+  loadVersions()
+}
+
+function changeVersionPageSize(size) {
+  versionPageSize.value = size
+  versionPage.value = 1
+  loadVersions()
+}
+
 function rowAttributions(row) {
   return [
     row?.developer_attribution || selectedAlgorithm.value?.developer_attribution,
@@ -190,6 +226,17 @@ onMounted(loadAlgorithms)
       <template #title>来源：{{ algorithmSourceLabel(selectedAlgorithm.source) }} · 接口版本需先完成样例连通性测试，再激活。</template>
     </el-alert>
 
+    <el-collapse v-model="governanceSections" class="version-collapse">
+      <el-collapse-item name="versions">
+        <template #title>
+          <div class="version-collapse-title">
+            <strong>版本列表</strong>
+            <span>Active：{{ activeVersionSummary }}</span>
+            <span>{{ versionsTotal }} 个版本</span>
+            <span class="version-collapse-hint">{{ governanceSections.includes('versions') ? '收起' : '展开治理' }}</span>
+          </div>
+        </template>
+        <div class="version-table-wrap">
     <el-table v-loading="loading" :data="versions" border empty-text="暂无可治理版本">
       <el-table-column prop="version" label="Version" width="100" />
       <el-table-column prop="status" label="状态" width="105"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row) }}</el-tag></template></el-table-column>
@@ -229,7 +276,7 @@ onMounted(loadAlgorithms)
       <el-table-column label="来源" min-width="170"><template #default="{ row }"><AttributionBadges :attributions="rowAttributions(row)" /></template></el-table-column>
       <el-table-column label="创建人" width="110">
         <template #default="{ row }">
-          {{ (selectedAlgorithm?.developer || selectedAlgorithm?.owner || row.uploaded_by || row.created_by) }}
+          {{ creatorLabel(row) }}
         </template>
       </el-table-column>
       <el-table-column label="创建时间" width="170"><template #default="{ row }">{{ formatDate(row.created_at) }}</template></el-table-column>
@@ -254,6 +301,20 @@ onMounted(loadAlgorithms)
         </template>
       </el-table-column>
     </el-table>
+          <el-pagination
+            v-if="versionsTotal > 0"
+            class="version-pagination"
+            :current-page="versionPage"
+            :page-size="versionPageSize"
+            :page-sizes="[10, 20, 50]"
+            :total="versionsTotal"
+            layout="total, sizes, prev, pager, next"
+            @current-change="changeVersionPage"
+            @size-change="changeVersionPageSize"
+          />
+        </div>
+      </el-collapse-item>
+    </el-collapse>
 
     <div v-if="!loading && !algorithms.length" class="empty-state">
       <strong>还没有可治理的垂类模型</strong>
@@ -278,6 +339,13 @@ onMounted(loadAlgorithms)
 
 <style scoped>
 .management-panel { display: grid; gap: 16px; }
+.version-collapse { border: 1px solid var(--app-border-soft); padding: 0 12px; }
+.version-collapse-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.version-collapse-title span { color: var(--app-ink-muted); font-size: 12px; font-weight: 400; }
+.version-collapse-title .version-collapse-hint { margin-left: auto; color: var(--app-primary-active); font-weight: 700; }
+.version-table-wrap { min-width: 0; overflow-x: auto; padding-bottom: 12px; }
+.version-table-wrap :deep(.el-table) { min-width: 1180px; }
+.version-pagination { justify-content: flex-end; margin-top: 12px; }
 .management-toolbar { display: flex; justify-content: space-between; align-items: end; gap: 12px; user-select: none; }
 .management-toolbar > div { display: grid; gap: 6px; }
 .management-toolbar .management-actions { display: flex; flex-direction: row; align-items: center; gap: 8px; }

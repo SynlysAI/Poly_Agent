@@ -2049,6 +2049,7 @@ sample_input_path: tests/sample_input.json
         self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
         package = upload_resp.json()["data"]
         self.assertEqual(package["created_by"], "original-owner")
+        self.assertEqual(package["created_by_name"], "original-owner")
         self.assertEqual(package["uploaded_by"], "system-admin")
         self.assertEqual(package["visibility"], "public")
 
@@ -2061,6 +2062,7 @@ sample_input_path: tests/sample_input.json
         self.assertEqual(released["activation_kind"], "release")
         self.assertEqual(released["previous_active_version_id"], first_version_id)
         self.assertEqual(released["created_by"], "original-owner")
+        self.assertEqual(released["created_by_name"], "original-owner")
         self.assertEqual(released["uploaded_by"], "system-admin")
 
         registry_resp = self.client.get(f"{self.base_url}/algorithms/admin_release_demo")
@@ -2089,6 +2091,95 @@ sample_input_path: tests/sample_input.json
             f"{self.base_url}/algorithms/admin_release_demo/versions/{released['version_id']}:rollback"
         )
         self.assertEqual(forbidden_resp.status_code, 403, forbidden_resp.text)
+
+    def test_standard_zip_release_updates_registry_metadata(self) -> None:
+        """标准 ZIP 新版本发布后同步包内展示信息，同时保留旧版本。"""
+        self._login_as("zip-owner")
+        first_version_id = self._pack_activate_simple_algorithm(
+            "zip_metadata_demo", visibility="private"
+        )
+        versions_resp = self.client.get(
+            f"{self.base_url}/algorithms/zip_metadata_demo/versions",
+            params={"page_size": 20},
+        )
+        first_package_id = versions_resp.json()["data"]["items"][0]["package_id"]
+        download_resp = self.client.get(
+            f"{self.base_url}/algorithm-packages/{first_package_id}/download"
+        )
+
+        replacement = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(download_resp.content)) as source_zip:
+            with zipfile.ZipFile(replacement, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
+                for member in source_zip.infolist():
+                    if member.is_dir():
+                        continue
+                    content = source_zip.read(member.filename)
+                    if member.filename == "polyagent.algorithm.yaml":
+                        contract = yaml.safe_load(content)
+                        contract["version"] = "0.2.0"
+                        contract["name"] = "ZIP Metadata Updated"
+                        contract["description"] = "Updated from the standard ZIP contract"
+                        contract["developer"] = "ZIP Developer"
+                        contract["developer_organization"] = "ZIP Institute"
+                        contract["mentor_team"] = "ZIP Mentor Team"
+                        contract["visibility"] = "public"
+                        content = yaml.safe_dump(
+                            contract, allow_unicode=True, sort_keys=False
+                        ).encode("utf-8")
+                    target_zip.writestr(member, content)
+
+        upload_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages",
+            data={"target_algorithm_id": "zip_metadata_demo"},
+            files={"file": ("zip-metadata-0.2.0.zip", replacement.getvalue(), "application/zip")},
+        )
+        self.assertEqual(upload_resp.status_code, 200, upload_resp.text)
+        release_resp = self.client.post(
+            f"{self.base_url}/algorithm-packages/{upload_resp.json()['data']['package_id']}:release"
+        )
+        self.assertEqual(release_resp.status_code, 200, release_resp.text)
+        released = release_resp.json()["data"]
+        self.assertEqual(released["status"], "active")
+        self.assertEqual(released["previous_active_version_id"], first_version_id)
+
+        detail_resp = self.client.get(f"{self.base_url}/algorithms/zip_metadata_demo")
+        detail = detail_resp.json()["data"]
+        self.assertEqual(detail["name"], "ZIP Metadata Updated")
+        self.assertEqual(detail["description"], "Updated from the standard ZIP contract")
+        self.assertEqual(detail["visibility"], "public")
+        self.assertEqual(detail["developer_attribution"]["name"], "ZIP Developer")
+        self.assertEqual(detail["developer_attribution"]["organization"], "ZIP Institute")
+        self.assertEqual(detail["mentor_team"], "ZIP Mentor Team")
+
+        _versions, total = AlgorithmVersionRepository.list_versions(
+            algorithm_id="zip_metadata_demo", page=1, page_size=20
+        )
+        self.assertEqual(total, 2)
+
+    def test_version_records_creator_username_with_id_fallback_contract(self) -> None:
+        """新版本记录创建人用户名，旧记录缺失该字段仍可序列化。"""
+        app.dependency_overrides[get_current_user] = lambda: {
+            "user_id": "creator-id",
+            "username": "creator-name",
+            "role": "user",
+            "status": "active",
+        }
+        version_id = self._pack_activate_simple_algorithm("creator_name_demo")
+        versions_resp = self.client.get(
+            f"{self.base_url}/algorithms/creator_name_demo/versions",
+            params={"page_size": 20},
+        )
+        version = next(item for item in versions_resp.json()["data"]["items"] if item["version_id"] == version_id)
+        self.assertEqual(version["created_by"], "creator-id")
+        self.assertEqual(version["created_by_name"], "creator-name")
+
+        AlgorithmVersionRepository.update_fields(version_id, {"created_by_name": None})
+        legacy_resp = self.client.get(
+            f"{self.base_url}/algorithms/creator_name_demo/versions",
+            params={"page_size": 20},
+        )
+        legacy = next(item for item in legacy_resp.json()["data"]["items"] if item["version_id"] == version_id)
+        self.assertIsNone(legacy["created_by_name"])
 
     def test_script_version_upload_inherits_active_package_contract(self) -> None:
         template_resp = self.client.get(f"{self.base_url}/algorithm-packages/template")

@@ -45,7 +45,13 @@ DEFAULT_REMOTE_ARTIFACT_TOTAL_BYTES = 100 * 1024 * 1024
 class RemoteInterfaceService:
     """管理远程接口版本并同步执行 HTTP/FastAPI 兼容请求。"""
 
-    def create_interface(self, payload: AlgorithmInterfaceCreate, *, actor_user_id: str) -> AlgorithmInterfaceDetails:
+    def create_interface(
+        self,
+        payload: AlgorithmInterfaceCreate,
+        *,
+        actor_user_id: str,
+        actor_user_name: str | None = None,
+    ) -> AlgorithmInterfaceDetails:
         """创建一个接口型算法及首个版本。"""
         if AlgorithmRegistryRepository.find_one({"algorithm_id": payload.algorithm_id}):
             raise HTTPException(status_code=409, detail="算法 ID 已存在")
@@ -65,6 +71,7 @@ class RemoteInterfaceService:
             description=payload.description,
             visibility=payload.visibility,
             created_by=actor_user_id,
+            created_by_name=actor_user_name or actor_user_id,
             now=now,
         )
         self._validate_interface_contract(
@@ -91,6 +98,7 @@ class RemoteInterfaceService:
         payload: AlgorithmInterfaceVersionCreate,
         *,
         actor_user_id: str,
+        actor_user_name: str | None = None,
     ) -> AlgorithmVersion:
         """为已有接口模型创建不可变的新版本。"""
         registry = self._get_registry(algorithm_id)
@@ -115,6 +123,7 @@ class RemoteInterfaceService:
             description=payload.description if payload.description is not None else registry.get("description"),
             visibility=payload.visibility or registry.get("visibility") or "private",
             created_by=actor_user_id,
+            created_by_name=actor_user_name or actor_user_id,
             now=now,
         )
         self._validate_interface_contract(
@@ -629,6 +638,7 @@ class RemoteInterfaceService:
         description: str | None,
         visibility: str,
         created_by: str,
+        created_by_name: str | None,
         now,
     ) -> dict[str, Any]:
         return {
@@ -667,6 +677,7 @@ class RemoteInterfaceService:
             "implementation_notes": None,
             "algorithm_summary": None,
             "created_by": created_by,
+            "created_by_name": created_by_name or created_by,
             "uploaded_by": created_by,
             "activated_at": None,
             "activation_kind": None,

@@ -102,6 +102,11 @@ def _actor_user_id(current_user: dict[str, str] | None) -> str:
     return current_user["user_id"] if current_user else "demo_user"
 
 
+def _actor_user_name(current_user: dict[str, str] | None) -> str:
+    """解析当前操作人的展示名称，未启用鉴权时使用稳定回退值。"""
+    return (current_user or {}).get("username") or "demo_user"
+
+
 def _access_user_id(current_user: dict[str, str] | None) -> str | None:
     """解析用于数据权限过滤的用户 ID。"""
     return current_user["user_id"] if current_user else None
@@ -220,6 +225,7 @@ def create_algorithm_interface(
     data = remote_interface_service.create_interface(
         payload,
         actor_user_id=_actor_user_id(current_user),
+        actor_user_name=_actor_user_name(current_user),
     )
     return ApiResponse(code=0, message="ok", data=data)
 
@@ -239,6 +245,7 @@ def create_algorithm_interface_version(
         algorithm_id,
         payload,
         actor_user_id=_actor_user_id(current_user),
+        actor_user_name=_actor_user_name(current_user),
     )
     return ApiResponse(code=0, message="ok", data=data)
 
@@ -641,6 +648,7 @@ async def pack_algorithm_package(
         filename=f"{payload.algorithm_id}-{payload.version}.zip",
         content=zip_bytes,
         actor_user_id=_actor_user_id(current_user),
+        actor_user_name=_actor_user_name(current_user),
         visibility=visibility,
     )
     data = package_service.validate_package(data.package_id)
@@ -675,6 +683,7 @@ async def upload_algorithm_package(
         filename=file.filename or "algorithm-package.zip",
         content=content,
         actor_user_id=_actor_user_id(current_user),
+        actor_user_name=_actor_user_name(current_user),
         visibility=visibility,
         target_algorithm_id=target_algorithm_id,
         owner_user_id=(
@@ -727,6 +736,7 @@ async def pack_algorithm_package_version(
         filename=f"{target_algorithm_id}-{version}.zip",
         content=zip_bytes,
         actor_user_id=_actor_user_id(current_user),
+        actor_user_name=_actor_user_name(current_user),
         target_algorithm_id=target_algorithm_id,
         owner_user_id=package_service.resolve_algorithm_owner(target_algorithm_id),
     )

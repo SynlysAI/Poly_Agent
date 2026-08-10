@@ -8,6 +8,17 @@ export function predictionStepState({ running = false, lastRun = null } = {}) {
   return { activeStep: 2, inputLabel: '填写输入', hasResult: false }
 }
 
+export function versionListQuery(page = 1, pageSize = 10) {
+  return {
+    page: Math.max(1, Number(page) || 1),
+    page_size: Math.min(100, Math.max(1, Number(pageSize) || 10)),
+  }
+}
+
+export function keepPredictionExperienceAfterRun() {
+  return { tab: 'experience', runId: '' }
+}
+
 /**
  * 判断缺失的模型选择是否需要退出当前工作流。
  */

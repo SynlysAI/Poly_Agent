@@ -230,6 +230,7 @@ class AlgorithmPackageService:
         filename: str,
         content: bytes,
         actor_user_id: str,
+        actor_user_name: str | None = None,
         owner_user_id: str | None = None,
         visibility: str | None = None,
         target_algorithm_id: str | None = None,
@@ -246,6 +247,10 @@ class AlgorithmPackageService:
         package_sha256 = hashlib.sha256(content).hexdigest()
         package_id = f"apkg_{uuid4().hex[:12]}"
         now = utc_now()
+        created_by = owner_user_id or actor_user_id
+        created_by_name = actor_user_name or actor_user_id
+        if owner_user_id and owner_user_id != actor_user_id:
+            created_by_name = owner_user_id
         package_dir = self._package_root(package_id)
         package_dir.mkdir(parents=True, exist_ok=True)
         zip_path = package_dir / "source.zip"
@@ -272,7 +277,8 @@ class AlgorithmPackageService:
             "environment_digest": None,
             "runtime_digest": None,
             "visibility": normalized_visibility,
-            "created_by": owner_user_id or actor_user_id,
+            "created_by": created_by,
+            "created_by_name": created_by_name,
             "uploaded_by": actor_user_id,
             "created_at": now,
             "updated_at": now,
@@ -498,6 +504,7 @@ class AlgorithmPackageService:
                     mode="python"
                 ),
                 "created_by": package.created_by,
+                "created_by_name": package.created_by_name or package.created_by,
                 "uploaded_by": package.uploaded_by or package.created_by,
                 "activated_at": None,
                 "activation_kind": None,
@@ -695,8 +702,12 @@ class AlgorithmPackageService:
                 previous_version.package_id,
                 {"status": "deployed_staging", "updated_at": now},
             )
+        # Releasing a new package should publish its contract metadata. Manual
+        # reactivation/rollback keeps metadata edited directly in the registry.
         preserve_registry_metadata = bool(
-            registry_entry and registry_entry.get("source") == "uploaded_package"
+            activation_kind != "release"
+            and registry_entry
+            and registry_entry.get("source") == "uploaded_package"
         )
         if preserve_registry_metadata:
             raw_attribution = registry_entry.get("developer_attribution")

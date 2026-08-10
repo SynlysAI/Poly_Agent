@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, CopyDocument, Delete, Plus, Refresh, VideoPlay } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { CopyDocument, Delete, Plus, Refresh, VideoPlay } from '@element-plus/icons-vue'
 
 import {
   createAlgorithmRun,
@@ -14,13 +14,12 @@ import {
 } from '../../api/polyAgentApi'
 import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
 import { algorithmSourceLabel, interfaceProtocolLabel, predictionStepState } from '../../utils/verticalPredictionState.mjs'
+import { inferValueKind } from '../../utils/verticalPredictionJson.mjs'
 import {
-  addFieldToRecords,
-  inferValueKind,
-  recordTitleField,
-  removeFieldFromRecords,
-  renameFieldInRecords,
-} from '../../utils/verticalPredictionJson.mjs'
+  mergeRowsBySchema,
+  parseClipboardTable,
+  serializeRowsForClipboard,
+} from '../../utils/verticalPredictionInputTable.mjs'
 import AlgorithmResultView from './AlgorithmResultView.vue'
 
 const props = defineProps({
@@ -43,11 +42,12 @@ const startSections = ref([])
 const advancedSections = ref([])
 const templateRuns = ref([])
 const templateRunId = ref('')
-const newNestedField = ref({})
-const newNestedValue = ref({})
-const newNestedKind = ref({})
-const renamedNestedField = ref({})
-const removedNestedFields = ref({})
+const expandedArrayFields = ref([])
+const clipboardDialogVisible = ref(false)
+const clipboardFieldKey = ref('')
+const clipboardDraft = ref('')
+const clipboardMode = ref('append')
+const clipboardPreview = ref({ rows: [], ignoredColumns: [], missingColumns: [] })
 const lastRun = ref(null)
 const inputFiles = ref({})
 const runArtifacts = ref([])
@@ -120,7 +120,7 @@ const inputGuidance = computed(() => {
   if (hasBlankPrimaryRecords.value) return '填写至少一条配方的字段值，或从历史输入开始。'
   return '输入已就绪，可以运行预测。'
 })
-const advancedFieldKeys = computed(() => schemaFields.value.filter((key) => isArrayObjectField(key) || isObjectField(key)))
+const clipboardPreviewColumns = computed(() => arrayColumns(clipboardFieldKey.value))
 const workflowStep = computed(() => predictionStepState({ running: running.value, lastRun: lastRun.value }))
 
 watch(() => props.refreshKey, loadAlgorithms)
@@ -232,11 +232,12 @@ function resetInputs() {
 }
 
 function resetNestedFieldState() {
-  newNestedField.value = {}
-  newNestedValue.value = {}
-  newNestedKind.value = {}
-  renamedNestedField.value = {}
-  removedNestedFields.value = {}
+  expandedArrayFields.value = []
+  clipboardDialogVisible.value = false
+  clipboardFieldKey.value = ''
+  clipboardDraft.value = ''
+  clipboardMode.value = 'append'
+  clipboardPreview.value = { rows: [], ignoredColumns: [], missingColumns: [] }
 }
 
 function syncFullJsonDraft() {
@@ -340,10 +341,6 @@ function ensureArrayValue(key) {
   if (!Array.isArray(inputs.value[key])) inputs.value[key] = []
 }
 
-function ensureObjectValue(key) {
-  if (!isPlainObject(inputs.value[key])) inputs.value[key] = {}
-}
-
 function templateValueFor(key) {
   const selected = templateRuns.value.find((run) => run.run_id === templateRunId.value)
   return selected?.input_snapshot?.[key]
@@ -368,12 +365,11 @@ function arrayColumns(key) {
   const templateRows = Array.isArray(templateValueFor(key)) ? templateValueFor(key) : []
   const keys = new Set()
   hinted.forEach((column) => keys.add(String(column)))
+  defaultArrayColumns(key).forEach((column) => keys.add(column))
   ;[...rows, ...templateRows].forEach((row) => {
     if (isPlainObject(row)) Object.keys(row).forEach((column) => keys.add(column))
   })
-  if (!keys.size) defaultArrayColumns(key).forEach((column) => keys.add(column))
-  const removed = new Set(removedNestedFields.value[key] || [])
-  return Array.from(keys).filter((column) => !removed.has(column))
+  return Array.from(keys)
 }
 
 function defaultArrayColumns(key) {
@@ -473,102 +469,6 @@ function removeArrayItem(key, index) {
   syncFullJsonDraft()
 }
 
-function addNestedFieldToArray(key) {
-  const name = String(newNestedField.value[key] || '').trim()
-  if (!name) return
-  ensureArrayValue(key)
-  if (!inputs.value[key].length) inputs.value[key].push({})
-  const parsed = parseCustomFieldValue(newNestedValue.value[key])
-  const kind = newNestedKind.value[key] || inferValueKind(name, [parsed])
-  try {
-    inputs.value[key] = addFieldToRecords(inputs.value[key], name, kind, newNestedValue.value[key])
-    removedNestedFields.value[key] = (removedNestedFields.value[key] || []).filter((item) => item !== name)
-    newNestedField.value[key] = ''
-    newNestedValue.value[key] = ''
-    delete newNestedKind.value[key]
-    syncFullJsonDraft()
-  } catch (error) {
-    ElMessage.warning(error.message)
-  }
-}
-
-function nestedFieldDraftKey(parentKey, field) {
-  return `${parentKey}.${field}`
-}
-
-function prepareNestedFieldRename(parentKey, field) {
-  renamedNestedField.value[nestedFieldDraftKey(parentKey, field)] = field
-}
-
-function renameNestedField(parentKey, field) {
-  const draftKey = nestedFieldDraftKey(parentKey, field)
-  const target = String(renamedNestedField.value[draftKey] || '').trim()
-  try {
-    inputs.value[parentKey] = renameFieldInRecords(inputs.value[parentKey] || [], field, target)
-    removedNestedFields.value[parentKey] = Array.from(new Set([
-      ...(removedNestedFields.value[parentKey] || []),
-      field,
-    ])).filter((item) => item !== target)
-    delete renamedNestedField.value[draftKey]
-    syncFullJsonDraft()
-  } catch (error) {
-    ElMessage.warning(error.message)
-  }
-}
-
-async function removeNestedField(parentKey, field) {
-  const records = inputs.value[parentKey] || []
-  const hasData = records.some((item) => !isEmptyValue(item?.[field]))
-  try {
-    if (hasData) {
-      await ElMessageBox.confirm(`字段 ${field} 已有数据，确认从全部记录中删除？`, '删除字段', {
-        type: 'warning',
-      })
-    }
-    inputs.value[parentKey] = removeFieldFromRecords(records, field)
-    removedNestedFields.value[parentKey] = Array.from(new Set([
-      ...(removedNestedFields.value[parentKey] || []),
-      field,
-    ]))
-    delete renamedNestedField.value[nestedFieldDraftKey(parentKey, field)]
-    syncFullJsonDraft()
-  } catch (error) {
-    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '删除字段失败')
-  }
-}
-
-function addNestedFieldToObject(key) {
-  const name = String(newNestedField.value[key] || '').trim()
-  if (!name) return
-  const value = parseCustomFieldValue(newNestedValue.value[key])
-  ensureObjectValue(key)
-  if (!Object.prototype.hasOwnProperty.call(inputs.value[key], name)) inputs.value[key][name] = value
-  newNestedField.value[key] = ''
-  newNestedValue.value[key] = ''
-  syncFullJsonDraft()
-}
-
-function removeObjectField(key, field) {
-  ensureObjectValue(key)
-  delete inputs.value[key][field]
-  syncFullJsonDraft()
-}
-
-function addAdvancedField(key) {
-  if (isArrayObjectField(key)) addNestedFieldToArray(key)
-  else if (isObjectField(key)) addNestedFieldToObject(key)
-}
-
-function itemTitle(key, item, index) {
-  const titleKey = fieldHint(key).item_title_key || recordTitleField(item)
-  return titleKey && item?.[titleKey] ? String(item[titleKey]) : `${fieldLabel(key)} ${index + 1}`
-}
-
-function itemTitleField(key, item) {
-  const hinted = fieldHint(key).item_title_key
-  return hinted && Object.prototype.hasOwnProperty.call(item || {}, hinted) ? hinted : recordTitleField(item)
-}
-
 function firstRecordButtonLabel(key) {
   return key === 'formulations' ? '新增第一条配方' : '新增第一条记录'
 }
@@ -587,6 +487,64 @@ function nestedValueKind(parentKey, field, item) {
   ])
 }
 
+function arrayTableSchema(key) {
+  const sample = arrayRows(key)[0] || {}
+  return {
+    fields: Object.fromEntries(arrayColumns(key).map((column) => [column, nestedValueKind(key, column, sample)])),
+    labels: Object.fromEntries(arrayColumns(key).map((column) => [column, nestedFieldLabel(key, column)])),
+  }
+}
+
+function displayedArrayColumns(key) {
+  return expandedArrayFields.value.includes(key) ? arrayColumns(key) : coreArrayColumns(key)
+}
+
+function toggleArrayColumns(key) {
+  expandedArrayFields.value = expandedArrayFields.value.includes(key)
+    ? expandedArrayFields.value.filter((item) => item !== key)
+    : [...expandedArrayFields.value, key]
+}
+
+function openClipboardImport(key) {
+  clipboardFieldKey.value = key
+  clipboardDraft.value = ''
+  clipboardMode.value = 'append'
+  clipboardPreview.value = { rows: [], ignoredColumns: [], missingColumns: [] }
+  clipboardDialogVisible.value = true
+}
+
+function previewClipboardImport() {
+  clipboardPreview.value = parseClipboardTable(
+    clipboardDraft.value,
+    arrayTableSchema(clipboardFieldKey.value),
+  )
+  if (!clipboardPreview.value.rows.length) ElMessage.warning('未识别到可导入的数据行')
+}
+
+function applyClipboardImport() {
+  if (!clipboardPreview.value.rows.length) previewClipboardImport()
+  if (!clipboardPreview.value.rows.length) return
+  const key = clipboardFieldKey.value
+  inputs.value[key] = mergeRowsBySchema(
+    arrayRows(key),
+    clipboardPreview.value.rows,
+    arrayTableSchema(key),
+    clipboardMode.value,
+  )
+  syncFullJsonDraft()
+  clipboardDialogVisible.value = false
+  ElMessage.success(`已导入 ${clipboardPreview.value.rows.length} 条记录`)
+}
+
+async function copyArrayTable(key) {
+  try {
+    await navigator.clipboard.writeText(serializeRowsForClipboard(arrayRows(key), arrayColumns(key)))
+    ElMessage.success('表格已复制，可直接粘贴到 Excel')
+  } catch {
+    ElMessage.warning('浏览器未授权写入剪贴板，请使用高级 JSON 导出')
+  }
+}
+
 function nestedNumberStep(field) {
   return /(count|index|number)/i.test(String(field || '')) ? 1 : 0.1
 }
@@ -603,15 +561,6 @@ function defaultValueForColumn(column, sourceValue) {
   if (kind === 'boolean') return false
   if (kind === 'number') return 0
   return ''
-}
-
-function parseCustomFieldValue(value) {
-  const text = String(value ?? '').trim()
-  if (!text) return ''
-  if (text === 'true') return true
-  if (text === 'false') return false
-  if (!Number.isNaN(Number(text)) && text !== '') return Number(text)
-  return text
 }
 
 function cloneJson(value) {
@@ -987,119 +936,75 @@ onMounted(loadAlgorithms)
               @update:model-value="setScalarValue(key, $event)"
             />
             <div v-else-if="isArrayObjectField(key)" class="array-object-editor">
-              <div v-if="arrayRows(key).length" class="nested-toolbar">
+              <div class="nested-toolbar">
                 <div class="nested-count">{{ arrayRows(key).length }} 条记录</div>
-                <el-button type="primary" plain :icon="Plus" @click="addArrayItem(key)">{{ addRecordButtonLabel(key) }}</el-button>
+                <div class="array-table-actions">
+                  <el-button :icon="CopyDocument" @click="openClipboardImport(key)">粘贴表格</el-button>
+                  <el-button :icon="CopyDocument" :disabled="!arrayRows(key).length" @click="copyArrayTable(key)">复制表格</el-button>
+                  <el-button type="primary" plain :icon="Plus" @click="addArrayItem(key)">{{ addRecordButtonLabel(key) }}</el-button>
+                </div>
               </div>
-              <el-collapse v-if="arrayRows(key).length" class="field-manager-collapse">
-                <el-collapse-item name="fields">
+              <el-collapse class="schema-summary-collapse">
+                <el-collapse-item :name="`schema-${key}`">
                   <template #title>
-                    <span class="field-manager-title">字段管理 · {{ arrayColumns(key).length }} 个字段</span>
+                    <span class="field-manager-title">字段定义 · {{ arrayColumns(key).length }} 个字段</span>
                   </template>
-                  <div class="field-manager">
-                    <div class="field-manager-add">
-                      <el-input v-model="newNestedField[key]" placeholder="新字段名" clearable />
-                      <el-select v-model="newNestedKind[key]" placeholder="字段类型">
-                        <el-option label="文本" value="string" />
-                        <el-option label="数值" value="number" />
-                        <el-option label="布尔" value="boolean" />
-                      </el-select>
-                      <el-input v-model="newNestedValue[key]" placeholder="默认值（可选）" clearable @keyup.enter="addNestedFieldToArray(key)" />
-                      <el-button :icon="Plus" @click="addNestedFieldToArray(key)">新增字段</el-button>
-                    </div>
-                    <div class="field-manager-list">
-                      <div v-for="column in arrayColumns(key)" :key="column" class="field-manager-row">
-                        <el-input
-                          v-model="renamedNestedField[nestedFieldDraftKey(key, column)]"
-                          :placeholder="column"
-                          @focus="prepareNestedFieldRename(key, column)"
-                          @keyup.enter="renameNestedField(key, column)"
-                        />
-                        <el-tag size="small" effect="plain">{{ nestedValueKind(key, column, arrayRows(key)[0]) }}</el-tag>
-                        <el-button
-                          text
-                          :icon="Check"
-                          aria-label="确认字段改名"
-                          @click="renameNestedField(key, column)"
-                        />
-                        <el-button
-                          text
-                          type="danger"
-                          :icon="Delete"
-                          aria-label="删除字段"
-                          @click="removeNestedField(key, column)"
-                        />
-                      </div>
-                    </div>
+                  <div class="schema-field-list">
+                    <el-tag v-for="column in arrayColumns(key)" :key="column" size="small" effect="plain">
+                      {{ nestedFieldLabel(key, column) }} · {{ nestedValueKind(key, column, arrayRows(key)[0]) }}
+                    </el-tag>
                   </div>
+                  <p class="schema-readonly-note">字段由当前算法版本的 input schema 定义，运行时仅填写数据。</p>
                 </el-collapse-item>
               </el-collapse>
-              <div v-if="arrayRows(key).length" class="record-list">
-                <article v-for="(item, index) in arrayRows(key)" :key="index" class="record-card">
-                  <header class="record-head">
-                    <el-input
-                      v-if="itemTitleField(key, item)"
-                      :model-value="item[itemTitleField(key, item)]"
-                      class="record-title-input"
-                      :aria-label="`编辑${itemTitleField(key, item)}`"
-                      @update:model-value="setNestedValue(item, itemTitleField(key, item), $event)"
-                    />
-                    <strong v-else>{{ itemTitle(key, item, index) }}</strong>
-                    <div class="record-actions">
-                      <el-button text :icon="CopyDocument" aria-label="复制记录" @click="copyArrayItem(key, index)" />
-                      <el-button text :icon="Delete" aria-label="删除记录" @click="removeArrayItem(key, index)" />
-                    </div>
-                  </header>
-                  <div class="record-fields">
-                    <label v-for="column in coreArrayColumns(key)" :key="column" class="nested-field">
-                      <span>{{ nestedFieldLabel(key, column) }}</span>
+              <div v-if="arrayRows(key).length" class="compact-record-table">
+                <el-table :data="arrayRows(key)" border size="small" max-height="420">
+                  <el-table-column type="index" label="#" width="52" fixed="left" />
+                  <el-table-column
+                    v-for="column in displayedArrayColumns(key)"
+                    :key="column"
+                    :label="nestedFieldLabel(key, column)"
+                    min-width="150"
+                  >
+                    <template #default="{ row }">
                       <el-input-number
-                        v-if="nestedValueKind(key, column, item) === 'number'"
-                        :model-value="item[column]"
+                        v-if="nestedValueKind(key, column, row) === 'number'"
+                        :model-value="row[column]"
                         :step="nestedNumberStep(column)"
                         class="full-control"
-                        @update:model-value="setNestedValue(item, column, $event)"
+                        :controls="false"
+                        @update:model-value="setNestedValue(row, column, $event)"
                       />
                       <el-switch
-                        v-else-if="nestedValueKind(key, column, item) === 'boolean'"
-                        :model-value="item[column]"
-                        @update:model-value="setNestedValue(item, column, $event)"
+                        v-else-if="nestedValueKind(key, column, row) === 'boolean'"
+                        :model-value="row[column]"
+                        @update:model-value="setNestedValue(row, column, $event)"
                       />
                       <el-input
                         v-else
-                        :model-value="item[column]"
+                        :model-value="row[column]"
                         :placeholder="nestedFieldLabel(key, column)"
-                        @update:model-value="setNestedValue(item, column, $event)"
+                        @update:model-value="setNestedValue(row, column, $event)"
                       />
-                    </label>
-                  </div>
-                  <el-collapse v-if="collapsedArrayColumns(key).length" class="record-collapse">
-                    <el-collapse-item title="更多字段" :name="`${key}-${index}`">
-                      <div class="record-fields">
-                        <label v-for="column in collapsedArrayColumns(key)" :key="column" class="nested-field">
-                          <span>{{ nestedFieldLabel(key, column) }}</span>
-                          <el-input-number
-                            v-if="nestedValueKind(key, column, item) === 'number'"
-                            :model-value="item[column]"
-                            :step="nestedNumberStep(column)"
-                            class="full-control"
-                            @update:model-value="setNestedValue(item, column, $event)"
-                          />
-                          <el-switch
-                            v-else-if="nestedValueKind(key, column, item) === 'boolean'"
-                            :model-value="item[column]"
-                            @update:model-value="setNestedValue(item, column, $event)"
-                          />
-                          <el-input v-else :model-value="item[column]" @update:model-value="setNestedValue(item, column, $event)" />
-                        </label>
-                      </div>
-                    </el-collapse-item>
-                  </el-collapse>
-                  <p class="record-ready-hint">填写可见字段即可开始；更多字段和原始 JSON 在高级设置中调整。</p>
-                </article>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="88" fixed="right">
+                    <template #default="{ $index }">
+                      <el-button text :icon="CopyDocument" aria-label="复制记录" @click="copyArrayItem(key, $index)" />
+                      <el-button text type="danger" :icon="Delete" aria-label="删除记录" @click="removeArrayItem(key, $index)" />
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-button
+                  v-if="collapsedArrayColumns(key).length"
+                  text
+                  class="more-columns-button"
+                  @click="toggleArrayColumns(key)"
+                >{{ expandedArrayFields.includes(key) ? '收起更多字段' : `更多字段（${collapsedArrayColumns(key).length}）` }}</el-button>
               </div>
               <div v-else class="nested-empty">
                 <el-button type="primary" :icon="Plus" @click="addArrayItem(key)">{{ firstRecordButtonLabel(key) }}</el-button>
+                <el-button :icon="CopyDocument" @click="openClipboardImport(key)">从 Excel/CSV 粘贴</el-button>
               </div>
             </div>
             <div v-else-if="isScalarArrayField(key)" class="scalar-array-editor">
@@ -1135,7 +1040,6 @@ onMounted(loadAlgorithms)
                       @update:model-value="setNestedValue(inputs[key], column, $event)"
                     />
                     <el-input v-else :model-value="inputs[key]?.[column]" @update:model-value="setNestedValue(inputs[key], column, $event)" />
-                    <el-button text :icon="Delete" aria-label="删除字段" @click="removeObjectField(key, column)" />
                   </div>
                 </label>
               </div>
@@ -1172,14 +1076,6 @@ onMounted(loadAlgorithms)
               <div>
                 <strong>原始输入 JSON</strong>
                 <span>这里和上方表单是同一份输入；粘贴 JSON 后会同步回表单。</span>
-              </div>
-            </div>
-            <div v-if="advancedFieldKeys.length" class="advanced-field-tools">
-              <div v-for="key in advancedFieldKeys" :key="key" class="advanced-field-row">
-                <span>{{ fieldLabel(key) }}</span>
-                <el-input v-model="newNestedField[key]" placeholder="字段名" clearable @keyup.enter="addAdvancedField(key)" />
-                <el-input v-model="newNestedValue[key]" placeholder="默认值（可选）" clearable @keyup.enter="addAdvancedField(key)" />
-                <el-button :icon="Plus" @click="addAdvancedField(key)">新增字段</el-button>
               </div>
             </div>
             <div class="json-editor">
@@ -1247,6 +1143,48 @@ onMounted(loadAlgorithms)
     </div>
 
     <div v-else class="empty-output">暂无可调用版本。请先上传、部署并激活算法。</div>
+
+    <el-dialog v-model="clipboardDialogVisible" title="粘贴表格数据" width="min(860px, 94vw)" append-to-body>
+      <div class="clipboard-import">
+        <div class="clipboard-toolbar">
+          <el-segmented
+            v-model="clipboardMode"
+            :options="[
+              { label: '追加到现有记录', value: 'append' },
+              { label: '替换现有记录', value: 'replace' },
+            ]"
+          />
+          <span>首行需为字段名或 schema 中配置的显示名称。</span>
+        </div>
+        <el-input
+          v-model="clipboardDraft"
+          type="textarea"
+          :rows="8"
+          placeholder="从 Excel 复制后粘贴到这里，支持制表符或 CSV"
+          @paste="clipboardPreview = { rows: [], ignoredColumns: [], missingColumns: [] }"
+        />
+        <div class="clipboard-preview-actions">
+          <el-button @click="previewClipboardImport">预览</el-button>
+          <span v-if="clipboardPreview.rows.length">识别到 {{ clipboardPreview.rows.length }} 条记录</span>
+          <span v-if="clipboardPreview.ignoredColumns.length">忽略未知列：{{ clipboardPreview.ignoredColumns.join('、') }}</span>
+          <span v-if="clipboardPreview.missingColumns.length">未提供列：{{ clipboardPreview.missingColumns.join('、') }}</span>
+        </div>
+        <el-table v-if="clipboardPreview.rows.length" :data="clipboardPreview.rows" border size="small" max-height="280">
+          <el-table-column type="index" label="#" width="52" />
+          <el-table-column
+            v-for="column in clipboardPreviewColumns"
+            :key="column"
+            :prop="column"
+            :label="nestedFieldLabel(clipboardFieldKey, column)"
+            min-width="130"
+          />
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="clipboardDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!clipboardDraft.trim()" @click="applyClipboardImport">确认导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1259,7 +1197,7 @@ onMounted(loadAlgorithms)
 .pane-heading h3, h4 { margin: 0; font-size: 15px; }
 .pane-heading span, .pane-heading small { color: var(--app-ink-muted); font-size: 12px; }
 .pane-heading small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
-.history-start, .input-actions, .nested-toolbar, .nested-actions, .record-actions, .object-field-row, .scalar-array-row, .advanced-mode-row, .advanced-field-row {
+.history-start, .input-actions, .nested-toolbar, .object-field-row, .scalar-array-row, .advanced-mode-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1373,9 +1311,20 @@ onMounted(loadAlgorithms)
 .smart-input-form {
   display: grid;
   gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
 }
 .json-form-item {
   margin-bottom: 18px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+.json-form-item :deep(.el-form-item__content) {
+  display: block;
+  min-width: 0;
+  width: 100%;
 }
 .field-label {
   display: inline-flex;
@@ -1435,7 +1384,7 @@ onMounted(loadAlgorithms)
   padding: 12px;
   border: 1px solid var(--app-stat-border);
   border-radius: var(--app-radius-sm);
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  background: #f8fbff;
 }
 .nested-toolbar {
   justify-content: space-between;
@@ -1448,92 +1397,81 @@ onMounted(loadAlgorithms)
   font-size: 12px;
   font-weight: 700;
 }
-.field-manager-collapse {
+.schema-summary-collapse {
   margin-bottom: 12px;
   border-top: 1px solid var(--app-border-soft);
   border-bottom: 1px solid var(--app-border-soft);
 }
-.field-manager-collapse :deep(.el-collapse-item__header) {
+.schema-summary-collapse :deep(.el-collapse-item__header) {
   min-height: 42px;
   height: auto;
   color: var(--app-ink-body);
   font-size: 12px;
   font-weight: 700;
+  background: transparent;
 }
-.field-manager-collapse :deep(.el-collapse-item__wrap) {
+.schema-summary-collapse :deep(.el-collapse-item__wrap) {
   border-bottom: 0;
+  background: transparent;
 }
 .field-manager-title {
   overflow-wrap: anywhere;
 }
-.field-manager {
-  display: grid;
-  gap: 10px;
-  padding-bottom: 10px;
-}
-.field-manager-add {
-  display: grid;
-  grid-template-columns: minmax(130px, 1fr) 110px minmax(140px, 1fr) auto;
-  gap: 8px;
-}
-.field-manager-list {
-  display: grid;
-  gap: 6px;
-}
-.field-manager-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px 32px 32px;
+.array-table-actions {
+  display: flex;
   align-items: center;
-  gap: 6px;
-}
-.field-manager-row :deep(.el-tag__content) {
-  width: 100%;
-  overflow: hidden;
-  text-align: center;
-  text-overflow: ellipsis;
-}
-.nested-actions {
-  flex: 1 1 260px;
   justify-content: flex-end;
+  gap: 8px;
   flex-wrap: wrap;
 }
-.nested-actions .el-input {
-  max-width: 180px;
-}
-.record-list {
-  display: grid;
-  gap: 10px;
-}
-.record-card {
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius-sm);
-  background: #fff;
-}
-.record-head {
+.schema-field-list {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
 }
-.record-head strong {
+.schema-readonly-note {
+  margin: 0 0 10px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.compact-record-table {
   min-width: 0;
-  color: var(--app-ink);
-  font-size: 14px;
+  max-width: 100%;
+  width: 100%;
+  overflow-x: auto;
+}
+.compact-record-table :deep(.el-table) {
+  min-width: 720px;
+}
+.compact-record-table :deep(.el-input-number) {
+  width: 100%;
+}
+.compact-record-table :deep(.el-table__cell) {
+  padding: 6px 0;
+}
+.more-columns-button {
+  margin-top: 8px;
+}
+.clipboard-import {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.clipboard-toolbar,
+.clipboard-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.clipboard-toolbar span,
+.clipboard-preview-actions span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
   overflow-wrap: anywhere;
-}
-.record-title-input {
-  width: min(320px, 100%);
-}
-.record-title-input :deep(.el-input__inner) {
-  color: var(--app-ink);
-  font-size: 14px;
-  font-weight: 700;
-}
-.record-actions {
-  flex: 0 0 auto;
 }
 .record-fields {
   display: grid;
@@ -1551,19 +1489,12 @@ onMounted(loadAlgorithms)
   font-weight: 700;
   overflow-wrap: anywhere;
 }
-.record-collapse {
-  margin-top: 10px;
-}
-.record-ready-hint {
-  margin: 10px 0 0;
-  color: var(--app-ink-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
 .nested-empty {
   min-height: 90px;
   display: grid;
   place-items: center;
+  align-content: center;
+  gap: 8px;
   border: 1px dashed var(--app-border);
   border-radius: var(--app-radius-sm);
   background: rgba(255, 255, 255, 0.72);
@@ -1594,8 +1525,7 @@ onMounted(loadAlgorithms)
   display: grid;
   gap: 2px;
 }
-.advanced-mode-row strong,
-.advanced-field-row > span {
+.advanced-mode-row strong {
   color: var(--app-ink);
   font-size: 13px;
 }
@@ -1604,22 +1534,6 @@ onMounted(loadAlgorithms)
   color: var(--app-ink-muted);
   font-size: 12px;
   line-height: 1.45;
-}
-.advanced-field-tools {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.advanced-field-row {
-  flex-wrap: wrap;
-}
-.advanced-field-row > span {
-  flex: 0 0 120px;
-  overflow-wrap: anywhere;
-}
-.advanced-field-row .el-input {
-  flex: 1 1 180px;
-  min-width: 0;
 }
 .json-error {
   margin-top: 2px;
@@ -1674,27 +1588,27 @@ onMounted(loadAlgorithms)
     flex-direction: column;
     gap: 6px;
   }
-  .test-toolbar, .pane-heading, .history-start, .nested-toolbar, .nested-actions, .input-actions, .advanced-mode-row, .advanced-field-row {
+  .test-toolbar, .pane-heading, .history-start, .nested-toolbar, .input-actions, .advanced-mode-row {
     align-items: stretch;
     flex-direction: column;
   }
-  .test-toolbar :deep(.el-select), .history-start .el-select, .nested-actions .el-input, .input-actions .el-button, .advanced-field-row .el-input, .advanced-field-row .el-button {
+  .test-toolbar :deep(.el-select), .history-start .el-select, .input-actions .el-button {
     width: 100% !important;
     max-width: none;
   }
-  .advanced-field-row > span,
   .run-status {
     flex-basis: auto;
   }
   .record-fields {
     grid-template-columns: 1fr;
   }
-  .field-manager-add,
-  .field-manager-row {
-    grid-template-columns: 1fr;
-  }
-  .field-manager-row :deep(.el-button) {
+  .array-table-actions,
+  .array-table-actions .el-button,
+  .clipboard-toolbar :deep(.el-segmented) {
     width: 100%;
+  }
+  .array-table-actions .el-button + .el-button {
+    margin-left: 0;
   }
   .run-overview {
     grid-template-columns: 1fr;
