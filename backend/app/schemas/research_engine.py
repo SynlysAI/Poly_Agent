@@ -1233,6 +1233,7 @@ class AlgorithmPackage(UtcDatetimeJsonModel):
     visibility: AlgorithmVisibility = "private"
     contributors: list[AlgorithmContributor] = Field(default_factory=list)
     created_by: str
+    created_by_name: str | None = None
     uploaded_by: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -1290,6 +1291,7 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     implementation_notes: str | None = Field(default=None, max_length=1000)
     algorithm_summary: AlgorithmSummary | None = None
     created_by: str
+    created_by_name: str | None = None
     uploaded_by: str | None = None
     activated_at: datetime | None = None
     activation_kind: Literal["manual", "release", "rollback"] | None = None

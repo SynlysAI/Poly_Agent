@@ -5,9 +5,11 @@ import {
   canEditRemoteInterfaceVersion,
   algorithmSourceLabel,
   interfaceProtocolLabel,
+  keepPredictionExperienceAfterRun,
   predictionStepState,
   shouldReturnToCenterAfterSelectionReconciliation,
   suggestNextPatch,
+  versionListQuery,
   versionLifecycleLabel,
 } from './verticalPredictionState.mjs'
 
@@ -23,6 +25,9 @@ assert.equal(
   '处理中',
 )
 assert.equal(predictionStepState({ running: false, lastRun: null }).activeStep, 2)
+assert.deepEqual(versionListQuery(0, 1000), { page: 1, page_size: 100 })
+assert.deepEqual(versionListQuery(2, 20), { page: 2, page_size: 20 })
+assert.deepEqual(keepPredictionExperienceAfterRun(), { tab: 'experience', runId: '' })
 assert.equal(suggestNextPatch([{ version: '0.1.0' }]), '0.1.1')
 assert.equal(suggestNextPatch([{ version: '0.1.9' }, { version: '0.2.1' }]), '0.2.2')
 assert.equal(suggestNextPatch([{ version: 'not-semver' }]), '0.1.0')

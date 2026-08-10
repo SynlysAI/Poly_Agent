@@ -445,7 +445,9 @@ async function downloadTemplate() {
 async function downloadGeneratedPackage() {
   if (!currentPackage.value?.package_id) return
   try {
-    saveBlob(await downloadAlgorithmPackage(currentPackage.value.package_id, currentPackage.value.filename))
+    const fallbackName = currentPackage.value.filename
+      || `${currentPackage.value.algorithm_id || form.algorithm_id}-${currentPackage.value.version || form.version}.zip`
+    saveBlob(await downloadAlgorithmPackage(currentPackage.value.package_id, fallbackName))
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
   }
@@ -1227,7 +1229,7 @@ function viewModelDetail() {
       <div v-if="currentPackage" class="success-actions">
         <div class="package-status">
           <el-tag :type="currentPackage.status === 'active' ? 'success' : 'warning'">{{ currentPackage.status }}</el-tag>
-          <span>{{ currentPackage.algorithm_id || currentPackage.filename }}</span>
+          <span>{{ currentPackage.name || currentPackage.algorithm_id || currentPackage.filename }}<template v-if="currentPackage.version"> · {{ currentPackage.version }}</template></span>
           <el-button text :icon="Download" @click="downloadGeneratedPackage">下载标准 ZIP</el-button>
         </div>
         <div class="success-buttons">

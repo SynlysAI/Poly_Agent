@@ -28,6 +28,7 @@ import {
   canEditRemoteInterfaceVersion,
   canManageUploadedAlgorithm,
   interfaceProtocolLabel,
+  keepPredictionExperienceAfterRun,
   shouldReturnToCenterAfterSelectionReconciliation,
 } from '../utils/verticalPredictionState.mjs'
 import { authState } from '../auth/authState'
@@ -186,6 +187,8 @@ function syncRoute() {
   } else {
     query.tab = 'detail'
     if (selectedAlgorithmId.value) query.algorithm_id = selectedAlgorithmId.value
+    if (targetRunId.value) query.run_id = targetRunId.value
+    else delete query.run_id
     delete query.handoff_id
     delete query.doc_mode
     delete query.upload_mode
@@ -208,7 +211,7 @@ watch(
   },
 )
 
-watch([activeMode, selectedAlgorithmId, interfaceConfigVersionId, selectedHandoffId, docEntryMode, uploadContextMode], syncRoute)
+watch([activeMode, selectedAlgorithmId, interfaceConfigVersionId, selectedHandoffId, docEntryMode, uploadContextMode, targetRunId], syncRoute)
 
 watch(targetRunId, (value) => {
   if (activeMode.value === 'detail' && value && selectedAlgorithm.value) {
@@ -315,6 +318,11 @@ function handleChanged(packageInfo) {
 }
 
 function handleRunCreated() {
+  // A fresh run belongs to the interactive experience, even if the page was
+  // previously opened with a historical run focused in the governance tab.
+  const next = keepPredictionExperienceAfterRun()
+  targetRunId.value = next.runId
+  detailActiveTab.value = next.tab
   loadData()
 }
 
@@ -572,7 +580,7 @@ onMounted(() => {
         <el-button text type="primary" @click="openDoc('upload')">需求文档</el-button>
       </div>
       <AlgorithmUploadPanel
-        v-if="uploadContextMode !== 'new_version' || (!loading && selectedAlgorithm)"
+        v-if="uploadContextMode !== 'new_version' || selectedAlgorithm"
         :mode="uploadContextMode"
         :target-algorithm="selectedAlgorithm"
         :target-version="activeVersion"
