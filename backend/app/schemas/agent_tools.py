@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -13,6 +13,15 @@ from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmIOSchema
 
 AgentToolPhase = Literal["available", "disabled", "unavailable"]
 AgentToolHealthStatus = Literal["healthy", "unknown", "unavailable"]
+AssistantToolCallPhase = Literal[
+    "requested",
+    "awaiting_input",
+    "awaiting_confirmation",
+    "running",
+    "completed",
+    "failed",
+    "canceled",
+]
 
 
 class AgentToolPolicy(BaseModel):
@@ -123,3 +132,99 @@ class AgentToolSyncData(BaseModel):
     unavailable: int
     disabled: int
     policies_created: int
+
+
+class AssistantToolCallCreate(BaseModel):
+    """模型或受信任编排器提出一个算法工具调用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str = Field(pattern=r"^algorithm:[^:]+$", max_length=120)
+    chat_id: str | None = Field(default=None, max_length=120)
+    message_id: str | None = Field(default=None, max_length=120)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    input_asset_refs: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantToolCallInputUpdate(BaseModel):
+    """补充或修正 pending 调用的参数与附件引用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    input_asset_refs: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantToolCallConfirm(BaseModel):
+    """确认时可原子地提交最后一版参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    arguments: dict[str, Any] | None = None
+    input_asset_refs: dict[str, Any] | None = None
+
+
+class AssistantToolCallEvent(BaseModel):
+    """可直接写入 Assistant SSE 的工具调用状态事件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["tool_call"] = "tool_call"
+    call_id: str
+    tool_id: str
+    algorithm_id: str
+    algorithm_version_id: str | None = None
+    tool_name: str
+    phase: AssistantToolCallPhase
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    result_summary: dict[str, Any] = Field(default_factory=dict)
+    artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
+    error: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class AssistantToolInputRequiredEvent(BaseModel):
+    """参数或附件不完整时发送给前端的补充输入事件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["tool_input_required"] = "tool_input_required"
+    call_id: str
+    missing_fields: list[str] = Field(default_factory=list)
+    field_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    required_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    created_at: datetime
+
+
+class AssistantToolCall(BaseModel):
+    """对话算法工具调用持久化状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: str
+    chat_id: str | None = None
+    message_id: str | None = None
+    tool_id: str
+    algorithm_id: str
+    algorithm_version_id: str | None = None
+    algorithm_version: str | None = None
+    tool_name: str
+    phase: AssistantToolCallPhase
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    input_asset_refs: dict[str, Any] = Field(default_factory=dict)
+    uploaded_assets: list[dict[str, Any]] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    required_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
+    requires_confirmation: bool = True
+    run_id: str | None = None
+    result_summary: dict[str, Any] = Field(default_factory=dict)
+    artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
+    error: dict[str, Any] | None = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    confirmed_at: datetime | None = None
+    canceled_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    events: list[dict[str, Any]] = Field(default_factory=list)

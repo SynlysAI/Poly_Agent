@@ -1082,6 +1082,47 @@ export function downloadReportArtifact(reportId, artifactId, fallbackName = 'rep
 
 // ── Structured Assistant API ──
 
+export function listAssistantChats(params = {}) {
+  return apiClient.get('/assistant/chats', { params }).then(unwrapResponse)
+}
+
+export function createAssistantChat(payload = {}) {
+  return apiClient.post('/assistant/chats', payload).then(unwrapResponse)
+}
+
+export function getAssistantChat(chatId) {
+  return apiClient.get(`/assistant/chats/${encodeURIComponent(chatId)}`).then(unwrapResponse)
+}
+
+export function updateAssistantChat(chatId, payload) {
+  return apiClient.patch(`/assistant/chats/${encodeURIComponent(chatId)}`, payload).then(unwrapResponse)
+}
+
+export function deleteAssistantChat(chatId) {
+  return apiClient.delete(`/assistant/chats/${encodeURIComponent(chatId)}`).then(unwrapResponse)
+}
+
+export function listAssistantMessages(chatId, params = {}) {
+  return apiClient.get(`/assistant/chats/${encodeURIComponent(chatId)}/messages`, { params }).then(unwrapResponse)
+}
+
+export function createAssistantMessage(chatId, payload) {
+  return apiClient.post(`/assistant/chats/${encodeURIComponent(chatId)}/messages`, payload).then(unwrapResponse)
+}
+
+export function updateAssistantMessage(chatId, messageId, payload) {
+  return apiClient.patch(
+    `/assistant/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
+    payload,
+  ).then(unwrapResponse)
+}
+
+export function deleteAssistantMessage(chatId, messageId) {
+  return apiClient.delete(
+    `/assistant/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
+  ).then(unwrapResponse)
+}
+
 export function chatWithAssistant(payload) {
   return apiClient.post('/assistant/chat', payload).then(unwrapResponse)
 }

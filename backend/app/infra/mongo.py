@@ -135,6 +135,21 @@ def get_agent_tool_policies_collection() -> Collection:
     return get_database()["agent_tool_policies"]
 
 
+def get_assistant_tool_calls_collection() -> Collection:
+    """获取 assistant_tool_calls 集合。"""
+    return get_database()["assistant_tool_calls"]
+
+
+def get_assistant_chats_collection() -> Collection:
+    """获取 assistant_chats 集合。"""
+    return get_database()["assistant_chats"]
+
+
+def get_assistant_messages_collection() -> Collection:
+    """获取 assistant_messages 集合。"""
+    return get_database()["assistant_messages"]
+
+
 def get_algorithm_packages_collection() -> Collection:
     """获取 algorithm_packages 集合。"""
     return get_database()["algorithm_packages"]

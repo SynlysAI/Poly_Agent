@@ -202,6 +202,31 @@ class AgentToolService:
         return AgentToolListData(items=items, total=len(items))
 
     @classmethod
+    def resolve_callable(
+        cls,
+        algorithm_id: str,
+        *,
+        user_id: str,
+        role: str,
+        is_admin: bool,
+    ) -> AgentTool | None:
+        """按当前请求重新解析一个可调用工具，避免使用历史目录绕过授权。"""
+        registry = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+        if not registry or not cls._is_vertical_algorithm(registry):
+            return None
+        item = cls._derive_registry_item(registry)
+        visibility = str(registry.get("visibility") or "private")
+        is_owner = bool(item.owner and item.owner == user_id)
+        if visibility == "private" and not (is_admin or is_owner):
+            return None
+        if not cls._can_call(item, user_id=user_id, role=role, is_admin=is_admin):
+            return None
+        tool_data = item.model_dump()
+        for field in ("owner", "status", "deployment_status", "runtime_health"):
+            tool_data.pop(field, None)
+        return AgentTool.model_validate(tool_data)
+
+    @classmethod
     def list_registry(cls) -> AgentToolRegistryData:
         """返回管理员工具治理目录，包含不可用原因。"""
         registries = cls._registries()

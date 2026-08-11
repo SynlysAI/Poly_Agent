@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any
 
 from pymongo.errors import PyMongoError
@@ -28,6 +29,9 @@ from app.infra.mongo import (
     get_algorithm_resources_collection,
     get_algorithm_runs_collection,
     get_algorithm_versions_collection,
+    get_assistant_chats_collection,
+    get_assistant_messages_collection,
+    get_assistant_tool_calls_collection,
     get_execution_decisions_collection,
     get_manual_algorithm_workflows_collection,
     get_research_problem_specs_collection,
@@ -426,6 +430,324 @@ class AgentToolPolicyRepository(BaseRepository):
             return True
 
         return bool(demo_store.mutate(mutate))
+
+
+class AssistantToolCallRepository(BaseRepository):
+    """对话算法工具调用及状态事件仓储。"""
+
+    collection_name = "assistant_tool_calls"
+
+    @classmethod
+    def _collection(cls):
+        return get_assistant_tool_calls_collection()
+
+    @classmethod
+    def update_fields(cls, call_id: str, fields: dict[str, Any]) -> bool:
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one({"call_id": call_id}, {"$set": fields})
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("call_id") == call_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def append_event(cls, call_id: str, event: dict[str, Any]) -> bool:
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"call_id": call_id},
+                    {"$push": {"events": {"$each": [clone_document(event)], "$slice": -200}}},
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("call_id") == call_id:
+                    events = item.setdefault("events", [])
+                    events.append(clone_document(event))
+                    item["events"] = events[-200:]
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def update_if_phase(
+        cls,
+        call_id: str,
+        expected_phases: set[str],
+        fields: dict[str, Any],
+    ) -> bool:
+        """原子认领调用，避免并发重复确认创建多个 AlgorithmRun。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"call_id": call_id, "phase": {"$in": sorted(expected_phases)}},
+                    {"$set": fields},
+                )
+                return result.modified_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("call_id") == call_id and item.get("phase") in expected_phases:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def list_events(cls, call_id: str) -> list[dict[str, Any]]:
+        document = cls.find_one({"call_id": call_id})
+        return list(document.get("events") or []) if document else []
+
+    @classmethod
+    def list_for_chat(cls, chat_id: str, *, created_by: str | None = None) -> list[dict[str, Any]]:
+        filters: dict[str, Any] = {"chat_id": chat_id}
+        if created_by is not None:
+            filters["created_by"] = created_by
+        items, _ = cls.list_all(filters, sort_field="created_at", reverse=False, page=1, page_size=10000)
+        return items
+
+    @classmethod
+    def delete_for_chat(cls, chat_id: str, *, created_by: str | None = None) -> int:
+        filters: dict[str, Any] = {"chat_id": chat_id}
+        if created_by is not None:
+            filters["created_by"] = created_by
+        if cls._can_use_mongo():
+            try:
+                return int(cls._collection().delete_many(filters).deleted_count)
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [item for item in data[cls.collection_name] if not _matches(item, filters)]
+            return before - len(data[cls.collection_name])
+
+        return int(demo_store.mutate(mutate))
+
+    @classmethod
+    def delete_for_message(cls, message_id: str, chat_id: str, *, created_by: str) -> int:
+        filters = {"message_id": message_id, "chat_id": chat_id, "created_by": created_by}
+        if cls._can_use_mongo():
+            try:
+                return int(cls._collection().delete_many(filters).deleted_count)
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [item for item in data[cls.collection_name] if not _matches(item, filters)]
+            return before - len(data[cls.collection_name])
+
+        return int(demo_store.mutate(mutate))
+
+
+class AssistantChatRepository(BaseRepository):
+    """按用户隔离的 assistant chat 仓储。"""
+
+    collection_name = "assistant_chats"
+
+    @classmethod
+    def _collection(cls):
+        return get_assistant_chats_collection()
+
+    @classmethod
+    def list_chats(
+        cls,
+        *,
+        created_by: str,
+        query: str | None = None,
+        archived: bool = False,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        filters: dict[str, Any] = {"created_by": created_by, "archived": archived}
+        if query:
+            safe_query = re.escape(query)
+            filters["$or"] = [
+                {"title": {"$regex": safe_query, "$options": "i"}},
+                {"search_text": {"$regex": safe_query, "$options": "i"}},
+            ]
+        if cls._can_use_mongo():
+            try:
+                collection = cls._collection()
+                total = int(collection.count_documents(filters))
+                cursor = (
+                    collection.find(filters, {"_id": 0})
+                    .sort([("updated_at", -1)])
+                    .skip((page - 1) * page_size)
+                    .limit(page_size)
+                )
+                return [dict(item) for item in cursor], total
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        data = demo_store.load()
+        rows = []
+        needle = query.lower() if query else None
+        for item in data[cls.collection_name]:
+            if item.get("created_by") != created_by or bool(item.get("archived", False)) != archived:
+                continue
+            if needle and needle not in str(item.get("search_text") or item.get("title") or "").lower():
+                continue
+            rows.append(clone_document(item))
+        rows = _sort_documents(rows, "updated_at", reverse=True)
+        start = (page - 1) * page_size
+        return rows[start : start + page_size], len(rows)
+
+    @classmethod
+    def update_owned(cls, chat_id: str, created_by: str, fields: dict[str, Any]) -> bool:
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"chat_id": chat_id, "created_by": created_by}, {"$set": fields}
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("chat_id") == chat_id and item.get("created_by") == created_by:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def delete_owned(cls, chat_id: str, created_by: str) -> bool:
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().delete_one({"chat_id": chat_id, "created_by": created_by})
+                return result.deleted_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [
+                item
+                for item in data[cls.collection_name]
+                if not (item.get("chat_id") == chat_id and item.get("created_by") == created_by)
+            ]
+            return before != len(data[cls.collection_name])
+
+        return bool(demo_store.mutate(mutate))
+
+
+class AssistantMessageRepository(BaseRepository):
+    """按会话和用户隔离的 assistant message 仓储。"""
+
+    collection_name = "assistant_messages"
+
+    @classmethod
+    def _collection(cls):
+        return get_assistant_messages_collection()
+
+    @classmethod
+    def list_for_chat(
+        cls,
+        chat_id: str,
+        created_by: str,
+        *,
+        page: int = 1,
+        page_size: int = 200,
+    ) -> tuple[list[dict[str, Any]], int]:
+        return cls.list_all(
+            {"chat_id": chat_id, "created_by": created_by},
+            sort_field="created_at",
+            reverse=False,
+            page=page,
+            page_size=page_size,
+        )
+
+    @classmethod
+    def update_owned(cls, message_id: str, chat_id: str, created_by: str, fields: dict[str, Any]) -> bool:
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"message_id": message_id, "chat_id": chat_id, "created_by": created_by},
+                    {"$set": fields},
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if (
+                    item.get("message_id") == message_id
+                    and item.get("chat_id") == chat_id
+                    and item.get("created_by") == created_by
+                ):
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def delete_owned(cls, message_id: str, chat_id: str, created_by: str) -> bool:
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().delete_one(
+                    {"message_id": message_id, "chat_id": chat_id, "created_by": created_by}
+                )
+                return result.deleted_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [
+                item
+                for item in data[cls.collection_name]
+                if not (
+                    item.get("message_id") == message_id
+                    and item.get("chat_id") == chat_id
+                    and item.get("created_by") == created_by
+                )
+            ]
+            return before != len(data[cls.collection_name])
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def delete_for_chat(cls, chat_id: str, created_by: str) -> int:
+        if cls._can_use_mongo():
+            try:
+                return int(
+                    cls._collection().delete_many({"chat_id": chat_id, "created_by": created_by}).deleted_count
+                )
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [
+                item
+                for item in data[cls.collection_name]
+                if not (item.get("chat_id") == chat_id and item.get("created_by") == created_by)
+            ]
+            return before - len(data[cls.collection_name])
+
+        return int(demo_store.mutate(mutate))
 
 
 class AlgorithmManagedResourceRepository(BaseRepository):

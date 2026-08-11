@@ -50,6 +50,19 @@ INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
     "agent_tool_policies": [
         ("algorithm_id", [("algorithm_id", 1)]),
     ],
+    "assistant_tool_calls": [
+        ("call_id", [("call_id", 1)]),
+        ("owner_chat_updated", [("created_by", 1), ("chat_id", 1), ("updated_at", -1)]),
+        ("owner_phase_updated", [("created_by", 1), ("phase", 1), ("updated_at", -1)]),
+    ],
+    "assistant_chats": [
+        ("owner_updated", [("created_by", 1), ("updated_at", -1)]),
+        ("owner_archived_updated", [("created_by", 1), ("archived", 1), ("updated_at", -1)]),
+    ],
+    "assistant_messages": [
+        ("chat_created", [("chat_id", 1), ("created_at", 1)]),
+        ("owner_chat_created", [("created_by", 1), ("chat_id", 1), ("created_at", 1)]),
+    ],
     "report_jobs": [
         ("subject_created", [("subject.subject_type", 1), ("subject.subject_id", 1), ("created_at", -1)]),
         ("owner_status_updated", [("created_by", 1), ("status", 1), ("updated_at", -1)]),

@@ -1,6 +1,6 @@
 # Plan 07：PolyAgent 垂类算法工具化与 LUI 升级方案
 
-> **状态：进行中** — 已完成第一交付单元“算法工具派生与策略”，调用状态机及 LUI 仍待实施。
+> **状态：进行中** — 已完成“算法工具派生与策略”和“工具调用状态机”；下一步实施用户级历史对话。
 >
 > 日期：2026-08-10
 >
@@ -77,8 +77,13 @@ algorithm:{algorithm_id}
 - `GET /agent-tools/registry`：管理员查看所有已部署算法及工具策略。
 - `PATCH /agent-tools/{algorithm_id}/policy`：管理员更新启用状态、允许角色和确认策略。
 - `POST /agent-tools/sync`：管理员执行一致性检查；正常情况下查询时自动派生，无需手动同步。
+- `POST /assistant/tool-calls`：创建 pending 算法调用并计算参数/附件缺口。
+- `GET /assistant/tool-calls/{call_id}`：读取当前用户自己的调用状态。
+- `PATCH /assistant/tool-calls/{call_id}/input`：补充或修正 JSON 参数和 artifact 引用。
+- `POST /assistant/tool-calls/{call_id}/input:multipart`：补充算法声明的文件输入。
 - `POST /assistant/tool-calls/{call_id}/confirm`：确认并执行待处理的算法调用。
 - `POST /assistant/tool-calls/{call_id}/cancel`：取消待处理调用。
+- `GET /assistant/tool-calls/{call_id}/events`：以 SSE 重放调用状态事件，用于断线恢复。
 
 服务端必须在每次调用时重新检查：
 
@@ -190,17 +195,17 @@ algorithm:{algorithm_id}
 
 ## Ordered Delivery
 
-1. **算法工具派生与策略**
+1. **算法工具派生与策略（已完成）**
    - 建立工具策略集合和 active 垂类算法派生服务。
    - 实现角色、visibility、owner、部署状态的组合授权。
    - 覆盖激活、回滚、冻结和下线后的工具可用性。
 
-2. **工具调用状态机**
+2. **工具调用状态机（已完成）**
    - 实现 pending 调用、参数补充、确认、取消和执行。
    - 接入现有 JSON 与 multipart AlgorithmRun 运行链路。
    - 保存实际运行版本、run ID、结果摘要和 artifact 引用。
 
-3. **历史对话**
+3. **历史对话（下一步）**
    - 实现用户级会话 CRUD、搜索、归档和自动保存。
    - 将工具调用状态完整纳入会话恢复。
 
@@ -211,6 +216,15 @@ algorithm:{algorithm_id}
 5. **界面实现与收敛**
    - 完成历史栏、算法选择器、调用卡片和工具管理标签。
    - 完成桌面与移动端浏览器验证，压缩无关装饰和常驻信息。
+
+### 下一步实施内容
+
+第三交付单元“历史对话”按以下顺序实施：
+
+1. 建立按用户隔离的 chat/message 仓储与 `GET/POST/PATCH/DELETE /assistant/chats` 接口。
+2. 保存模型、模式、知识库、联网搜索和当前会话已选择的算法工具。
+3. 将 `AssistantToolCall` 关联到 chat/message，并在恢复会话时还原参数、实际版本、run ID、结果和事件状态。
+4. 覆盖搜索、重命名、归档、删除、所有权校验和工具调用恢复测试。
 
 ## Test Plan
 
@@ -235,5 +249,6 @@ algorithm:{algorithm_id}
 
 ## 状态记录
 
+- 2026-08-11：完成第二交付单元“工具调用状态机”。新增 `assistant_tool_calls` Mongo/demo-store 双模仓储和索引，提供 pending 调用创建、详情、参数/附件补充、确认、取消及 SSE 事件重放接口；状态覆盖 `requested`、`awaiting_input`、`awaiting_confirmation`、`running`、`completed`、`failed`、`canceled`。确认时重新校验当前用户权限、工具策略、算法状态和 active 版本，通过原子状态认领保证重复确认只执行一次，并委托现有 `ResearchEngineService.create_algorithm_run` 执行 JSON、artifact 引用或 multipart 输入。调用保存实际版本、run ID、结果摘要和公开 artifact 引用，事件与历史参数执行敏感字段脱敏，临时附件不暴露内部路径。新增后端状态机测试，覆盖参数补充、幂等确认、取消终态、策略变更、active 版本切换、multipart 透传和 SSE 状态事件。
 - 2026-08-11：完成第一交付单元“算法工具派生与策略”。新增 `GET /agent-tools`、`GET /agent-tools/registry`、`PATCH /agent-tools/{algorithm_id}/policy` 和 `POST /agent-tools/sync`；工具目录从 active 垂类算法和 active 版本动态派生，策略保存于独立轻量集合，服务端执行角色、visibility、owner、部署状态、版本状态和运行时健康状态的交集校验。补充后端 API 测试，覆盖公开/私有算法、冻结版本、管理员策略更新和不可用算法启用保护。
 - 2026-08-10：创建本计划文档，状态为**未开始**。上述接口、界面和验收项均未实施；待实施时按 Ordered Delivery 顺序推进，并同步更新归因源矩阵与文档地图。

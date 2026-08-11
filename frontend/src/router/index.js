@@ -23,7 +23,7 @@ const routes = [
   { path: '/optimization/experiment-dispatch', component: view('ExperimentDispatchView'), meta: { section: '任务提交', title: '实验方案转发台' } },
   { path: '/optimization/experiment-dispatch/profiles', component: view('ExperimentDispatchProfilesView'), meta: { section: '任务提交', title: '管理下发配置' } },
   { path: '/vertical-prediction', component: view('VerticalPredictionView'), meta: { section: '任务提交', title: '垂类预测模型' } },
-  { path: '/dialogue', component: view('DialogueView'), meta: { section: '工作台', title: '问答对话' } },
+  { path: '/dialogue/:chatId?', component: view('DialogueView'), meta: { section: '工作台', title: '问答对话' } },
   { path: '/tools', component: view('ToolServicesView'), meta: { section: '工具服务', title: '工具列表' } },
   { path: '/tools/alchemist', component: view('AlchemistToolView'), meta: { section: '工具服务', title: '实验设计与优化' } },
   { path: '/research-engine', component: view('ResearchEngineView'), meta: { section: '研发引擎', title: 'ResearchEngine' } },

@@ -1,10 +1,21 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { ArrowDown, ChatLineRound, Promotion, Reading } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, ChatLineRound, Delete, EditPen, FolderOpened, Plus, Promotion, Reading, Search } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, getLlmModels, listKnowledgeSystems, streamAssistantChat } from '../api/polyAgentApi'
+import {
+  createAssistantChat,
+  createAssistantMessage,
+  deleteAssistantChat,
+  getApiErrorMessage,
+  getAssistantChat,
+  getLlmModels,
+  listAssistantChats,
+  listKnowledgeSystems,
+  streamAssistantChat,
+  updateAssistantChat,
+} from '../api/polyAgentApi'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import {
@@ -28,16 +39,23 @@ const knowledgeSystems = ref([])
 const selectedModelKey = ref('')
 const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
 const useWebSearch = ref(loadWebSearchPreference())
+const chatId = ref(normalizeQueryString(route.params.chatId))
+const chatHistory = ref([])
+const historyQuery = ref('')
+const historyLoading = ref(false)
+const historyArchived = ref(false)
 
-const messages = ref([
-  {
+function defaultMessages() {
+  return [{
     role: 'assistant',
     content: '你好！我是 PolyAgent 产品内助手，可以帮你定位页面入口、确认 ResearchEngine 算法清单、提交计算任务和处理 AutoResearch 审批。',
     actions: [{ label: '进入 ResearchEngine', target: '/research-engine', type: 'route' }],
     references: [],
     suggested_questions: ['哪些算法是真实适配器？', '如何开始一个 ResearchEngine 示例？', '如何查看待审批任务？'],
-  },
-])
+  }]
+}
+
+const messages = ref(defaultMessages())
 
 const chatModeOptions = [
   { label: '科研问答', value: 'qa' },
@@ -170,6 +188,119 @@ async function loadKnowledgeBases() {
   }
 }
 
+function chatOptionsPayload() {
+  return {
+    model: selectedModelContext() || {},
+    mode: chatMode.value,
+    knowledge_base_ids: selectedKnowledgeBaseIds.value,
+    knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
+    use_web_search: Boolean(useWebSearch.value),
+  }
+}
+
+async function loadChatHistory() {
+  historyLoading.value = true
+  try {
+    const data = await listAssistantChats({ query: historyQuery.value || undefined, archived: historyArchived.value })
+    chatHistory.value = data?.items || []
+  } catch (error) {
+    ElMessage.warning(`历史会话加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function restoreMessage(item) {
+  return {
+    ...item,
+    actions: item.actions || [],
+    references: item.references || [],
+    suggested_questions: item.suggested_questions || [],
+    reasoning_summary: item.reasoning_summary || [],
+    web_search_requested: item.web_search_requested,
+    streaming: false,
+    error: false,
+  }
+}
+
+async function loadChat(chatKey) {
+  if (!chatKey) return
+  try {
+    const data = await getAssistantChat(chatKey)
+    chatId.value = data.chat_id
+    chatMode.value = normalizeMode(data.mode)
+    selectedKnowledgeBaseIds.value = data.knowledge_base_ids || []
+    useWebSearch.value = Boolean(data.use_web_search)
+    messages.value = data.messages?.length ? data.messages.map(restoreMessage) : defaultMessages()
+    selectDefaultModelForMode(data.model || {})
+    await loadChatHistory()
+    scrollToBottom()
+  } catch (error) {
+    ElMessage.warning(`会话恢复失败：${getApiErrorMessage(error)}`)
+    await router.replace({ path: '/dialogue', query: route.query })
+  }
+}
+
+async function ensureChat() {
+  if (chatId.value) {
+    await updateAssistantChat(chatId.value, chatOptionsPayload())
+    return chatId.value
+  }
+  const data = await createAssistantChat(chatOptionsPayload())
+  chatId.value = data.chat_id
+  await router.replace({ path: `/dialogue/${encodeURIComponent(chatId.value)}`, query: route.query })
+  await loadChatHistory()
+  return chatId.value
+}
+
+async function createNewChat() {
+  if (sending.value) return
+  chatId.value = ''
+  messages.value = defaultMessages()
+  await router.push({ path: '/dialogue', query: { mode: chatMode.value } })
+}
+
+async function selectHistoryChat(item) {
+  if (sending.value || !item?.chat_id) return
+  await router.push({ path: `/dialogue/${encodeURIComponent(item.chat_id)}` })
+  await loadChat(item.chat_id)
+}
+
+async function renameHistoryChat(item) {
+  try {
+    const result = await ElMessageBox.prompt('输入新的会话名称', '重命名会话', {
+      inputValue: item.title,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+    })
+    await updateAssistantChat(item.chat_id, { title: result.value })
+    await loadChatHistory()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(`重命名失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function archiveHistoryChat(item) {
+  try {
+    await updateAssistantChat(item.chat_id, { archived: !item.archived })
+    if (item.chat_id === chatId.value && !item.archived) await createNewChat()
+    await loadChatHistory()
+  } catch (error) {
+    ElMessage.error(`归档操作失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function deleteHistoryChat(item) {
+  try {
+    await ElMessageBox.confirm('删除后将无法恢复该会话及其消息。', '删除会话', { type: 'warning' })
+    await deleteAssistantChat(item.chat_id)
+    if (item.chat_id === chatId.value) await createNewChat()
+    await loadChatHistory()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(`删除失败：${getApiErrorMessage(error)}`)
+  }
+}
+
 async function sendMessage() {
   await sendPrompt(inputText.value)
 }
@@ -178,7 +309,21 @@ async function sendPrompt(prompt) {
   const text = String(prompt || '').trim()
   if (!text || sending.value) return
   const requestUseWebSearch = Boolean(useWebSearch.value)
+  try {
+    await ensureChat()
+  } catch (error) {
+    ElMessage.error(`会话保存失败：${getApiErrorMessage(error)}`)
+    return
+  }
   messages.value.push({ role: 'user', content: text })
+  try {
+    const savedUserMessage = await createAssistantMessage(chatId.value, { role: 'user', content: text })
+    Object.assign(messages.value[messages.value.length - 1], savedUserMessage)
+  } catch (error) {
+    messages.value.pop()
+    ElMessage.error(`消息保存失败：${getApiErrorMessage(error)}`)
+    return
+  }
   const requestMessages = buildRequestMessages()
   const assistantMessage = {
     role: 'assistant',
@@ -242,6 +387,22 @@ async function sendPrompt(prompt) {
       messages.value[assistantIndex].stream_status = ''
     }
     sending.value = false
+    if (messages.value[assistantIndex]?.content && !messages.value[assistantIndex]?.streaming) {
+      try {
+        await createAssistantMessage(chatId.value, {
+          role: 'assistant',
+          content: messages.value[assistantIndex].content,
+          references: messages.value[assistantIndex].references || [],
+          reasoning_summary: messages.value[assistantIndex].reasoning_summary || [],
+          answer_mode: messages.value[assistantIndex].answer_mode || null,
+          answer_scope: messages.value[assistantIndex].answer_scope || null,
+          retrieval_status: messages.value[assistantIndex].retrieval_status || null,
+        })
+        await loadChatHistory()
+      } catch (error) {
+        ElMessage.warning(`助手回复未能保存：${getApiErrorMessage(error)}`)
+      }
+    }
     scrollToBottom()
   }
 }
@@ -544,14 +705,85 @@ onMounted(() => {
   Promise.all([
     loadLlmModels({ providerId: initialProviderId, modelId: initialModelId }),
     loadKnowledgeBases(),
-  ]).finally(() => {
-    if (initialPrompt) sendPrompt(initialPrompt)
+  ]).then(async () => {
+    if (chatId.value) await loadChat(chatId.value)
+    await loadChatHistory()
+    if (initialPrompt) await sendPrompt(initialPrompt)
   })
 })
+
+watch(
+  [chatMode, selectedModelKey, selectedKnowledgeBaseIds, useWebSearch],
+  async () => {
+    if (!chatId.value || sending.value) return
+    try {
+      await updateAssistantChat(chatId.value, chatOptionsPayload())
+      await loadChatHistory()
+    } catch {
+      // The next message save retries the session options if this background update fails.
+    }
+  },
+  { deep: true },
+)
+
+watch(
+  () => route.params.chatId,
+  async (value) => {
+    const nextChatId = normalizeQueryString(value)
+    if (nextChatId && nextChatId !== chatId.value) await loadChat(nextChatId)
+    if (!nextChatId && chatId.value) {
+      chatId.value = ''
+      messages.value = defaultMessages()
+    }
+  },
+)
 </script>
 
 <template>
   <div class="dialogue-page">
+    <aside class="dialogue-history" aria-label="历史会话">
+      <div class="history-header">
+        <strong>历史会话</strong>
+        <el-button circle text :icon="Plus" aria-label="新建会话" @click="createNewChat" />
+      </div>
+      <el-input
+        v-model="historyQuery"
+        size="small"
+        clearable
+        placeholder="搜索会话"
+        :prefix-icon="Search"
+        @keyup.enter="loadChatHistory"
+        @clear="loadChatHistory"
+      />
+      <div class="history-tabs">
+        <button type="button" :class="{ active: !historyArchived }" @click="historyArchived = false; loadChatHistory()">最近</button>
+        <button type="button" :class="{ active: historyArchived }" @click="historyArchived = true; loadChatHistory()">归档</button>
+      </div>
+      <div v-loading="historyLoading" class="history-list">
+        <div v-if="!historyLoading && !chatHistory.length" class="history-empty">暂无会话</div>
+        <div
+          v-for="item in chatHistory"
+          :key="item.chat_id"
+          class="history-item"
+          :class="{ active: item.chat_id === chatId }"
+        >
+          <button type="button" class="history-item-main" @click="selectHistoryChat(item)">
+            <span class="history-item-title">{{ item.title }}</span>
+            <small>{{ item.messages?.length || 0 }} 条消息</small>
+          </button>
+          <el-dropdown trigger="click" @command="(command) => command === 'rename' ? renameHistoryChat(item) : command === 'archive' ? archiveHistoryChat(item) : deleteHistoryChat(item)">
+            <el-button text circle :icon="FolderOpened" aria-label="会话操作" />
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="rename"><el-icon><EditPen /></el-icon>重命名</el-dropdown-item>
+                <el-dropdown-item command="archive"><el-icon><FolderOpened /></el-icon>{{ item.archived ? '取消归档' : '归档' }}</el-dropdown-item>
+                <el-dropdown-item command="delete" divided><el-icon><Delete /></el-icon>删除</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </div>
+    </aside>
     <header class="dialogue-header" :class="{ 'dialogue-header-centered': !conversationStarted }">
       <div>
         <p class="dialogue-kicker">Poly Agent 问答</p>
@@ -795,10 +1027,114 @@ onMounted(() => {
   height: calc(100vh - 90px);
   min-height: 620px;
   display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
   max-width: 1440px;
   margin: 0 auto;
+}
+
+.dialogue-history {
+  grid-row: 1 / -1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.history-header,
+.history-item,
+.history-tabs {
+  display: flex;
+  align-items: center;
+}
+
+.history-header {
+  justify-content: space-between;
+  color: var(--app-ink);
+}
+
+.history-tabs {
+  gap: 4px;
+  border-bottom: 1px solid var(--app-border-soft);
+}
+
+.history-tabs button {
+  flex: 1;
+  padding: 6px 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--app-ink-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.history-tabs button.active {
+  border-bottom-color: var(--app-primary-active);
+  color: var(--app-primary-active);
+  font-weight: 650;
+}
+
+.history-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.history-item {
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--app-radius-sm);
+}
+
+.history-item.active,
+.history-item:hover {
+  background: #f0f7ff;
+}
+
+.history-item-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+  padding: 7px 6px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-item-title,
+.history-item-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item-title {
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.history-item-main small,
+.history-empty {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+}
+
+.history-empty {
+  padding: 24px 8px;
+  text-align: center;
+}
+
+.dialogue-header,
+.dialogue-body,
+.dialogue-composer {
+  grid-column: 2;
 }
 
 .dialogue-header {
@@ -1295,6 +1631,18 @@ h1 {
   .dialogue-page {
     height: calc(100vh - 78px);
     min-height: 560px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dialogue-history {
+    grid-row: auto;
+    max-height: 180px;
+  }
+
+  .dialogue-header,
+  .dialogue-body,
+  .dialogue-composer {
+    grid-column: 1;
   }
 
   .dialogue-header {
