@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html as html_module
+import hashlib
 import ipaddress
 import json
 import re
@@ -19,6 +20,7 @@ import httpx
 from app.core import llm_client
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.infra.research_engine_repositories import AssistantToolCallRepository
 from app.schemas.assistant import AssistantAction
 from app.schemas.assistant import AssistantAnswerMode
 from app.schemas.assistant import AssistantAnswerScope
@@ -26,6 +28,9 @@ from app.schemas.assistant import AssistantChatRequest
 from app.schemas.assistant import AssistantChatResponse
 from app.schemas.assistant import AssistantReference
 from app.schemas.assistant import AssistantRetrievalStatus
+from app.schemas.agent_tools import AgentTool, AssistantToolCall, AssistantToolCallCreate
+from app.services.agent_tool_service import agent_tool_service
+from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.integration_status_service import IntegrationStatusService
 from app.services.knowledge_service import KnowledgeService
 from app.services.llm_model_service import LLMModelService
@@ -1113,6 +1118,7 @@ class AssistantAnswerSynthesizer:
         knowledge: KnowledgeOutcome | None,
         evidence: SearchOutcome | None,
         llm_route: dict,
+        extra_messages: list[dict] | None = None,
     ) -> SynthesizedAnswer:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -1140,6 +1146,8 @@ class AssistantAnswerSynthesizer:
                     ),
                 }
             )
+        if extra_messages:
+            messages.extend(extra_messages)
         messages.extend({"role": item.role, "content": item.content} for item in request.messages)
         content = llm_client.chat(
             messages,
@@ -1161,6 +1169,7 @@ class AssistantAnswerSynthesizer:
         knowledge: KnowledgeOutcome | None,
         evidence: SearchOutcome | None,
         llm_route: dict,
+        extra_messages: list[dict] | None = None,
     ) -> Iterator[str]:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -1186,6 +1195,8 @@ class AssistantAnswerSynthesizer:
                     ),
                 }
             )
+        if extra_messages:
+            messages.extend(extra_messages)
         messages.extend({"role": item.role, "content": item.content} for item in request.messages)
         yield from llm_client.chat_stream(
             messages,
@@ -1194,6 +1205,42 @@ class AssistantAnswerSynthesizer:
             provider_id=llm_route.get("provider_id"),
             model=llm_route.get("model_id"),
         )
+
+    def tool_call_messages(
+        self,
+        *,
+        request: AssistantChatRequest,
+        intent: AssistantIntent,
+        facts: dict,
+        knowledge: KnowledgeOutcome | None,
+        evidence: SearchOutcome | None,
+        extra_messages: list[dict] | None = None,
+    ) -> list[dict]:
+        """构建用于工具提议的模型消息，包含项目事实与工具使用规则。"""
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": self._build_context_block(
+                    intent=intent,
+                    facts=facts,
+                    knowledge=knowledge,
+                    evidence=evidence,
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    "TOOL_USE_RULES: 只有用户明确请求运行某个已启用算法、或回答需要算法计算/预测结果时，"
+                    "才发起算法工具调用；其余情况直接回答。一次可以提出多个相互独立的算法调用。"
+                    "不要把文件路径、密钥或内部字段放入参数。"
+                ),
+            },
+        ]
+        if extra_messages:
+            messages.extend(extra_messages)
+        messages.extend({"role": item.role, "content": item.content} for item in request.messages)
+        return messages
 
     def _parse_deep_response(self, raw_content: str) -> SynthesizedAnswer:
         content = str(raw_content or "").strip()
@@ -1274,7 +1321,247 @@ class AssistantService:
         self.answer_synthesizer = AssistantAnswerSynthesizer()
         self.llm_model_service = LLMModelService()
 
-    def chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
+    # ── 算法工具编排 ──
+
+    @staticmethod
+    def _tool_actor_context(current_user: dict | None) -> tuple[str, str, bool]:
+        if current_user is None:
+            return "demo_user", "admin", True
+        role = current_user.get("role", "user")
+        return current_user.get("user_id", ""), role, role == "admin"
+
+    @staticmethod
+    def _safe_tool_name(tool_id: str) -> str:
+        base = re.sub(r"[^A-Za-z0-9_-]", "_", str(tool_id or ""))
+        if len(base) <= 64:
+            return base
+        digest = hashlib.sha1(str(tool_id or "").encode("utf-8")).hexdigest()[:8]
+        return f"{base[:55]}_{digest}"
+
+    def _build_function_tools(
+        self,
+        selected_tool_ids: list[str],
+        current_user: dict | None,
+    ) -> tuple[list[dict], dict[str, str]]:
+        """把当前用户可调用的已选算法转为 function schema，并记录安全名到 tool_id 的映射。"""
+        user_id, role, is_admin = self._tool_actor_context(current_user)
+        tools: list[dict] = []
+        name_map: dict[str, str] = {}
+        for tool_id in selected_tool_ids or []:
+            if not isinstance(tool_id, str) or not tool_id.startswith("algorithm:"):
+                continue
+            algorithm_id = tool_id.removeprefix("algorithm:")
+            tool = agent_tool_service.resolve_callable(
+                algorithm_id,
+                user_id=user_id,
+                role=role,
+                is_admin=is_admin,
+            )
+            if tool is None:
+                continue
+            tools.append(self._function_schema(tool))
+            name_map[self._safe_tool_name(tool_id)] = tool_id
+        return tools, name_map
+
+    @classmethod
+    def _function_schema(cls, tool: AgentTool) -> dict:
+        schema = tool.input_schema
+        properties = {
+            field_name: cls._property_schema(field_name, description, schema)
+            for field_name, description in (schema.fields or {}).items()
+        }
+        parameters: dict[str, Any] = {"type": "object", "properties": properties}
+        if schema.required:
+            parameters["required"] = list(schema.required)
+        description_parts = [str(tool.description or tool.name)]
+        if tool.input_assets:
+            keys = ", ".join(spec.key for spec in tool.input_assets)
+            description_parts.append(f"文件输入由用户在界面补充，不要放入参数: {keys}")
+        return {
+            "type": "function",
+            "function": {
+                "name": cls._safe_tool_name(tool.tool_id),
+                "description": " ".join(description_parts),
+                "parameters": parameters,
+            },
+        }
+
+    @staticmethod
+    def _property_schema(field_name: str, description: str, schema) -> dict:
+        raw = str(description or "").strip()
+        type_token = raw.split(" -", 1)[0].strip().lower()
+        scalar_types = {
+            "string": "string",
+            "str": "string",
+            "text": "string",
+            "number": "number",
+            "float": "number",
+            "integer": "integer",
+            "int": "integer",
+            "boolean": "boolean",
+            "bool": "boolean",
+        }
+        list_match = re.match(r"^(?:list|array)\[(.*)\]$", type_token)
+        dict_match = re.match(r"^(?:dict|map)\[(.*)\]$", type_token)
+        if list_match:
+            inner = list_match.group(1).strip()
+            prop: dict[str, Any] = {
+                "type": "array",
+                "items": {"type": scalar_types.get(inner, "string")},
+            }
+        elif dict_match:
+            prop = {"type": "object", "additionalProperties": True}
+        else:
+            prop = {"type": scalar_types.get(type_token, "string")}
+        notes: list[str] = []
+        options = (schema.field_options or {}).get(field_name) or []
+        if options:
+            notes.append("可选值: " + ", ".join(str(item) for item in options))
+        constraints = (schema.constraints or {}).get(field_name) or {}
+        if isinstance(constraints, dict):
+            for key, label in (
+                ("minimum", "最小值"),
+                ("maximum", "最大值"),
+                ("min_length", "最小长度"),
+                ("max_length", "最大长度"),
+                ("pattern", "正则"),
+            ):
+                if constraints.get(key) is not None:
+                    notes.append(f"{label}: {constraints[key]}")
+        prop["description"] = "; ".join([raw, *notes]) if notes else raw
+        return prop
+
+    def _propose_tool_calls(
+        self,
+        *,
+        request: AssistantChatRequest,
+        intent: AssistantIntent,
+        facts: dict,
+        knowledge: KnowledgeOutcome | None,
+        evidence: SearchOutcome | None,
+        llm_route: dict,
+        current_user: dict | None,
+    ) -> tuple[list[dict], list[AssistantToolCall], str | None, list[dict]]:
+        """让模型基于 function schema 提出算法调用。
+
+        Returns:
+            (事件列表, pending 调用, 无工具调用时的直接回答, 已构建的 function schema)
+        """
+        selected_tool_ids = request.context.get("selected_tool_ids") or []
+        tools, name_map = self._build_function_tools(selected_tool_ids, current_user)
+        if not tools:
+            return [], [], None, []
+        messages = self.answer_synthesizer.tool_call_messages(
+            request=request,
+            intent=intent,
+            facts=facts,
+            knowledge=knowledge,
+            evidence=evidence,
+        )
+        try:
+            message = llm_client.chat_message(
+                messages,
+                temperature=0.2,
+                purpose="deep" if intent.deep else "qa",
+                provider_id=llm_route.get("provider_id"),
+                model=llm_route.get("model_id"),
+                tools=tools,
+                tool_choice="auto",
+            )
+        except Exception as exc:
+            logger.warning("assistant tool calling unsupported, fallback to QA: %s", exc)
+            return [], [], None, tools
+
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if not tool_calls:
+            return [], [], getattr(message, "content", "") or "", tools
+
+        events: list[dict] = []
+        pending: list[AssistantToolCall] = []
+        for call in tool_calls:
+            function = getattr(call, "function", None)
+            if function is None:
+                continue
+            function_name = str(getattr(function, "name", "") or "")
+            tool_id = name_map.get(function_name)
+            if not tool_id:
+                logger.warning("assistant tool proposal references unknown function: %s", function_name)
+                continue
+            raw_arguments = str(getattr(function, "arguments", None) or "{}")
+            try:
+                arguments = json.loads(raw_arguments)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            try:
+                created = assistant_tool_call_service.create(
+                    AssistantToolCallCreate(
+                        tool_id=tool_id,
+                        chat_id=request.context.get("chat_id"),
+                        message_id=request.context.get("message_id"),
+                        arguments=arguments,
+                    ),
+                    current_user,
+                )
+                pending.append(created)
+                events.extend(AssistantToolCallRepository.list_events(created.call_id))
+            except Exception as exc:
+                logger.warning("assistant tool proposal skipped call %s: %s", tool_id, exc)
+        return events, pending, None, tools
+
+    def _continuation_messages(
+        self,
+        tool_call_ids: list[str],
+        current_user: dict | None,
+    ) -> tuple[list[dict], list[dict]]:
+        """读取已完成/失败的调用，构造 assistant+tool 消息供模型继续生成。"""
+        events: list[dict] = []
+        messages: list[dict] = []
+        for call_id in tool_call_ids or []:
+            try:
+                call = assistant_tool_call_service.get(call_id, current_user)
+            except Exception as exc:
+                logger.warning("assistant continuation skipped call %s: %s", call_id, exc)
+                continue
+            events.extend(AssistantToolCallRepository.list_events(call_id))
+            if call.phase not in {"completed", "failed"}:
+                continue
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": call.call_id,
+                            "type": "function",
+                            "function": {
+                                "name": self._safe_tool_name(call.tool_id),
+                                "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                            },
+                        }
+                    ],
+                }
+            )
+            if call.phase == "completed":
+                payload = {
+                    "status": "completed",
+                    "run_id": call.run_id,
+                    "result_summary": call.result_summary,
+                    "artifact_refs": call.artifact_refs,
+                }
+            else:
+                payload = {"status": "failed", "error": call.error or {}, "result_summary": {}}
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.call_id,
+                    "content": json.dumps(payload, ensure_ascii=False, default=str),
+                }
+            )
+        return events, messages
+
+    def chat(self, request: AssistantChatRequest, current_user: dict | None = None) -> AssistantChatResponse:
         user_text = self._latest_user_text(request.messages)
         mode = self._normalize_mode(request.context.get("mode"))
         intent = self.intent_router.route(user_text, mode=mode)
@@ -1326,6 +1613,48 @@ class AssistantService:
             llm_route=llm_route,
         )
 
+        continuation_ids = request.context.get("tool_call_ids") or []
+        selected_ids = request.context.get("selected_tool_ids") or []
+        extra_messages: list[dict] = []
+        if continuation_ids:
+            _tool_events, extra_messages = self._continuation_messages(continuation_ids, current_user)
+        elif selected_ids:
+            _events, calls, direct_content, _tools = self._propose_tool_calls(
+                request=request,
+                intent=intent,
+                facts=response_facts,
+                knowledge=knowledge_outcome,
+                evidence=web_outcome,
+                llm_route=llm_route,
+                current_user=current_user,
+            )
+            if calls:
+                return AssistantChatResponse(
+                    content="已根据你的请求生成算法调用，请确认参数后执行。",
+                    tool_calls=calls,
+                    actions=actions,
+                    references=references,
+                    suggested_questions=suggested_questions,
+                    grounding_facts=response_facts,
+                    confidence="medium",
+                    answer_mode=answer_mode,
+                    answer_scope=intent.scope,
+                    retrieval_status=retrieval_status,
+                )
+            if direct_content:
+                return AssistantChatResponse(
+                    content=direct_content,
+                    reasoning_summary=[],
+                    actions=actions,
+                    references=references,
+                    suggested_questions=suggested_questions,
+                    grounding_facts=response_facts,
+                    confidence="medium",
+                    answer_mode=answer_mode,
+                    answer_scope=intent.scope,
+                    retrieval_status=retrieval_status,
+                )
+
         try:
             synthesized = self.answer_synthesizer.synthesize(
                 request=request,
@@ -1334,6 +1663,7 @@ class AssistantService:
                 knowledge=knowledge_outcome,
                 evidence=web_outcome,
                 llm_route=llm_route,
+                extra_messages=extra_messages,
             )
             content = synthesized.content
             reasoning_summary = synthesized.reasoning_summary
@@ -1362,7 +1692,7 @@ class AssistantService:
             retrieval_status=retrieval_status,
         )
 
-    def stream_chat(self, request: AssistantChatRequest) -> Iterator[dict]:
+    def stream_chat(self, request: AssistantChatRequest, current_user: dict | None = None) -> Iterator[dict]:
         try:
             yield {"type": "status", "stage": "intent", "message": "正在识别问题范围..."}
             user_text = self._latest_user_text(request.messages)
@@ -1447,6 +1777,68 @@ class AssistantService:
                 llm_route=llm_route,
             )
 
+            continuation_ids = request.context.get("tool_call_ids") or []
+            selected_ids = request.context.get("selected_tool_ids") or []
+            extra_messages: list[dict] = []
+            if continuation_ids:
+                tool_events, extra_messages = self._continuation_messages(continuation_ids, current_user)
+                for event in tool_events:
+                    yield event
+            elif selected_ids:
+                yield {"type": "status", "stage": "tools", "message": "正在分析算法工具调用..."}
+                tool_events, calls, direct_content, built_tools = self._propose_tool_calls(
+                    request=request,
+                    intent=intent,
+                    facts=response_facts,
+                    knowledge=knowledge_outcome,
+                    evidence=web_outcome,
+                    llm_route=llm_route,
+                    current_user=current_user,
+                )
+                if calls:
+                    for event in tool_events:
+                        yield event
+                    yield {
+                        "type": "final",
+                        "data": AssistantChatResponse(
+                            content="已根据你的请求生成算法调用，请确认参数后执行。",
+                            tool_calls=calls,
+                            actions=actions,
+                            references=references,
+                            suggested_questions=suggested_questions,
+                            grounding_facts=response_facts,
+                            confidence="medium",
+                            answer_mode=answer_mode,
+                            answer_scope=intent.scope,
+                            retrieval_status=retrieval_status,
+                        ).model_dump(mode="python"),
+                    }
+                    return
+                if direct_content:
+                    yield {"type": "answer_delta", "delta": direct_content}
+                    yield {
+                        "type": "final",
+                        "data": AssistantChatResponse(
+                            content=direct_content,
+                            reasoning_summary=[],
+                            actions=actions,
+                            references=references,
+                            suggested_questions=suggested_questions,
+                            grounding_facts=response_facts,
+                            confidence="medium",
+                            answer_mode=answer_mode,
+                            answer_scope=intent.scope,
+                            retrieval_status=retrieval_status,
+                        ).model_dump(mode="python"),
+                    }
+                    return
+                if built_tools:
+                    yield {
+                        "type": "status",
+                        "stage": "tools",
+                        "message": "当前模型不支持算法工具调用，已按普通问答继续。",
+                    }
+
             reasoning_summary = self._visible_reasoning_summary(
                 intent=intent,
                 knowledge_outcome=knowledge_outcome,
@@ -1465,6 +1857,7 @@ class AssistantService:
                 knowledge=knowledge_outcome,
                 evidence=web_outcome,
                 llm_route=llm_route,
+                extra_messages=extra_messages,
             ):
                 if not chunk:
                     continue
@@ -2072,9 +2465,9 @@ class AssistantService:
 _assistant_service = AssistantService()
 
 
-def chat_assistant(request: AssistantChatRequest) -> AssistantChatResponse:
-    return _assistant_service.chat(request)
+def chat_assistant(request: AssistantChatRequest, current_user: dict | None = None) -> AssistantChatResponse:
+    return _assistant_service.chat(request, current_user=current_user)
 
 
-def stream_chat_assistant(request: AssistantChatRequest) -> Iterator[dict]:
-    yield from _assistant_service.stream_chat(request)
+def stream_chat_assistant(request: AssistantChatRequest, current_user: dict | None = None) -> Iterator[dict]:
+    yield from _assistant_service.stream_chat(request, current_user=current_user)

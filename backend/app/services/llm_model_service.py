@@ -99,27 +99,33 @@ class LLMModelService:
         model: str | None = None,
         **kwargs: Any,
     ) -> str:
-        route = self.resolve_route(
-            purpose=purpose,
-            requested_model={"provider_id": provider_id, "model_id": model} if provider_id and model else None,
-        )
-        provider_config = route["provider_config"]
-        provider_type = route["provider_type"]
-        if provider_type == "ollama":
-            base_url = str(provider_config.get("base_url") or settings.report_ollama_base_url).rstrip("/")
-            if not base_url.endswith("/v1"):
-                base_url = f"{base_url}/v1"
-            api_key = "ollama"
-        else:
-            base_url = provider_config.get("base_url") or settings.llm_base_url or None
-            api_key = self._provider_api_key(provider_config)
-        client = OpenAI(api_key=api_key or "EMPTY", base_url=base_url)
+        route = self._resolve_chat_route(purpose=purpose, provider_id=provider_id, model=model)
+        client = self._chat_client(route)
         response = client.chat.completions.create(
             model=route["model_id"],
             messages=messages,
             **kwargs,
         )
         return response.choices[0].message.content or ""
+
+    def complete_message(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        purpose: LLMRoutePurpose = "qa",
+        provider_id: str | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """返回完整的 chat completion message，保留 tool_calls 等结构化字段。"""
+        route = self._resolve_chat_route(purpose=purpose, provider_id=provider_id, model=model)
+        client = self._chat_client(route)
+        response = client.chat.completions.create(
+            model=route["model_id"],
+            messages=messages,
+            **kwargs,
+        )
+        return response.choices[0].message
 
     def stream_text(
         self,
@@ -130,21 +136,8 @@ class LLMModelService:
         model: str | None = None,
         **kwargs: Any,
     ) -> Iterator[str]:
-        route = self.resolve_route(
-            purpose=purpose,
-            requested_model={"provider_id": provider_id, "model_id": model} if provider_id and model else None,
-        )
-        provider_config = route["provider_config"]
-        provider_type = route["provider_type"]
-        if provider_type == "ollama":
-            base_url = str(provider_config.get("base_url") or settings.report_ollama_base_url).rstrip("/")
-            if not base_url.endswith("/v1"):
-                base_url = f"{base_url}/v1"
-            api_key = "ollama"
-        else:
-            base_url = provider_config.get("base_url") or settings.llm_base_url or None
-            api_key = self._provider_api_key(provider_config)
-        client = OpenAI(api_key=api_key or "EMPTY", base_url=base_url)
+        route = self._resolve_chat_route(purpose=purpose, provider_id=provider_id, model=model)
+        client = self._chat_client(route)
         response = client.chat.completions.create(
             model=route["model_id"],
             messages=messages,
@@ -158,6 +151,31 @@ class LLMModelService:
             content = getattr(delta, "content", None)
             if content:
                 yield content
+
+    def _resolve_chat_route(
+        self,
+        *,
+        purpose: LLMRoutePurpose,
+        provider_id: str | None,
+        model: str | None,
+    ) -> dict[str, Any]:
+        return self.resolve_route(
+            purpose=purpose,
+            requested_model={"provider_id": provider_id, "model_id": model} if provider_id and model else None,
+        )
+
+    def _chat_client(self, route: dict[str, Any]) -> OpenAI:
+        provider_config = route["provider_config"]
+        provider_type = route["provider_type"]
+        if provider_type == "ollama":
+            base_url = str(provider_config.get("base_url") or settings.report_ollama_base_url).rstrip("/")
+            if not base_url.endswith("/v1"):
+                base_url = f"{base_url}/v1"
+            api_key = "ollama"
+        else:
+            base_url = provider_config.get("base_url") or settings.llm_base_url or None
+            api_key = self._provider_api_key(provider_config)
+        return OpenAI(api_key=api_key or "EMPTY", base_url=base_url)
 
     def _build_providers(self) -> list[LLMProviderInfo]:
         providers: list[LLMProviderInfo] = [

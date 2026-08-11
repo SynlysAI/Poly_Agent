@@ -145,9 +145,12 @@ def delete_assistant_message(
 
 
 @router.post("/chat", response_model=ApiResponse[AssistantChatResponse])
-def assistant_chat(payload: AssistantChatRequest) -> ApiResponse[AssistantChatResponse]:
+def assistant_chat(
+    payload: AssistantChatRequest,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantChatResponse]:
     """Return assistant content plus structured UI actions."""
-    data = chat_assistant(payload)
+    data = chat_assistant(payload, current_user)
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -156,10 +159,13 @@ def _sse_event(payload: dict) -> str:
 
 
 @router.post("/chat/stream")
-def assistant_chat_stream(payload: AssistantChatRequest) -> StreamingResponse:
+def assistant_chat_stream(
+    payload: AssistantChatRequest,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> StreamingResponse:
     """Stream observable assistant stages, answer chunks, and final structured data."""
     return StreamingResponse(
-        (_sse_event(event) for event in stream_chat_assistant(payload)),
+        (_sse_event(event) for event in stream_chat_assistant(payload, current_user)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -14,6 +14,7 @@
     "test:poly-data-groups": "node src/utils/polyDataDatasetGroups.test.mjs",
     "test:data-catalog-analysis": "node src/utils/dataCatalogAnalysis.test.mjs",
     "test:api-error-message": "node src/utils/apiErrorMessage.test.mjs",
+    "test:assistant-tool-calls": "node src/utils/assistantToolCalls.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

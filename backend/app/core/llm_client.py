@@ -45,6 +45,22 @@ def chat(messages: list[dict], **kwargs) -> str:
     return LLMModelService().complete_text(messages=messages, purpose=purpose, **kwargs)
 
 
+def chat_message(messages: list[dict], **kwargs):
+    """发送对话请求并返回完整消息对象（保留 tool_calls 等结构化字段）。"""
+    provider_id = kwargs.pop("provider_id", None)
+    model = kwargs.pop("model", None)
+    purpose = kwargs.pop("purpose", "qa")
+    if provider_id or model:
+        return LLMModelService().complete_message(
+            messages=messages,
+            purpose=purpose,
+            provider_id=provider_id,
+            model=model,
+            **kwargs,
+        )
+    return LLMModelService().complete_message(messages=messages, purpose=purpose, **kwargs)
+
+
 def chat_stream(messages: list[dict], **kwargs) -> Iterator[str]:
     """发送对话请求并逐段返回模型回复文本。"""
     provider_id = kwargs.pop("provider_id", None)

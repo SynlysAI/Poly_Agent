@@ -1,8 +1,8 @@
 # Plan 07：PolyAgent 垂类算法工具化与 LUI 升级方案
 
-> **状态：进行中** — 已完成“算法工具派生与策略”和“工具调用状态机”；下一步实施用户级历史对话。
+> **状态：进行中** — 已完成“算法工具派生与策略”“工具调用状态机”“历史对话”“流式协议与模型编排”和“界面实现”主体；剩余响应式浏览器验证与收敛。
 >
-> 日期：2026-08-10
+> 日期：2026-08-11
 >
 > 来源：方案草稿（参考 Open WebUI 的对话工作台与工具调用交互，仅作为产品交互与实现参考，不暗示代码归属）。
 
@@ -69,6 +69,15 @@ algorithm:{algorithm_id}
 
 ## Backend Changes
 
+### 当前代码实现（2026-08-11 基线）
+
+以下后端能力已按本计划落地，配套测试位于 `backend/tests/`：
+
+- `backend/app/services/agent_tool_service.py`：从 ResearchEngine 注册表动态派生算法工具目录，组合算法 visibility/owner、部署与 active 版本状态、工具策略进行授权；支持管理员注册表视图、策略更新与一致性检查。
+- `backend/app/services/assistant_tool_service.py`：实现 `requested → awaiting_input → awaiting_confirmation → running → completed / failed / canceled` 状态机；确认后固定 active 版本并复用 `ResearchEngineService.create_algorithm_run` 执行；SSE 事件持久化到 `assistant_tool_calls`。
+- `backend/app/services/assistant_chat_service.py` 与 `backend/app/api/v1/endpoints/assistant.py`：用户级会话/消息 CRUD、搜索、归档、所有权校验，工具调用按 `chat_id + created_by` 关联并在会话恢复时还原参数、实际版本、run ID、结果摘要与事件。
+- 测试：`test_agent_tools_api.py`、`test_assistant_tool_calls_api.py`、`test_assistant_chats_api.py` 共 13 项，覆盖目录派生、策略、状态机幂等、越权隔离、SSE 重放与会话恢复。
+
 ### 工具目录与权限接口
 
 新增接口：
@@ -99,15 +108,21 @@ algorithm:{algorithm_id}
 
 扩展 AssistantService，允许模型根据已选择工具的 schema 生成算法调用：
 
-1. 将当前用户授权且当前会话启用的算法 schema 转为模型 tool/function schema。
-2. 模型提出工具调用后，服务端创建 `pending` 调用记录。
-3. SSE 发送参数摘要和 `awaiting_confirmation` 状态。
-4. 用户在消息内确认或修改参数。
+1. 将当前用户授权且当前会话启用的算法 schema 转为模型 tool/function schema（暂存于 AssistantService，不写入持久化工具目录）。
+2. 模型提出工具调用后，服务端创建 `pending` 调用记录并持久化。
+3. SSE 发送 `tool_call` / `tool_input_required` 事件和参数摘要。
+4. 用户在消息内确认或修改参数（复用 `PATCH /assistant/tool-calls/{call_id}/input` 与 `confirm` 接口）。
 5. 后端通过现有 `ResearchEngineService.create_algorithm_run` 执行，并固定使用确认时的 active version。
-6. 将 `AlgorithmRun` 的状态、输出摘要、结果字段和 artifact 引用反馈给模型。
+6. 前端在调用完成后携带 `tool_call_ids` 重新发起流式对话；服务端把真实结果注入消息上下文。
 7. 模型基于真实结果继续生成最终回答。
 
 对于不支持原生 tool calling 的模型，保持普通问答能力，同时明确提示当前模型不能发起算法调用，不使用文本解析猜测工具参数。
+
+模型编排的上下文约定（`AssistantChatRequest.context`）：
+
+- `selected_tool_ids`：当前会话显式启用的算法工具，仅在非空时向模型暴露 function schema。
+- `chat_id` / `message_id`：新建的算法调用需要关联的会话与用户消息。
+- `tool_call_ids`：确认执行完成后携带的调用 ID 列表，服务端据此注入结果消息并继续生成。
 
 ### Schema 与附件处理
 
@@ -199,32 +214,43 @@ algorithm:{algorithm_id}
    - 建立工具策略集合和 active 垂类算法派生服务。
    - 实现角色、visibility、owner、部署状态的组合授权。
    - 覆盖激活、回滚、冻结和下线后的工具可用性。
+   - 代码位置：`agent_tool_service.py`、`endpoints/agent_tools.py`、`test_agent_tools_api.py`。
 
 2. **工具调用状态机（已完成）**
    - 实现 pending 调用、参数补充、确认、取消和执行。
    - 接入现有 JSON 与 multipart AlgorithmRun 运行链路。
    - 保存实际运行版本、run ID、结果摘要和 artifact 引用。
+   - 代码位置：`assistant_tool_service.py`、`test_assistant_tool_calls_api.py`。
 
-3. **历史对话（下一步）**
+3. **历史对话（已完成）**
    - 实现用户级会话 CRUD、搜索、归档和自动保存。
    - 将工具调用状态完整纳入会话恢复。
+   - 代码位置：`assistant_chat_service.py`、`endpoints/assistant.py`、`DialogueView.vue` 历史侧栏、`test_assistant_chats_api.py`。
 
-4. **流式协议与模型编排**
-   - 扩展 SSE 和前端事件 reducer。
-   - 支持原生 function calling、确认后继续生成以及不支持工具模型的兼容路径。
+4. **流式协议与模型编排（已完成）**
+   - AssistantService 把已启用算法转为 function schema，支持原生 function calling、确认后继续生成以及不支持工具模型的兼容路径。
+   - 对话流 SSE 输出 `tool_call` / `tool_input_required` 事件；前端 API 封装 `agent-tools` 与 `assistant/tool-calls` 接口并在 reducer 中处理。
+   - 代码位置：`assistant_service.py` 工具编排、`llm_client.chat_message`、`test_assistant_tool_orchestration_api.py`。
 
-5. **界面实现与收敛**
-   - 完成历史栏、算法选择器、调用卡片和工具管理标签。
-   - 完成桌面与移动端浏览器验证，压缩无关装饰和常驻信息。
+5. **界面实现与收敛（主体完成，剩余浏览器验证）**
+   - 历史栏、算法选择器、消息内调用卡片（参数编辑、附件上传、确认/取消/重试、结果与 artifact 入口）和“工具服务”页“算法工具”标签均已完成。
+   - 待办：桌面与移动端浏览器验证，压缩无关装饰和常驻信息。
 
-### 下一步实施内容
+### 已实施内容（本轮迭代）
 
-第三交付单元“历史对话”按以下顺序实施：
+第四、五交付单元已按以下顺序落地：
 
-1. 建立按用户隔离的 chat/message 仓储与 `GET/POST/PATCH/DELETE /assistant/chats` 接口。
-2. 保存模型、模式、知识库、联网搜索和当前会话已选择的算法工具。
-3. 将 `AssistantToolCall` 关联到 chat/message，并在恢复会话时还原参数、实际版本、run ID、结果和事件状态。
-4. 覆盖搜索、重命名、归档、删除、所有权校验和工具调用恢复测试。
+1. AssistantService 增加工具编排路径：`selected_tool_ids` 非空时构造 function schema 并调用模型；返回 `tool_calls` 时创建持久化调用并输出 SSE 事件。
+2. 前端 API 封装 `GET /agent-tools`、`POST/PATCH/GET /assistant/tool-calls`、multipart 上传、确认、取消与事件重放。
+3. 对话工作台增加算法工具选择器（保存到会话 `selected_tool_ids`）、消息内调用卡片（参数编辑、附件上传、确认/取消/重试、结果摘要与 artifact 入口）以及 `tool_call` / `tool_input_required` 事件 reducer。
+4. “工具服务”页新增“算法工具”标签：管理员查看策略并编辑启用/角色/确认策略，非管理员只读查看可调用工具。
+5. 覆盖工具提议、确认后继续生成、不支持工具模型的兼容路径、前端 reducer 与构建验证测试（`test_assistant_tool_orchestration_api.py`、`assistantToolCalls.test.mjs`）。
+
+### 下一步（收尾）
+
+1. Playwright 验证算法选择、参数补充、确认、结果展示及 320px、768px、1440px 响应式布局。
+2. 用支持 function calling 的真实模型做一次端到端人工验收：启用工具 → 模型提议 → 确认执行 → 结果注入续答。
+3. 按验收结果压缩卡片/选择器中的常驻信息与无关装饰。
 
 ## Test Plan
 
@@ -236,6 +262,10 @@ algorithm:{algorithm_id}
 - 确认前不创建 AlgorithmRun；确认后只创建一次，重复确认保持幂等。
 - SSE 能正确恢复 `awaiting_input`、`awaiting_confirmation`、`running`、`completed` 和 `failed` 状态。
 - 历史搜索、恢复、重命名、归档和删除按用户隔离。
+- `selected_tool_ids` 为空时模型不接收任何 function schema；非空时仅接收当前用户可调用的工具。
+- 模型提出调用后服务端立即创建 `pending` 记录并持久化，SSE 输出 `tool_call` / `tool_input_required` 事件。
+- 确认完成后携带 `tool_call_ids` 的续问请求能把真实 `AlgorithmRun` 结果注入模型上下文，模型基于结果生成最终回答。
+- 不支持 function calling 的模型不产生调用，且流式回答明确提示当前模型不能发起算法调用。
 - Playwright 验证算法选择、参数补充、确认、运行结果及 320px、768px、1440px 响应式布局。
 - 后端目标测试、前端单元测试和 `npm run build` 全部通过。
 
