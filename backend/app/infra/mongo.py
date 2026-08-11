@@ -130,6 +130,11 @@ def get_algorithm_registry_entries_collection() -> Collection:
     return get_database()["algorithm_registry_entries"]
 
 
+def get_agent_tool_policies_collection() -> Collection:
+    """获取 agent_tool_policies 集合。"""
+    return get_database()["agent_tool_policies"]
+
+
 def get_algorithm_packages_collection() -> Collection:
     """获取 algorithm_packages 集合。"""
     return get_database()["algorithm_packages"]

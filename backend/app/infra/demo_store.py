@@ -31,6 +31,7 @@ COLLECTION_NAMES = [
     "manual_algorithm_workflows",
     "workflow_runs",
     "algorithm_registry_entries",
+    "agent_tool_policies",
     "algorithm_packages",
     "algorithm_versions",
     "algorithm_resources",

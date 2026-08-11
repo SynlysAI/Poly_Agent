@@ -23,6 +23,7 @@ from app.infra.computation_repositories import (
 from app.infra.mongo import (
     get_algorithm_packages_collection,
     get_algorithm_registry_entries_collection,
+    get_agent_tool_policies_collection,
     get_algorithm_handoffs_collection,
     get_algorithm_resources_collection,
     get_algorithm_runs_collection,
@@ -366,6 +367,63 @@ class AlgorithmRegistryRepository(BaseRepository):
                 item for item in data[cls.collection_name] if item.get("algorithm_id") != algorithm_id
             ]
             return len(data[cls.collection_name]) != before
+
+        return bool(demo_store.mutate(mutate))
+
+
+class AgentToolPolicyRepository(BaseRepository):
+    """算法工具策略仓储。"""
+
+    collection_name = "agent_tool_policies"
+
+    @classmethod
+    def _collection(cls):
+        return get_agent_tool_policies_collection()
+
+    @classmethod
+    def list_policies(cls) -> list[dict[str, Any]]:
+        """返回全部策略，按 algorithm_id 稳定排序。"""
+        items, _ = cls.list_all({}, sort_field="algorithm_id", reverse=False, page=1, page_size=10000)
+        return items
+
+    @classmethod
+    def ensure_default(cls, algorithm_id: str) -> tuple[dict[str, Any], bool]:
+        """读取策略，不存在时写入安全默认值。"""
+        existing = cls.find_one({"algorithm_id": algorithm_id})
+        if existing:
+            return existing, False
+        document = {
+            "algorithm_id": algorithm_id,
+            "enabled": True,
+            "allowed_roles": ["admin", "user"],
+            "requires_confirmation": True,
+            "updated_by": None,
+            "updated_at": None,
+        }
+        cls.save("algorithm_id", document)
+        return document, True
+
+    @classmethod
+    def update_fields(cls, algorithm_id: str, fields: dict[str, Any]) -> bool:
+        """更新策略字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"algorithm_id": algorithm_id}, {"$set": fields}, upsert=True
+                )
+                return result.matched_count > 0 or result.upserted_id is not None
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("algorithm_id") == algorithm_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            data[cls.collection_name].append(
+                {"algorithm_id": algorithm_id, **clone_document(fields)}
+            )
+            return True
 
         return bool(demo_store.mutate(mutate))
 

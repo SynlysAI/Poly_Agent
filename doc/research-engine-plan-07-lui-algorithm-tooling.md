@@ -1,6 +1,6 @@
 # Plan 07：PolyAgent 垂类算法工具化与 LUI 升级方案
 
-> **状态：未开始** — 本文件仅为计划文档，尚未进入实施阶段。
+> **状态：进行中** — 已完成第一交付单元“算法工具派生与策略”，调用状态机及 LUI 仍待实施。
 >
 > 日期：2026-08-10
 >
@@ -235,4 +235,5 @@ algorithm:{algorithm_id}
 
 ## 状态记录
 
+- 2026-08-11：完成第一交付单元“算法工具派生与策略”。新增 `GET /agent-tools`、`GET /agent-tools/registry`、`PATCH /agent-tools/{algorithm_id}/policy` 和 `POST /agent-tools/sync`；工具目录从 active 垂类算法和 active 版本动态派生，策略保存于独立轻量集合，服务端执行角色、visibility、owner、部署状态、版本状态和运行时健康状态的交集校验。补充后端 API 测试，覆盖公开/私有算法、冻结版本、管理员策略更新和不可用算法启用保护。
 - 2026-08-10：创建本计划文档，状态为**未开始**。上述接口、界面和验收项均未实施；待实施时按 Ordered Delivery 顺序推进，并同步更新归因源矩阵与文档地图。

@@ -47,6 +47,9 @@ INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
     "algorithm_registry_entries": [
         ("family_source_visibility_owner_status", [("algorithm_family", 1), ("source", 1), ("visibility", 1), ("owner", 1), ("status", 1)]),
     ],
+    "agent_tool_policies": [
+        ("algorithm_id", [("algorithm_id", 1)]),
+    ],
     "report_jobs": [
         ("subject_created", [("subject.subject_type", 1), ("subject.subject_id", 1), ("created_at", -1)]),
         ("owner_status_updated", [("created_by", 1), ("status", 1), ("updated_at", -1)]),
