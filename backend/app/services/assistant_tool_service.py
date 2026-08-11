@@ -232,6 +232,7 @@ class AssistantToolCallService:
     def _event(document: dict[str, Any]) -> dict[str, Any]:
         return AssistantToolCallEvent(
             call_id=document["call_id"],
+            provider_tool_call_id=document.get("provider_tool_call_id"),
             tool_id=document["tool_id"],
             algorithm_id=document["algorithm_id"],
             algorithm_version_id=document.get("algorithm_version_id"),
@@ -324,6 +325,7 @@ class AssistantToolCallService:
         now = utc_now()
         document = {
             "call_id": f"atc_{uuid4().hex[:16]}",
+            "provider_tool_call_id": payload.provider_tool_call_id,
             "chat_id": payload.chat_id,
             "message_id": payload.message_id,
             "tool_id": payload.tool_id,

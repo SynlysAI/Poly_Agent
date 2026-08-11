@@ -115,9 +115,9 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             {"content": content, "tool_calls": tool_calls},
         )()
 
-    def _tool_call(self, name: str, arguments: str):
+    def _tool_call(self, name: str, arguments: str, call_id: str | None = None):
         function = type("FakeFunction", (), {"name": name, "arguments": arguments})()
-        return type("FakeToolCall", (), {"type": "function", "function": function})()
+        return type("FakeToolCall", (), {"id": call_id, "type": "function", "function": function})()
 
     def test_stream_proposes_tool_call_and_persists_pending_call(self) -> None:
         chat_id, message_id = self._chat_and_message()
@@ -240,6 +240,112 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         final = events[-1]
         self.assertEqual(final["type"], "final")
         self.assertIn("0.88", final["data"]["content"])
+
+    def test_continuation_reuses_provider_tool_call_id(self) -> None:
+        chat_id, message_id = self._chat_and_message()
+        captured: dict = {}
+
+        def fake_chat_message(messages, **kwargs):
+            return self._fake_message(
+                tool_calls=[
+                    self._tool_call(
+                        "algorithm_vertical-tool",
+                        '{"smiles": "CCO"}',
+                        call_id="provider-call-123",
+                    )
+                ],
+            )
+
+        with patch("app.core.llm_client.chat_message", side_effect=fake_chat_message), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测 CCO 的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        call_id = events[-1]["data"]["tool_calls"][0]["call_id"]
+        persisted = AssistantToolCallRepository.find_one({"call_id": call_id})
+        self.assertEqual(persisted["provider_tool_call_id"], "provider-call-123")
+
+        def fake_run(_service, payload, *, actor_user_id, is_admin=False, request_id=None, input_asset_uploads=None):
+            return type(
+                "FakeRun",
+                (),
+                {
+                    "run_id": "arun-provider-id-1",
+                    "algorithm_id": payload.algorithm_id,
+                    "algorithm_version_id": payload.algorithm_version_id,
+                    "status": "completed",
+                    "output_summary": {"score": 0.88},
+                    "artifact_refs": [],
+                    "error": None,
+                },
+            )()
+
+        with patch(
+            "app.services.assistant_tool_service.ResearchEngineService.create_algorithm_run",
+            new=fake_run,
+        ):
+            confirmed = self.client.post(f"/api/v1/assistant/tool-calls/{call_id}/confirm")
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+
+        second = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={
+                "tool_id": "algorithm:vertical-tool",
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "arguments": {"smiles": "CCN", "temperature": 310},
+            },
+        ).json()["data"]
+        second_call_id = second["call_id"]
+        with patch(
+            "app.services.assistant_tool_service.ResearchEngineService.create_algorithm_run",
+            new=fake_run,
+        ):
+            second_confirmed = self.client.post(f"/api/v1/assistant/tool-calls/{second_call_id}/confirm")
+        self.assertEqual(second_confirmed.status_code, 200, second_confirmed.text)
+
+        def fake_stream(messages, **kwargs):
+            captured["messages"] = messages
+            yield "基于运行结果：分数 0.88。"
+
+        with patch("app.core.llm_client.chat_stream", side_effect=fake_stream), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            continuation = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测 CCO 的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "tool_call_ids": [call_id, second_call_id],
+                    },
+                }
+            )
+
+        assistant_message = next(item for item in captured["messages"] if item.get("tool_calls"))
+        tool_message = next(item for item in captured["messages"] if item.get("role") == "tool")
+        assistant_tool_call = assistant_message["tool_calls"][0]
+        self.assertEqual(assistant_tool_call["id"], "provider-call-123")
+        self.assertEqual(tool_message["tool_call_id"], "provider-call-123")
+        self.assertEqual(len(assistant_message["tool_calls"]), 2)
+        self.assertEqual(
+            len([item for item in captured["messages"] if item.get("role") == "tool"]),
+            2,
+        )
+        self.assertEqual(continuation[-1]["type"], "final")
 
     def test_stream_falls_back_to_qa_when_model_does_not_support_tools(self) -> None:
         chat_id, message_id = self._chat_and_message()

@@ -140,6 +140,7 @@ class AssistantToolCallCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tool_id: str = Field(pattern=r"^algorithm:[^:]+$", max_length=120)
+    provider_tool_call_id: str | None = Field(default=None, max_length=255)
     chat_id: str | None = Field(default=None, max_length=120)
     message_id: str | None = Field(default=None, max_length=120)
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -171,6 +172,7 @@ class AssistantToolCallEvent(BaseModel):
 
     type: Literal["tool_call"] = "tool_call"
     call_id: str
+    provider_tool_call_id: str | None = None
     tool_id: str
     algorithm_id: str
     algorithm_version_id: str | None = None
@@ -202,6 +204,7 @@ class AssistantToolCall(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     call_id: str
+    provider_tool_call_id: str | None = None
     chat_id: str | None = None
     message_id: str | None = None
     tool_id: str

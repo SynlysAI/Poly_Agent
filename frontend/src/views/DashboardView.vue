@@ -3,13 +3,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, ArrowDown, ChatLineRound, Check, FolderOpened, Histogram, MagicStick, Promotion, Reading, SetUp,
+  Aim, ArrowDown, ChatLineRound, Check, FolderOpened, Histogram, MagicStick, Promotion, Reading, SetUp, Tools,
 } from '@element-plus/icons-vue'
 
 import {
   getApiErrorMessage,
   getIntegrationStatus,
   getLlmModels,
+  listAgentTools,
   listKnowledgeSystems,
   listAlgorithmRuns,
   listCampaigns,
@@ -18,6 +19,7 @@ import {
 } from '../api/polyAgentApi'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
+import ToolMenuPicker from '../components/ToolMenuPicker.vue'
 import {
   loadKnowledgePreference,
   loadWebSearchPreference,
@@ -51,8 +53,11 @@ const modelLoading = ref(false)
 const knowledgeLoading = ref(false)
 const llmCatalog = ref({ providers: [], routing: {} })
 const knowledgeSystems = ref([])
+const agentTools = ref([])
+const agentToolsLoading = ref(false)
 const selectedModelKey = ref('')
 const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
+const selectedToolIds = ref([])
 const useWebSearch = ref(loadWebSearchPreference())
 
 const dashboardViewOptions = [
@@ -130,6 +135,10 @@ const selectedKnowledgeBases = computed(() =>
   selectedKnowledgeBaseIds.value
     .map((systemId) => knowledgeSystems.value.find((item) => item.system_id === systemId))
     .filter(Boolean),
+)
+
+const selectedToolSummary = computed(() =>
+  (agentTools.value || []).filter((tool) => selectedToolIds.value.includes(tool.tool_id)),
 )
 
 const stats = computed(() => {
@@ -278,14 +287,18 @@ function openDialogue(prompt) {
     return
   }
   if (!text) return
+  const query = {
+    prompt: text,
+    mode: chatMode.value,
+    providerId: selectedModel.value?.providerId || undefined,
+    modelId: selectedModel.value?.modelId || undefined,
+  }
+  if (selectedToolIds.value.length) {
+    query.toolIds = selectedToolIds.value.join(',')
+  }
   router.push({
     path: '/dialogue',
-    query: {
-      prompt: text,
-      mode: chatMode.value,
-      providerId: selectedModel.value?.providerId || undefined,
-      modelId: selectedModel.value?.modelId || undefined,
-    },
+    query,
   })
 }
 
@@ -381,10 +394,32 @@ async function loadKnowledgeBases() {
   }
 }
 
+async function loadAgentTools() {
+  agentToolsLoading.value = true
+  try {
+    const data = await listAgentTools()
+    agentTools.value = data?.items || []
+    if (selectedToolIds.value.length) {
+      const validIds = new Set(agentTools.value.map((tool) => tool.tool_id))
+      selectedToolIds.value = selectedToolIds.value.filter((toolId) => validIds.has(toolId))
+    }
+  } catch (error) {
+    agentTools.value = []
+    ElMessage.warning(`算法工具加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    agentToolsLoading.value = false
+  }
+}
+
+function removeAgentTool(toolId) {
+  selectedToolIds.value = selectedToolIds.value.filter((item) => item !== toolId)
+}
+
 onMounted(() => {
   loadDashboardData()
   loadLlmCatalog()
   loadKnowledgeBases()
+  loadAgentTools()
 })
 </script>
 
@@ -402,11 +437,16 @@ onMounted(() => {
       </div>
 
       <div class="lui-composer">
-        <div v-if="selectedKnowledgeBases.length" class="selected-tags-inline">
+        <div v-if="selectedKnowledgeBases.length || selectedToolSummary.length" class="selected-tags-inline">
           <span v-for="system in selectedKnowledgeBases" :key="system.system_id" class="mention-chip mention-chip--kb">
             <el-icon><Reading /></el-icon>
             <span class="mention-chip-name" :title="system.name">{{ system.name }}</span>
             <button type="button" aria-label="移除知识库" @click="removeKnowledgeBase(system.system_id)">×</button>
+          </span>
+          <span v-for="tool in selectedToolSummary" :key="tool.tool_id" class="mention-chip mention-chip--tool">
+            <el-icon><Tools /></el-icon>
+            <span class="mention-chip-name" :title="tool.name">{{ tool.name }}</span>
+            <button type="button" aria-label="移除工具" @click="removeAgentTool(tool.tool_id)">×</button>
           </span>
         </div>
         <div class="composer-input">
@@ -492,6 +532,12 @@ onMounted(() => {
                 <p v-if="!knowledgeSystems.length" class="kb-picker-empty">暂无可用知识库</p>
               </div>
             </el-popover>
+            <ToolMenuPicker
+              v-model="selectedToolIds"
+              :tools="agentTools"
+              :loading="agentToolsLoading"
+              aria-label="选择工具"
+            />
           </div>
           <div class="composer-actions">
             <LlmModelSelect
@@ -614,6 +660,7 @@ h2 { font-size: 16px; line-height: 1.35; }
 .selected-tags-inline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 0 8px; border-bottom: 1px solid var(--app-border-soft); }
 .mention-chip { max-width: 100%; height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; border: 1px solid var(--app-border-soft); border-radius: var(--app-radius-sm); background: #f8fbff; color: var(--app-ink-body); font-size: 12px; font-weight: 650; }
 .mention-chip--kb .el-icon { color: var(--app-primary-active); }
+.mention-chip--tool .el-icon { color: #16a34a; }
 .mention-chip-name { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-chip button { width: 16px; height: 16px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #94a3b8; cursor: pointer; line-height: 1; }
 .mention-chip button:hover { background: #e2e8f0; color: var(--app-ink); }

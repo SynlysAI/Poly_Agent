@@ -8,12 +8,15 @@ import {
   Cpu,
   Delete,
   EditPen,
+  Expand,
+  Fold,
   FolderOpened,
   Plus,
   Promotion,
   Reading,
   RefreshRight,
   Search,
+  Tools,
   Upload,
 } from '@element-plus/icons-vue'
 
@@ -38,6 +41,7 @@ import {
 } from '../api/polyAgentApi'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
+import ToolMenuPicker from '../components/ToolMenuPicker.vue'
 import {
   applyToolCallEvent,
   canEditToolCall,
@@ -49,8 +53,10 @@ import {
 } from '../utils/assistantToolCalls.mjs'
 import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
 import {
+  loadHistoryPanelPreference,
   loadKnowledgePreference,
   loadWebSearchPreference,
+  saveHistoryPanelPreference,
   saveKnowledgePreference,
   saveWebSearchPreference,
 } from '../utils/dialoguePreferences'
@@ -71,7 +77,6 @@ const agentToolsLoading = ref(false)
 const selectedModelKey = ref('')
 const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
 const selectedToolIds = ref([])
-const toolQuery = ref('')
 const useWebSearch = ref(loadWebSearchPreference())
 const chatId = ref(normalizeQueryString(route.params.chatId))
 const userMessageId = ref('')
@@ -79,6 +84,7 @@ const chatHistory = ref([])
 const historyQuery = ref('')
 const historyLoading = ref(false)
 const historyArchived = ref(false)
+const historyPanelVisible = ref(loadHistoryPanelPreference())
 
 function defaultMessages() {
   return [{
@@ -111,17 +117,6 @@ const selectedKnowledgeBases = computed(() =>
     .filter(Boolean),
 )
 const hasKnowledgeBase = computed(() => Boolean(selectedKnowledgeBases.value.length))
-const filteredAgentTools = computed(() => {
-  const query = toolQuery.value.trim().toLowerCase()
-  const items = agentTools.value || []
-  if (!query) return items
-  return items.filter((tool) =>
-    [tool.name, tool.tool_id, tool.algorithm_id, tool.description, ...(tool.material_scope || [])]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query)),
-  )
-})
-const hasSelectedTools = computed(() => Boolean(selectedToolIds.value.length))
 const selectedToolSummary = computed(() =>
   (agentTools.value || []).filter((tool) => selectedToolIds.value.includes(tool.tool_id)),
 )
@@ -171,12 +166,13 @@ watch(
 )
 
 function cleanInitialQuery() {
-  if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId) return
+  if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId && !route.query.toolIds) return
   const query = { ...route.query }
   delete query.prompt
   delete query.mode
   delete query.providerId
   delete query.modelId
+  delete query.toolIds
   router.replace({ path: route.path, query })
 }
 
@@ -254,18 +250,8 @@ async function loadAgentTools() {
   }
 }
 
-function isAgentToolSelected(toolId) {
-  return selectedToolIds.value.includes(toolId)
-}
-
-function toggleAgentTool(toolId) {
-  selectedToolIds.value = isAgentToolSelected(toolId)
-    ? selectedToolIds.value.filter((item) => item !== toolId)
-    : [...selectedToolIds.value, toolId]
-}
-
-function clearAgentTools() {
-  selectedToolIds.value = []
+function removeAgentTool(toolId) {
+  selectedToolIds.value = selectedToolIds.value.filter((item) => item !== toolId)
 }
 
 function chatOptionsPayload() {
@@ -289,6 +275,11 @@ async function loadChatHistory() {
   } finally {
     historyLoading.value = false
   }
+}
+
+function toggleHistoryPanel() {
+  historyPanelVisible.value = !historyPanelVisible.value
+  saveHistoryPanelPreference(historyPanelVisible.value)
 }
 
 function restoreMessage(item) {
@@ -969,6 +960,11 @@ onMounted(() => {
   const initialPrompt = normalizeQueryString(route.query.prompt).trim()
   const initialProviderId = normalizeQueryString(route.query.providerId).trim()
   const initialModelId = normalizeQueryString(route.query.modelId).trim()
+  const initialToolIds = String(route.query.toolIds || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  selectedToolIds.value = initialToolIds
   chatMode.value = normalizeMode(route.query.mode)
   cleanInitialQuery()
   Promise.all([
@@ -983,7 +979,7 @@ onMounted(() => {
 })
 
 watch(
-  [chatMode, selectedModelKey, selectedKnowledgeBaseIds, selectedToolIds, useWebSearch],
+  [chatMode, selectedModelKey, selectedKnowledgeBaseIds, useWebSearch],
   async () => {
     if (!chatId.value || sending.value) return
     try {
@@ -1010,49 +1006,63 @@ watch(
 </script>
 
 <template>
-  <div class="dialogue-page">
-    <aside class="dialogue-history" aria-label="历史会话">
-      <div class="history-header">
-        <strong>历史会话</strong>
-        <el-button circle text :icon="Plus" aria-label="新建会话" @click="createNewChat" />
-      </div>
-      <el-input
-        v-model="historyQuery"
-        size="small"
-        clearable
-        placeholder="搜索会话"
-        :prefix-icon="Search"
-        @keyup.enter="loadChatHistory"
-        @clear="loadChatHistory"
-      />
-      <div class="history-tabs">
-        <button type="button" :class="{ active: !historyArchived }" @click="historyArchived = false; loadChatHistory()">最近</button>
-        <button type="button" :class="{ active: historyArchived }" @click="historyArchived = true; loadChatHistory()">归档</button>
-      </div>
-      <div v-loading="historyLoading" class="history-list">
-        <div v-if="!historyLoading && !chatHistory.length" class="history-empty">暂无会话</div>
-        <div
-          v-for="item in chatHistory"
-          :key="item.chat_id"
-          class="history-item"
-          :class="{ active: item.chat_id === chatId }"
-        >
-          <button type="button" class="history-item-main" @click="selectHistoryChat(item)">
-            <span class="history-item-title">{{ item.title }}</span>
-            <small>{{ item.messages?.length || 0 }} 条消息</small>
-          </button>
-          <el-dropdown trigger="click" @command="(command) => command === 'rename' ? renameHistoryChat(item) : command === 'archive' ? archiveHistoryChat(item) : deleteHistoryChat(item)">
-            <el-button text circle :icon="FolderOpened" aria-label="会话操作" />
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="rename"><el-icon><EditPen /></el-icon>重命名</el-dropdown-item>
-                <el-dropdown-item command="archive"><el-icon><FolderOpened /></el-icon>{{ item.archived ? '取消归档' : '归档' }}</el-dropdown-item>
-                <el-dropdown-item command="delete" divided><el-icon><Delete /></el-icon>删除</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+  <div class="dialogue-page" :class="{ 'history-docked': !historyPanelVisible }">
+    <aside class="dialogue-history" :class="{ docked: !historyPanelVisible }" aria-label="历史会话">
+      <template v-if="historyPanelVisible">
+        <div class="history-header">
+          <strong>历史会话</strong>
+          <div class="history-header-actions">
+            <el-tooltip content="收起历史会话" placement="right">
+              <el-button circle text :icon="Fold" aria-label="收起历史会话" :aria-expanded="true" @click="toggleHistoryPanel" />
+            </el-tooltip>
+            <el-tooltip content="新建会话" placement="right">
+              <el-button circle text :icon="Plus" aria-label="新建会话" @click="createNewChat" />
+            </el-tooltip>
+          </div>
         </div>
-      </div>
+        <el-input
+          v-model="historyQuery"
+          size="small"
+          clearable
+          placeholder="搜索会话"
+          :prefix-icon="Search"
+          @keyup.enter="loadChatHistory"
+          @clear="loadChatHistory"
+        />
+        <div class="history-tabs">
+          <button type="button" :class="{ active: !historyArchived }" @click="historyArchived = false; loadChatHistory()">最近</button>
+          <button type="button" :class="{ active: historyArchived }" @click="historyArchived = true; loadChatHistory()">归档</button>
+        </div>
+        <div v-loading="historyLoading" class="history-list">
+          <div v-if="!historyLoading && !chatHistory.length" class="history-empty">暂无会话</div>
+          <div
+            v-for="item in chatHistory"
+            :key="item.chat_id"
+            class="history-item"
+            :class="{ active: item.chat_id === chatId }"
+          >
+            <button type="button" class="history-item-main" @click="selectHistoryChat(item)">
+              <span class="history-item-title">{{ item.title }}</span>
+              <small>{{ item.messages?.length || 0 }} 条消息</small>
+            </button>
+            <el-dropdown trigger="click" @command="(command) => command === 'rename' ? renameHistoryChat(item) : command === 'archive' ? archiveHistoryChat(item) : deleteHistoryChat(item)">
+              <el-button text circle :icon="FolderOpened" aria-label="会话操作" />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="rename"><el-icon><EditPen /></el-icon>重命名</el-dropdown-item>
+                  <el-dropdown-item command="archive"><el-icon><FolderOpened /></el-icon>{{ item.archived ? '取消归档' : '归档' }}</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided><el-icon><Delete /></el-icon>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </div>
+      </template>
+      <el-tooltip v-else content="展开历史会话" placement="right">
+        <button type="button" class="history-dock" aria-label="展开历史会话" :aria-expanded="false" @click="toggleHistoryPanel">
+          <el-icon><Expand /></el-icon>
+        </button>
+      </el-tooltip>
     </aside>
     <header class="dialogue-header" :class="{ 'dialogue-header-centered': !conversationStarted }">
       <div>
@@ -1257,11 +1267,16 @@ watch(
         </button>
       </div>
       <div class="composer-box">
-        <div v-if="selectedKnowledgeBases.length" class="selected-tags-inline">
+        <div v-if="selectedKnowledgeBases.length || selectedToolSummary.length" class="selected-tags-inline">
           <span v-for="system in selectedKnowledgeBases" :key="system.system_id" class="mention-chip mention-chip--kb">
             <el-icon><Reading /></el-icon>
             <span class="mention-chip-name" :title="system.name">{{ system.name }}</span>
             <button type="button" aria-label="移除知识库" @click="removeKnowledgeBase(system.system_id)">×</button>
+          </span>
+          <span v-for="tool in selectedToolSummary" :key="tool.tool_id" class="mention-chip mention-chip--tool">
+            <el-icon><Tools /></el-icon>
+            <span class="mention-chip-name" :title="tool.name">{{ tool.name }}</span>
+            <button type="button" aria-label="移除工具" @click="removeAgentTool(tool.tool_id)">×</button>
           </span>
         </div>
         <div class="composer-input-row">
@@ -1348,53 +1363,12 @@ watch(
                 <p v-if="!knowledgeSystems.length" class="kb-picker-empty">暂无可用知识库</p>
               </div>
             </el-popover>
-            <el-popover
-              placement="top-start"
-              trigger="click"
-              width="340"
-              popper-class="dialogue-tools-popper"
-            >
-              <template #reference>
-                <button
-                  type="button"
-                  class="icon-tool-btn"
-                  :class="{ active: hasSelectedTools }"
-                  :disabled="agentToolsLoading || !agentTools.length"
-                  aria-label="选择算法工具"
-                >
-                  <el-icon><Cpu /></el-icon>
-                  <span v-if="hasSelectedTools" class="tool-count">{{ selectedToolIds.length }}</span>
-                </button>
-              </template>
-              <div class="tool-picker">
-                <el-input
-                  v-model="toolQuery"
-                  size="small"
-                  clearable
-                  placeholder="搜索算法工具"
-                  :prefix-icon="Search"
-                />
-                <button
-                  v-for="tool in filteredAgentTools"
-                  :key="tool.tool_id"
-                  type="button"
-                  class="tool-picker-item"
-                  :class="{ selected: isAgentToolSelected(tool.tool_id) }"
-                  :aria-pressed="isAgentToolSelected(tool.tool_id)"
-                  @click="toggleAgentTool(tool.tool_id)"
-                >
-                  <el-icon><Cpu /></el-icon>
-                  <span>
-                    <strong>{{ tool.name }}</strong>
-                    <small>{{ tool.description || tool.algorithm_id }}</small>
-                  </span>
-                </button>
-                <button v-if="selectedToolIds.length" type="button" class="kb-picker-clear" @click="clearAgentTools">
-                  清除全部
-                </button>
-                <p v-if="!filteredAgentTools.length" class="kb-picker-empty">暂无可用算法工具</p>
-              </div>
-            </el-popover>
+            <ToolMenuPicker
+              v-model="selectedToolIds"
+              :tools="agentTools"
+              :loading="agentToolsLoading"
+              aria-label="选择工具"
+            />
           </div>
           <div class="composer-toolbar-right">
             <LlmModelSelect
@@ -1421,6 +1395,7 @@ watch(
 
 <style scoped>
 .dialogue-page {
+  position: relative;
   height: calc(100vh - 90px);
   min-height: 620px;
   display: grid;
@@ -1429,6 +1404,10 @@ watch(
   gap: 12px;
   max-width: 1440px;
   margin: 0 auto;
+}
+
+.dialogue-page.history-docked {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .dialogue-history {
@@ -1443,6 +1422,21 @@ watch(
   background: rgba(255, 255, 255, 0.82);
 }
 
+.dialogue-history.docked {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
 .history-header,
 .history-item,
 .history-tabs {
@@ -1453,6 +1447,30 @@ watch(
 .history-header {
   justify-content: space-between;
   color: var(--app-ink);
+}
+
+.history-header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.history-dock {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--app-ink-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.history-dock:hover,
+.history-dock:focus-visible {
+  background: #f5f8fc;
+  color: var(--app-primary-active);
 }
 
 .history-tabs {
@@ -1532,6 +1550,12 @@ watch(
 .dialogue-body,
 .dialogue-composer {
   grid-column: 2;
+}
+
+.history-docked .dialogue-header,
+.history-docked .dialogue-body,
+.history-docked .dialogue-composer {
+  grid-column: 1;
 }
 
 .dialogue-header {
@@ -1928,6 +1952,10 @@ h1 {
   color: var(--app-primary-active);
 }
 
+.mention-chip--tool .el-icon {
+  color: #16a34a;
+}
+
 .mention-chip-name {
   min-width: 0;
   max-width: 180px;
@@ -2021,61 +2049,6 @@ h1 {
   background: transparent;
   color: var(--app-primary-active);
   cursor: pointer;
-  font-size: 12px;
-}
-
-.tool-picker {
-  display: grid;
-  gap: 6px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.tool-picker-item {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border: 0;
-  border-radius: var(--app-radius-sm);
-  background: transparent;
-  color: var(--app-ink-body);
-  text-align: left;
-  cursor: pointer;
-}
-
-.tool-picker-item:hover,
-.tool-picker-item.selected {
-  background: #f0f7ff;
-  color: var(--app-primary-active);
-}
-
-.tool-picker-item .el-icon {
-  color: var(--app-primary-active);
-}
-
-.tool-picker-item span {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.tool-picker-item strong,
-.tool-picker-item small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tool-picker-item strong {
-  font-size: 13px;
-}
-
-.tool-picker-item small {
-  color: var(--app-ink-muted);
   font-size: 12px;
 }
 
@@ -2200,11 +2173,26 @@ h1 {
     height: calc(100vh - 78px);
     min-height: 560px;
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .dialogue-page.history-docked {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .dialogue-history {
     grid-row: auto;
     max-height: 180px;
+  }
+
+  .dialogue-history.docked {
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .history-empty {
+    padding: 6px 8px;
   }
 
   .dialogue-header,

@@ -1498,6 +1498,7 @@ class AssistantService:
                 created = assistant_tool_call_service.create(
                     AssistantToolCallCreate(
                         tool_id=tool_id,
+                        provider_tool_call_id=getattr(call, "id", None),
                         chat_id=request.context.get("chat_id"),
                         message_id=request.context.get("message_id"),
                         arguments=arguments,
@@ -1517,7 +1518,7 @@ class AssistantService:
     ) -> tuple[list[dict], list[dict]]:
         """读取已完成/失败的调用，构造 assistant+tool 消息供模型继续生成。"""
         events: list[dict] = []
-        messages: list[dict] = []
+        continuation_calls: list[AssistantToolCall] = []
         for call_id in tool_call_ids or []:
             try:
                 call = assistant_tool_call_service.get(call_id, current_user)
@@ -1527,22 +1528,33 @@ class AssistantService:
             events.extend(AssistantToolCallRepository.list_events(call_id))
             if call.phase not in {"completed", "failed"}:
                 continue
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": call.call_id,
-                            "type": "function",
-                            "function": {
-                                "name": self._safe_tool_name(call.tool_id),
-                                "arguments": json.dumps(call.arguments, ensure_ascii=False),
-                            },
-                        }
-                    ],
-                }
-            )
+            continuation_calls.append(call)
+
+        if not continuation_calls:
+            return events, []
+
+        # OpenAI-compatible providers require each tool result to reference the
+        # exact provider-generated tool call ID from the preceding assistant
+        # message. Older persisted calls fall back to the local call ID.
+        messages: list[dict] = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call.provider_tool_call_id or call.call_id,
+                        "type": "function",
+                        "function": {
+                            "name": self._safe_tool_name(call.tool_id),
+                            "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                        },
+                    }
+                    for call in continuation_calls
+                ],
+            }
+        ]
+        for call in continuation_calls:
+            provider_tool_call_id = call.provider_tool_call_id or call.call_id
             if call.phase == "completed":
                 payload = {
                     "status": "completed",
@@ -1555,7 +1567,7 @@ class AssistantService:
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": call.call_id,
+                    "tool_call_id": provider_tool_call_id,
                     "content": json.dumps(payload, ensure_ascii=False, default=str),
                 }
             )
