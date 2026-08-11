@@ -54,7 +54,7 @@
 | [research-engine-plan-04-autoresearch-orchestrator.md](research-engine-plan-04-autoresearch-orchestrator.md) | AutoResearch 材料版编排器计划 |
 | [research-engine-plan-05-frontend-mvp.md](research-engine-plan-05-frontend-mvp.md) | ResearchEngine 前端 MVP 计划 |
 | [research-engine-plan-06-traceability-and-qa.md](research-engine-plan-06-traceability-and-qa.md) | 追溯闭环与验收计划 |
-| [research-engine-plan-07-lui-algorithm-tooling.md](research-engine-plan-07-lui-algorithm-tooling.md) | `/dialogue` LUI 升级：垂类算法工具化、历史对话与工具管理（未开始） |
+| [research-engine-plan-07-lui-algorithm-tooling.md](research-engine-plan-07-lui-algorithm-tooling.md) | `/dialogue` LUI 升级：算法工具派生、调用状态机、历史对话、模型编排与界面均已落地，真实模型与 Playwright 响应式验收完成 |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |
 
 ## 部署、工具链与治理

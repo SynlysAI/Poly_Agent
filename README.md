@@ -44,7 +44,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 | **垂类预测** | `/vertical-prediction` | 算法包上传、治理、在线测试、运行历史、结果查看和 handoff | 运行时以算法契约和受限子进程为边界 |
 | **Knowledge Base** | `/knowledge` | WeKnora 问答、证据清单和 Neo4j 增强检索子图 | 通过 WeKnora API 接入；Neo4j 图谱增强可选 |
 | **Data Catalog** | `/database/data-catalog`、`/data-catalog` | 材料数据资产浏览、检索和只读外部数据接入 | 资产库使用 `poly_data` 与 MinIO |
-| **助手与报告** | `/dialogue`、ResearchEngine 报告面板 | 基于项目事实导航、审批引导和结构化报告生成 | 支持 OpenAI、Ollama、Edison、Codex 和自定义 HTTP provider |
+| **助手与报告** | `/dialogue`、ResearchEngine 报告面板 | 基于项目事实导航、垂类算法工具调用、历史会话和结构化报告生成 | 算法工具仅来自已部署且 active 的垂类算法；支持 OpenAI、Ollama、Edison、Codex 和自定义 HTTP provider |
 | **基础工作台** | `/dashboard`、`/tasks/center`、`/tools`、`/admin` | 统一任务视图、模型选择、集成状态和管理 | 与 AI4MS 门户共享认证体系 |
 
 ### 模块细节
@@ -55,7 +55,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 - **垂类预测**：支持 `.zip/.tar.gz` 算法包注册、版本管理、在线测试、运行历史、结果查看和 handoff；算法通过契约声明输入、输出、来源和运行时边界。
 - **Knowledge Base**：KnowledgeService 统一转发 WeKnora 的知识库列表、问答流和无总结检索；前端展示证据卡片，后端可用 Neo4j 补充 Entity 关系，并过滤 API key、object key 和 embedding 等敏感元数据。
 - **Data Catalog**：面向材料数据资产提供目录、分类和筛选；业务运行态写入 `poly_agent`，材料资产使用 `poly_data` MongoDB 和 MinIO `datasets/` 路径。
-- **助手与报告**：助手基于项目实时事实返回入口、算法、计算和审批引导；报告链路支持 OpenAI/Ollama/Edison/Codex/自定义 HTTP provider，以及 HTML/LaTeX/Markdown/PDF renderer。
+- **助手与报告**：助手基于项目实时事实返回入口、算法、计算和审批引导；`/dialogue` 支持按用户隔离的历史会话、已部署垂类算法工具选择、参数确认、AlgorithmRun 结果与 artifact 回链；报告链路支持 OpenAI/Ollama/Edison/Codex/自定义 HTTP provider，以及 HTML/LaTeX/Markdown/PDF renderer。
 
 ## 当前项目状态
 
@@ -67,12 +67,12 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 | 垂类预测 | ✅ 基础可用 | 算法包上传、测试、运行历史和结果查看已集成 |
 | Knowledge Base | ✅ WeKnora 已接入 | 知识库、问答流、证据和检索子图可用 |
 | Data Catalog | ✅ 基础可用 | 目录浏览、筛选和资产读取可用 |
-| 认证、助手、任务中心 | ✅ 基础可用 | HMAC token、门户 SSO、事实约束助手和跨模块任务视图可用 |
+| 认证、助手、任务中心 | ✅ 基础可用 | HMAC token、门户 SSO、对话历史、垂类算法工具调用和跨模块任务视图可用；真实模型/算法服务依赖环境配置 |
 | 真实 ORCA/HPC/AiiDA/SpecLabOS | 📋 规划中 | 通过 integration config 和 adapter 契约逐步接入 |
 
 ### 下一阶段优先级
 
-1. **P1 生产化**：Schema 驱动算法表单、AlgorithmRegistry 管理、真实预测模型服务、checkpoint/rerun、worker 运维、对象存储和浏览器 e2e。
+1. **P1 生产化**：Schema 驱动算法表单、AlgorithmRegistry 管理、真实预测模型服务、checkpoint/rerun、worker 运维、对象存储，以及更多页面的浏览器 e2e。
 2. **P2 真实执行**：ORCA/HPC/AiiDA executor、SpecLabOS/LabOS 实验提交与结果回填。
 3. **P2 规模化协同**：材料 profile、模型更新与经验沉淀、项目级权限/配额、跨项目知识与策略复用。
 
@@ -204,15 +204,20 @@ pm2 save
 |---|---|
 | `make test-backend` | 运行 `backend/tests` pytest |
 | `make test-frontend-build` | 构建 Vue 前端 |
-| `make check-all` | 后端测试、前端构建和当前 e2e 占位目标 |
+| `make test-e2e` | Playwright 验证对话 LUI 真实模型流程与 320/768/1440px 响应式布局（需前后端和 PI Mock 服务已启动） |
+| `make check-all` | 后端测试、前端构建和对话 LUI e2e 验收 |
 | `npm --prefix frontend run test:llm-models` | LLM 模型配置单测 |
 | `npm --prefix frontend run test:vertical-prediction` | 垂类预测与 artifact 下载单测 |
+| `npm --prefix frontend run test:assistant-tool-calls` | 对话算法工具 SSE/reducer 单测 |
+| `npm --prefix frontend run test:tool-menu-categories` | 对话工具菜单分类与筛选单测 |
 | `make init-mongo-indexes` | 初始化生产查询索引 |
 | `python scripts/pack_algorithm.py --help` | 查看算法包打包参数 |
 | `python scripts/update_algorithm_visibility.py --dry-run` | 预览算法 visibility 修正 |
 | `bash scripts/run_compute_engine.sh status` | 查看 ComputeEngine 参考服务状态 |
 
-当前仓库没有完整的 Playwright e2e 套件；发布前至少执行后端回归、前端构建和关键页面手工验收。ResearchEngine 的历史测试记录与已知限制见 [`doc/research-engine-progress-and-plan.md`](doc/research-engine-progress-and-plan.md)。
+E2E 默认使用后端 `5201`、前端 `5200` 和 PI Mock `8300`；临时环境可通过 `POLY_AGENT_BACKEND_URL`、`POLY_AGENT_FRONTEND_URL`、`POLY_AGENT_PI_MOCK_URL` 覆盖。
+
+当前 Playwright 覆盖 `/dialogue` 的算法工具完整交互和 320/768/1440px 响应式验收（见 [`e2e/README.md`](e2e/README.md)）；其他页面仍以后端回归、前端构建和关键页面手工验收为主。ResearchEngine 的历史测试记录与已知限制见 [`doc/research-engine-progress-and-plan.md`](doc/research-engine-progress-and-plan.md)。
 
 ## 配置边界与安全
 

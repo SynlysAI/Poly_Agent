@@ -1,5 +1,6 @@
 export const WEB_SEARCH_STORAGE_KEY = 'poly-agent-dialogue-use-web-search'
 export const KNOWLEDGE_STORAGE_KEY = 'poly-agent-dialogue-knowledge-base-id'
+export const HISTORY_PANEL_STORAGE_KEY = 'poly-agent-dialogue-history-panel-visible'
 
 function resolveStorage(storage) {
   if (storage) return storage
@@ -30,6 +31,18 @@ export function saveWebSearchPreference(value, storage) {
   const target = resolveStorage(storage)
   if (!target) return
   target.setItem(WEB_SEARCH_STORAGE_KEY, normalizeWebSearchPreference(value) ? '1' : '0')
+}
+
+export function loadHistoryPanelPreference(storage) {
+  const target = resolveStorage(storage)
+  if (!target) return true
+  return normalizeWebSearchPreference(target.getItem(HISTORY_PANEL_STORAGE_KEY), true)
+}
+
+export function saveHistoryPanelPreference(value, storage) {
+  const target = resolveStorage(storage)
+  if (!target) return
+  target.setItem(HISTORY_PANEL_STORAGE_KEY, normalizeWebSearchPreference(value, true) ? '1' : '0')
 }
 
 export function normalizeKnowledgePreference(value) {

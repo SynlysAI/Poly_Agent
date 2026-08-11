@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 
 import {
+  loadHistoryPanelPreference,
   loadKnowledgePreference,
   loadWebSearchPreference,
+  saveHistoryPanelPreference,
   saveKnowledgePreference,
   saveWebSearchPreference,
 } from './dialoguePreferences.js'
@@ -25,6 +27,13 @@ function createStorage(initial = {}) {
 const emptyStorage = createStorage()
 assert.equal(loadWebSearchPreference(emptyStorage), false)
 assert.deepEqual(loadKnowledgePreference(emptyStorage), [])
+assert.equal(loadHistoryPanelPreference(emptyStorage), true)
+
+const historyPanelStorage = createStorage()
+saveHistoryPanelPreference(false, historyPanelStorage)
+assert.equal(loadHistoryPanelPreference(historyPanelStorage), false)
+saveHistoryPanelPreference(true, historyPanelStorage)
+assert.equal(loadHistoryPanelPreference(historyPanelStorage), true)
 
 const webStorage = createStorage()
 saveWebSearchPreference(true, webStorage)

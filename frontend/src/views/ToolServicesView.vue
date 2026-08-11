@@ -6,6 +6,8 @@ import {
   Check, DataAnalysis, Edit, Files, Refresh, SetUp, View as ViewIcon, Warning,
 } from '@element-plus/icons-vue'
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
+import AttributionBadges from '../components/attribution/AttributionBadges.vue'
+import { authState } from '../auth/authState'
 
 import {
   checkLlmModels,
@@ -14,8 +16,12 @@ import {
   getApiErrorMessage,
   getIntegrationStatus,
   getLlmModels,
+  listAgentToolRegistry,
+  listAgentTools,
   listAlgorithms,
   listIntegrationConfigs,
+  syncAgentTools,
+  updateAgentToolPolicy,
   updateLlmRouting,
   upsertIntegrationConfig,
 } from '../api/polyAgentApi'
@@ -43,6 +49,11 @@ const serviceGroupFilter = ref('all')
 // ── ResearchEngine 算法清单 ──
 const algorithms = ref([])
 const algoLoading = ref(false)
+const agentToolItems = ref([])
+const agentToolLoading = ref(false)
+const agentToolSaving = ref('')
+const syncingAgentTools = ref(false)
+const agentToolFilter = ref('')
 const algoDetailVisible = ref(false)
 const algoDetail = ref(null)
 const algoFilters = reactive({ type: '', material_scope: '', keyword: '' })
@@ -52,7 +63,35 @@ const llmRouteForm = reactive({ qa: '', deep: '', report: '' })
 
 function normalizeTab(value) {
   const tab = Array.isArray(value) ? value[0] : value
-  return ['status', 'algorithms', 'configs', 'llm-models'].includes(tab) ? tab : 'status'
+  return ['status', 'algorithms', 'agent-tools', 'configs', 'llm-models'].includes(tab) ? tab : 'status'
+}
+
+const isAdmin = computed(() => authState.role === 'admin' || !authState.authEnabled)
+
+const visibleAgentTools = computed(() => {
+  const keyword = agentToolFilter.value.trim().toLowerCase()
+  const items = agentToolItems.value || []
+  if (!keyword) return items
+  return items.filter((item) =>
+    [item.name, item.tool_id, item.algorithm_id, item.description]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(keyword)),
+  )
+})
+
+function agentToolPhaseLabel(phase) {
+  const map = { available: '可调用', disabled: '已禁用', unavailable: '不可用' }
+  return map[phase] || phase
+}
+
+function agentToolPhaseTag(phase) {
+  const map = { available: 'success', disabled: 'warning', unavailable: 'danger' }
+  return map[phase] || 'info'
+}
+
+function agentToolHealthLabel(status) {
+  const map = { healthy: '健康', unknown: '未知', unavailable: '不可用' }
+  return map[status] || status
 }
 
 const algoTypeOptions = [
@@ -160,6 +199,48 @@ async function loadAlgos() {
     ElMessage.error(getApiErrorMessage(error))
   } finally {
     algoLoading.value = false
+  }
+}
+
+async function loadAgentToolItems() {
+  agentToolLoading.value = true
+  try {
+    agentToolItems.value = isAdmin.value
+      ? (await listAgentToolRegistry())?.items || []
+      : (await listAgentTools())?.items || []
+  } catch (error) {
+    agentToolItems.value = []
+    ElMessage.warning(`算法工具目录加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    agentToolLoading.value = false
+  }
+}
+
+async function updatePolicy(row, fields) {
+  const key = `${row.algorithm_id}:policy`
+  agentToolSaving.value = key
+  try {
+    const updated = await updateAgentToolPolicy(row.algorithm_id, fields)
+    const index = agentToolItems.value.findIndex((item) => item.algorithm_id === row.algorithm_id)
+    if (index >= 0) agentToolItems.value.splice(index, 1, updated)
+    ElMessage.success('工具策略已更新')
+  } catch (error) {
+    ElMessage.error(`策略更新失败：${getApiErrorMessage(error)}`)
+  } finally {
+    agentToolSaving.value = ''
+  }
+}
+
+async function runAgentToolSync() {
+  syncingAgentTools.value = true
+  try {
+    const data = await syncAgentTools()
+    ElMessage.success(`一致性检查完成：可用 ${data.available}，不可用 ${data.unavailable}，禁用 ${data.disabled}`)
+    await loadAgentToolItems()
+  } catch (error) {
+    ElMessage.error(`一致性检查失败：${getApiErrorMessage(error)}`)
+  } finally {
+    syncingAgentTools.value = false
   }
 }
 
@@ -647,6 +728,7 @@ async function handleCheck(row) {
 onMounted(() => {
   loadAll()
   loadAlgos()
+  loadAgentToolItems()
   loadLlmModels({ quiet: true })
 })
 
@@ -792,6 +874,106 @@ watch(activeTab, (tab) => {
             </section>
           </div>
           <el-empty v-else-if="!algoLoading" description="暂无算法数据" />
+        </section>
+      </el-tab-pane>
+
+      <el-tab-pane label="算法工具" name="agent-tools">
+        <section class="tools-section">
+          <div class="section-heading">
+            <div>
+              <h2>算法工具</h2>
+              <p class="section-description">已部署垂类算法在对话 LUI 中的工具状态与调用策略。</p>
+            </div>
+            <span>{{ visibleAgentTools.length }} 项工具</span>
+          </div>
+          <div class="algo-filter-bar">
+            <el-input v-model="agentToolFilter" placeholder="搜索算法工具" clearable style="width:240px" />
+            <el-button :icon="Refresh" :loading="agentToolLoading" @click="loadAgentToolItems">刷新</el-button>
+            <el-button v-if="isAdmin" :icon="Check" :loading="syncingAgentTools" @click="runAgentToolSync">
+              一致性检查
+            </el-button>
+          </div>
+          <div v-loading="agentToolLoading" class="agent-tool-panel">
+            <el-table v-if="visibleAgentTools.length" :data="visibleAgentTools" class="agent-tool-table">
+              <el-table-column label="工具" min-width="240">
+                <template #default="{ row }">
+                  <div class="agent-tool-main">
+                    <strong>{{ row.name }}</strong>
+                    <small>{{ row.tool_id }}</small>
+                    <p>{{ row.description || '暂无描述' }}</p>
+                    <AttributionBadges
+                      v-if="row.framework_attributions?.length || row.method_attributions?.length || row.developer_attribution"
+                      :attributions="[
+                        ...(row.framework_attributions || []),
+                        ...(row.method_attributions || []),
+                        ...(row.developer_attribution ? [row.developer_attribution] : []),
+                      ]"
+                    />
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="版本 / 健康" width="130">
+                <template #default="{ row }">
+                  <div class="agent-tool-main">
+                    <strong>{{ row.version || '-' }}</strong>
+                    <small>{{ agentToolHealthLabel(row.health_status) }}</small>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="可用状态" width="150">
+                <template #default="{ row }">
+                  <div class="agent-tool-main">
+                    <el-tag size="small" :type="agentToolPhaseTag(row.phase)">{{ agentToolPhaseLabel(row.phase) }}</el-tag>
+                    <small v-if="row.unavailable_reason" :title="row.unavailable_reason">{{ row.unavailable_reason }}</small>
+                  </div>
+                </template>
+              </el-table-column>
+              <template v-if="isAdmin">
+                <el-table-column label="启用" width="86">
+                  <template #default="{ row }">
+                    <el-switch
+                      :model-value="row.policy.enabled"
+                      :disabled="row.phase === 'unavailable'"
+                      :loading="agentToolSaving === `${row.algorithm_id}:policy`"
+                      @change="(value) => updatePolicy(row, { enabled: value })"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column label="允许角色" width="190">
+                  <template #default="{ row }">
+                    <el-select
+                      :model-value="row.policy.allowed_roles"
+                      multiple
+                      size="small"
+                      :disabled="row.phase === 'unavailable'"
+                      @change="(value) => updatePolicy(row, { allowed_roles: value })"
+                    >
+                      <el-option label="管理员" value="admin" />
+                      <el-option label="用户" value="user" />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="确认执行" width="110">
+                  <template #default="{ row }">
+                    <el-switch
+                      :model-value="row.policy.requires_confirmation"
+                      :disabled="row.phase === 'unavailable'"
+                      @change="(value) => updatePolicy(row, { requires_confirmation: value })"
+                    />
+                  </template>
+                </el-table-column>
+              </template>
+              <el-table-column label="输入 / 输出" min-width="210">
+                <template #default="{ row }">
+                  <div class="agent-tool-main">
+                    <small>输入：{{ Object.keys(row.input_schema?.fields || {}).join(', ') || '-' }}</small>
+                    <small>输出：{{ Object.keys(row.output_schema?.fields || {}).join(', ') || '-' }}</small>
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-if="!visibleAgentTools.length && !agentToolLoading" description="暂无算法工具" />
+          </div>
         </section>
       </el-tab-pane>
 
@@ -1208,6 +1390,41 @@ watch(activeTab, (tab) => {
 .service-status-table {
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
+}
+
+.agent-tool-panel {
+  min-width: 0;
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.agent-tool-table {
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+}
+
+.agent-tool-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.agent-tool-main strong {
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.agent-tool-main small,
+.agent-tool-main p {
+  overflow: hidden;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tool-main p {
+  margin: 0;
 }
 
 .algo-table :deep(.el-table__cell),

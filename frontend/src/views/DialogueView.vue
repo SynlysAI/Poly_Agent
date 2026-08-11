@@ -1,15 +1,62 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { ArrowDown, ChatLineRound, Promotion, Reading } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ArrowDown,
+  ChatLineRound,
+  Cpu,
+  Delete,
+  EditPen,
+  Expand,
+  Fold,
+  FolderOpened,
+  Plus,
+  Promotion,
+  Reading,
+  RefreshRight,
+  Search,
+  Tools,
+  Upload,
+} from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, getLlmModels, listKnowledgeSystems, streamAssistantChat } from '../api/polyAgentApi'
+import {
+  cancelAssistantToolCall,
+  confirmAssistantToolCall,
+  createAssistantChat,
+  createAssistantMessage,
+  createAssistantToolCall,
+  deleteAssistantChat,
+  downloadArtifact,
+  getApiErrorMessage,
+  getAssistantChat,
+  getLlmModels,
+  listAgentTools,
+  listAssistantChats,
+  listKnowledgeSystems,
+  streamAssistantChat,
+  updateAssistantChat,
+  updateAssistantToolCallInput,
+  uploadAssistantToolCallInput,
+} from '../api/polyAgentApi'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
+import ToolMenuPicker from '../components/ToolMenuPicker.vue'
 import {
+  applyToolCallEvent,
+  canEditToolCall,
+  normalizeToolCall,
+  parseToolArguments,
+  replaceToolCall,
+  toolPhaseLabel,
+  toolPhaseTagType,
+} from '../utils/assistantToolCalls.mjs'
+import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
+import {
+  loadHistoryPanelPreference,
   loadKnowledgePreference,
   loadWebSearchPreference,
+  saveHistoryPanelPreference,
   saveKnowledgePreference,
   saveWebSearchPreference,
 } from '../utils/dialoguePreferences'
@@ -25,19 +72,31 @@ const knowledgeLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
 const llmCatalog = ref({ providers: [], routing: {} })
 const knowledgeSystems = ref([])
+const agentTools = ref([])
+const agentToolsLoading = ref(false)
 const selectedModelKey = ref('')
 const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
+const selectedToolIds = ref([])
 const useWebSearch = ref(loadWebSearchPreference())
+const chatId = ref(normalizeQueryString(route.params.chatId))
+const userMessageId = ref('')
+const chatHistory = ref([])
+const historyQuery = ref('')
+const historyLoading = ref(false)
+const historyArchived = ref(false)
+const historyPanelVisible = ref(loadHistoryPanelPreference())
 
-const messages = ref([
-  {
+function defaultMessages() {
+  return [{
     role: 'assistant',
     content: '你好！我是 PolyAgent 产品内助手，可以帮你定位页面入口、确认 ResearchEngine 算法清单、提交计算任务和处理 AutoResearch 审批。',
     actions: [{ label: '进入 ResearchEngine', target: '/research-engine', type: 'route' }],
     references: [],
     suggested_questions: ['哪些算法是真实适配器？', '如何开始一个 ResearchEngine 示例？', '如何查看待审批任务？'],
-  },
-])
+  }]
+}
+
+const messages = ref(defaultMessages())
 
 const chatModeOptions = [
   { label: '科研问答', value: 'qa' },
@@ -58,6 +117,9 @@ const selectedKnowledgeBases = computed(() =>
     .filter(Boolean),
 )
 const hasKnowledgeBase = computed(() => Boolean(selectedKnowledgeBases.value.length))
+const selectedToolSummary = computed(() =>
+  (agentTools.value || []).filter((tool) => selectedToolIds.value.includes(tool.tool_id)),
+)
 const conversationStarted = computed(() => messages.value.some((item) => item.role === 'user'))
 
 const currentSuggestions = computed(() => {
@@ -104,12 +166,13 @@ watch(
 )
 
 function cleanInitialQuery() {
-  if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId) return
+  if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId && !route.query.toolIds) return
   const query = { ...route.query }
   delete query.prompt
   delete query.mode
   delete query.providerId
   delete query.modelId
+  delete query.toolIds
   router.replace({ path: route.path, query })
 }
 
@@ -170,6 +233,148 @@ async function loadKnowledgeBases() {
   }
 }
 
+async function loadAgentTools() {
+  agentToolsLoading.value = true
+  try {
+    const data = await listAgentTools()
+    agentTools.value = data?.items || []
+    if (selectedToolIds.value.length) {
+      const validIds = new Set(agentTools.value.map((tool) => tool.tool_id))
+      selectedToolIds.value = selectedToolIds.value.filter((toolId) => validIds.has(toolId))
+    }
+  } catch (error) {
+    agentTools.value = []
+    ElMessage.warning(`算法工具加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    agentToolsLoading.value = false
+  }
+}
+
+function removeAgentTool(toolId) {
+  selectedToolIds.value = selectedToolIds.value.filter((item) => item !== toolId)
+}
+
+function chatOptionsPayload() {
+  return {
+    model: selectedModelContext() || {},
+    mode: chatMode.value,
+    knowledge_base_ids: selectedKnowledgeBaseIds.value,
+    knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
+    use_web_search: Boolean(useWebSearch.value),
+    selected_tool_ids: selectedToolIds.value,
+  }
+}
+
+async function loadChatHistory() {
+  historyLoading.value = true
+  try {
+    const data = await listAssistantChats({ query: historyQuery.value || undefined, archived: historyArchived.value })
+    chatHistory.value = data?.items || []
+  } catch (error) {
+    ElMessage.warning(`历史会话加载失败：${getApiErrorMessage(error)}`)
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function toggleHistoryPanel() {
+  historyPanelVisible.value = !historyPanelVisible.value
+  saveHistoryPanelPreference(historyPanelVisible.value)
+}
+
+function restoreMessage(item) {
+  return {
+    ...item,
+    actions: item.actions || [],
+    references: item.references || [],
+    suggested_questions: item.suggested_questions || [],
+    reasoning_summary: item.reasoning_summary || [],
+    tool_calls: (item.tool_calls || []).map(normalizeToolCall),
+    web_search_requested: item.web_search_requested,
+    streaming: false,
+    error: false,
+  }
+}
+
+async function loadChat(chatKey) {
+  if (!chatKey) return
+  try {
+    const data = await getAssistantChat(chatKey)
+    chatId.value = data.chat_id
+    chatMode.value = normalizeMode(data.mode)
+    selectedKnowledgeBaseIds.value = data.knowledge_base_ids || []
+    selectedToolIds.value = data.selected_tool_ids || []
+    useWebSearch.value = Boolean(data.use_web_search)
+    messages.value = data.messages?.length ? data.messages.map(restoreMessage) : defaultMessages()
+    selectDefaultModelForMode(data.model || {})
+    await loadChatHistory()
+    scrollToBottom()
+  } catch (error) {
+    ElMessage.warning(`会话恢复失败：${getApiErrorMessage(error)}`)
+    await router.replace({ path: '/dialogue', query: route.query })
+  }
+}
+
+async function ensureChat() {
+  if (chatId.value) {
+    await updateAssistantChat(chatId.value, chatOptionsPayload())
+    return chatId.value
+  }
+  const data = await createAssistantChat(chatOptionsPayload())
+  chatId.value = data.chat_id
+  await router.replace({ path: `/dialogue/${encodeURIComponent(chatId.value)}`, query: route.query })
+  await loadChatHistory()
+  return chatId.value
+}
+
+async function createNewChat() {
+  if (sending.value) return
+  chatId.value = ''
+  messages.value = defaultMessages()
+  await router.push({ path: '/dialogue', query: { mode: chatMode.value } })
+}
+
+async function selectHistoryChat(item) {
+  if (sending.value || !item?.chat_id) return
+  await router.push({ path: `/dialogue/${encodeURIComponent(item.chat_id)}` })
+  await loadChat(item.chat_id)
+}
+
+async function renameHistoryChat(item) {
+  try {
+    const result = await ElMessageBox.prompt('输入新的会话名称', '重命名会话', {
+      inputValue: item.title,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+    })
+    await updateAssistantChat(item.chat_id, { title: result.value })
+    await loadChatHistory()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(`重命名失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function archiveHistoryChat(item) {
+  try {
+    await updateAssistantChat(item.chat_id, { archived: !item.archived })
+    if (item.chat_id === chatId.value && !item.archived) await createNewChat()
+    await loadChatHistory()
+  } catch (error) {
+    ElMessage.error(`归档操作失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function deleteHistoryChat(item) {
+  try {
+    await ElMessageBox.confirm('删除后将无法恢复该会话及其消息。', '删除会话', { type: 'warning' })
+    await deleteAssistantChat(item.chat_id)
+    if (item.chat_id === chatId.value) await createNewChat()
+    await loadChatHistory()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(`删除失败：${getApiErrorMessage(error)}`)
+  }
+}
+
 async function sendMessage() {
   await sendPrompt(inputText.value)
 }
@@ -178,7 +383,25 @@ async function sendPrompt(prompt) {
   const text = String(prompt || '').trim()
   if (!text || sending.value) return
   const requestUseWebSearch = Boolean(useWebSearch.value)
-  messages.value.push({ role: 'user', content: text })
+  try {
+    await ensureChat()
+  } catch (error) {
+    ElMessage.error(`会话保存失败：${getApiErrorMessage(error)}`)
+    return
+  }
+  messages.value.push({ role: 'user', content: text, tool_calls: [] })
+  const userIndex = messages.value.length - 1
+  try {
+    const savedUserMessage = await createAssistantMessage(chatId.value, { role: 'user', content: text })
+    Object.assign(messages.value[userIndex], savedUserMessage, {
+      tool_calls: messages.value[userIndex].tool_calls || [],
+    })
+    userMessageId.value = savedUserMessage.message_id
+  } catch (error) {
+    messages.value.pop()
+    ElMessage.error(`消息保存失败：${getApiErrorMessage(error)}`)
+    return
+  }
   const requestMessages = buildRequestMessages()
   const assistantMessage = {
     role: 'assistant',
@@ -195,6 +418,8 @@ async function sendPrompt(prompt) {
     stream_stage: 'queued',
     streaming: true,
     error: false,
+    tool_calls: [],
+    pending_tool_call_ids: [],
   }
   messages.value.push(assistantMessage)
   const assistantIndex = messages.value.length - 1
@@ -203,28 +428,11 @@ async function sendPrompt(prompt) {
   scrollToBottom()
   let streamErrorMessage = ''
   try {
-    await streamAssistantChat(
-      {
-        messages: requestMessages,
-        context: {
-          current_route: router.currentRoute.value.fullPath,
-          page: 'dialogue',
-          mode: chatMode.value,
-          use_web_search: requestUseWebSearch,
-          use_knowledge_base: hasKnowledgeBase.value,
-          knowledge_base_ids: selectedKnowledgeBases.value.map((item) => item.system_id),
-          knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
-          knowledge_base_id: selectedKnowledgeBases.value[0]?.system_id || '',
-          knowledge_base_name: selectedKnowledgeBases.value[0]?.name || '',
-          model: selectedModelContext(),
-        },
-      },
-      (event) => {
-        const errorMessage = applyAssistantStreamEvent(assistantIndex, event)
-        if (errorMessage) streamErrorMessage = errorMessage
-        scrollToBottom()
-      },
-    )
+    streamErrorMessage = await runAssistantStream({
+      requestMessages,
+      context: buildAssistantContext({}),
+      assistantIndex,
+    })
     if (streamErrorMessage) ElMessage.error(`对话失败：${streamErrorMessage}`)
   } catch (error) {
     const message = getApiErrorMessage(error)
@@ -242,7 +450,111 @@ async function sendPrompt(prompt) {
       messages.value[assistantIndex].stream_status = ''
     }
     sending.value = false
-    scrollToBottom()
+    await finalizeAssistantMessage(assistantIndex)
+  }
+}
+
+function buildAssistantContext(extra = {}) {
+  return {
+    current_route: router.currentRoute.value.fullPath,
+    page: 'dialogue',
+    mode: chatMode.value,
+    use_web_search: Boolean(useWebSearch.value),
+    use_knowledge_base: hasKnowledgeBase.value,
+    knowledge_base_ids: selectedKnowledgeBases.value.map((item) => item.system_id),
+    knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
+    knowledge_base_id: selectedKnowledgeBases.value[0]?.system_id || '',
+    knowledge_base_name: selectedKnowledgeBases.value[0]?.name || '',
+    model: selectedModelContext(),
+    chat_id: chatId.value,
+    message_id: userMessageId.value,
+    selected_tool_ids: selectedToolIds.value,
+    ...extra,
+  }
+}
+
+async function runAssistantStream({ requestMessages, context, assistantIndex }) {
+  let streamErrorMessage = ''
+  await streamAssistantChat(
+    { messages: requestMessages, context },
+    (event) => {
+      const errorMessage = applyAssistantStreamEvent(assistantIndex, event)
+      if (errorMessage) streamErrorMessage = errorMessage
+      scrollToBottom()
+    },
+  )
+  return streamErrorMessage
+}
+
+async function finalizeAssistantMessage(assistantIndex) {
+  const assistant = messages.value[assistantIndex]
+  if (!assistant) return
+  assistant.streaming = false
+  assistant.stream_status = ''
+  if (assistant.content && !assistant.streaming) {
+    try {
+      await createAssistantMessage(chatId.value, {
+        role: 'assistant',
+        content: assistant.content,
+        references: assistant.references || [],
+        reasoning_summary: assistant.reasoning_summary || [],
+        answer_mode: assistant.answer_mode || null,
+        answer_scope: assistant.answer_scope || null,
+        retrieval_status: assistant.retrieval_status || null,
+        tool_call_ids: assistant.pending_tool_call_ids || [],
+      })
+      await loadChatHistory()
+    } catch (error) {
+      ElMessage.warning(`助手回复未能保存：${getApiErrorMessage(error)}`)
+    }
+  }
+  scrollToBottom()
+}
+
+async function continueToolCall(callId) {
+  if (sending.value) return
+  const assistantMessage = {
+    role: 'assistant',
+    content: '',
+    reasoning_summary: [],
+    actions: [],
+    references: [],
+    suggested_questions: [],
+    answer_mode: '',
+    answer_scope: '',
+    retrieval_status: '',
+    stream_status: '正在基于算法结果生成回答...',
+    stream_stage: 'queued',
+    streaming: true,
+    error: false,
+    tool_calls: [],
+    pending_tool_call_ids: [],
+  }
+  messages.value.push(assistantMessage)
+  const assistantIndex = messages.value.length - 1
+  sending.value = true
+  scrollToBottom()
+  let streamErrorMessage = ''
+  try {
+    streamErrorMessage = await runAssistantStream({
+      requestMessages: buildRequestMessages(),
+      context: buildAssistantContext({ tool_call_ids: [callId] }),
+      assistantIndex,
+    })
+    if (streamErrorMessage) ElMessage.error(`继续生成失败：${streamErrorMessage}`)
+  } catch (error) {
+    const message = getApiErrorMessage(error)
+    Object.assign(messages.value[assistantIndex], {
+      content: `对话出错：${message}`,
+      stream_status: '',
+      stream_stage: 'error',
+      streaming: false,
+      error: true,
+    })
+    ElMessage.error(`继续生成失败：${message}`)
+  } finally {
+    sending.value = false
+    await finalizeAssistantMessage(assistantIndex)
   }
 }
 
@@ -280,6 +592,10 @@ function selectedModelContext() {
 function applyAssistantStreamEvent(index, event) {
   const target = messages.value[index]
   if (!target || !event) return ''
+  if (event.type === 'tool_call' || event.type === 'tool_input_required') {
+    applyToolCallEvent(findToolCallMessage(event.call_id) || messages.value[index - 1], event)
+    return ''
+  }
   if (event.type === 'status') {
     target.stream_status = event.message || ''
     target.stream_stage = event.stage || ''
@@ -318,6 +634,17 @@ function applyAssistantStreamEvent(index, event) {
       streaming: false,
       error: false,
     })
+    const calls = Array.isArray(data.tool_calls) ? data.tool_calls : []
+    if (calls.length) {
+      target.pending_tool_call_ids = calls.map((call) => call.call_id)
+      const userMessage = messages.value[index - 1]
+      if (userMessage) {
+        userMessage.tool_calls = calls.map((call) => ({
+          ...call,
+          arguments_text: JSON.stringify(call.arguments || {}, null, 2),
+        }))
+      }
+    }
     return ''
   }
   if (event.type === 'error') {
@@ -330,6 +657,100 @@ function applyAssistantStreamEvent(index, event) {
     return message
   }
   return ''
+}
+
+function findToolCallMessage(callId) {
+  if (!callId) return null
+  for (const message of messages.value) {
+    if ((message.tool_calls || []).some((call) => call.call_id === callId)) return message
+  }
+  return null
+}
+
+async function updateToolCallArguments(message, call) {
+  const result = parseToolArguments(call.arguments_text)
+  if (!result.ok) {
+    ElMessage.error(result.error)
+    return
+  }
+  try {
+    const updated = await updateAssistantToolCallInput(call.call_id, { arguments: result.arguments })
+    replaceToolCall(message, updated)
+    ElMessage.success('参数已更新')
+  } catch (error) {
+    ElMessage.error(`参数更新失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function uploadToolCallAsset(message, call, assetKey, event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  const formData = new FormData()
+  formData.append(assetKey, file)
+  try {
+    const updated = await uploadAssistantToolCallInput(call.call_id, formData)
+    replaceToolCall(message, updated)
+    ElMessage.success('附件已上传')
+  } catch (error) {
+    ElMessage.error(`附件上传失败：${getApiErrorMessage(error)}`)
+  }
+  event.target.value = ''
+}
+
+async function confirmToolCall(message, call) {
+  try {
+    const updated = await confirmAssistantToolCall(call.call_id, {})
+    replaceToolCall(message, updated)
+    if (updated.phase === 'completed') {
+      if (message.message_id) userMessageId.value = message.message_id
+      ElMessage.success('算法运行完成')
+      await continueToolCall(updated.call_id)
+    } else if (updated.phase === 'running') {
+      ElMessage.info('算法运行中，可在工具卡片查看状态')
+    }
+  } catch (error) {
+    ElMessage.error(`确认执行失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function cancelToolCall(message, call) {
+  try {
+    const updated = await cancelAssistantToolCall(call.call_id)
+    replaceToolCall(message, updated)
+    ElMessage.info('算法调用已取消')
+  } catch (error) {
+    ElMessage.error(`取消失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function retryToolCall(message, call) {
+  try {
+    const created = await createAssistantToolCall({
+      tool_id: call.tool_id,
+      chat_id: chatId.value,
+      message_id: message.message_id,
+      arguments: call.arguments || {},
+      input_asset_refs: call.input_asset_refs || {},
+    })
+    replaceToolCall(message, created)
+    ElMessage.success('已重新发起算法调用')
+  } catch (error) {
+    ElMessage.error(`重新发起失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function downloadToolArtifact(ref) {
+  const artifactId = ref?.artifact_id || ref?.id
+  if (!artifactId) return
+  try {
+    await downloadArtifactToBrowser({
+      artifactId,
+      fallbackName: ref?.name || 'artifact.dat',
+      download: downloadArtifact,
+    })
+  } catch (error) {
+    ElMessage.error(`下载失败：${getApiErrorMessage(error)}`)
+  }
 }
 
 function currentModeLabel() {
@@ -539,19 +960,110 @@ onMounted(() => {
   const initialPrompt = normalizeQueryString(route.query.prompt).trim()
   const initialProviderId = normalizeQueryString(route.query.providerId).trim()
   const initialModelId = normalizeQueryString(route.query.modelId).trim()
+  const initialToolIds = String(route.query.toolIds || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  selectedToolIds.value = initialToolIds
   chatMode.value = normalizeMode(route.query.mode)
   cleanInitialQuery()
   Promise.all([
     loadLlmModels({ providerId: initialProviderId, modelId: initialModelId }),
     loadKnowledgeBases(),
-  ]).finally(() => {
-    if (initialPrompt) sendPrompt(initialPrompt)
+    loadAgentTools(),
+  ]).then(async () => {
+    if (chatId.value) await loadChat(chatId.value)
+    await loadChatHistory()
+    if (initialPrompt) await sendPrompt(initialPrompt)
   })
 })
+
+watch(
+  [chatMode, selectedModelKey, selectedKnowledgeBaseIds, useWebSearch],
+  async () => {
+    if (!chatId.value || sending.value) return
+    try {
+      await updateAssistantChat(chatId.value, chatOptionsPayload())
+      await loadChatHistory()
+    } catch {
+      // The next message save retries the session options if this background update fails.
+    }
+  },
+  { deep: true },
+)
+
+watch(
+  () => route.params.chatId,
+  async (value) => {
+    const nextChatId = normalizeQueryString(value)
+    if (nextChatId && nextChatId !== chatId.value) await loadChat(nextChatId)
+    if (!nextChatId && chatId.value) {
+      chatId.value = ''
+      messages.value = defaultMessages()
+    }
+  },
+)
 </script>
 
 <template>
-  <div class="dialogue-page">
+  <div class="dialogue-page" :class="{ 'history-docked': !historyPanelVisible }">
+    <aside class="dialogue-history" :class="{ docked: !historyPanelVisible }" aria-label="历史会话">
+      <template v-if="historyPanelVisible">
+        <div class="history-header">
+          <strong>历史会话</strong>
+          <div class="history-header-actions">
+            <el-tooltip content="收起历史会话" placement="right">
+              <el-button circle text :icon="Fold" aria-label="收起历史会话" :aria-expanded="true" @click="toggleHistoryPanel" />
+            </el-tooltip>
+            <el-tooltip content="新建会话" placement="right">
+              <el-button circle text :icon="Plus" aria-label="新建会话" @click="createNewChat" />
+            </el-tooltip>
+          </div>
+        </div>
+        <el-input
+          v-model="historyQuery"
+          size="small"
+          clearable
+          placeholder="搜索会话"
+          :prefix-icon="Search"
+          @keyup.enter="loadChatHistory"
+          @clear="loadChatHistory"
+        />
+        <div class="history-tabs">
+          <button type="button" :class="{ active: !historyArchived }" @click="historyArchived = false; loadChatHistory()">最近</button>
+          <button type="button" :class="{ active: historyArchived }" @click="historyArchived = true; loadChatHistory()">归档</button>
+        </div>
+        <div v-loading="historyLoading" class="history-list">
+          <div v-if="!historyLoading && !chatHistory.length" class="history-empty">暂无会话</div>
+          <div
+            v-for="item in chatHistory"
+            :key="item.chat_id"
+            class="history-item"
+            :class="{ active: item.chat_id === chatId }"
+          >
+            <button type="button" class="history-item-main" @click="selectHistoryChat(item)">
+              <span class="history-item-title">{{ item.title }}</span>
+              <small>{{ item.messages?.length || 0 }} 条消息</small>
+            </button>
+            <el-dropdown trigger="click" @command="(command) => command === 'rename' ? renameHistoryChat(item) : command === 'archive' ? archiveHistoryChat(item) : deleteHistoryChat(item)">
+              <el-button text circle :icon="FolderOpened" aria-label="会话操作" />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="rename"><el-icon><EditPen /></el-icon>重命名</el-dropdown-item>
+                  <el-dropdown-item command="archive"><el-icon><FolderOpened /></el-icon>{{ item.archived ? '取消归档' : '归档' }}</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided><el-icon><Delete /></el-icon>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </div>
+      </template>
+      <el-tooltip v-else content="展开历史会话" placement="right">
+        <button type="button" class="history-dock" aria-label="展开历史会话" :aria-expanded="false" @click="toggleHistoryPanel">
+          <el-icon><Expand /></el-icon>
+        </button>
+      </el-tooltip>
+    </aside>
     <header class="dialogue-header" :class="{ 'dialogue-header-centered': !conversationStarted }">
       <div>
         <p class="dialogue-kicker">Poly Agent 问答</p>
@@ -663,6 +1175,86 @@ onMounted(() => {
                 {{ ref.label }}
               </button>
             </div>
+            <div v-if="msg.tool_calls?.length" class="tool-call-list">
+              <div
+                v-for="call in msg.tool_calls"
+                :key="call.call_id"
+                class="tool-call-card"
+                :class="`tool-call-${call.phase}`"
+              >
+                <div class="tool-call-head">
+                  <el-icon><Cpu /></el-icon>
+                  <strong>{{ call.tool_name || call.tool_id }}</strong>
+                  <el-tag size="small" effect="plain" :type="toolPhaseTagType(call.phase)">
+                    {{ toolPhaseLabel(call.phase) }}
+                  </el-tag>
+                  <small v-if="call.algorithm_version">v{{ call.algorithm_version }}</small>
+                </div>
+                <details v-if="canEditToolCall(call)" class="tool-call-details" open>
+                  <summary>参数</summary>
+                  <el-input
+                    v-model="call.arguments_text"
+                    type="textarea"
+                    :rows="3"
+                    class="tool-args-editor"
+                    resize="none"
+                  />
+                  <div class="tool-call-actions">
+                    <el-button size="small" @click="updateToolCallArguments(msg, call)">更新参数</el-button>
+                    <el-button
+                      v-if="call.phase === 'awaiting_confirmation'"
+                      size="small"
+                      type="primary"
+                      @click="confirmToolCall(msg, call)"
+                    >
+                      确认执行
+                    </el-button>
+                    <el-button
+                      v-if="['awaiting_input', 'awaiting_confirmation'].includes(call.phase)"
+                      size="small"
+                      @click="cancelToolCall(msg, call)"
+                    >
+                      取消
+                    </el-button>
+                  </div>
+                </details>
+                <div v-if="call.required_assets?.length" class="tool-assets">
+                  <label v-for="asset in call.required_assets" :key="asset.key" class="tool-asset-upload">
+                    <el-icon><Upload /></el-icon>
+                    <span>{{ asset.key }}{{ asset.required ? '（必填）' : '' }}</span>
+                    <input
+                      type="file"
+                      :accept="asset.accept || ''"
+                      @change="uploadToolCallAsset(msg, call, asset.key, $event)"
+                    />
+                  </label>
+                </div>
+                <div v-if="call.phase === 'completed'" class="tool-call-result">
+                  <details>
+                    <summary>运行结果</summary>
+                    <pre>{{ JSON.stringify(call.result_summary || {}, null, 2) }}</pre>
+                  </details>
+                  <div v-if="call.artifact_refs?.length" class="tool-artifacts">
+                    <el-button
+                      v-for="ref in call.artifact_refs"
+                      :key="ref.artifact_id"
+                      size="small"
+                      text
+                      type="primary"
+                      @click="downloadToolArtifact(ref)"
+                    >
+                      下载 {{ ref.name || ref.artifact_id }}
+                    </el-button>
+                  </div>
+                </div>
+                <div v-if="call.phase === 'failed'" class="tool-call-error">
+                  <p>{{ call.error?.message || '算法运行失败' }}</p>
+                  <el-button size="small" type="primary" plain @click="retryToolCall(msg, call)">
+                    重新发起
+                  </el-button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -675,11 +1267,16 @@ onMounted(() => {
         </button>
       </div>
       <div class="composer-box">
-        <div v-if="selectedKnowledgeBases.length" class="selected-tags-inline">
+        <div v-if="selectedKnowledgeBases.length || selectedToolSummary.length" class="selected-tags-inline">
           <span v-for="system in selectedKnowledgeBases" :key="system.system_id" class="mention-chip mention-chip--kb">
             <el-icon><Reading /></el-icon>
             <span class="mention-chip-name" :title="system.name">{{ system.name }}</span>
             <button type="button" aria-label="移除知识库" @click="removeKnowledgeBase(system.system_id)">×</button>
+          </span>
+          <span v-for="tool in selectedToolSummary" :key="tool.tool_id" class="mention-chip mention-chip--tool">
+            <el-icon><Tools /></el-icon>
+            <span class="mention-chip-name" :title="tool.name">{{ tool.name }}</span>
+            <button type="button" aria-label="移除工具" @click="removeAgentTool(tool.tool_id)">×</button>
           </span>
         </div>
         <div class="composer-input-row">
@@ -766,6 +1363,12 @@ onMounted(() => {
                 <p v-if="!knowledgeSystems.length" class="kb-picker-empty">暂无可用知识库</p>
               </div>
             </el-popover>
+            <ToolMenuPicker
+              v-model="selectedToolIds"
+              :tools="agentTools"
+              :loading="agentToolsLoading"
+              aria-label="选择工具"
+            />
           </div>
           <div class="composer-toolbar-right">
             <LlmModelSelect
@@ -792,13 +1395,167 @@ onMounted(() => {
 
 <style scoped>
 .dialogue-page {
+  position: relative;
   height: calc(100vh - 90px);
   min-height: 620px;
   display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
   max-width: 1440px;
   margin: 0 auto;
+}
+
+.dialogue-page.history-docked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dialogue-history {
+  grid-row: 1 / -1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.dialogue-history.docked {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.history-header,
+.history-item,
+.history-tabs {
+  display: flex;
+  align-items: center;
+}
+
+.history-header {
+  justify-content: space-between;
+  color: var(--app-ink);
+}
+
+.history-header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.history-dock {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--app-ink-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.history-dock:hover,
+.history-dock:focus-visible {
+  background: #f5f8fc;
+  color: var(--app-primary-active);
+}
+
+.history-tabs {
+  gap: 4px;
+  border-bottom: 1px solid var(--app-border-soft);
+}
+
+.history-tabs button {
+  flex: 1;
+  padding: 6px 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--app-ink-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.history-tabs button.active {
+  border-bottom-color: var(--app-primary-active);
+  color: var(--app-primary-active);
+  font-weight: 650;
+}
+
+.history-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.history-item {
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--app-radius-sm);
+}
+
+.history-item.active,
+.history-item:hover {
+  background: #f0f7ff;
+}
+
+.history-item-main {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+  padding: 7px 6px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-item-title,
+.history-item-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item-title {
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.history-item-main small,
+.history-empty {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+}
+
+.history-empty {
+  padding: 24px 8px;
+  text-align: center;
+}
+
+.dialogue-header,
+.dialogue-body,
+.dialogue-composer {
+  grid-column: 2;
+}
+
+.history-docked .dialogue-header,
+.history-docked .dialogue-body,
+.history-docked .dialogue-composer {
+  grid-column: 1;
 }
 
 .dialogue-header {
@@ -1195,6 +1952,10 @@ h1 {
   color: var(--app-primary-active);
 }
 
+.mention-chip--tool .el-icon {
+  color: #16a34a;
+}
+
 .mention-chip-name {
   min-width: 0;
   max-width: 180px;
@@ -1291,10 +2052,153 @@ h1 {
   font-size: 12px;
 }
 
+.tool-call-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tool-call-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: #fbfdff;
+}
+
+.tool-call-card.tool-call-completed {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.tool-call-card.tool-call-failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.tool-call-card.tool-call-running {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.tool-call-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-call-head .el-icon {
+  color: var(--app-primary-active);
+}
+
+.tool-call-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.tool-call-head small {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+}
+
+.tool-call-details summary {
+  color: var(--app-ink-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tool-args-editor :deep(textarea) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.tool-call-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-assets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tool-asset-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px dashed #cbd5e1;
+  border-radius: var(--app-radius-sm);
+  color: var(--app-ink-body);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tool-asset-upload input {
+  display: none;
+}
+
+.tool-call-result pre,
+.tool-call-error p {
+  margin: 0;
+  padding: 8px;
+  border-radius: var(--app-radius-sm);
+  background: #f1f5f9;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tool-call-error p {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
 @media (max-width: 900px) {
   .dialogue-page {
     height: calc(100vh - 78px);
     min-height: 560px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .dialogue-page.history-docked {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dialogue-history {
+    grid-row: auto;
+    max-height: 180px;
+  }
+
+  .dialogue-history.docked {
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .history-empty {
+    padding: 6px 8px;
+  }
+
+  .dialogue-header,
+  .dialogue-body,
+  .dialogue-composer {
+    grid-column: 1;
   }
 
   .dialogue-header {

@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.agent_tools import AssistantToolCall
+
 
 AssistantAnswerMode = Literal["llm_project_grounded", "web_grounded", "hybrid_grounded", "fallback"]
 AssistantAnswerScope = Literal["project", "web", "hybrid", "model", "unknown"]
@@ -41,6 +43,7 @@ class AssistantChatResponse(BaseModel):
     actions: list[AssistantAction] = Field(default_factory=list)
     references: list[AssistantReference] = Field(default_factory=list)
     suggested_questions: list[str] = Field(default_factory=list)
+    tool_calls: list[AssistantToolCall] = Field(default_factory=list)
     grounding_facts: dict = Field(default_factory=dict)
     confidence: str = "medium"
     answer_mode: AssistantAnswerMode = "llm_project_grounded"

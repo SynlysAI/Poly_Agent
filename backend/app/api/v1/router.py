@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.endpoints.admin import router as admin_router
+from app.api.v1.endpoints.agent_tools import router as agent_tools_router
 from app.api.v1.endpoints.assistant import router as assistant_router
 from app.api.v1.endpoints.attributions import router as attributions_router
 from app.api.v1.endpoints.auth import router as auth_router
@@ -28,6 +29,7 @@ api_router.include_router(auth_router)
 api_router.include_router(capabilities_router)
 api_router.include_router(attributions_router)
 api_router.include_router(admin_router)
+api_router.include_router(agent_tools_router)
 api_router.include_router(computations_router)
 api_router.include_router(data_catalog_router)
 api_router.include_router(experiment_dispatch_router)

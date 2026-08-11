@@ -473,6 +473,11 @@ body {
   font-weight: 600;
 }
 
+.tool-menu-popper,
+.dialogue-kb-popper {
+  max-width: min(340px, calc(100vw - 20px)) !important;
+}
+
 .el-tag {
   border-radius: var(--app-radius-pill);
 }

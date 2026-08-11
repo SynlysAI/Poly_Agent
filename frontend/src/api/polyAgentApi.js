@@ -1082,6 +1082,130 @@ export function downloadReportArtifact(reportId, artifactId, fallbackName = 'rep
 
 // ── Structured Assistant API ──
 
+export function listAssistantChats(params = {}) {
+  return apiClient.get('/assistant/chats', { params }).then(unwrapResponse)
+}
+
+export function createAssistantChat(payload = {}) {
+  return apiClient.post('/assistant/chats', payload).then(unwrapResponse)
+}
+
+export function getAssistantChat(chatId) {
+  return apiClient.get(`/assistant/chats/${encodeURIComponent(chatId)}`).then(unwrapResponse)
+}
+
+export function updateAssistantChat(chatId, payload) {
+  return apiClient.patch(`/assistant/chats/${encodeURIComponent(chatId)}`, payload).then(unwrapResponse)
+}
+
+export function deleteAssistantChat(chatId) {
+  return apiClient.delete(`/assistant/chats/${encodeURIComponent(chatId)}`).then(unwrapResponse)
+}
+
+export function listAssistantMessages(chatId, params = {}) {
+  return apiClient.get(`/assistant/chats/${encodeURIComponent(chatId)}/messages`, { params }).then(unwrapResponse)
+}
+
+export function createAssistantMessage(chatId, payload) {
+  return apiClient.post(`/assistant/chats/${encodeURIComponent(chatId)}/messages`, payload).then(unwrapResponse)
+}
+
+export function updateAssistantMessage(chatId, messageId, payload) {
+  return apiClient.patch(
+    `/assistant/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
+    payload,
+  ).then(unwrapResponse)
+}
+
+export function deleteAssistantMessage(chatId, messageId) {
+  return apiClient.delete(
+    `/assistant/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
+  ).then(unwrapResponse)
+}
+
 export function chatWithAssistant(payload) {
   return apiClient.post('/assistant/chat', payload).then(unwrapResponse)
+}
+
+// ── 算法工具目录与调用 API ──
+
+export function listAgentTools() {
+  return apiClient.get('/agent-tools').then(unwrapResponse)
+}
+
+export function listAgentToolRegistry() {
+  return apiClient.get('/agent-tools/registry').then(unwrapResponse)
+}
+
+export function updateAgentToolPolicy(algorithmId, payload) {
+  return apiClient.patch(`/agent-tools/${encodeURIComponent(algorithmId)}/policy`, payload).then(unwrapResponse)
+}
+
+export function syncAgentTools() {
+  return apiClient.post('/agent-tools/sync').then(unwrapResponse)
+}
+
+export function createAssistantToolCall(payload) {
+  return apiClient.post('/assistant/tool-calls', payload).then(unwrapResponse)
+}
+
+export function getAssistantToolCall(callId) {
+  return apiClient.get(`/assistant/tool-calls/${encodeURIComponent(callId)}`).then(unwrapResponse)
+}
+
+export function updateAssistantToolCallInput(callId, payload) {
+  return apiClient.patch(`/assistant/tool-calls/${encodeURIComponent(callId)}/input`, payload).then(unwrapResponse)
+}
+
+export function uploadAssistantToolCallInput(callId, formData) {
+  return apiClient
+    .post(`/assistant/tool-calls/${encodeURIComponent(callId)}/input:multipart`, formData)
+    .then(unwrapResponse)
+}
+
+export function confirmAssistantToolCall(callId, payload = {}) {
+  return apiClient.post(`/assistant/tool-calls/${encodeURIComponent(callId)}/confirm`, payload).then(unwrapResponse)
+}
+
+export function cancelAssistantToolCall(callId) {
+  return apiClient.post(`/assistant/tool-calls/${encodeURIComponent(callId)}/cancel`).then(unwrapResponse)
+}
+
+export async function streamAssistantToolCallEvents(callId, onEvent) {
+  const headers = { 'X-Request-Id': generateRequestId() }
+  const authHeader = getAuthorizationHeader()
+  if (authHeader) headers.Authorization = authHeader
+  const response = await fetch(`${resolvedBaseUrl}/assistant/tool-calls/${encodeURIComponent(callId)}/events`, {
+    method: 'GET',
+    headers,
+  })
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`
+    try {
+      const data = await response.json()
+      message = data.detail || data.message || message
+    } catch {
+      // Keep the HTTP status when the response is not JSON.
+    }
+    const error = createApiError('http', message)
+    error.status = response.status
+    throw error
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() || ''
+    for (const rawEvent of events) {
+      const dataLines = rawEvent
+        .split('\n')
+        .filter((line) => line.startsWith('data: '))
+        .map((line) => line.slice(6))
+      if (dataLines.length) onEvent(JSON.parse(dataLines.join('\n')))
+    }
+    if (done) break
+  }
 }
