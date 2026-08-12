@@ -25,6 +25,20 @@ export function toolPhaseTagType(phase) {
   return 'primary'
 }
 
+const EARLY_PHASES = new Set(['requested', 'awaiting_input', 'awaiting_confirmation'])
+const TERMINAL_PHASES = new Set(['completed', 'failed', 'canceled'])
+
+/**
+ * 判断 incoming 事件中的调用状态是否比本地已有状态“更早”。
+ * 运行/结束后的调用不允许被重放的旧事件降级回待确认等早期状态。
+ */
+export function isStaleToolCallPhase(existingPhase, incomingPhase) {
+  if (!existingPhase || !incomingPhase) return false
+  if (TERMINAL_PHASES.has(existingPhase)) return existingPhase !== incomingPhase
+  if (existingPhase === 'queued' || existingPhase === 'running') return EARLY_PHASES.has(incomingPhase)
+  return false
+}
+
 export function canEditToolCall(call) {
   return ['awaiting_input', 'awaiting_confirmation'].includes(call?.phase)
 }
@@ -55,14 +69,40 @@ export function applyToolCallEvent(message, event) {
   if (!message || !event?.call_id) return message
   const calls = Array.isArray(message.tool_calls) ? [...message.tool_calls] : []
   const existingIndex = calls.findIndex((call) => call.call_id === event.call_id)
+  const existing = existingIndex >= 0 ? calls[existingIndex] : null
+  const stalePhase = existing ? isStaleToolCallPhase(existing.phase, event.phase) : false
   const record = normalizeToolCall({
-    ...(existingIndex >= 0 ? calls[existingIndex] : {}),
+    ...(existing || {}),
     ...event,
+    ...(stalePhase ? { phase: existing.phase } : {}),
   })
   if (existingIndex >= 0) calls.splice(existingIndex, 1, record)
   else calls.push(record)
   message.tool_calls = calls
   return message
+}
+
+/**
+ * 用快照/最终事件中的调用列表合并到现有列表，避免把已确认或已结束的调用重置回待确认。
+ */
+export function mergeToolCalls(existing, incoming) {
+  const merged = (Array.isArray(existing) ? existing : []).map((call) => ({ ...call }))
+  for (const call of incoming || []) {
+    const index = merged.findIndex((item) => item.call_id === call.call_id)
+    const incomingRecord = normalizeToolCall({ ...call })
+    if (index < 0) {
+      merged.push(incomingRecord)
+      continue
+    }
+    const current = merged[index]
+    const stalePhase = isStaleToolCallPhase(current.phase, call.phase)
+    merged[index] = normalizeToolCall({
+      ...current,
+      ...incomingRecord,
+      ...(stalePhase ? { phase: current.phase } : {}),
+    })
+  }
+  return merged
 }
 
 export function replaceToolCall(message, updated) {

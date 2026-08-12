@@ -143,6 +143,7 @@ function handleCancel() {
   margin: 6px 0 0;
   padding: 10px;
   background: #f8fbff;
+  color: var(--app-ink-body);
   border: 1px solid var(--app-border-soft);
   border-radius: var(--app-radius-sm);
   font-family: var(--app-mono-font);
