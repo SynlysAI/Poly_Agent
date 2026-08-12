@@ -9,6 +9,7 @@ import {
   TASK_MODULES,
   getTaskModule,
 } from '../tasks/taskModules'
+import AlgorithmResultView from './vertical-prediction/AlgorithmResultView.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -44,6 +45,22 @@ const statusOptions = [
   { label: 'Archived', value: 'archived' },
   { label: 'Blocked Approval', value: 'blocked_approval' },
 ]
+
+const selectedTaskAlgorithmRun = computed(() => {
+  const raw = selectedTask.value?.raw
+  if (!raw?.algorithm_id) return null
+  const runId = raw.run_id || selectedTask.value?.task_id
+  if (!runId) return null
+  return {
+    outputSummary: raw.output_summary || {},
+    inputSnapshot: raw.input_snapshot || {},
+    artifactRefs: raw.artifact_refs || [],
+    error: raw.error || null,
+    status: selectedTask.value?.status || '',
+    algorithmId: raw.algorithm_id,
+    runId,
+  }
+})
 
 const unavailableModules = computed(() => TASK_MODULES.filter((item) => !item.routes?.center && item.status === 'coming'))
 
@@ -340,6 +357,27 @@ onMounted(() => {
           <el-descriptions-item label="创建时间">{{ formatDate(selectedTask.created_at) }}</el-descriptions-item>
           <el-descriptions-item label="更新时间">{{ formatDate(selectedTask.updated_at) }}</el-descriptions-item>
         </el-descriptions>
+        <div v-if="selectedTaskAlgorithmRun" class="task-detail-result">
+          <div class="task-detail-result-head">
+            <h4>算法运行结果</h4>
+            <el-tag v-if="['queued', 'running'].includes(selectedTaskAlgorithmRun.status)" size="small" type="warning">
+              {{ selectedTaskAlgorithmRun.status === 'queued' ? '排队中' : '运行中' }}
+            </el-tag>
+          </div>
+          <p v-if="['queued', 'running'].includes(selectedTaskAlgorithmRun.status)" class="task-detail-result-hint">
+            算法执行中，完成后这里会展示运行结果。
+          </p>
+          <AlgorithmResultView
+            :output-summary="selectedTaskAlgorithmRun.outputSummary"
+            :input-snapshot="selectedTaskAlgorithmRun.inputSnapshot"
+            :artifact-refs="selectedTaskAlgorithmRun.artifactRefs"
+            :status="selectedTaskAlgorithmRun.status"
+            :error="selectedTaskAlgorithmRun.error"
+            :algorithm-id="selectedTaskAlgorithmRun.algorithmId"
+            :run-id="selectedTaskAlgorithmRun.runId"
+            :show-input="false"
+          />
+        </div>
         <div class="task-detail-shortcuts">
           <el-button :icon="DataAnalysis" :disabled="!taskAlgorithmResultTarget(selectedTask)" @click="openTaskAlgorithmResult(selectedTask)">算法结果</el-button>
           <el-button :icon="Document" :disabled="!taskSourceRoute(selectedTask)" @click="openTaskSource(selectedTask)">来源页</el-button>
@@ -466,6 +504,32 @@ onMounted(() => {
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 14px;
+}
+
+.task-detail-result {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--app-border-soft);
+}
+
+.task-detail-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.task-detail-result-head h4 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--app-ink);
+}
+
+.task-detail-result-hint {
+  margin: 0 0 8px;
+  color: var(--app-ink-muted);
+  font-size: 13px;
 }
 
 .unavailable-grid {
