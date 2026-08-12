@@ -238,8 +238,34 @@ function updateFullJson(value) {
       return
     }
     for (const key of schemaFields.value) {
-      if (isListType(fieldType(key)) && parsed[key] !== undefined && !Array.isArray(parsed[key])) {
-        jsonParseError.value = `"${key}" 应为数组类型`
+      const val = parsed[key]
+      if (val === undefined || val === null) continue
+      const type = fieldType(key)
+
+      if (isListType(type)) {
+        if (!Array.isArray(val)) {
+          jsonParseError.value = `"${key}" 应为数组类型`
+          return
+        }
+        if (Array.isArray(fieldHint(key).columns) && fieldHint(key).columns.length) {
+          const idx = val.findIndex((item) => item !== null && !isPlainObject(item))
+          if (idx !== -1) {
+            jsonParseError.value = `"${key}" 第 ${idx + 1} 个元素应为对象类型`
+            return
+          }
+        }
+      }
+
+      if (isNumberType(type) && typeof val !== 'number') {
+        jsonParseError.value = `"${key}" 应为数值类型`
+        return
+      }
+      if (type === 'boolean' && typeof val !== 'boolean') {
+        jsonParseError.value = `"${key}" 应为布尔类型`
+        return
+      }
+      if (['object', 'dict'].some((item) => type.includes(item)) && !isPlainObject(val)) {
+        jsonParseError.value = `"${key}" 应为对象类型`
         return
       }
     }
@@ -818,13 +844,12 @@ onMounted(loadAlgorithms)
               <el-collapse v-if="arrayRows(key).length" class="schema-summary-collapse">
                 <el-collapse-item :name="`schema-${key}`">
                   <template #title>
-                    <span class="field-manager-title">字段显隐 · {{ visibleArrayColumns(key).length }} / {{ arrayColumns(key).length }} 个字段</span>
+                    <span class="field-manager-title">显示字段 · {{ visibleArrayColumns(key).length }} / {{ arrayColumns(key).length }}</span>
                   </template>
                   <div class="field-manager">
                     <div class="field-manager-list">
                       <div v-for="column in arrayColumns(key)" :key="column" class="field-manager-row">
                         <span class="field-column-name">{{ nestedFieldLabel(key, column) }}</span>
-                        <el-tag size="small" effect="plain">{{ nestedValueKind(key, column, arrayRows(key)[0]) }}</el-tag>
                         <el-switch
                           :model-value="!hiddenColumns[key]?.has(column)"
                           size="small"
@@ -1223,7 +1248,7 @@ onMounted(loadAlgorithms)
 }
 .field-manager-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px 48px;
+  grid-template-columns: minmax(0, 1fr) 48px;
   align-items: center;
   gap: 8px;
 }
