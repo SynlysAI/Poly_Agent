@@ -41,6 +41,9 @@ class AssistantMessageUpdate(BaseModel):
 
 
 class AssistantMessage(AssistantMessageCreate):
+    # 响应侧忽略历史文档中的未知字段，避免 schema 演进导致历史会话加载 500。
+    model_config = ConfigDict(extra="ignore")
+
     message_id: str
     chat_id: str
     created_by: str
@@ -76,6 +79,9 @@ class AssistantChatUpdate(BaseModel):
 
 
 class AssistantChat(AssistantChatCreate):
+    # 响应侧忽略历史文档中的未知字段，请求侧 Create 模型仍保持严格校验。
+    model_config = ConfigDict(extra="ignore")
+
     chat_id: str
     title: str
     created_by: str

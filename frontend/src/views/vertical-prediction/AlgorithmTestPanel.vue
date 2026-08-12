@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { CopyDocument, Delete, Plus, Refresh, VideoPlay } from '@element-plus/icons-vue'
 
 import {
@@ -13,13 +13,7 @@ import {
   listAlgorithmVersions,
 } from '../../api/polyAgentApi'
 import { apiDateTimeMs, formatApiDateTime } from '../../utils/datetime'
-import { algorithmSourceLabel, interfaceProtocolLabel, predictionStepState } from '../../utils/verticalPredictionState.mjs'
 import { inferValueKind } from '../../utils/verticalPredictionJson.mjs'
-import {
-  mergeRowsBySchema,
-  parseClipboardTable,
-  serializeRowsForClipboard,
-} from '../../utils/verticalPredictionInputTable.mjs'
 import AlgorithmResultView from './AlgorithmResultView.vue'
 
 const props = defineProps({
@@ -42,13 +36,7 @@ const startSections = ref([])
 const advancedSections = ref([])
 const templateRuns = ref([])
 const templateRunId = ref('')
-const expandedArrayFields = ref([])
-const clipboardDialogVisible = ref(false)
-const clipboardFieldKey = ref('')
-const clipboardDraft = ref('')
-const clipboardMode = ref('append')
-const clipboardHeaderMode = ref('auto')
-const clipboardPreview = ref({ rows: [], ignoredColumns: [], missingColumns: [] })
+const hiddenColumns = ref({})
 const lastRun = ref(null)
 const inputFiles = ref({})
 const runArtifacts = ref([])
@@ -86,7 +74,7 @@ const requiredInputAssets = computed(() => inputAssets.value.filter((item) => it
 const selectedAttributions = computed(() => algorithmAttributions(selectedAlgorithm.value))
 const templateOptions = computed(() => templateRuns.value.map((run) => ({
   value: run.run_id,
-  label: `${formatDate(run.created_at)} · ${summarizeInput(run.input_snapshot)}`,
+  label: `${formatApiDateTime(run.created_at)} · ${summarizeInput(run.input_snapshot)}`,
 })))
 const primaryArrayObjectKey = computed(() => {
   const formulationsKey = schemaFields.value.find((key) => key === 'formulations' && isArrayObjectField(key))
@@ -107,31 +95,28 @@ const hasBlankPrimaryRecords = computed(() => (
 const runBlocker = computed(() => {
   if (!selectedVersion.value) return '请选择可调用版本。'
   if (jsonParseError.value) return `输入 JSON 不合法：${jsonParseError.value}`
-  if (missingRequiredFields.value.length) return `补齐标记 * 的字段：${missingRequiredFields.value.join('、')}`
+  if (missingRequiredFields.value.length) return `缺少必填字段：${missingRequiredFields.value.join('、')}`
   const missingAssets = requiredInputAssets.value.filter((item) => !inputFiles.value[item.key])
   if (missingAssets.length) return `上传必填文件：${missingAssets.map(assetLabel).join('、')}`
-  if (hasBlankPrimaryRecords.value) return `请先填写至少一条${primaryArrayObjectKey.value === 'formulations' ? '配方' : '记录'}的字段值。`
+  for (const key of schemaFields.value) {
+    if (isJsonType(fieldType(key)) && typeof inputs.value[key] === 'string') return `${key} 不是合法 JSON`
+  }
+  for (const asset of inputAssets.value) {
+    const file = inputFiles.value[asset.key]
+    if (!file) continue
+    if (asset.max_size_bytes && file.size > asset.max_size_bytes) return `${assetLabel(asset)} 超过大小限制`
+    const suffix = file.name.includes('.') ? `.${file.name.split('.').pop().toLowerCase()}` : ''
+    const extensions = (asset.extensions || []).map((item) => String(item).toLowerCase())
+    if (extensions.length && !extensions.includes(suffix)) return `${assetLabel(asset)} 文件类型不受支持`
+  }
+  if (hasBlankPrimaryRecords.value) return '请先填写至少一条记录的字段值。'
   return ''
 })
-const inputGuidance = computed(() => {
-  if (requiredInputAssets.value.some((item) => !inputFiles.value[item.key])) return '补齐必填文件后再运行。'
-  if (primaryArrayObjectKey.value && !primaryRecords.value.length) return '先新增一条配方，或从历史输入开始。'
-  if (missingRequiredFields.value.length) return '补齐标记 * 的字段。'
-  if (jsonParseError.value) return '修正高级设置中的 JSON 后再运行。'
-  if (hasBlankPrimaryRecords.value) return '填写至少一条配方的字段值，或从历史输入开始。'
-  return '输入已就绪，可以运行预测。'
-})
-const clipboardPreviewColumns = computed(() => arrayColumns(clipboardFieldKey.value))
-const workflowStep = computed(() => predictionStepState({ running: running.value, lastRun: lastRun.value }))
-
 watch(() => props.refreshKey, loadAlgorithms)
 watch(() => props.algorithmId, loadAlgorithms)
 watch(algorithmId, handleAlgorithmChanged)
 watch(versionId, resetInputs)
 watch(inputs, syncFullJsonDraft, { deep: true })
-watch([clipboardDraft, clipboardHeaderMode], () => {
-  clipboardPreview.value = { rows: [], ignoredColumns: [], missingColumns: [] }
-})
 
 async function loadAlgorithms() {
   loading.value = true
@@ -236,13 +221,7 @@ function resetInputs() {
 }
 
 function resetNestedFieldState() {
-  expandedArrayFields.value = []
-  clipboardDialogVisible.value = false
-  clipboardFieldKey.value = ''
-  clipboardDraft.value = ''
-  clipboardMode.value = 'append'
-  clipboardHeaderMode.value = 'auto'
-  clipboardPreview.value = { rows: [], ignoredColumns: [], missingColumns: [] }
+  hiddenColumns.value = {}
 }
 
 function syncFullJsonDraft() {
@@ -257,6 +236,38 @@ function updateFullJson(value) {
     if (!isPlainObject(parsed)) {
       jsonParseError.value = '输入 JSON 必须是 object'
       return
+    }
+    for (const key of schemaFields.value) {
+      const val = parsed[key]
+      if (val === undefined || val === null) continue
+      const type = fieldType(key)
+
+      if (isListType(type)) {
+        if (!Array.isArray(val)) {
+          jsonParseError.value = `"${key}" 应为数组类型`
+          return
+        }
+        if (Array.isArray(fieldHint(key).columns) && fieldHint(key).columns.length) {
+          const idx = val.findIndex((item) => item !== null && !isPlainObject(item))
+          if (idx !== -1) {
+            jsonParseError.value = `"${key}" 第 ${idx + 1} 个元素应为对象类型`
+            return
+          }
+        }
+      }
+
+      if (isNumberType(type) && typeof val !== 'number') {
+        jsonParseError.value = `"${key}" 应为数值类型`
+        return
+      }
+      if (type === 'boolean' && typeof val !== 'boolean') {
+        jsonParseError.value = `"${key}" 应为布尔类型`
+        return
+      }
+      if (['object', 'dict'].some((item) => type.includes(item)) && !isPlainObject(val)) {
+        jsonParseError.value = `"${key}" 应为对象类型`
+        return
+      }
     }
     inputs.value = parsed
     resetNestedFieldState()
@@ -301,22 +312,6 @@ function nestedFieldLabel(parentKey, key) {
   return fieldHint(parentKey).column_labels?.[key] || formatLabel(key)
 }
 
-function fieldHelp(key) {
-  return fieldHint(key).help || ''
-}
-
-function fieldUnit(key) {
-  return fieldHint(key).unit || ''
-}
-
-function fieldPlaceholder(key) {
-  return fieldHint(key).placeholder || ''
-}
-
-function isRequiredField(key) {
-  return (selectedVersion.value?.input_schema?.required || []).includes(key)
-}
-
 function canUseStructuredEditor(key) {
   const type = fieldType(key)
   return isJsonType(type)
@@ -342,10 +337,6 @@ function isObjectField(key) {
   return isPlainObject(inputs.value[key]) || ['object', 'dict'].some((item) => String(fieldType(key)).includes(item))
 }
 
-function ensureArrayValue(key) {
-  if (!Array.isArray(inputs.value[key])) inputs.value[key] = []
-}
-
 function templateValueFor(key) {
   const selected = templateRuns.value.find((run) => run.run_id === templateRunId.value)
   return selected?.input_snapshot?.[key]
@@ -360,8 +351,7 @@ function historyValueFor(key) {
 }
 
 function arrayRows(key) {
-  ensureArrayValue(key)
-  return inputs.value[key]
+  return Array.isArray(inputs.value[key]) ? inputs.value[key] : []
 }
 
 function arrayColumns(key) {
@@ -396,46 +386,6 @@ function visibleArrayColumns(key) {
   return arrayColumns(key).filter((column) => !collapsed.has(column))
 }
 
-function collapsedArrayColumns(key) {
-  const core = new Set(coreArrayColumns(key))
-  return arrayColumns(key).filter((column) => !core.has(column))
-}
-
-function coreArrayColumns(key) {
-  const explicit = fieldHint(key).core_columns || fieldHint(key).primary_columns
-  const columns = arrayColumns(key)
-  const visible = Array.isArray(explicit) && explicit.length
-    ? explicit.map(String).filter((column) => columns.includes(column))
-    : visibleArrayColumns(key)
-  if (visible.length <= 6) return visible
-  const priority = [
-    'formula_id',
-    'id',
-    'name',
-    'title',
-    'task_type',
-    'smiles',
-    'psmiles',
-    'polymer_smiles',
-    'material',
-    'component',
-    'composition',
-    'mass_fraction',
-    'weight_fraction',
-    'volume_fraction',
-    'ratio',
-    'solvent',
-    'salt',
-    'additive',
-  ]
-  const ranked = [...visible].sort((a, b) => {
-    const left = priority.includes(a) ? priority.indexOf(a) : priority.length + visible.indexOf(a)
-    const right = priority.includes(b) ? priority.indexOf(b) : priority.length + visible.indexOf(b)
-    return left - right
-  })
-  return ranked.slice(0, 6)
-}
-
 function objectColumns(key) {
   const hinted = Array.isArray(fieldHint(key).columns) ? fieldHint(key).columns : []
   const value = isPlainObject(inputs.value[key]) ? inputs.value[key] : {}
@@ -451,35 +401,112 @@ function emptyItemTemplate(key) {
 }
 
 function addArrayItem(key) {
-  ensureArrayValue(key)
   inputs.value[key].push(emptyItemTemplate(key))
   syncFullJsonDraft()
 }
 
 function addScalarArrayItem(key) {
-  ensureArrayValue(key)
   inputs.value[key].push('')
   syncFullJsonDraft()
 }
 
 function copyArrayItem(key, index) {
-  ensureArrayValue(key)
   inputs.value[key].splice(index + 1, 0, cloneJson(inputs.value[key][index]))
   syncFullJsonDraft()
 }
 
 function removeArrayItem(key, index) {
-  ensureArrayValue(key)
   inputs.value[key].splice(index, 1)
   syncFullJsonDraft()
 }
 
-function firstRecordButtonLabel(key) {
-  return key === 'formulations' ? '新增第一条配方' : '新增第一条记录'
+async function promptPasteData(key) {
+  try {
+    const { value } = await ElMessageBox.prompt('从 Excel 复制数据后粘贴到下方（支持 Tab / 逗号分隔）', '粘贴数据', {
+      confirmButtonText: '导入',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputPlaceholder: '在此粘贴 Excel / CSV 数据...',
+      customClass: 'paste-data-dialog',
+    })
+    if (value && value.trim()) {
+      importPastedData(key, value)
+    }
+  } catch {
+    /* cancelled */
+  }
 }
 
-function addRecordButtonLabel(key) {
-  return key === 'formulations' ? '新增配方' : '新增记录'
+function importPastedData(key, text) {
+  const lines = text.trim().split(/\r?\n/).filter((line) => line.trim())
+  if (!lines.length) return
+
+  const delim = detectDelimiter(lines)
+  const rawRows = lines.map((line) => parseRow(line, delim))
+  if (!rawRows.length || !rawRows[0].length) return
+
+  const columns = displayedArrayColumns(key)
+  const headerRow = rawRows[0]
+  const colIndex = new Map()
+  columns.forEach((col) => colIndex.set(col.toLowerCase(), col))
+
+  const hasHeader = headerRow.some((cell) => colIndex.has(String(cell).trim().toLowerCase()))
+  const dataRows = hasHeader ? rawRows.slice(1) : rawRows
+
+  const colMap = []
+  for (let i = 0; i < headerRow.length; i++) {
+    const name = String(headerRow[i] || '').trim().toLowerCase()
+    colMap[i] = colIndex.has(name) ? colIndex.get(name) : (hasHeader ? null : columns[i] || null)
+  }
+
+  let added = 0
+  for (const rawRow of dataRows) {
+    if (rawRow.every((cell) => !String(cell).trim())) continue
+    const record = emptyItemTemplate(key)
+    for (let i = 0; i < rawRow.length && i < colMap.length; i++) {
+      const col = colMap[i]
+      if (col) {
+        record[col] = coerceCellValue(key, col, rawRow[i])
+      }
+    }
+    inputs.value[key].push(record)
+    added++
+  }
+  if (added) {
+    syncFullJsonDraft()
+    ElMessage.success(`已导入 ${added} 行`)
+  } else {
+    ElMessage.warning('未能解析出有效数据，请检查格式')
+  }
+}
+
+function detectDelimiter(lines) {
+  const tabCount = lines.reduce((sum, line) => sum + (line.match(/\t/g) || []).length, 0)
+  const commaCount = lines.reduce((sum, line) => sum + (line.match(/,/g) || []).length, 0)
+  return tabCount >= commaCount ? '\t' : ','
+}
+
+function parseRow(line, delim) {
+  if (delim === '\t') return line.split('\t')
+  return line.split(',').map((cell) => {
+    const trimmed = cell.trim()
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+      return trimmed.slice(1, -1)
+    }
+    return trimmed
+  })
+}
+
+function coerceCellValue(key, column, raw) {
+  const text = String(raw ?? '').trim()
+  if (!text) return ''
+  const kind = nestedValueKind(key, column, {})
+  if (kind === 'number') {
+    const num = Number(text)
+    return Number.isFinite(num) ? num : text
+  }
+  if (kind === 'boolean') return text.toLowerCase() === 'true'
+  return text
 }
 
 function nestedValueKind(parentKey, field, item) {
@@ -492,65 +519,24 @@ function nestedValueKind(parentKey, field, item) {
   ])
 }
 
-function arrayTableSchema(key) {
-  const sample = arrayRows(key)[0] || {}
-  return {
-    fields: Object.fromEntries(arrayColumns(key).map((column) => [column, nestedValueKind(key, column, sample)])),
-    labels: Object.fromEntries(arrayColumns(key).map((column) => [column, nestedFieldLabel(key, column)])),
-  }
-}
 
 function displayedArrayColumns(key) {
-  return expandedArrayFields.value.includes(key) ? arrayColumns(key) : coreArrayColumns(key)
+  const hidden = hiddenColumns.value[key] || new Set()
+  return arrayColumns(key).filter((column) => !hidden.has(column))
 }
 
-function toggleArrayColumns(key) {
-  expandedArrayFields.value = expandedArrayFields.value.includes(key)
-    ? expandedArrayFields.value.filter((item) => item !== key)
-    : [...expandedArrayFields.value, key]
-}
-
-function openClipboardImport(key) {
-  clipboardFieldKey.value = key
-  clipboardDraft.value = ''
-  clipboardMode.value = 'append'
-  clipboardHeaderMode.value = 'auto'
-  clipboardPreview.value = { rows: [], ignoredColumns: [], missingColumns: [] }
-  clipboardDialogVisible.value = true
-}
-
-function previewClipboardImport() {
-  clipboardPreview.value = parseClipboardTable(
-    clipboardDraft.value,
-    arrayTableSchema(clipboardFieldKey.value),
-    { hasHeader: clipboardHeaderMode.value },
-  )
-  if (!clipboardPreview.value.rows.length) ElMessage.warning('未识别到可导入的数据行')
-}
-
-function applyClipboardImport() {
-  if (!clipboardPreview.value.rows.length) previewClipboardImport()
-  if (!clipboardPreview.value.rows.length) return
-  const key = clipboardFieldKey.value
-  inputs.value[key] = mergeRowsBySchema(
-    arrayRows(key),
-    clipboardPreview.value.rows,
-    arrayTableSchema(key),
-    clipboardMode.value,
-  )
-  syncFullJsonDraft()
-  clipboardDialogVisible.value = false
-  ElMessage.success(`已导入 ${clipboardPreview.value.rows.length} 条记录`)
-}
-
-async function copyArrayTable(key) {
-  try {
-    await navigator.clipboard.writeText(serializeRowsForClipboard(arrayRows(key), arrayColumns(key)))
-    ElMessage.success('表格已复制，可直接粘贴到 Excel')
-  } catch {
-    ElMessage.warning('浏览器未授权写入剪贴板，请使用高级 JSON 导出')
+function toggleColumnVisibility(key, column, visible) {
+  if (!hiddenColumns.value[key]) hiddenColumns.value[key] = new Set()
+  if (visible) {
+    hiddenColumns.value[key].delete(column)
+  } else {
+    hiddenColumns.value[key].add(column)
   }
 }
+
+
+
+
 
 function nestedNumberStep(field) {
   return /(count|index|number)/i.test(String(field || '')) ? 1 : 0.1
@@ -578,10 +564,6 @@ function formatLabel(value) {
   return String(value || '-')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
-}
-
-function formatDate(value) {
-  return formatApiDateTime(value)
 }
 
 function summarizeInput(value) {
@@ -644,29 +626,6 @@ function isJsonType(type) {
   return ['object', 'dict', 'list', 'array'].some((item) => String(type).includes(item))
 }
 
-function validateInputs() {
-  if (jsonParseError.value) return `输入 JSON 不合法：${jsonParseError.value}`
-  const required = selectedVersion.value?.input_schema?.required || []
-  for (const key of required) {
-    const value = inputs.value[key]
-    if (isEmptyValue(value)) return `请填写必填字段 ${fieldLabel(key)}`
-  }
-  for (const key of schemaFields.value) {
-    if (isJsonType(fieldType(key)) && typeof inputs.value[key] === 'string') return `${key} 不是合法 JSON`
-  }
-  const missingAssets = requiredInputAssets.value.filter((item) => !inputFiles.value[item.key])
-  if (missingAssets.length) return `请上传必填文件 ${missingAssets.map(assetLabel).join('、')}`
-  for (const asset of inputAssets.value) {
-    const file = inputFiles.value[asset.key]
-    if (!file) continue
-    if (asset.max_size_bytes && file.size > asset.max_size_bytes) return `${assetLabel(asset)} 超过大小限制`
-    const suffix = file.name.includes('.') ? `.${file.name.split('.').pop().toLowerCase()}` : ''
-    const extensions = (asset.extensions || []).map((item) => String(item).toLowerCase())
-    if (extensions.length && !extensions.includes(suffix)) return `${assetLabel(asset)} 文件类型不受支持`
-  }
-  return ''
-}
-
 function setInputAssetFile(key, file) {
   inputFiles.value = { ...inputFiles.value, [key]: file || null }
 }
@@ -698,9 +657,8 @@ function formatBytes(value) {
 }
 
 async function runPrediction() {
-  const errorMessage = validateInputs()
-  if (errorMessage) {
-    ElMessage.warning(errorMessage)
+  if (runBlocker.value) {
+    ElMessage.warning(runBlocker.value)
     return
   }
   lastRun.value = null
@@ -773,49 +731,7 @@ function algorithmAttributions(algorithm) {
     algorithm.developer_attribution,
     ...(algorithm.framework_attributions || []),
     ...(algorithm.method_attributions || []),
-  ].filter(isPublicAttribution)
-}
-
-function authorLabel(algorithm) {
-  const attribution = algorithm?.developer_attribution
-  const developer = cleanAuthorValue(attribution?.name) || cleanAuthorValue(algorithm?.owner)
-  const organization = cleanAuthorValue(attribution?.organization)
-  if (developer && organization) return `${developer} / ${organization}`
-  return developer || organization || '未标注'
-}
-
-function mentorTeamLabel(algorithm, version) {
-  return cleanAuthorValue(version?.mentor_team) || cleanAuthorValue(algorithm?.mentor_team) || '未标注'
-}
-
-function cleanAuthorValue(value) {
-  const text = String(value || '').trim()
-  const normalized = text.toLowerCase()
-  if (!text) return ''
-  if (['anonymous', 'demo_user', 'system', 'raman demo adapter', 'local raman reference'].includes(normalized)) return ''
-  if (/^u_[0-9a-z]{8,}$/i.test(text)) return ''
-  return text
-}
-
-function isPublicAttribution(item) {
-  const name = cleanAuthorValue(item?.name)
-  const organization = cleanAuthorValue(item?.organization)
-  return Boolean(item && (name || organization))
-}
-
-function protocolLabel(algorithm, version) {
-  return interfaceProtocolLabel(version?.interface_config?.protocol || algorithm?.interface_config?.protocol)
-}
-
-function endpointSummary(algorithm, version) {
-  const value = version?.interface_config?.endpoint_url || algorithm?.interface_config?.endpoint_url
-  if (!value) return '-'
-  try {
-    const url = new URL(value)
-    return `${url.protocol}//${url.host}${url.pathname}`
-  } catch {
-    return value
-  }
+  ].filter(Boolean)
 }
 
 onMounted(loadAlgorithms)
@@ -836,39 +752,14 @@ onMounted(loadAlgorithms)
     <div v-if="selectedVersion" class="test-layout">
       <section class="input-pane">
         <div class="pane-heading">
-          <div>
-            <h3>预测输入</h3>
-            <span>{{ selectedVersion.algorithm_id }} / {{ selectedVersion.version }}</span>
-            <small>来源：{{ algorithmSourceLabel(selectedAlgorithm?.source) }}<template v-if="selectedAlgorithm?.source === 'remote_interface'"> · {{ protocolLabel(selectedAlgorithm, selectedVersion) }}</template></small>
-            <small v-if="selectedAlgorithm?.source === 'remote_interface'">Endpoint：{{ endpointSummary(selectedAlgorithm, selectedVersion) }}</small>
-            <small>作者：{{ authorLabel(selectedAlgorithm) }}</small>
-            <small>导师课题组：{{ mentorTeamLabel(selectedAlgorithm, selectedVersion) }}</small>
-          </div>
+          <h3>预测输入</h3>
         </div>
-
-        <div class="prediction-steps" aria-label="预测流程">
-          <div class="prediction-step is-done"><span>1</span><strong>选择起点</strong></div>
-          <div
-            class="prediction-step"
-            :class="{ 'is-active': workflowStep.activeStep === 2, 'is-done': workflowStep.hasResult }"
-          >
-            <span>2</span><strong>{{ workflowStep.inputLabel }}</strong>
-          </div>
-          <div class="prediction-step" :class="{ 'is-active': workflowStep.activeStep === 3 }">
-            <span>3</span><strong>查看结果</strong>
-          </div>
-        </div>
-
-        <el-alert class="input-guidance" :title="inputGuidance" type="info" :closable="false" show-icon />
 
         <el-collapse v-model="startSections" class="start-collapse">
           <el-collapse-item name="history">
             <template #title>
               <div class="start-collapse-title">
-                <div class="step-section-head">
-                  <span>1</span>
-                  <h4>可选起点</h4>
-                </div>
+                <h4>从历史输入开始（可选）</h4>
                 <small>
                   {{ templateOptions.length ? `${templateOptions.length} 条历史输入，可跳过` : '无历史输入，可跳过' }}
                 </small>
@@ -887,7 +778,7 @@ onMounted(loadAlgorithms)
               </el-select>
               <el-button :icon="CopyDocument" :disabled="!templateRuns.length" @click="applyLatestTemplate">载入最近成功输入</el-button>
               <span class="history-empty">
-                {{ templateOptions.length ? `可选：从 ${templateOptions.length} 条历史输入开始；也可以跳过，直接新增配方。` : '可跳过：当前暂无历史模板，直接新增第一条配方即可。' }}
+                {{ templateOptions.length ? `可选：从 ${templateOptions.length} 条历史输入开始；也可以跳过，直接新增记录。` : '可跳过：当前暂无历史模板，直接新增第一条配方即可。' }}
               </span>
             </div>
           </el-collapse-item>
@@ -895,8 +786,8 @@ onMounted(loadAlgorithms)
 
         <section class="input-step-section">
           <div class="step-section-head">
-            <span>2</span>
-            <h4>编辑配方</h4>
+            <span>1</span>
+            <h4>编辑输入</h4>
           </div>
           <el-form label-position="top" class="smart-input-form">
             <el-form-item
@@ -907,10 +798,10 @@ onMounted(loadAlgorithms)
               <template #label>
                 <span class="field-label">
                   {{ fieldLabel(key) }}
-                  <em v-if="isRequiredField(key)">*</em>
-                  <small v-if="fieldUnit(key)">{{ fieldUnit(key) }}</small>
+                  <em v-if="(selectedVersion?.input_schema?.required || []).includes(key)">*</em>
+                  <small v-if="fieldHint(key).unit">{{ fieldHint(key).unit }}</small>
                 </span>
-                <span v-if="fieldHelp(key)" class="field-help">{{ fieldHelp(key) }}</span>
+                <span v-if="fieldHint(key).help" class="field-help">{{ fieldHint(key).help }}</span>
               </template>
 
             <el-select
@@ -945,73 +836,73 @@ onMounted(loadAlgorithms)
             <div v-else-if="isArrayObjectField(key)" class="array-object-editor">
               <div class="nested-toolbar">
                 <div class="nested-count">{{ arrayRows(key).length }} 条记录</div>
-                <div class="array-table-actions">
-                  <el-button :icon="CopyDocument" @click="openClipboardImport(key)">粘贴表格</el-button>
-                  <el-button :icon="CopyDocument" :disabled="!arrayRows(key).length" @click="copyArrayTable(key)">复制表格</el-button>
-                  <el-button type="primary" plain :icon="Plus" @click="addArrayItem(key)">{{ addRecordButtonLabel(key) }}</el-button>
+                <div class="flex-row nested-toolbar-right">
+                  <el-button :icon="CopyDocument" @click="promptPasteData(key)">粘贴数据</el-button>
+                  <el-button type="primary" plain :icon="Plus" @click="addArrayItem(key)">新增记录</el-button>
                 </div>
               </div>
-              <el-collapse class="schema-summary-collapse">
+              <el-collapse v-if="arrayRows(key).length" class="schema-summary-collapse">
                 <el-collapse-item :name="`schema-${key}`">
                   <template #title>
-                    <span class="field-manager-title">字段定义 · {{ arrayColumns(key).length }} 个字段</span>
+                    <span class="field-manager-title">显示字段 · {{ visibleArrayColumns(key).length }} / {{ arrayColumns(key).length }}</span>
                   </template>
-                  <div class="schema-field-list">
-                    <el-tag v-for="column in arrayColumns(key)" :key="column" size="small" effect="plain">
-                      {{ nestedFieldLabel(key, column) }} · {{ nestedValueKind(key, column, arrayRows(key)[0]) }}
-                    </el-tag>
+                  <div class="field-manager">
+                    <div class="field-manager-list">
+                      <div v-for="column in arrayColumns(key)" :key="column" class="field-manager-row">
+                        <span class="field-column-name">{{ nestedFieldLabel(key, column) }}</span>
+                        <el-switch
+                          :model-value="!hiddenColumns[key]?.has(column)"
+                          size="small"
+                          @update:model-value="toggleColumnVisibility(key, column, $event)"
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <p class="schema-readonly-note">字段由当前算法版本的 input schema 定义，运行时仅填写数据。</p>
                 </el-collapse-item>
               </el-collapse>
-              <div v-if="arrayRows(key).length" class="compact-record-table">
-                <el-table :data="arrayRows(key)" border size="small" max-height="420">
-                  <el-table-column type="index" label="#" width="52" fixed="left" />
-                  <el-table-column
-                    v-for="column in displayedArrayColumns(key)"
-                    :key="column"
-                    :label="nestedFieldLabel(key, column)"
-                    min-width="150"
-                  >
-                    <template #default="{ row }">
-                      <el-input-number
-                        v-if="nestedValueKind(key, column, row) === 'number'"
-                        :model-value="row[column]"
-                        :step="nestedNumberStep(column)"
-                        class="full-control"
-                        :controls="false"
-                        @update:model-value="setNestedValue(row, column, $event)"
-                      />
-                      <el-switch
-                        v-else-if="nestedValueKind(key, column, row) === 'boolean'"
-                        :model-value="row[column]"
-                        @update:model-value="setNestedValue(row, column, $event)"
-                      />
-                      <el-input
-                        v-else
-                        :model-value="row[column]"
-                        :placeholder="nestedFieldLabel(key, column)"
-                        @update:model-value="setNestedValue(row, column, $event)"
-                      />
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="88" fixed="right">
-                    <template #default="{ $index }">
-                      <el-button text :icon="CopyDocument" aria-label="复制记录" @click="copyArrayItem(key, $index)" />
-                      <el-button text type="danger" :icon="Delete" aria-label="删除记录" @click="removeArrayItem(key, $index)" />
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <el-button
-                  v-if="collapsedArrayColumns(key).length"
-                  text
-                  class="more-columns-button"
-                  @click="toggleArrayColumns(key)"
-                >{{ expandedArrayFields.includes(key) ? '收起更多字段' : `更多字段（${collapsedArrayColumns(key).length}）` }}</el-button>
-              </div>
-              <div v-else class="nested-empty">
-                <el-button type="primary" :icon="Plus" @click="addArrayItem(key)">{{ firstRecordButtonLabel(key) }}</el-button>
-                <el-button :icon="CopyDocument" @click="openClipboardImport(key)">从 Excel/CSV 粘贴</el-button>
+              <div v-if="arrayRows(key).length" class="record-table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th class="row-num-col">#</th>
+                      <th v-for="column in displayedArrayColumns(key)" :key="column">
+                        {{ nestedFieldLabel(key, column) }}
+                      </th>
+                      <th class="row-actions-col"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(item, index) in arrayRows(key)" :key="index">
+                      <td class="row-num-col">{{ index + 1 }}</td>
+                      <td v-for="column in displayedArrayColumns(key)" :key="column" class="editable-cell">
+                        <el-input-number
+                          v-if="nestedValueKind(key, column, item) === 'number'"
+                          :model-value="item[column]"
+                          :step="nestedNumberStep(column)"
+                          size="small"
+                          :controls="false"
+                          @update:model-value="setNestedValue(item, column, $event)"
+                        />
+                        <el-switch
+                          v-else-if="nestedValueKind(key, column, item) === 'boolean'"
+                          :model-value="item[column]"
+                          size="small"
+                          @update:model-value="setNestedValue(item, column, $event)"
+                        />
+                        <el-input
+                          v-else
+                          :model-value="item[column]"
+                          size="small"
+                          @update:model-value="setNestedValue(item, column, $event)"
+                        />
+                      </td>
+                      <td class="row-actions-col">
+                        <el-button text :icon="CopyDocument" size="small" @click="copyArrayItem(key, index)" />
+                        <el-button text :icon="Delete" size="small" @click="removeArrayItem(key, index)" />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
             <div v-else-if="isScalarArrayField(key)" class="scalar-array-editor">
@@ -1054,7 +945,7 @@ onMounted(loadAlgorithms)
             <el-input
               v-else
               :model-value="inputs[key]"
-              :placeholder="fieldPlaceholder(key)"
+              :placeholder="fieldHint(key).placeholder"
               @update:model-value="setScalarValue(key, $event)"
             />
             </el-form-item>
@@ -1094,7 +985,7 @@ onMounted(loadAlgorithms)
 
         <section class="input-step-section run-step-section">
           <div class="step-section-head">
-            <span>3</span>
+            <span>2</span>
             <h4>运行预测</h4>
           </div>
           <div class="input-actions">
@@ -1150,56 +1041,6 @@ onMounted(loadAlgorithms)
     </div>
 
     <div v-else class="empty-output">暂无可调用版本。请先上传、部署并激活算法。</div>
-
-    <el-dialog v-model="clipboardDialogVisible" title="粘贴表格数据" width="min(860px, 94vw)" append-to-body>
-      <div class="clipboard-import">
-        <div class="clipboard-toolbar">
-          <el-segmented
-            v-model="clipboardMode"
-            :options="[
-              { label: '追加到现有记录', value: 'append' },
-              { label: '替换现有记录', value: 'replace' },
-            ]"
-          />
-          <el-segmented
-            v-model="clipboardHeaderMode"
-            :options="[
-              { label: '自动识别', value: 'auto' },
-              { label: '首行是表头', value: 'yes' },
-              { label: '无表头纯数据', value: 'no' },
-            ]"
-          />
-          <span>首行可为字段名或显示名；无表头时按当前表格列顺序粘贴纯数据。自动识别不准确时可手动选择表头模式。</span>
-        </div>
-        <el-input
-          v-model="clipboardDraft"
-          type="textarea"
-          :rows="8"
-          placeholder="从 Excel 复制后粘贴到这里，支持制表符、CSV 或空格分隔的表头"
-          @paste="clipboardPreview = { rows: [], ignoredColumns: [], missingColumns: [] }"
-        />
-        <div class="clipboard-preview-actions">
-          <el-button @click="previewClipboardImport">预览</el-button>
-          <span v-if="clipboardPreview.rows.length">识别到 {{ clipboardPreview.rows.length }} 条记录</span>
-          <span v-if="clipboardPreview.ignoredColumns.length">忽略未知列：{{ clipboardPreview.ignoredColumns.join('、') }}</span>
-          <span v-if="clipboardPreview.missingColumns.length">未提供列：{{ clipboardPreview.missingColumns.join('、') }}</span>
-        </div>
-        <el-table v-if="clipboardPreview.rows.length" :data="clipboardPreview.rows" border size="small" max-height="280">
-          <el-table-column type="index" label="#" width="52" />
-          <el-table-column
-            v-for="column in clipboardPreviewColumns"
-            :key="column"
-            :prop="column"
-            :label="nestedFieldLabel(clipboardFieldKey, column)"
-            min-width="130"
-          />
-        </el-table>
-      </div>
-      <template #footer>
-        <el-button @click="clipboardDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!clipboardDraft.trim()" @click="applyClipboardImport">确认导入</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -1209,32 +1050,12 @@ onMounted(loadAlgorithms)
 .test-layout { display: grid; grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr); gap: 20px; align-items: start; }
 .input-pane, .output-pane { min-width: 0; border-top: 1px solid var(--app-border-soft); padding-top: 14px; }
 .pane-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
-.pane-heading h3, h4 { margin: 0; font-size: 15px; }
-.pane-heading span, .pane-heading small { color: var(--app-ink-muted); font-size: 12px; }
-.pane-heading small { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.pane-heading h3 { margin: 0; font-size: 15px; }
 .history-start, .input-actions, .nested-toolbar, .object-field-row, .scalar-array-row, .advanced-mode-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.prediction-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.prediction-step {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius-sm);
-  background: #fff;
-  color: var(--app-ink-muted);
-}
-.prediction-step span,
 .step-section-head span {
   display: inline-grid;
   place-items: center;
@@ -1247,22 +1068,6 @@ onMounted(loadAlgorithms)
   font-size: 12px;
   font-weight: 800;
   line-height: 1;
-}
-.prediction-step strong {
-  min-width: 0;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.prediction-step.is-active {
-  border-color: var(--app-primary-active);
-  color: var(--app-ink);
-}
-.prediction-step.is-done {
-  color: var(--app-ink);
-  background: #f8fbff;
-}
-.input-guidance {
-  margin-bottom: 12px;
 }
 .input-step-section {
   display: grid;
@@ -1432,62 +1237,48 @@ onMounted(loadAlgorithms)
 .field-manager-title {
   overflow-wrap: anywhere;
 }
-.array-table-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.schema-field-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-bottom: 8px;
-}
-.schema-readonly-note {
-  margin: 0 0 10px;
-  color: var(--app-ink-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-.compact-record-table {
-  min-width: 0;
-  max-width: 100%;
-  width: 100%;
-  overflow-x: auto;
-}
-.compact-record-table :deep(.el-table) {
-  min-width: 720px;
-}
-.compact-record-table :deep(.el-input-number) {
-  width: 100%;
-}
-.compact-record-table :deep(.el-table__cell) {
-  padding: 6px 0;
-}
-.more-columns-button {
-  margin-top: 8px;
-}
-.clipboard-import {
+.field-manager {
   display: grid;
-  gap: 12px;
-  min-width: 0;
+  gap: 6px;
+  padding-bottom: 10px;
 }
-.clipboard-toolbar,
-.clipboard-preview-actions {
-  display: flex;
+.field-manager-list {
+  display: grid;
+  gap: 6px;
+}
+.field-manager-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
 }
-.clipboard-toolbar span,
-.clipboard-preview-actions span {
-  color: var(--app-ink-muted);
+.field-column-name {
   font-size: 12px;
-  overflow-wrap: anywhere;
+  font-weight: 600;
+  color: var(--app-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.record-table-wrapper {
+  overflow-x: auto;
+  max-height: 520px;
+  overflow-y: auto;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+}
+.data-table thead th { position: sticky; top: 0; z-index: 1; }
+.data-table thead th, .data-table tbody td { border-right: 1px solid #e8e8e8; }
+.data-table thead th:last-child, .data-table tbody td:last-child { border-right: 0; }
+.row-num-col { width: 40px; text-align: center !important; color: var(--app-ink-muted); font-size: 12px; font-weight: 600; }
+.row-actions-col { width: 72px; white-space: nowrap; text-align: center !important; }
+.editable-cell { min-width: 110px; }
+.editable-cell .el-input, .editable-cell .el-input-number { width: 100%; }
+.editable-cell :deep(.el-input__wrapper) { box-shadow: none; background: transparent; padding: 0 2px; }
+.editable-cell :deep(.el-input__inner) { padding: 4px 6px; min-height: 28px; font-size: 13px; }
+.editable-cell :deep(.el-input-number .el-input__inner) { text-align: left; }
+.editable-cell:hover :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--app-primary-active) inset; }
+.editable-cell:focus-within :deep(.el-input__wrapper) { box-shadow: 0 0 0 1.5px var(--app-primary-active) inset; }
 .record-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -1503,16 +1294,6 @@ onMounted(loadAlgorithms)
   font-size: 12px;
   font-weight: 700;
   overflow-wrap: anywhere;
-}
-.nested-empty {
-  min-height: 90px;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 8px;
-  border: 1px dashed var(--app-border);
-  border-radius: var(--app-radius-sm);
-  background: rgba(255, 255, 255, 0.72);
 }
 .scalar-array-list {
   display: grid;
@@ -1595,9 +1376,6 @@ onMounted(loadAlgorithms)
 .empty-output { min-height: 180px; display: grid; place-items: center; color: var(--app-ink-muted); text-align: center; }
 @media (max-width: 900px) { .test-layout { grid-template-columns: 1fr; } }
 @media (max-width: 620px) {
-  .prediction-steps {
-    grid-template-columns: 1fr;
-  }
   .start-collapse-title {
     align-items: flex-start;
     flex-direction: column;
@@ -1617,16 +1395,27 @@ onMounted(loadAlgorithms)
   .record-fields {
     grid-template-columns: 1fr;
   }
-  .array-table-actions,
-  .array-table-actions .el-button,
-  .clipboard-toolbar :deep(.el-segmented) {
-    width: 100%;
-  }
-  .array-table-actions .el-button + .el-button {
-    margin-left: 0;
-  }
   .run-overview {
     grid-template-columns: 1fr;
   }
+}
+</style>
+<style>
+.paste-data-dialog {
+  width: 640px;
+  max-width: 92vw;
+}
+.paste-data-dialog .el-message-box__message {
+  margin-bottom: 10px;
+  color: var(--app-ink-muted, #666);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.paste-data-dialog .el-textarea__inner {
+  min-height: 260px;
+  font-family: var(--app-mono-font, 'Consolas', 'Courier New', monospace);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
 }
 </style>

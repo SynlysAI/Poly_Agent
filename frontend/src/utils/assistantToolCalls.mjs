@@ -63,6 +63,27 @@ export function parseToolArguments(text) {
 }
 
 /**
+ * 构建确认执行请求体：优先提交用户当前编辑的 arguments_text，
+ * 避免必须先点“更新参数”保存后才能确认运行。
+ */
+export function buildToolCallConfirmPayload(call) {
+  const inputAssetRefs = call?.input_asset_refs || {}
+  const raw = call?.arguments_text
+  if (typeof raw === 'string' && raw.trim()) {
+    const parsed = parseToolArguments(raw)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    return {
+      ok: true,
+      payload: { arguments: parsed.arguments, input_asset_refs: inputAssetRefs },
+    }
+  }
+  return {
+    ok: true,
+    payload: { arguments: call?.arguments || {}, input_asset_refs: inputAssetRefs },
+  }
+}
+
+/**
  * 把 SSE 的 tool_call / tool_input_required 事件归并到消息的 tool_calls 列表。
  */
 export function applyToolCallEvent(message, event) {

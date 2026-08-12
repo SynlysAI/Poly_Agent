@@ -11,7 +11,13 @@ except ImportError:
 
 from app.core.auth import get_current_user
 from app.infra.computation_repositories import utc_now
-from app.infra.research_engine_repositories import AlgorithmRegistryRepository, AlgorithmVersionRepository
+from app.infra.research_engine_repositories import (
+    AlgorithmRegistryRepository,
+    AlgorithmVersionRepository,
+    AssistantChatRepository,
+    AssistantMessageRepository,
+    AssistantToolCallRepository,
+)
 from app.main import app
 
 
@@ -187,3 +193,86 @@ class AssistantChatsApiTest(ComputationTestCase):
             [event["phase"] for event in restored["tool_calls"][0]["events"] if event.get("phase")],
             ["requested", "awaiting_confirmation", "running", "completed"],
         )
+
+    def test_chat_restore_tolerates_legacy_extra_fields_and_run_status(self) -> None:
+        """历史文档中的消息/会话未知字段与 run_status 不应导致会话加载失败。"""
+        now = utc_now()
+        created = self.client.post("/api/v1/assistant/chats", json={"title": "旧字段兼容"})
+        self.assertEqual(created.status_code, 200, created.text)
+        chat_id = created.json()["data"]["chat_id"]
+
+        message = self.client.post(
+            f"/api/v1/assistant/chats/{chat_id}/messages",
+            json={"role": "user", "content": "预测 Tg"},
+        )
+        self.assertEqual(message.status_code, 200, message.text)
+        message_id = message.json()["data"]["message_id"]
+
+        call = {
+            "call_id": "atc-legacy-run-status",
+            "provider_tool_call_id": None,
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "tool_id": "algorithm:vertical-tool",
+            "algorithm_id": "vertical-tool",
+            "algorithm_version_id": "vertical-tool-v1",
+            "algorithm_version": "1.0.0",
+            "tool_name": "Vertical Tool",
+            "phase": "completed",
+            "run_status": "completed",
+            "future_unknown_field": {"legacy": True},
+            "arguments": {"smiles": "CCO"},
+            "input_asset_refs": {},
+            "uploaded_assets": [],
+            "missing_fields": [],
+            "required_assets": [],
+            "requires_confirmation": True,
+            "run_id": "arun-legacy-1",
+            "result_summary": {
+                "prediction": {
+                    "property": "glass_transition_temperature",
+                    "value": 481.68,
+                    "unit": "degC",
+                    "model_version": "gnn-v0.1.0",
+                }
+            },
+            "artifact_refs": [],
+            "error": None,
+            "created_by": "user-1",
+            "created_at": now,
+            "updated_at": now,
+            "confirmed_at": now,
+            "canceled_at": None,
+            "started_at": now,
+            "finished_at": now,
+            "events": [],
+        }
+        AssistantToolCallRepository.save("call_id", call)
+        self.assertTrue(
+            AssistantMessageRepository.update_owned(
+                message_id,
+                chat_id,
+                "user-1",
+                {"legacy_message_field": "old"},
+            )
+        )
+        self.assertTrue(
+            AssistantChatRepository.update_owned(
+                chat_id,
+                "user-1",
+                {"legacy_chat_field": "old"},
+            )
+        )
+
+        restored = self.client.get(f"/api/v1/assistant/chats/{chat_id}")
+        self.assertEqual(restored.status_code, 200, restored.text)
+        data = restored.json()["data"]
+        self.assertEqual(data["tool_calls"][0]["run_status"], "completed")
+        self.assertEqual(data["tool_calls"][0]["result_summary"]["prediction"]["value"], 481.68)
+        self.assertNotIn("legacy_message_field", data["messages"][0])
+        self.assertNotIn("legacy_chat_field", data)
+
+        listed = self.client.get("/api/v1/assistant/chats")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        item = next(item for item in listed.json()["data"]["items"] if item["chat_id"] == chat_id)
+        self.assertEqual(item["tool_calls"][0]["run_status"], "completed")

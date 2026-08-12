@@ -49,6 +49,7 @@ import LlmModelSelect from '../components/LlmModelSelect.vue'
 import ToolMenuPicker from '../components/ToolMenuPicker.vue'
 import {
   applyToolCallEvent,
+  buildToolCallConfirmPayload,
   canEditToolCall,
   mergeToolCalls,
   normalizeToolCall,
@@ -803,9 +804,14 @@ async function uploadToolCallAsset(message, call, assetKey, event) {
 
 async function confirmToolCall(message, call) {
   if (confirmingCallId.value === call.call_id) return
+  const payload = buildToolCallConfirmPayload(call)
+  if (!payload.ok) {
+    ElMessage.error(payload.error)
+    return
+  }
   confirmingCallId.value = call.call_id
   try {
-    const updated = await confirmAssistantToolCall(call.call_id, {})
+    const updated = await confirmAssistantToolCall(call.call_id, payload.payload)
     replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     if (['queued', 'running'].includes(updated.phase)) {
       startToolCallPolling(message, updated)
@@ -2274,6 +2280,7 @@ h1 {
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-md);
   background: #fbfdff;
+  color: var(--app-ink-body);
 }
 
 .tool-call-card.tool-call-completed {
@@ -2398,12 +2405,17 @@ h1 {
   display: none;
 }
 
+.tool-call-result {
+  color: var(--app-ink-body);
+}
+
 .tool-call-result pre,
 .tool-call-error p {
   margin: 0;
   padding: 8px;
   border-radius: var(--app-radius-sm);
   background: #f1f5f9;
+  color: var(--app-ink-body);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
