@@ -721,6 +721,7 @@ function stringifyJson(value) {
   display: grid;
   gap: 14px;
   min-width: 0;
+  color: var(--app-ink-body);
 }
 
 .result-error {

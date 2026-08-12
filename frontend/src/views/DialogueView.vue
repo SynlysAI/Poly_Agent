@@ -2280,6 +2280,7 @@ h1 {
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-md);
   background: #fbfdff;
+  color: var(--app-ink-body);
 }
 
 .tool-call-card.tool-call-completed {
@@ -2404,12 +2405,17 @@ h1 {
   display: none;
 }
 
+.tool-call-result {
+  color: var(--app-ink-body);
+}
+
 .tool-call-result pre,
 .tool-call-error p {
   margin: 0;
   padding: 8px;
   border-radius: var(--app-radius-sm);
   background: #f1f5f9;
+  color: var(--app-ink-body);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
