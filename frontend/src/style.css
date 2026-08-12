@@ -395,6 +395,61 @@ body {
   max-height: 420px;
 }
 
+/* Typography utilities */
+.text-muted {
+  color: var(--app-ink-muted);
+}
+
+.text-caption {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-ink-muted);
+}
+
+.text-body-sm {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Layout utilities */
+.flex-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Editable data table */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table thead th {
+  padding: 6px 8px;
+  background: #f5f7fa;
+  color: var(--app-ink-muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 2px solid var(--app-border-soft);
+}
+
+.data-table tbody td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--app-border-soft);
+  vertical-align: middle;
+}
+
+.data-table tbody tr:hover {
+  background: #f8fbff;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 /* Element Plus overrides */
 .el-input__inner,
 .el-textarea__inner,
