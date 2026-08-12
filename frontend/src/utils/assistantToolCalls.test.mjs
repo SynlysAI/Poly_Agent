@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import {
   applyToolCallEvent,
+  buildToolCallConfirmPayload,
   canEditToolCall,
   isStaleToolCallPhase,
   mergeToolCalls,
@@ -47,6 +48,46 @@ assert.deepEqual(normalizeToolCall(null), { arguments_text: '{}' })
 assert.deepEqual(parseToolArguments('{"smiles": "CCO"}'), { ok: true, arguments: { smiles: 'CCO' } })
 assert.equal(parseToolArguments('not json').ok, false)
 assert.equal(parseToolArguments('"str"').ok, false)
+
+const confirmPayload = buildToolCallConfirmPayload({
+  arguments_text: '{"smiles": "CCO", "temperature": 300}',
+  arguments: { smiles: 'stale' },
+  input_asset_refs: { structure: { artifact_id: 'art-1' } },
+})
+assert.deepEqual(confirmPayload, {
+  ok: true,
+  payload: {
+    arguments: { smiles: 'CCO', temperature: 300 },
+    input_asset_refs: { structure: { artifact_id: 'art-1' } },
+  },
+})
+assert.equal(buildToolCallConfirmPayload({ arguments_text: 'not json' }).ok, false)
+assert.deepEqual(
+  buildToolCallConfirmPayload({
+    arguments: { smiles: 'CCO' },
+    input_asset_refs: { structure: { artifact_id: 'art-1' } },
+  }),
+  {
+    ok: true,
+    payload: {
+      arguments: { smiles: 'CCO' },
+      input_asset_refs: { structure: { artifact_id: 'art-1' } },
+    },
+  },
+)
+assert.deepEqual(
+  buildToolCallConfirmPayload({
+    arguments_text: '  ',
+    arguments: { smiles: 'CCO' },
+  }),
+  {
+    ok: true,
+    payload: {
+      arguments: { smiles: 'CCO' },
+      input_asset_refs: {},
+    },
+  },
+)
 
 const message = { role: 'user', tool_calls: [] }
 applyToolCallEvent(message, {

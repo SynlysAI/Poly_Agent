@@ -49,6 +49,7 @@ import LlmModelSelect from '../components/LlmModelSelect.vue'
 import ToolMenuPicker from '../components/ToolMenuPicker.vue'
 import {
   applyToolCallEvent,
+  buildToolCallConfirmPayload,
   canEditToolCall,
   mergeToolCalls,
   normalizeToolCall,
@@ -803,9 +804,14 @@ async function uploadToolCallAsset(message, call, assetKey, event) {
 
 async function confirmToolCall(message, call) {
   if (confirmingCallId.value === call.call_id) return
+  const payload = buildToolCallConfirmPayload(call)
+  if (!payload.ok) {
+    ElMessage.error(payload.error)
+    return
+  }
   confirmingCallId.value = call.call_id
   try {
-    const updated = await confirmAssistantToolCall(call.call_id, {})
+    const updated = await confirmAssistantToolCall(call.call_id, payload.payload)
     replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     if (['queued', 'running'].includes(updated.phase)) {
       startToolCallPolling(message, updated)
