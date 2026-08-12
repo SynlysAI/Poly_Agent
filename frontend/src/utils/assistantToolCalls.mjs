@@ -73,6 +73,20 @@ export function replaceToolCall(message, updated) {
   return message
 }
 
+/**
+ * 构建垂类预测运行详情的深链路由。
+ */
+export function toolCallRunDetailRoute(call) {
+  return {
+    path: '/vertical-prediction',
+    query: {
+      tab: 'detail',
+      algorithm_id: call?.algorithm_id || '',
+      run_id: call?.run_id || '',
+    },
+  }
+}
+
 export function schemaFieldType(description = '') {
   const token = String(description).split(' -', 1)[0].trim().toLowerCase()
   if (/^(number|float)$/.test(token)) return 'number'

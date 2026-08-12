@@ -6,6 +6,7 @@ import {
   normalizeToolCall,
   parseToolArguments,
   replaceToolCall,
+  toolCallRunDetailRoute,
   toolPhaseLabel,
   toolPhaseTagType,
   schemaFieldType,
@@ -78,5 +79,21 @@ replaceToolCall(message, {
 assert.equal(message.tool_calls.length, 1)
 assert.equal(message.tool_calls[0].phase, 'completed')
 assert.equal(message.tool_calls[0].result_summary.score, 0.91)
+
+assert.deepEqual(
+  toolCallRunDetailRoute({ algorithm_id: 'PI_Tg_predictor', run_id: 'arun_abc123' }),
+  {
+    path: '/vertical-prediction',
+    query: {
+      tab: 'detail',
+      algorithm_id: 'PI_Tg_predictor',
+      run_id: 'arun_abc123',
+    },
+  },
+)
+assert.deepEqual(toolCallRunDetailRoute(null), {
+  path: '/vertical-prediction',
+  query: { tab: 'detail', algorithm_id: '', run_id: '' },
+})
 
 console.log('assistantToolCalls tests passed')

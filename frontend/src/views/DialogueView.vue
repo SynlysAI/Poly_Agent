@@ -54,6 +54,7 @@ import {
   parseToolArguments,
   replaceToolCall,
   normalizeSchemaArguments,
+  toolCallRunDetailRoute,
   toolPhaseLabel,
   toolPhaseTagType,
 } from '../utils/assistantToolCalls.mjs'
@@ -355,6 +356,21 @@ function startToolCallPolling(message, call) {
   toolCallPollers.set(call.call_id, setInterval(poll, 2000))
 }
 
+function hasToolCallResultData(call) {
+  if (call?.result_summary && Object.keys(call.result_summary).length) return true
+  return Boolean(call?.artifact_refs?.length)
+}
+
+async function backfillCompletedToolCall(message, call) {
+  if (!call?.call_id || hasToolCallResultData(call)) return
+  try {
+    const updated = await getAssistantToolCall(call.call_id)
+    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+  } catch {
+    // 保留会话中的持久化状态，等待下一次完整加载或用户操作。
+  }
+}
+
 async function loadChat(chatKey) {
   if (!chatKey) return
   try {
@@ -365,7 +381,12 @@ async function loadChat(chatKey) {
     selectedToolIds.value = data.selected_tool_ids || []
     useWebSearch.value = Boolean(data.use_web_search)
     messages.value = data.messages?.length ? data.messages.map(restoreMessage) : defaultMessages()
-    messages.value.forEach((message) => (message.tool_calls || []).forEach((call) => startToolCallPolling(message, call)))
+    for (const message of messages.value) {
+      for (const call of message.tool_calls || []) {
+        if (call.phase === 'completed') await backfillCompletedToolCall(message, call)
+        startToolCallPolling(message, call)
+      }
+    }
     selectDefaultModelForMode(data.model || {})
     await loadChatRun(chatKey)
     await loadChatHistory()
@@ -1402,7 +1423,7 @@ watch(
                   <span>{{ call.phase === 'queued' ? '任务已进入任务中心队列' : '算法正在执行，结果会自动回填到对话' }}</span>
                 </div>
                 <div v-if="call.run_id" class="tool-call-links">
-                  <el-button size="small" text type="primary" @click="router.push({ path: '/tasks/center', query: { keyword: call.run_id } })">查看任务中心</el-button>
+                  <el-button size="small" text type="primary" @click="router.push(toolCallRunDetailRoute(call))">查看运行详情</el-button>
                 </div>
               </div>
             </div>
