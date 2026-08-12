@@ -45,28 +45,56 @@ function splitLine(line, separator) {
   return cells;
 }
 
-export function parseClipboardTable(text, schema = {}) {
+function splitCells(line, allowWhitespace = false) {
+  const source = String(line || '').trim();
+  if (source.includes('\t')) return source.split('\t');
+  if (source.includes(',')) return splitLine(source, ',');
+  if (allowWhitespace) return source.split(/\s+/);
+  return [source];
+}
+
+export function parseClipboardTable(text, schema = {}, options = {}) {
   const source = String(text || '').replace(/\r\n?/g, '\n').trim();
   if (!source) return { headers: [], rows: [], ignoredColumns: [], missingColumns: [] };
   const lines = source.split('\n').filter((line) => line.trim());
-  const separator = lines[0].includes('\t') ? '\t' : ',';
-  const headers = splitLine(lines[0], separator).map((value) => String(value || '').trim());
   const schemaFields = schema?.fields || {};
+  const schemaFieldKeys = Object.keys(schemaFields);
   const headerMap = new Map();
-  Object.keys(schemaFields).forEach((field) => {
+  schemaFieldKeys.forEach((field) => {
     headerMap.set(field.toLowerCase(), field);
     const label = String(schema?.labels?.[field] || '').trim();
     if (label) headerMap.set(label.toLowerCase(), field);
   });
-  const mapped = headers.map((header) => headerMap.get(header.toLowerCase()) || null);
-  const ignoredColumns = headers.filter((_, index) => !mapped[index]);
-  const rows = lines.slice(1).map((line) => {
-    const cells = splitLine(line, separator);
+  const rawHeaderMode = options?.hasHeader === true ? 'yes'
+    : options?.hasHeader === false ? 'no'
+    : String(options?.hasHeader ?? 'auto').trim().toLowerCase();
+  const firstCells = splitCells(lines[0], true);
+  const firstMatches = firstCells.filter((cell) => headerMap.has(String(cell || '').trim().toLowerCase())).length;
+  const hasHeader = rawHeaderMode === 'yes' || (rawHeaderMode === 'auto' && firstMatches > 0);
+  const headers = hasHeader ? firstCells.map((value) => String(value || '').trim()) : [];
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+  let mapped = [];
+  let ignoredColumns = [];
+  let positionalWidth = 0;
+  if (hasHeader) {
+    mapped = headers.map((header) => headerMap.get(header.toLowerCase()) || null);
+    ignoredColumns = headers.filter((_, index) => !mapped[index]);
+  } else {
+    positionalWidth = Math.max(0, ...dataLines.map((line) => splitCells(line, false).length));
+    mapped = schemaFieldKeys.slice(0, positionalWidth);
+  }
+  const rows = dataLines.map((line) => {
+    const cells = splitCells(line, false);
+    if (!hasHeader) {
+      return Object.fromEntries(mapped.map((field, index) => [field, coerceClipboardValue(cells[index], schemaFields[field])]));
+    }
     return Object.fromEntries(mapped
       .map((field, index) => [field, field ? coerceClipboardValue(cells[index], schemaFields[field]) : undefined])
       .filter(([field]) => field));
   }).filter((row) => Object.values(row).some((value) => String(value ?? '').trim() !== ''));
-  const missingColumns = Object.keys(schemaFields).filter((field) => !mapped.includes(field));
+  const missingColumns = hasHeader
+    ? schemaFieldKeys.filter((field) => !mapped.includes(field))
+    : schemaFieldKeys.slice(positionalWidth);
   return { headers, rows, ignoredColumns, missingColumns };
 }
 

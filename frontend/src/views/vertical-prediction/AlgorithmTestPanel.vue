@@ -47,6 +47,7 @@ const clipboardDialogVisible = ref(false)
 const clipboardFieldKey = ref('')
 const clipboardDraft = ref('')
 const clipboardMode = ref('append')
+const clipboardHeaderMode = ref('auto')
 const clipboardPreview = ref({ rows: [], ignoredColumns: [], missingColumns: [] })
 const lastRun = ref(null)
 const inputFiles = ref({})
@@ -128,6 +129,9 @@ watch(() => props.algorithmId, loadAlgorithms)
 watch(algorithmId, handleAlgorithmChanged)
 watch(versionId, resetInputs)
 watch(inputs, syncFullJsonDraft, { deep: true })
+watch([clipboardDraft, clipboardHeaderMode], () => {
+  clipboardPreview.value = { rows: [], ignoredColumns: [], missingColumns: [] }
+})
 
 async function loadAlgorithms() {
   loading.value = true
@@ -237,6 +241,7 @@ function resetNestedFieldState() {
   clipboardFieldKey.value = ''
   clipboardDraft.value = ''
   clipboardMode.value = 'append'
+  clipboardHeaderMode.value = 'auto'
   clipboardPreview.value = { rows: [], ignoredColumns: [], missingColumns: [] }
 }
 
@@ -509,6 +514,7 @@ function openClipboardImport(key) {
   clipboardFieldKey.value = key
   clipboardDraft.value = ''
   clipboardMode.value = 'append'
+  clipboardHeaderMode.value = 'auto'
   clipboardPreview.value = { rows: [], ignoredColumns: [], missingColumns: [] }
   clipboardDialogVisible.value = true
 }
@@ -517,6 +523,7 @@ function previewClipboardImport() {
   clipboardPreview.value = parseClipboardTable(
     clipboardDraft.value,
     arrayTableSchema(clipboardFieldKey.value),
+    { hasHeader: clipboardHeaderMode.value },
   )
   if (!clipboardPreview.value.rows.length) ElMessage.warning('未识别到可导入的数据行')
 }
@@ -1154,13 +1161,21 @@ onMounted(loadAlgorithms)
               { label: '替换现有记录', value: 'replace' },
             ]"
           />
-          <span>首行需为字段名或 schema 中配置的显示名称。</span>
+          <el-segmented
+            v-model="clipboardHeaderMode"
+            :options="[
+              { label: '自动识别', value: 'auto' },
+              { label: '首行是表头', value: 'yes' },
+              { label: '无表头纯数据', value: 'no' },
+            ]"
+          />
+          <span>首行可为字段名或显示名；无表头时按当前表格列顺序粘贴纯数据。自动识别不准确时可手动选择表头模式。</span>
         </div>
         <el-input
           v-model="clipboardDraft"
           type="textarea"
           :rows="8"
-          placeholder="从 Excel 复制后粘贴到这里，支持制表符或 CSV"
+          placeholder="从 Excel 复制后粘贴到这里，支持制表符、CSV 或空格分隔的表头"
           @paste="clipboardPreview = { rows: [], ignoredColumns: [], missingColumns: [] }"
         />
         <div class="clipboard-preview-actions">
