@@ -6,6 +6,7 @@ BACKEND_SESSION="${POLY_AGENT_BACKEND_SESSION:-poly_agent_backend}"
 FRONTEND_SESSION="${POLY_AGENT_FRONTEND_SESSION:-poly_agent_frontend}"
 WORKER_SESSION="${POLY_AGENT_WORKER_SESSION:-poly_agent_worker}"
 ASSISTANT_WORKER_SESSION="${POLY_AGENT_ASSISTANT_WORKER_SESSION:-poly_agent_assistant_worker}"
+ALGORITHM_WORKER_SESSION="${POLY_AGENT_ALGORITHM_WORKER_SESSION:-poly_agent_algorithm_worker}"
 PORTS=("${POLY_AGENT_FRONTEND_PORT:-5200}" "${POLY_AGENT_BACKEND_PORT:-5201}" 5100 5101 5174 8003)
 
 pid_matches_root() {
@@ -56,8 +57,9 @@ tmux kill-session -t "$BACKEND_SESSION" 2>/dev/null || true
 tmux kill-session -t "$FRONTEND_SESSION" 2>/dev/null || true
 tmux kill-session -t "$WORKER_SESSION" 2>/dev/null || true
 tmux kill-session -t "$ASSISTANT_WORKER_SESSION" 2>/dev/null || true
+tmux kill-session -t "$ALGORITHM_WORKER_SESSION" 2>/dev/null || true
 
-for session in "$BACKEND_SESSION" "$FRONTEND_SESSION" "$WORKER_SESSION" "$ASSISTANT_WORKER_SESSION"; do
+for session in "$BACKEND_SESSION" "$FRONTEND_SESSION" "$WORKER_SESSION" "$ASSISTANT_WORKER_SESSION" "$ALGORITHM_WORKER_SESSION"; do
   pid_file="/tmp/${session}.pid"
   if [[ -r "$pid_file" ]]; then
     pid="$(cat "$pid_file" 2>/dev/null || true)"
@@ -75,5 +77,6 @@ done
 kill_repo_pattern "frontend/node_modules/.bin/vite"
 kill_repo_pattern "app.workers.computation_worker"
 kill_repo_pattern "app.workers.assistant_run_worker"
+kill_repo_pattern "app.workers.algorithm_run_worker"
 
 echo "Stopped Poly_Agent services for $ROOT"

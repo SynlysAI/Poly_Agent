@@ -1702,6 +1702,8 @@ class ResearchEngineService:
         is_admin: bool = False,
         request_id: str | None = None,
         input_asset_uploads: dict[str, dict[str, Any]] | None = None,
+        execute: bool = True,
+        existing_run_id: str | None = None,
     ) -> AlgorithmRun:
         """创建并执行算法运行。
 
@@ -1774,10 +1776,13 @@ class ResearchEngineService:
             if payload.algorithm_version_id and algorithm_version.status != "active":
                 raise HTTPException(status_code=403, detail="无权限调用非 active 公开版本")
 
-        # 3. 创建 AlgorithmRun（初始状态 queued）
+        # 3. 创建 AlgorithmRun（初始状态 queued），或复用异步提交阶段已创建的记录。
         now = utc_now()
-        run_id = self._new_id("arun")
-        run_doc = {
+        run_id = existing_run_id or self._new_id("arun")
+        run_doc = AlgorithmRunRepository.find_one({"run_id": run_id}) if existing_run_id else None
+        if existing_run_id and not run_doc:
+            raise HTTPException(status_code=404, detail=f"AlgorithmRun '{existing_run_id}' 不存在")
+        run_doc = run_doc or {
             "run_id": run_id,
             "algorithm_id": payload.algorithm_id,
             "trigger_source": payload.trigger_source,
@@ -1805,6 +1810,7 @@ class ResearchEngineService:
             "linked_suggestion_id": None,
             "linked_observation_id": None,
             "input_snapshot": payload.input_snapshot,
+            "input_asset_refs": payload.input_asset_refs,
             "output_summary": {},
             "artifact_refs": [],
             "status": "queued",
@@ -1816,23 +1822,28 @@ class ResearchEngineService:
             "finished_at": None,
         }
 
-        AlgorithmRunRepository.save("run_id", run_doc)
+        if not existing_run_id:
+            AlgorithmRunRepository.save("run_id", run_doc)
 
         # 写入审计事件：创建
-        self._write_audit_event(
-            actor_user_id=actor_user_id,
-            entity_type="algorithm_run",
-            entity_id=run_id,
-            event_type="created",
-            reason=payload.reason or f"人工触发算法 '{payload.algorithm_id}'",
-            before={},
-            after={
-                "algorithm_id": payload.algorithm_id,
-                "trigger_source": payload.trigger_source,
-                "status": "queued",
-            },
-            request_id=request_id,
-        )
+        if not existing_run_id:
+            self._write_audit_event(
+                actor_user_id=actor_user_id,
+                entity_type="algorithm_run",
+                entity_id=run_id,
+                event_type="created",
+                reason=payload.reason or f"人工触发算法 '{payload.algorithm_id}'",
+                before={},
+                after={
+                    "algorithm_id": payload.algorithm_id,
+                    "trigger_source": payload.trigger_source,
+                    "status": "queued",
+                },
+                request_id=request_id,
+            )
+
+        if not execute:
+            return self._doc_to_algorithm_run(run_doc)
 
         # 4. 推进到 running 状态并执行
         try:
@@ -1977,6 +1988,15 @@ class ResearchEngineService:
                     output_summary["computation_run_id"] = linked_computation_run_id
 
             # 更新为 completed
+            if not any(isinstance(item, dict) and item.get("artifact_id") for item in artifact_specs):
+                inline_artifact = self._register_inline_json_artifact(
+                    run_id=run_id,
+                    output_summary=output_summary,
+                    actor_user_id=actor_user_id,
+                    created_at=utc_now(),
+                )
+                if inline_artifact:
+                    artifact_specs = [*artifact_specs, self._artifact_ref_from_registered(inline_artifact)]
             now2 = utc_now()
             update_fields: dict[str, Any] = {
                 "status": "completed",
@@ -2922,6 +2942,39 @@ class ResearchEngineService:
             actor_worker_id="system",
             created_at=created_at,
         )
+
+    def _register_inline_json_artifact(
+        self,
+        *,
+        run_id: str,
+        output_summary: Any,
+        actor_user_id: str,
+        created_at,
+    ):
+        """Persist JSON-only algorithm output as a real authenticated artifact."""
+        output_dir = settings.outputs_root / "algorithm-runs" / run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "output.json"
+        output_path.write_text(json.dumps(output_summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        artifacts = ComputationService().register_owner_artifacts(
+            owner_type="algorithm_run",
+            owner_id=run_id,
+            legacy_run_id=run_id,
+            created_by=actor_user_id,
+            artifact_specs=[ArtifactSpec(
+                step_key="PREDICT",
+                artifact_type="result_json",
+                name="algorithm-output.json",
+                path=output_path,
+                mime_type="application/json",
+                parser_name="algorithm_run_output",
+                parser_version="0.2",
+                metadata={"generated": "inline_output"},
+            )],
+            actor_worker_id="system",
+            created_at=created_at,
+        )
+        return artifacts[0] if artifacts else None
 
     @staticmethod
     def _validate_input_asset_upload(

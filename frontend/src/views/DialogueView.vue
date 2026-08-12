@@ -31,6 +31,7 @@ import {
   downloadArtifact,
   getApiErrorMessage,
   getAssistantChat,
+  getAssistantToolCall,
   getActiveAssistantRun,
   getAssistantRun,
   getLlmModels,
@@ -52,9 +53,11 @@ import {
   normalizeToolCall,
   parseToolArguments,
   replaceToolCall,
+  normalizeSchemaArguments,
   toolPhaseLabel,
   toolPhaseTagType,
 } from '../utils/assistantToolCalls.mjs'
+import AlgorithmResultView from './vertical-prediction/AlgorithmResultView.vue'
 import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
 import {
   loadHistoryPanelPreference,
@@ -72,6 +75,8 @@ const bodyRef = ref(null)
 const inputText = ref('')
 const runStates = ref(new Map())
 const runSubscriptions = new Map()
+const toolCallPollers = new Map()
+const continuedToolCalls = new Set()
 const modelLoading = ref(false)
 const knowledgeLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
@@ -300,11 +305,54 @@ function restoreMessage(item) {
     references: item.references || [],
     suggested_questions: item.suggested_questions || [],
     reasoning_summary: item.reasoning_summary || [],
-    tool_calls: (item.tool_calls || []).map(normalizeToolCall),
+    tool_calls: (item.tool_calls || []).map((call) => normalizeToolCall({ ...call, schema_fields: normalizeSchemaArguments(call) })),
     web_search_requested: item.web_search_requested,
     streaming: false,
     error: false,
   }
+}
+
+function toolCallFields(call) {
+  return call?.schema_fields?.length ? call.schema_fields : normalizeSchemaArguments(call)
+}
+
+function setToolArgument(call, field, value) {
+  const next = { ...(call.arguments || {}) }
+  if (field.type === 'number' || field.type === 'integer') {
+    next[field.key] = value === '' ? '' : Number(value)
+  } else if (field.type === 'boolean') {
+    next[field.key] = Boolean(value)
+  } else if (field.type === 'array' || field.type === 'object') {
+    try { next[field.key] = JSON.parse(value || (field.type === 'array' ? '[]' : '{}')) } catch { next[field.key] = value }
+  } else next[field.key] = value
+  call.arguments = next
+  call.arguments_text = JSON.stringify(next, null, 2)
+  call.schema_fields = normalizeSchemaArguments(call)
+}
+
+function stopToolCallPolling(callId) {
+  const timer = toolCallPollers.get(callId)
+  if (timer) clearInterval(timer)
+  toolCallPollers.delete(callId)
+}
+
+function startToolCallPolling(message, call) {
+  if (!call?.call_id || !['queued', 'running'].includes(call.phase) || toolCallPollers.has(call.call_id)) return
+  const poll = async () => {
+    try {
+      const updated = await getAssistantToolCall(call.call_id)
+      replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+      if (['completed', 'failed', 'canceled'].includes(updated.phase)) {
+        stopToolCallPolling(call.call_id)
+        if (updated.phase === 'completed' && !continuedToolCalls.has(call.call_id)) {
+          continuedToolCalls.add(call.call_id)
+          await continueToolCall(updated.call_id)
+        }
+      }
+    } catch { /* keep the last durable state and retry on the next tick */ }
+  }
+  poll()
+  toolCallPollers.set(call.call_id, setInterval(poll, 2000))
 }
 
 async function loadChat(chatKey) {
@@ -317,6 +365,7 @@ async function loadChat(chatKey) {
     selectedToolIds.value = data.selected_tool_ids || []
     useWebSearch.value = Boolean(data.use_web_search)
     messages.value = data.messages?.length ? data.messages.map(restoreMessage) : defaultMessages()
+    messages.value.forEach((message) => (message.tool_calls || []).forEach((call) => startToolCallPolling(message, call)))
     selectDefaultModelForMode(data.model || {})
     await loadChatRun(chatKey)
     await loadChatHistory()
@@ -710,7 +759,7 @@ async function updateToolCallArguments(message, call) {
   }
   try {
     const updated = await updateAssistantToolCallInput(call.call_id, { arguments: result.arguments })
-    replaceToolCall(message, updated)
+    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     ElMessage.success('参数已更新')
   } catch (error) {
     ElMessage.error(`参数更新失败：${getApiErrorMessage(error)}`)
@@ -724,7 +773,7 @@ async function uploadToolCallAsset(message, call, assetKey, event) {
   formData.append(assetKey, file)
   try {
     const updated = await uploadAssistantToolCallInput(call.call_id, formData)
-    replaceToolCall(message, updated)
+    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     ElMessage.success('附件已上传')
   } catch (error) {
     ElMessage.error(`附件上传失败：${getApiErrorMessage(error)}`)
@@ -735,13 +784,12 @@ async function uploadToolCallAsset(message, call, assetKey, event) {
 async function confirmToolCall(message, call) {
   try {
     const updated = await confirmAssistantToolCall(call.call_id, {})
-    replaceToolCall(message, updated)
-    if (updated.phase === 'completed') {
-      if (message.message_id) userMessageId.value = message.message_id
+    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+    if (['queued', 'running'].includes(updated.phase)) {
+      startToolCallPolling(message, updated)
+      ElMessage.info(updated.phase === 'queued' ? '算法已提交，正在排队' : '算法运行中')
+    } else if (updated.phase === 'completed') {
       ElMessage.success('算法运行完成')
-      await continueToolCall(updated.call_id)
-    } else if (updated.phase === 'running') {
-      ElMessage.info('算法运行中，可在工具卡片查看状态')
     }
   } catch (error) {
     ElMessage.error(`确认执行失败：${getApiErrorMessage(error)}`)
@@ -1031,6 +1079,8 @@ watch(
 onUnmounted(() => {
   for (const controller of runSubscriptions.values()) controller.abort()
   runSubscriptions.clear()
+  for (const callId of toolCallPollers.keys()) stopToolCallPolling(callId)
+  continuedToolCalls.clear()
 })
 
 watch(
@@ -1233,13 +1283,59 @@ watch(
                 </div>
                 <details v-if="canEditToolCall(call)" class="tool-call-details" open>
                   <summary>参数</summary>
+                  <div v-if="toolCallFields(call).length" class="tool-schema-form">
+                    <div v-for="field in toolCallFields(call)" :key="field.key" class="tool-schema-field">
+                      <label :for="`tool-${call.call_id}-${field.key}`">
+                        {{ field.key }} <span v-if="field.required" class="required-mark">*</span>
+                      </label>
+                      <el-select
+                        v-if="field.options?.length"
+                        :id="`tool-${call.call_id}-${field.key}`"
+                        :model-value="call.arguments?.[field.key]"
+                        @update:model-value="setToolArgument(call, field, $event)"
+                      >
+                        <el-option v-for="option in field.options" :key="String(option)" :label="String(option)" :value="option" />
+                      </el-select>
+                      <el-switch
+                        v-else-if="field.type === 'boolean'"
+                        :id="`tool-${call.call_id}-${field.key}`"
+                        :model-value="Boolean(call.arguments?.[field.key])"
+                        @update:model-value="setToolArgument(call, field, $event)"
+                      />
+                      <el-input-number
+                        v-else-if="field.type === 'number' || field.type === 'integer'"
+                        :id="`tool-${call.call_id}-${field.key}`"
+                        :model-value="call.arguments?.[field.key] === '' ? undefined : call.arguments?.[field.key]"
+                        :step="field.type === 'integer' ? 1 : 0.1"
+                        controls-position="right"
+                        @update:model-value="setToolArgument(call, field, $event)"
+                      />
+                      <el-input
+                        v-else-if="field.type === 'array' || field.type === 'object'"
+                        :id="`tool-${call.call_id}-${field.key}`"
+                        :model-value="JSON.stringify(call.arguments?.[field.key] ?? (field.type === 'array' ? [] : {}))"
+                        type="textarea"
+                        :rows="2"
+                        @update:model-value="setToolArgument(call, field, $event)"
+                      />
+                      <el-input
+                        v-else
+                        :id="`tool-${call.call_id}-${field.key}`"
+                        :model-value="call.arguments?.[field.key] ?? ''"
+                        @update:model-value="setToolArgument(call, field, $event)"
+                      />
+                      <small>{{ field.description }}</small>
+                    </div>
+                  </div>
                   <el-input
+                    v-else
                     v-model="call.arguments_text"
                     type="textarea"
                     :rows="3"
                     class="tool-args-editor"
                     resize="none"
                   />
+                  <div v-if="call.missing_fields?.length" class="tool-missing-fields">待补充：{{ call.missing_fields.join('、') }}</div>
                   <div class="tool-call-actions">
                     <el-button size="small" @click="updateToolCallArguments(msg, call)">更新参数</el-button>
                     <el-button
@@ -1271,10 +1367,17 @@ watch(
                   </label>
                 </div>
                 <div v-if="call.phase === 'completed'" class="tool-call-result">
-                  <details>
-                    <summary>运行结果</summary>
-                    <pre>{{ JSON.stringify(call.result_summary || {}, null, 2) }}</pre>
-                  </details>
+                  <AlgorithmResultView
+                    :output-summary="call.result_summary || {}"
+                    :input-snapshot="call.arguments || {}"
+                    :artifact-refs="call.artifact_refs || []"
+                    :output-schema="call.output_schema || null"
+                    :attributions="call.attributions || []"
+                    :status="call.phase"
+                    :algorithm-id="call.algorithm_id"
+                    :run-id="call.run_id || ''"
+                    :show-input="true"
+                  />
                   <div v-if="call.artifact_refs?.length" class="tool-artifacts">
                     <el-button
                       v-for="ref in call.artifact_refs"
@@ -1293,6 +1396,13 @@ watch(
                   <el-button size="small" type="primary" plain @click="retryToolCall(msg, call)">
                     重新发起
                   </el-button>
+                </div>
+                <div v-if="['queued', 'running'].includes(call.phase)" class="tool-call-progress">
+                  <el-progress :indeterminate="true" :percentage="50" :show-text="false" />
+                  <span>{{ call.phase === 'queued' ? '任务已进入任务中心队列' : '算法正在执行，结果会自动回填到对话' }}</span>
+                </div>
+                <div v-if="call.run_id" class="tool-call-links">
+                  <el-button size="small" text type="primary" @click="router.push({ path: '/tasks/center', query: { keyword: call.run_id } })">查看任务中心</el-button>
                 </div>
               </div>
             </div>
@@ -2131,6 +2241,11 @@ h1 {
   background: #fffbeb;
 }
 
+.tool-call-card.tool-call-queued {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
 .tool-call-head {
   min-width: 0;
   display: flex;
@@ -2160,6 +2275,44 @@ h1 {
   color: var(--app-ink-muted);
   cursor: pointer;
   font-size: 12px;
+}
+
+.tool-schema-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.tool-schema-field {
+  display: grid;
+  gap: 4px;
+}
+
+.tool-schema-field label {
+  color: var(--app-ink-body);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.tool-schema-field small,
+.tool-missing-fields,
+.tool-call-progress span {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+}
+
+.required-mark {
+  color: #dc2626;
+}
+
+.tool-call-progress {
+  display: grid;
+  gap: 5px;
+}
+
+.tool-call-links {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .tool-args-editor :deep(textarea) {

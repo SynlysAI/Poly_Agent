@@ -1480,6 +1480,44 @@ class AlgorithmRunRepository(BaseRepository):
         return bool(demo_store.mutate(mutate))
 
     @classmethod
+    def claim_queued(cls, run_id: str, worker_id: str, now: datetime) -> bool:
+        """Atomically reserve a queued run for one executor."""
+        filters = {"run_id": run_id, "status": "queued", "execution_claimed_by": {"$in": [None, ""]}}
+        fields = {"execution_claimed_by": worker_id, "execution_claimed_at": now, "updated_at": now}
+        if cls._can_use_mongo():
+            try:
+                return cls._collection().update_one(filters, {"$set": fields}).matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if _matches(item, filters):
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def claim_next_queued(cls, worker_id: str, now: datetime) -> dict[str, Any] | None:
+        if cls._can_use_mongo():
+            try:
+                return _without_mongo_id(cls._collection().find_one_and_update(
+                    {"status": "queued", "execution_claimed_by": {"$in": [None, ""]}},
+                    {"$set": {"execution_claimed_by": worker_id, "execution_claimed_at": now, "updated_at": now}},
+                    sort=[("created_at", 1)], projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+                ))
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            queued = [item for item in data[cls.collection_name] if item.get("status") == "queued" and not item.get("execution_claimed_by")]
+            if not queued:
+                return None
+            item = sorted(queued, key=lambda row: str(row.get("created_at", "")))[0]
+            _apply_update_fields(item, {"execution_claimed_by": worker_id, "execution_claimed_at": now, "updated_at": now})
+            return clone_document(item)
+        return demo_store.mutate(mutate)
+
+    @classmethod
     def list_by_research_run(cls, research_run_id: str) -> list[dict[str, Any]]:
         """查询 ResearchRun 关联的所有 AlgorithmRun。
 

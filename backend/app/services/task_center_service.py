@@ -11,6 +11,7 @@ from app.services.computation_service import ComputationService
 from app.services.optimization_service import OptimizationService
 from app.services.research_engine_orchestrator import ResearchEngineOrchestrator
 from app.services.research_engine_service import ResearchEngineService
+from app.infra.research_engine_repositories import AlgorithmRegistryRepository
 
 
 MAX_AGGREGATE_PAGE_SIZE = 10000
@@ -135,6 +136,8 @@ class TaskCenterService:
             raw = run.model_dump(mode="python")
             source_kind = str(raw.get("source_kind") or "")
             is_vertical_model_run = source_kind in {"uploaded_package", "remote_interface"}
+            registry = AlgorithmRegistryRepository.find_one({"algorithm_id": run.algorithm_id})
+            is_vertical_model_run = is_vertical_model_run or str((registry or {}).get("algorithm_family") or "") == "vertical_prediction"
             if is_vertical_model_run:
                 module_id = "vertical-prediction"
                 module_name = "垂类预测模型"
@@ -157,7 +160,7 @@ class TaskCenterService:
                     module_id=module_id,
                     module_name=module_name,
                     title=f"算法运行: {run.algorithm_id}",
-                    summary=json.dumps(run.input_snapshot, ensure_ascii=False)[:80] if run.input_snapshot else "-",
+                    summary=("来源：LUI 对话；" if run.trigger_context_id else "") + (json.dumps(run.input_snapshot, ensure_ascii=False)[:80] if run.input_snapshot else "-"),
                     status=run.status,
                     status_text=run.status,
                     created_at=run.created_at,

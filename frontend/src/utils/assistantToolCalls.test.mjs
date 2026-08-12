@@ -8,6 +8,8 @@ import {
   replaceToolCall,
   toolPhaseLabel,
   toolPhaseTagType,
+  schemaFieldType,
+  normalizeSchemaArguments,
 } from './assistantToolCalls.mjs'
 
 assert.equal(toolPhaseLabel('awaiting_confirmation'), '等待确认')
@@ -18,6 +20,10 @@ assert.equal(toolPhaseTagType('running'), 'warning')
 assert.equal(toolPhaseTagType('failed'), 'danger')
 assert.equal(toolPhaseTagType('canceled'), 'info')
 assert.equal(toolPhaseTagType('awaiting_input'), 'primary')
+assert.equal(toolPhaseLabel('queued'), '排队中')
+assert.equal(schemaFieldType('number - 温度'), 'number')
+assert.equal(schemaFieldType('list[string]'), 'array')
+assert.equal(normalizeSchemaArguments({ field_schema: { fields: { smiles: 'string' }, required: ['smiles'] }, arguments: { smiles: 'CCO' } })[0].value, 'CCO')
 
 assert.equal(canEditToolCall({ phase: 'awaiting_input' }), true)
 assert.equal(canEditToolCall({ phase: 'awaiting_confirmation' }), true)

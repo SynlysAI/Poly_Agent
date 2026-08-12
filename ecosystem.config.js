@@ -44,5 +44,16 @@ module.exports = {
       autorestart: true,
       max_memory_restart: "1G",
     },
+    {
+      name: "poly-agent-algorithm-worker",
+      cwd: BACKEND_CWD,
+      script: PYTHON_BIN,
+      args: "-m app.workers.algorithm_run_worker --worker-id algorithm-pm2-1",
+      interpreter: "none",
+      env: { PYTHONNOUSERSITE: "1" },
+      watch: false,
+      autorestart: true,
+      max_memory_restart: "1G",
+    },
   ],
 };
