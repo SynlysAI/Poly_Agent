@@ -8,6 +8,7 @@ export function toolPhaseLabel(phase) {
     requested: '已请求',
     awaiting_input: '等待补充参数',
     awaiting_confirmation: '等待确认',
+    queued: '排队中',
     running: '运行中',
     completed: '已完成',
     failed: '失败',
@@ -18,6 +19,7 @@ export function toolPhaseLabel(phase) {
 export function toolPhaseTagType(phase) {
   if (phase === 'completed') return 'success'
   if (phase === 'running') return 'warning'
+  if (phase === 'queued') return 'warning'
   if (phase === 'failed') return 'danger'
   if (phase === 'canceled') return 'info'
   return 'primary'
@@ -69,4 +71,27 @@ export function replaceToolCall(message, updated) {
     call.call_id === updated.call_id ? normalizeToolCall(updated) : call,
   )
   return message
+}
+
+export function schemaFieldType(description = '') {
+  const token = String(description).split(' -', 1)[0].trim().toLowerCase()
+  if (/^(number|float)$/.test(token)) return 'number'
+  if (/^(integer|int)$/.test(token)) return 'integer'
+  if (/^(boolean|bool)$/.test(token)) return 'boolean'
+  if (/^(list|array)\[/.test(token)) return 'array'
+  if (/^(dict|map)\[/.test(token)) return 'object'
+  return 'string'
+}
+
+export function normalizeSchemaArguments(call) {
+  const fields = call?.field_schema?.fields || call?.input_schema?.fields || {}
+  const values = { ...(call?.arguments || {}) }
+  return Object.entries(fields).map(([key, description]) => ({
+    key,
+    description,
+    type: schemaFieldType(description),
+    value: values[key] ?? '',
+    required: (call?.missing_fields || []).includes(key) || (call?.field_schema?.required || []).includes(key),
+    options: call?.field_schema?.field_options?.[key] || call?.input_schema?.field_options?.[key] || [],
+  }))
 }

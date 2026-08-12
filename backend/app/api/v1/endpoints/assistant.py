@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, require_admin
 from app.schemas.agent_tools import (
     AssistantToolCall,
     AssistantToolCallConfirm,
@@ -27,11 +27,13 @@ from app.schemas.assistant_chats import (
     AssistantMessageListData,
     AssistantMessageUpdate,
 )
+from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate, AssistantRunListData
 from app.schemas.common import ApiResponse
 from app.services.assistant_service import chat_assistant
 from app.services.assistant_service import stream_chat_assistant
 from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.assistant_chat_service import assistant_chat_service
+from app.services.assistant_run_service import assistant_run_service
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -142,6 +144,75 @@ def delete_assistant_message(
 ) -> ApiResponse[None]:
     assistant_chat_service.delete_message(chat_id, message_id, current_user)
     return ApiResponse(code=0, message="deleted", data=None)
+
+
+@router.post("/chats/{chat_id}/runs", response_model=ApiResponse[AssistantRun])
+def create_assistant_run(
+    chat_id: str,
+    payload: AssistantRunCreate,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantRun]:
+    return ApiResponse(code=0, message="queued", data=assistant_run_service.create(chat_id, payload, current_user))
+
+
+@router.get("/chats/{chat_id}/runs", response_model=ApiResponse[AssistantRunListData])
+def list_assistant_runs(
+    chat_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantRunListData]:
+    data = assistant_run_service.list_for_chat(chat_id, current_user, page=page, page_size=page_size)
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/runs/{run_id}", response_model=ApiResponse[AssistantRun])
+def get_assistant_run(
+    run_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantRun]:
+    return ApiResponse(code=0, message="ok", data=assistant_run_service.get(run_id, current_user))
+
+
+@router.get("/runs-active/current", response_model=ApiResponse[AssistantRun | None])
+def get_active_assistant_run(
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantRun | None]:
+    return ApiResponse(code=0, message="ok", data=assistant_run_service.get_active(current_user))
+
+
+@router.get("/runs/{run_id}/events")
+def stream_assistant_run_events(
+    run_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> StreamingResponse:
+    return StreamingResponse(
+        (_sse_event(event) for event in assistant_run_service.events(run_id, current_user, after_seq)),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/runs/{run_id}/cancel", response_model=ApiResponse[AssistantRun])
+def cancel_assistant_run(
+    run_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantRun]:
+    return ApiResponse(code=0, message="ok", data=assistant_run_service.cancel(run_id, current_user))
+
+
+@router.get("/run-metrics/summary", response_model=ApiResponse[dict], dependencies=[Depends(require_admin)])
+def assistant_run_metrics(
+    created_by: str | None = Query(default=None),
+    provider_id: str | None = Query(default=None),
+    model_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+) -> ApiResponse[dict]:
+    data = assistant_run_service.metrics(
+        created_by=created_by, provider_id=provider_id, model_id=model_id, status=status,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.post("/chat", response_model=ApiResponse[AssistantChatResponse])

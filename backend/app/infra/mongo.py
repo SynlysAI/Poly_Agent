@@ -150,6 +150,11 @@ def get_assistant_messages_collection() -> Collection:
     return get_database()["assistant_messages"]
 
 
+def get_assistant_runs_collection() -> Collection:
+    """获取 assistant_runs 集合。"""
+    return get_database()["assistant_runs"]
+
+
 def get_algorithm_packages_collection() -> Collection:
     """获取 algorithm_packages 集合。"""
     return get_database()["algorithm_packages"]

@@ -10,7 +10,8 @@ from datetime import datetime
 import re
 from typing import Any
 
-from pymongo.errors import PyMongoError
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.infra.computation_repositories import (
     BaseRepository,
@@ -31,6 +32,7 @@ from app.infra.mongo import (
     get_algorithm_versions_collection,
     get_assistant_chats_collection,
     get_assistant_messages_collection,
+    get_assistant_runs_collection,
     get_assistant_tool_calls_collection,
     get_execution_decisions_collection,
     get_manual_algorithm_workflows_collection,
@@ -750,6 +752,220 @@ class AssistantMessageRepository(BaseRepository):
         return int(demo_store.mutate(mutate))
 
 
+class AssistantRunRepository(BaseRepository):
+    """持久化 LUI assistant run 及其可回放事件。"""
+
+    collection_name = "assistant_runs"
+
+    @classmethod
+    def _collection(cls):
+        return get_assistant_runs_collection()
+
+    @classmethod
+    def ensure_indexes(cls) -> None:
+        if not cls._can_use_mongo():
+            return
+        try:
+            collection = cls._collection()
+            collection.create_index("run_id", unique=True)
+            collection.create_index(
+                "created_by",
+                unique=True,
+                name="one_active_assistant_run_per_user",
+                partialFilterExpression={"active": True},
+            )
+            collection.create_index([("chat_id", 1), ("created_at", -1)])
+        except PyMongoError as exc:
+            cls._handle_mongo_error(exc)
+
+    @classmethod
+    def create_active(cls, document: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        """原子创建用户唯一活动 run；冲突时返回现有活动 run。"""
+        payload = clone_document(document)
+        if cls._can_use_mongo():
+            try:
+                cls.ensure_indexes()
+                cls._collection().insert_one(payload)
+                return True, payload
+            except DuplicateKeyError:
+                return False, cls.find_active_for_user(payload["created_by"]) or {}
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("created_by") == payload["created_by"] and item.get("status") in {"queued", "running"}:
+                    return False, clone_document(item)
+            data[cls.collection_name].append(payload)
+            return True, clone_document(payload)
+        return demo_store.mutate(mutate)
+
+    @classmethod
+    def find_active_for_user(cls, created_by: str) -> dict[str, Any] | None:
+        filters = {"created_by": created_by, "status": {"$in": ["queued", "running"]}}
+        if cls._can_use_mongo():
+            try:
+                return _without_mongo_id(cls._collection().find_one(filters, {"_id": 0}, sort=[("created_at", 1)]))
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        data = demo_store.load()
+        rows = [clone_document(x) for x in data[cls.collection_name] if _matches(x, filters)]
+        return sorted(rows, key=lambda x: str(x.get("created_at", "")))[0] if rows else None
+
+    @classmethod
+    def find_active_for_chat(cls, chat_id: str, created_by: str) -> dict[str, Any] | None:
+        filters = {"chat_id": chat_id, "created_by": created_by, "status": {"$in": ["queued", "running"]}}
+        return cls.find_one(filters)
+
+    @classmethod
+    def update_if_status(cls, run_id: str, statuses: list[str], fields: dict[str, Any]) -> bool:
+        filters = {"run_id": run_id, "status": {"$in": statuses}}
+        if cls._can_use_mongo():
+            try:
+                return cls._collection().update_one(filters, {"$set": fields}).matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if _matches(item, filters):
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def update_claim(cls, run_id: str, worker_id: str, fields: dict[str, Any]) -> bool:
+        filters = {"run_id": run_id, "status": "running", "worker_id": worker_id}
+        if cls._can_use_mongo():
+            try:
+                return cls._collection().update_one(filters, {"$set": fields}).matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if _matches(item, filters):
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def increment_metric(cls, run_id: str, field: str) -> None:
+        if cls._can_use_mongo():
+            try:
+                cls._collection().update_one({"run_id": run_id}, {"$inc": {field: 1}})
+                return
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("run_id") == run_id:
+                    item[field] = int(item.get(field, 0)) + 1
+                    return
+        demo_store.mutate(mutate)
+
+    @classmethod
+    def claim_next(cls, worker_id: str, now: datetime) -> dict[str, Any] | None:
+        fields = {"status": "running", "worker_id": worker_id, "started_at": now, "heartbeat_at": now, "updated_at": now}
+        if cls._can_use_mongo():
+            try:
+                document = cls._collection().find_one_and_update(
+                    {"status": "queued", "user_message_id": {"$ne": ""}},
+                    {"$set": fields},
+                    sort=[("created_at", 1)],
+                    projection={"_id": 0},
+                    return_document=ReturnDocument.AFTER,
+                )
+                return _without_mongo_id(document)
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            queued = [
+                item for item in data[cls.collection_name]
+                if item.get("status") == "queued" and item.get("user_message_id")
+            ]
+            if not queued:
+                return None
+            selected = sorted(queued, key=lambda x: str(x.get("created_at", "")))[0]
+            _apply_update_fields(selected, fields)
+            return clone_document(selected)
+        return demo_store.mutate(mutate)
+
+    @classmethod
+    def requeue_stale(cls, stale_before: datetime, now: datetime) -> list[str]:
+        if cls._can_use_mongo():
+            try:
+                run_ids = [
+                    item["run_id"]
+                    for item in cls._collection().find(
+                        {"status": "running", "heartbeat_at": {"$lt": stale_before}}, {"_id": 0, "run_id": 1}
+                    )
+                ]
+                result = cls._collection().update_many(
+                    {"run_id": {"$in": run_ids}, "status": "running"},
+                    {"$set": {
+                        "status": "queued", "stage": "queued", "worker_id": None, "started_at": None,
+                        "heartbeat_at": None, "partial_content": "", "first_token_ms": None, "updated_at": now,
+                    }},
+                )
+                return run_ids[: int(result.modified_count)]
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            run_ids = []
+            for item in data[cls.collection_name]:
+                heartbeat = item.get("heartbeat_at")
+                if item.get("status") == "running" and heartbeat and str(heartbeat) < stale_before.isoformat():
+                    _apply_update_fields(item, {
+                        "status": "queued", "stage": "queued", "worker_id": None, "started_at": None,
+                        "heartbeat_at": None, "partial_content": "", "first_token_ms": None, "updated_at": now,
+                    })
+                    run_ids.append(item["run_id"])
+            return run_ids
+        return list(demo_store.mutate(mutate))
+
+    @classmethod
+    def append_event(cls, run_id: str, event: dict[str, Any]) -> dict[str, Any] | None:
+        if cls._can_use_mongo():
+            try:
+                current = cls._collection().find_one_and_update(
+                    {"run_id": run_id},
+                    {"$inc": {"event_seq": 1}},
+                    projection={"event_seq": 1},
+                    return_document=False,
+                )
+                if not current:
+                    return None
+                seq = int(current.get("event_seq", 0)) + 1
+                payload = {"seq": seq, **clone_document(event)}
+                cls._collection().update_one(
+                    {"run_id": run_id},
+                    {"$push": {"events": {"$each": [payload], "$slice": -500}}, "$set": {"updated_at": event.get("at")}},
+                )
+                return payload
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("run_id") == run_id:
+                    seq = int(item.get("event_seq", 0)) + 1
+                    item["event_seq"] = seq
+                    payload = {"seq": seq, **clone_document(event)}
+                    item.setdefault("events", []).append(payload)
+                    item["events"] = item["events"][-500:]
+                    return payload
+            return None
+        return demo_store.mutate(mutate)
+
+    @classmethod
+    def events_after(cls, run_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
+        document = cls.find_one({"run_id": run_id}) or {}
+        return [clone_document(e) for e in document.get("events", []) if int(e.get("seq", 0)) > after_seq]
+
+    @classmethod
+    def list_for_chat(cls, chat_id: str, created_by: str, page: int = 1, page_size: int = 20):
+        return cls.list_all({"chat_id": chat_id, "created_by": created_by}, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+
 class AlgorithmManagedResourceRepository(BaseRepository):
     """算法大资源登记仓储。"""
 
@@ -1262,6 +1478,44 @@ class AlgorithmRunRepository(BaseRepository):
             return False
 
         return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def claim_queued(cls, run_id: str, worker_id: str, now: datetime) -> bool:
+        """Atomically reserve a queued run for one executor."""
+        filters = {"run_id": run_id, "status": "queued", "execution_claimed_by": {"$in": [None, ""]}}
+        fields = {"execution_claimed_by": worker_id, "execution_claimed_at": now, "updated_at": now}
+        if cls._can_use_mongo():
+            try:
+                return cls._collection().update_one(filters, {"$set": fields}).matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if _matches(item, filters):
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def claim_next_queued(cls, worker_id: str, now: datetime) -> dict[str, Any] | None:
+        if cls._can_use_mongo():
+            try:
+                return _without_mongo_id(cls._collection().find_one_and_update(
+                    {"status": "queued", "execution_claimed_by": {"$in": [None, ""]}},
+                    {"$set": {"execution_claimed_by": worker_id, "execution_claimed_at": now, "updated_at": now}},
+                    sort=[("created_at", 1)], projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+                ))
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        def mutate(data):
+            queued = [item for item in data[cls.collection_name] if item.get("status") == "queued" and not item.get("execution_claimed_by")]
+            if not queued:
+                return None
+            item = sorted(queued, key=lambda row: str(row.get("created_at", "")))[0]
+            _apply_update_fields(item, {"execution_claimed_by": worker_id, "execution_claimed_at": now, "updated_at": now})
+            return clone_document(item)
+        return demo_store.mutate(mutate)
 
     @classmethod
     def list_by_research_run(cls, research_run_id: str) -> list[dict[str, Any]]:

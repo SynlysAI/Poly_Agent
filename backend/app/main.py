@@ -139,6 +139,10 @@ async def app_lifespan(app: FastAPI):
                 failed = service.fail_stale_running_runs(actor_user_id="system-reaper")
                 if failed:
                     logger_reaper.info("stale-run reaper: failed %d runs: %s", len(failed), failed)
+                from app.services.assistant_run_service import assistant_run_service
+                recovered = assistant_run_service.requeue_stale()
+                if recovered:
+                    logger_reaper.info("assistant stale-run reaper: requeued %d runs", recovered)
             except Exception:
                 logger_reaper.exception("stale-run reaper loop error")
 
@@ -267,7 +271,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         extra={"request_id": request_id},
     )
 
-    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    detail = jsonable_encoder(exc.detail)
     return JSONResponse(
         status_code=exc.status_code,
         content={

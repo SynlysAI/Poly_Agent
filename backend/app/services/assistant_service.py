@@ -1478,7 +1478,8 @@ class AssistantService:
 
         events: list[dict] = []
         pending: list[AssistantToolCall] = []
-        for call in tool_calls:
+        # A single user prompt may submit at most one vertical algorithm call.
+        for call in tool_calls[:1]:
             function = getattr(call, "function", None)
             if function is None:
                 continue
@@ -1502,6 +1503,8 @@ class AssistantService:
                         chat_id=request.context.get("chat_id"),
                         message_id=request.context.get("message_id"),
                         arguments=arguments,
+                        selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool_id}",
+                        selection_confidence=0.5,
                     ),
                     current_user,
                 )

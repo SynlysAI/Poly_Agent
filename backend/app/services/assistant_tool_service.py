@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
@@ -33,6 +34,7 @@ from app.services.research_engine_service import ResearchEngineService
 
 
 CALLABLE_PHASES = {"requested", "awaiting_input", "awaiting_confirmation"}
+TERMINAL_PHASES = {"completed", "failed", "canceled"}
 SENSITIVE_KEYS = {
     "access-key",
     "api_key",
@@ -333,7 +335,16 @@ class AssistantToolCallService:
             "algorithm_version_id": tool.active_version_id,
             "algorithm_version": tool.version,
             "tool_name": tool.name,
+            "selection_reason": payload.selection_reason,
+            "selection_confidence": payload.selection_confidence,
             "phase": "requested",
+            "field_schema": tool.input_schema.model_dump(mode="python"),
+            "output_schema": tool.output_schema.model_dump(mode="python"),
+            "attributions": [
+                item.model_dump(mode="python")
+                for item in [tool.developer_attribution, *tool.framework_attributions, *tool.method_attributions]
+                if item is not None
+            ],
             "arguments": _redact(arguments),
             "input_asset_refs": _redact(payload.input_asset_refs),
             "uploaded_assets": uploaded_assets,
@@ -341,6 +352,7 @@ class AssistantToolCallService:
             "required_assets": [item.model_dump(mode="python") for item in missing_assets],
             "requires_confirmation": tool.requires_confirmation,
             "run_id": None,
+            "run_status": None,
             "result_summary": {},
             "artifact_refs": [],
             "error": None,
@@ -371,7 +383,36 @@ class AssistantToolCallService:
             raise HTTPException(status_code=404, detail=f"工具调用 '{call_id}' 不存在")
         if document.get("created_by") != user_id:
             raise HTTPException(status_code=403, detail="无权限访问该工具调用")
+        cls._sync_run_state(document, current_user)
         return cls._public_document(document)
+
+    @classmethod
+    def _sync_run_state(cls, document: dict[str, Any], current_user: dict[str, str] | None) -> None:
+        run_id = document.get("run_id")
+        if not run_id:
+            return
+        run_doc = AlgorithmRunRepository.find_one({"run_id": run_id})
+        if not run_doc:
+            return
+        status = str(run_doc.get("status") or "queued")
+        phase = {"queued": "queued", "running": "running", "completed": "completed", "failed": "failed", "canceled": "canceled"}.get(status)
+        if not phase or (phase == document.get("phase") and document.get("run_status") == status):
+            return
+        update = {
+            "phase": phase,
+            "run_status": status,
+            "result_summary": _redact(run_doc.get("output_summary") or {}),
+            "artifact_refs": cls._public_artifact_refs(run_doc.get("artifact_refs") or []),
+            "error": _redact(run_doc.get("error")) if run_doc.get("error") else None,
+            "started_at": run_doc.get("started_at") or document.get("started_at"),
+            "finished_at": run_doc.get("finished_at"),
+            "updated_at": run_doc.get("updated_at") or utc_now(),
+        }
+        AssistantToolCallRepository.update_fields(document["call_id"], update)
+        document.update(update)
+        cls._append_phase_event(document)
+        if phase in TERMINAL_PHASES:
+            cls._cleanup_uploads(document)
 
     @classmethod
     def update_input(
@@ -480,7 +521,7 @@ class AssistantToolCallService:
             return cls._public_document(document)
         if phase in {"canceled", "failed"}:
             raise HTTPException(status_code=409, detail="当前工具调用已结束，不能确认")
-        if phase == "running":
+        if phase in {"queued", "running"}:
             return cls._public_document(document)
         tool = cls._tool(document["algorithm_id"], current_user)
         arguments = dict(document.get("arguments") or {})
@@ -506,12 +547,13 @@ class AssistantToolCallService:
         # The version is resolved only after confirmation, then frozen on the call and run.
         now = utc_now()
         running_fields = {
-            "phase": "running",
+            "phase": "queued",
+            "run_status": "queued",
             "arguments": _redact(arguments),
             "input_asset_refs": _redact(refs),
             "algorithm_version_id": tool.active_version_id,
             "algorithm_version": tool.version,
-            "started_at": now,
+            "started_at": None,
             "confirmed_at": now,
             "updated_at": now,
             "missing_fields": [],
@@ -524,13 +566,13 @@ class AssistantToolCallService:
                 return cls._public_document(latest)
             raise HTTPException(status_code=409, detail="当前工具调用不能确认")
         document.update(running_fields)
-        cls._append_phase_event(document)
         cls._audit(
             document,
             "assistant_tool_call_confirmed",
-            {"status": "running", "algorithm_version_id": tool.active_version_id},
+            {"status": "queued", "algorithm_version_id": tool.active_version_id},
         )
         user_id, _role, is_admin = _actor_context(current_user)
+        legacy_sync = False
         try:
             try:
                 uploads = {
@@ -551,6 +593,16 @@ class AssistantToolCallService:
                     input_asset_refs=refs,
                     reason=f"Assistant 工具调用 {call_id}",
                 )
+                run = ResearchEngineService().create_algorithm_run(
+                    run_payload,
+                    actor_user_id=user_id,
+                    is_admin=is_admin,
+                    input_asset_uploads=uploads,
+                    execute=False,
+                )
+            except TypeError:
+                # Compatibility with legacy test doubles/integrations that expose the old signature.
+                legacy_sync = True
                 run = ResearchEngineService().create_algorithm_run(
                     run_payload,
                     actor_user_id=user_id,
@@ -577,23 +629,54 @@ class AssistantToolCallService:
                 )
                 return cls._public_document(document)
 
-            output_summary = dict(getattr(run, "output_summary", {}) or {})
-            artifact_refs = cls._public_artifact_refs(getattr(run, "artifact_refs", []) or [])
+            run_id = getattr(run, "run_id", None)
+            if legacy_sync:
+                cls._transition(document, "running", run_status="running", started_at=now)
+                output_summary = dict(getattr(run, "output_summary", {}) or {})
+                artifact_refs = cls._public_artifact_refs(getattr(run, "artifact_refs", []) or [])
+                update = {
+                    "run_id": run_id,
+                    "run_status": getattr(run, "status", "completed"),
+                    "result_summary": _redact(output_summary),
+                    "artifact_refs": artifact_refs,
+                    "finished_at": utc_now(),
+                }
+                cls._transition(document, "completed", **update)
+                cls._audit(document, "assistant_tool_call_completed", {"status": "completed", "run_id": run_id})
+                cls._cleanup_uploads(document)
+                return cls._public_document(document)
             update = {
-                "run_id": getattr(run, "run_id", None),
-                "result_summary": _redact(output_summary),
-                "artifact_refs": artifact_refs,
-                "finished_at": utc_now(),
+                "run_id": run_id,
+                "run_status": getattr(run, "status", "queued"),
             }
-            cls._transition(document, "completed", **update)
-            cls._audit(
-                document,
-                "assistant_tool_call_completed",
-                {"status": "completed", "run_id": update["run_id"]},
-            )
+            cls._transition(document, "queued", **update)
+            cls._schedule_run(document, run_payload, user_id, is_admin, uploads)
             return cls._public_document(document)
-        finally:
-            cls._cleanup_uploads(document)
+        except Exception:
+            raise
+
+    @classmethod
+    def _schedule_run(cls, document: dict[str, Any], payload: AlgorithmRunCreate, user_id: str, is_admin: bool, uploads: dict[str, dict[str, Any]]) -> None:
+        def execute() -> None:
+            try:
+                if not AlgorithmRunRepository.claim_queued(document.get("run_id"), f"lui-{document.get('call_id')}", utc_now()):
+                    return
+                run = ResearchEngineService().create_algorithm_run(
+                    payload,
+                    actor_user_id=user_id,
+                    is_admin=is_admin,
+                    input_asset_uploads=uploads,
+                    existing_run_id=document.get("run_id"),
+                )
+                current = AssistantToolCallRepository.find_one({"call_id": document["call_id"]}) or dict(document)
+                cls._sync_run_state(current, None)
+            except Exception as exc:
+                latest = AssistantToolCallRepository.find_one({"call_id": document["call_id"]}) or dict(document)
+                error = {"error_type": type(exc).__name__, "message": cls._safe_error_message(exc), "retryable": False}
+                cls._transition(latest, "failed", error=error, finished_at=utc_now(), run_status="failed")
+            finally:
+                cls._cleanup_uploads(document)
+        threading.Thread(target=execute, name=f"algorithm-run-{document.get('run_id')}", daemon=True).start()
 
     @classmethod
     def cancel(cls, call_id: str, current_user: dict[str, str] | None) -> AssistantToolCall:

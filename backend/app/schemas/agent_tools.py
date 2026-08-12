@@ -17,6 +17,7 @@ AssistantToolCallPhase = Literal[
     "requested",
     "awaiting_input",
     "awaiting_confirmation",
+    "queued",
     "running",
     "completed",
     "failed",
@@ -145,6 +146,8 @@ class AssistantToolCallCreate(BaseModel):
     message_id: str | None = Field(default=None, max_length=120)
     arguments: dict[str, Any] = Field(default_factory=dict)
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
+    selection_reason: str | None = Field(default=None, max_length=500)
+    selection_confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class AssistantToolCallInputUpdate(BaseModel):
@@ -213,6 +216,9 @@ class AssistantToolCall(BaseModel):
     algorithm_version: str | None = None
     tool_name: str
     phase: AssistantToolCallPhase
+    field_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    attributions: list[AttributionItem] = Field(default_factory=list)
     arguments: dict[str, Any] = Field(default_factory=dict)
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
     uploaded_assets: list[dict[str, Any]] = Field(default_factory=list)
@@ -220,6 +226,11 @@ class AssistantToolCall(BaseModel):
     required_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
     requires_confirmation: bool = True
     run_id: str | None = None
+    selection_reason: str | None = None
+    selection_confidence: float | None = None
+    task_route: dict[str, Any] | None = None
+    source_context: dict[str, Any] | None = None
+    run_status: str | None = None
     result_summary: dict[str, Any] = Field(default_factory=dict)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     error: dict[str, Any] | None = None

@@ -9,9 +9,13 @@ BIND_HOST="${POLY_AGENT_BIND_HOST:-0.0.0.0}"
 BACKEND_LOG="${POLY_AGENT_BACKEND_LOG:-/tmp/poly_agent_backend.log}"
 FRONTEND_LOG="${POLY_AGENT_FRONTEND_LOG:-/tmp/poly_agent_frontend.log}"
 WORKER_LOG="${POLY_AGENT_WORKER_LOG:-/tmp/poly_agent_worker.log}"
+ASSISTANT_WORKER_LOG="${POLY_AGENT_ASSISTANT_WORKER_LOG:-/tmp/poly_agent_assistant_worker.log}"
+ALGORITHM_WORKER_LOG="${POLY_AGENT_ALGORITHM_WORKER_LOG:-/tmp/poly_agent_algorithm_worker.log}"
 BACKEND_SESSION="${POLY_AGENT_BACKEND_SESSION:-poly_agent_backend}"
 FRONTEND_SESSION="${POLY_AGENT_FRONTEND_SESSION:-poly_agent_frontend}"
 WORKER_SESSION="${POLY_AGENT_WORKER_SESSION:-poly_agent_worker}"
+ASSISTANT_WORKER_SESSION="${POLY_AGENT_ASSISTANT_WORKER_SESSION:-poly_agent_assistant_worker}"
+ALGORITHM_WORKER_SESSION="${POLY_AGENT_ALGORITHM_WORKER_SESSION:-poly_agent_algorithm_worker}"
 CONDA_BASE="${POLY_AGENT_CONDA_BASE:-$(conda info --base 2>/dev/null)}"
 ENV_BIN_DIR="${CONDA_BASE}/envs/${ENV_NAME}/bin"
 PYTHON_BIN="${POLY_AGENT_PYTHON_BIN:-$ENV_BIN_DIR/python}"
@@ -60,6 +64,20 @@ WORKER_CMD="
   exec '$PYTHON_BIN' -m app.workers.computation_worker --worker-id worker-local-real-1 >'$WORKER_LOG' 2>&1
 "
 
+ASSISTANT_WORKER_CMD="
+  cd '$ROOT/backend'
+  export PYTHONNOUSERSITE=1
+  export PATH='$ENV_BIN_DIR':\"\$PATH\"
+  exec '$PYTHON_BIN' -m app.workers.assistant_run_worker --worker-id assistant-local-1 >'$ASSISTANT_WORKER_LOG' 2>&1
+"
+
+ALGORITHM_WORKER_CMD="
+  cd '$ROOT/backend'
+  export PYTHONNOUSERSITE=1
+  export PATH='$ENV_BIN_DIR':\"\$PATH\"
+  exec '$PYTHON_BIN' -m app.workers.algorithm_run_worker --worker-id algorithm-local-1 >'$ALGORITHM_WORKER_LOG' 2>&1
+"
+
 FRONTEND_CMD="
   cd '$ROOT/frontend'
   export PATH='$ENV_BIN_DIR':\"\$PATH\"
@@ -69,6 +87,8 @@ FRONTEND_CMD="
 
 start_service "$BACKEND_SESSION" "$BACKEND_CMD"
 start_service "$WORKER_SESSION" "$WORKER_CMD"
+start_service "$ASSISTANT_WORKER_SESSION" "$ASSISTANT_WORKER_CMD"
+start_service "$ALGORITHM_WORKER_SESSION" "$ALGORITHM_WORKER_CMD"
 start_service "$FRONTEND_SESSION" "$FRONTEND_CMD"
 
 for _ in {1..30}; do
@@ -100,5 +120,5 @@ fi
 echo "Frontend: http://127.0.0.1:${FRONTEND_PORT}/"
 echo "Backend:  http://127.0.0.1:${BACKEND_PORT}/api/v1/health"
 echo "External: http://$(hostname -I 2>/dev/null | awk '{print $1}'):${FRONTEND_PORT}/"
-echo "Logs: $BACKEND_LOG $FRONTEND_LOG $WORKER_LOG"
-echo "Sessions/PIDs: $BACKEND_SESSION $FRONTEND_SESSION $WORKER_SESSION"
+echo "Logs: $BACKEND_LOG $FRONTEND_LOG $WORKER_LOG $ASSISTANT_WORKER_LOG $ALGORITHM_WORKER_LOG"
+echo "Sessions/PIDs: $BACKEND_SESSION $FRONTEND_SESSION $WORKER_SESSION $ASSISTANT_WORKER_SESSION"

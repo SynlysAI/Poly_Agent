@@ -145,6 +145,14 @@ class LLMModelService:
             **kwargs,
         )
         for chunk in response:
+            usage = getattr(chunk, "usage", None)
+            if usage is not None:
+                from app.core.llm_client import record_stream_usage
+                record_stream_usage({
+                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                    "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+                })
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta

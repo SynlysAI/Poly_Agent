@@ -6,11 +6,18 @@
 from __future__ import annotations
 
 import json
+import os
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - demo store runs on Linux in production
+    fcntl = None
 
 from app.core.config import settings
 from app.services.poly_data_extra_datasets import EXTRA_DATASET_SPECS
@@ -35,6 +42,7 @@ COLLECTION_NAMES = [
     "assistant_tool_calls",
     "assistant_chats",
     "assistant_messages",
+    "assistant_runs",
     "algorithm_packages",
     "algorithm_versions",
     "algorithm_resources",
@@ -71,29 +79,57 @@ class DemoJsonStore:
     def load(self) -> dict[str, list[dict[str, Any]]]:
         """读取完整数据。"""
         with self._lock:
-            if not self.path.exists():
-                return {name: [] for name in COLLECTION_NAMES}
-            with self.path.open("r", encoding="utf-8") as fp:
-                raw = json.load(fp)
-            data = {name: list(raw.get(name, [])) for name in COLLECTION_NAMES}
-            return data
+            with self._file_lock(shared=True):
+                return self._load_unlocked()
 
     def save(self, data: dict[str, list[dict[str, Any]]]) -> None:
         """保存完整数据。"""
         with self._lock:
-            payload = {name: data.get(name, []) for name in COLLECTION_NAMES}
-            tmp_path = self.path.with_suffix(".tmp")
-            with tmp_path.open("w", encoding="utf-8") as fp:
-                json.dump(payload, fp, ensure_ascii=False, indent=2, default=_json_default)
-            tmp_path.replace(self.path)
+            with self._file_lock(shared=False):
+                self._save_unlocked(data)
 
     def mutate(self, callback):
         """以锁保护方式读改写。"""
         with self._lock:
-            data = self.load()
-            result = callback(data)
-            self.save(data)
-            return result
+            # The in-process RLock is insufficient when the API and worker are
+            # separate processes sharing the demo JSON database.
+            with self._file_lock(shared=False):
+                data = self._load_unlocked()
+                result = callback(data)
+                self._save_unlocked(data)
+                return result
+
+    def _load_unlocked(self) -> dict[str, list[dict[str, Any]]]:
+        if not self.path.exists():
+            return {name: [] for name in COLLECTION_NAMES}
+        with self.path.open("r", encoding="utf-8") as fp:
+            raw = json.load(fp)
+        return {name: list(raw.get(name, [])) for name in COLLECTION_NAMES}
+
+    def _save_unlocked(self, data: dict[str, list[dict[str, Any]]]) -> None:
+        payload = {name: data.get(name, []) for name in COLLECTION_NAMES}
+        # A process-specific temporary path prevents concurrent writers from
+        # replacing one another's temporary file before the final rename.
+        tmp_path = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+        with tmp_path.open("w", encoding="utf-8") as fp:
+            json.dump(payload, fp, ensure_ascii=False, indent=2, default=_json_default)
+            fp.flush()
+        tmp_path.replace(self.path)
+
+    @contextmanager
+    def _file_lock(self, *, shared: bool):
+        if fcntl is None:
+            yield
+            return
+        lock_path = self.path.with_name(f"{self.path.name}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as lock_file:
+            operation = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+            fcntl.flock(lock_file.fileno(), operation)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _json_default(value: Any) -> str:
