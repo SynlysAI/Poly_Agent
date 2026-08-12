@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Document, Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
@@ -26,6 +27,7 @@ const props = defineProps({
   showInput: { type: Boolean, default: false },
 })
 
+const router = useRouter()
 const tablePagination = ref({})
 const downloadingArtifactId = ref('')
 
@@ -173,6 +175,18 @@ async function handleDownloadArtifact(row) {
   } finally {
     downloadingArtifactId.value = ''
   }
+}
+
+function openRunDetail() {
+  if (!props.runId) return
+  router.push({
+    path: '/vertical-prediction',
+    query: {
+      tab: 'detail',
+      algorithm_id: props.algorithmId || '',
+      run_id: props.runId,
+    },
+  })
 }
 
 function artifactGroup(item) {
@@ -662,7 +676,7 @@ function stringifyJson(value) {
         <span>{{ artifactRows.length }} 项</span>
       </div>
       <el-table :data="artifactRows" border size="small" class="result-table">
-        <el-table-column label="下载" width="86">
+        <el-table-column label="操作" width="96">
           <template #default="{ row }">
             <el-button
               v-if="row.downloadable"
@@ -672,6 +686,12 @@ function stringifyJson(value) {
               :loading="downloadingArtifactId === row.id"
               @click="handleDownloadArtifact(row)"
             >下载</el-button>
+            <el-button
+              v-else-if="runId && row.id !== 'output_summary'"
+              text
+              type="primary"
+              @click="openRunDetail"
+            >查看</el-button>
             <span v-else>-</span>
           </template>
         </el-table-column>

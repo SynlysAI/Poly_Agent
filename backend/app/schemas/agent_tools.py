@@ -204,7 +204,9 @@ class AssistantToolInputRequiredEvent(BaseModel):
 class AssistantToolCall(BaseModel):
     """对话算法工具调用持久化状态。"""
 
-    model_config = ConfigDict(extra="forbid")
+    # 持久化文档可能携带历史/未来扩展字段（如 run_status）；响应侧忽略未知字段，
+    # 避免历史会话加载因 schema 演进触发 extra_forbidden 500。请求侧模型仍保持严格。
+    model_config = ConfigDict(extra="ignore")
 
     call_id: str
     provider_tool_call_id: str | None = None

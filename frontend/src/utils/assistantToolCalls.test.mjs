@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {
   applyToolCallEvent,
   canEditToolCall,
+  isStaleToolCallPhase,
+  mergeToolCalls,
   normalizeToolCall,
   parseToolArguments,
   replaceToolCall,
@@ -30,6 +32,13 @@ assert.equal(canEditToolCall({ phase: 'awaiting_input' }), true)
 assert.equal(canEditToolCall({ phase: 'awaiting_confirmation' }), true)
 assert.equal(canEditToolCall({ phase: 'running' }), false)
 assert.equal(canEditToolCall(null), false)
+
+assert.equal(isStaleToolCallPhase('queued', 'awaiting_confirmation'), true)
+assert.equal(isStaleToolCallPhase('running', 'requested'), true)
+assert.equal(isStaleToolCallPhase('completed', 'awaiting_confirmation'), true)
+assert.equal(isStaleToolCallPhase('awaiting_confirmation', 'queued'), false)
+assert.equal(isStaleToolCallPhase('queued', 'running'), false)
+assert.equal(isStaleToolCallPhase('', 'awaiting_confirmation'), false)
 
 const normalized = normalizeToolCall({ call_id: 'atc-1', arguments: { smiles: 'CCO' } })
 assert.equal(normalized.arguments_text, JSON.stringify({ smiles: 'CCO' }, null, 2))
@@ -79,6 +88,57 @@ replaceToolCall(message, {
 assert.equal(message.tool_calls.length, 1)
 assert.equal(message.tool_calls[0].phase, 'completed')
 assert.equal(message.tool_calls[0].result_summary.score, 0.91)
+
+// 已进入执行/结束状态的调用不允许被重放的旧事件降级回待确认。
+const racingMessage = { role: 'user', tool_calls: [] }
+applyToolCallEvent(racingMessage, {
+  type: 'tool_call',
+  call_id: 'atc-race',
+  phase: 'awaiting_confirmation',
+  tool_id: 'algorithm:vertical-tool',
+  tool_name: 'Vertical Tool',
+  arguments: { smiles: 'CCO' },
+})
+applyToolCallEvent(racingMessage, {
+  type: 'tool_call',
+  call_id: 'atc-race',
+  phase: 'queued',
+  tool_name: 'Vertical Tool',
+  arguments: { smiles: 'CCO' },
+})
+applyToolCallEvent(racingMessage, {
+  type: 'tool_call',
+  call_id: 'atc-race',
+  phase: 'awaiting_confirmation',
+  tool_name: 'Vertical Tool',
+  arguments: { smiles: 'CCO' },
+})
+assert.equal(racingMessage.tool_calls[0].phase, 'queued')
+
+const merged = mergeToolCalls(
+  [
+    {
+      call_id: 'atc-final',
+      phase: 'completed',
+      tool_id: 'algorithm:vertical-tool',
+      tool_name: 'Vertical Tool',
+      arguments: { smiles: 'CCO' },
+      result_summary: { score: 0.91 },
+    },
+  ],
+  [
+    {
+      call_id: 'atc-final',
+      phase: 'awaiting_confirmation',
+      tool_id: 'algorithm:vertical-tool',
+      tool_name: 'Vertical Tool',
+      arguments: { smiles: 'CCO' },
+    },
+  ],
+)
+assert.equal(merged.length, 1)
+assert.equal(merged[0].phase, 'completed')
+assert.equal(merged[0].result_summary.score, 0.91)
 
 assert.deepEqual(
   toolCallRunDetailRoute({ algorithm_id: 'PI_Tg_predictor', run_id: 'arun_abc123' }),

@@ -18,6 +18,7 @@ from app.infra.research_engine_repositories import (
     AlgorithmVersionRepository,
     AssistantToolCallRepository,
 )
+from app.schemas.agent_tools import AssistantToolCall
 from app.main import app
 
 
@@ -78,6 +79,29 @@ class AssistantToolCallApiTest(ComputationTestCase):
     def tearDown(self) -> None:
         app.dependency_overrides.pop(get_current_user, None)
         super().tearDown()
+
+    def test_persisted_extra_fields_do_not_break_tool_call_serialization(self) -> None:
+        """历史/未来持久化字段不应导致会话加载或确认响应校验失败。"""
+        now = utc_now()
+        parsed = AssistantToolCall.model_validate({
+            "call_id": "atc-extra-fields",
+            "tool_id": "algorithm:vertical-tool",
+            "algorithm_id": "vertical-tool",
+            "tool_name": "Vertical Tool",
+            "phase": "completed",
+            "run_status": "completed",
+            "future_unknown_field": {"x": 1},
+            "arguments": {"smiles": "CCO"},
+            "result_summary": {"score": 0.91},
+            "artifact_refs": [],
+            "error": None,
+            "created_by": "user-1",
+            "created_at": now,
+            "updated_at": now,
+        })
+        self.assertEqual(parsed.phase, "completed")
+        self.assertEqual(parsed.run_status, "completed")
+        self.assertNotIn("future_unknown_field", parsed.model_dump())
 
     def _fake_run(self, payload, *, actor_user_id, is_admin=False, request_id=None, input_asset_uploads=None):
         return type(

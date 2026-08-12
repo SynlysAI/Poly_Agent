@@ -50,6 +50,7 @@ import ToolMenuPicker from '../components/ToolMenuPicker.vue'
 import {
   applyToolCallEvent,
   canEditToolCall,
+  mergeToolCalls,
   normalizeToolCall,
   parseToolArguments,
   replaceToolCall,
@@ -78,6 +79,7 @@ const runStates = ref(new Map())
 const runSubscriptions = new Map()
 const toolCallPollers = new Map()
 const continuedToolCalls = new Set()
+const confirmingCallId = ref('')
 const modelLoading = ref(false)
 const knowledgeLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
@@ -744,10 +746,7 @@ function applyAssistantStreamEvent(index, event) {
       target.pending_tool_call_ids = calls.map((call) => call.call_id)
       const userMessage = messages.value[index - 1]
       if (userMessage) {
-        userMessage.tool_calls = calls.map((call) => ({
-          ...call,
-          arguments_text: JSON.stringify(call.arguments || {}, null, 2),
-        }))
+        userMessage.tool_calls = mergeToolCalls(userMessage.tool_calls, calls)
       }
     }
     return ''
@@ -803,6 +802,8 @@ async function uploadToolCallAsset(message, call, assetKey, event) {
 }
 
 async function confirmToolCall(message, call) {
+  if (confirmingCallId.value === call.call_id) return
+  confirmingCallId.value = call.call_id
   try {
     const updated = await confirmAssistantToolCall(call.call_id, {})
     replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
@@ -813,7 +814,23 @@ async function confirmToolCall(message, call) {
       ElMessage.success('算法运行完成')
     }
   } catch (error) {
-    ElMessage.error(`确认执行失败：${getApiErrorMessage(error)}`)
+    const detail = error?.detail
+    const missingFields = Array.isArray(detail?.missing_fields) ? detail.missing_fields : []
+    const missingAssets = Array.isArray(detail?.missing_assets) ? detail.missing_assets : []
+    if (detail?.code === 'TOOL_INPUT_REQUIRED' || missingFields.length || missingAssets.length) {
+      replaceToolCall(message, {
+        ...call,
+        phase: 'awaiting_input',
+        missing_fields: missingFields,
+        required_assets: missingAssets.map((key) => ({ key, required: true, accept: '' })),
+      })
+      const hint = [...missingFields, ...missingAssets.map((key) => `附件：${key}`)].join('、')
+      ElMessage.warning(`请先补充参数后再次确认：${hint || '存在必填输入'}`)
+    } else {
+      ElMessage.error(`确认执行失败：${getApiErrorMessage(error)}`)
+    }
+  } finally {
+    confirmingCallId.value = ''
   }
 }
 
@@ -1363,6 +1380,7 @@ watch(
                       v-if="call.phase === 'awaiting_confirmation'"
                       size="small"
                       type="primary"
+                      :loading="confirmingCallId === call.call_id"
                       @click="confirmToolCall(msg, call)"
                     >
                       确认执行
@@ -1400,16 +1418,27 @@ watch(
                     :show-input="true"
                   />
                   <div v-if="call.artifact_refs?.length" class="tool-artifacts">
-                    <el-button
-                      v-for="ref in call.artifact_refs"
-                      :key="ref.artifact_id"
-                      size="small"
-                      text
-                      type="primary"
-                      @click="downloadToolArtifact(ref)"
-                    >
-                      下载 {{ ref.name || ref.artifact_id }}
-                    </el-button>
+                    <template v-for="(ref, refIndex) in call.artifact_refs" :key="ref.artifact_id || refIndex">
+                      <el-button
+                        v-if="ref.artifact_id || ref.id"
+                        size="small"
+                        text
+                        type="primary"
+                        @click="downloadToolArtifact(ref)"
+                      >
+                        下载 {{ ref.name || ref.artifact_id }}
+                      </el-button>
+                      <el-button
+                        v-else
+                        size="small"
+                        text
+                        type="primary"
+                        :disabled="!call.run_id"
+                        @click="router.push(toolCallRunDetailRoute(call))"
+                      >
+                        查看运行结果
+                      </el-button>
+                    </template>
                   </div>
                 </div>
                 <div v-if="call.phase === 'failed'" class="tool-call-error">

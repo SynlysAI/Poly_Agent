@@ -1904,7 +1904,7 @@ class ResearchEngineService:
                 else:
                     artifact_specs = [{
                         "type": "json_artifact",
-                        "name": f"{payload.algorithm_id}_{algorithm_version.version}_output",
+                        "name": "运行结果",
                         "content": output_summary,
                         "content_type": "application/json",
                         "description": "远程接口运行输出",
@@ -1961,7 +1961,7 @@ class ResearchEngineService:
                     artifact_specs = [
                         {
                             "type": "json_artifact",
-                            "name": f"{payload.algorithm_id}_{algorithm_version.version}_output",
+                            "name": "运行结果",
                             "content": output_summary,
                             "content_type": "application/json",
                             "description": "上传算法运行输出",
