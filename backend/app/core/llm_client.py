@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextvars import ContextVar
 
 from openai import OpenAI
 
@@ -11,6 +12,20 @@ from app.services.llm_model_service import LLMModelService
 
 
 _client: OpenAI | None = None
+_stream_usage: ContextVar[dict[str, int] | None] = ContextVar("llm_stream_usage", default=None)
+
+
+def reset_stream_usage() -> None:
+    _stream_usage.set(None)
+
+
+def get_stream_usage() -> dict[str, int] | None:
+    value = _stream_usage.get()
+    return dict(value) if value else None
+
+
+def record_stream_usage(usage: dict[str, int] | None) -> None:
+    _stream_usage.set(dict(usage) if usage else None)
 
 
 def get_client() -> OpenAI:

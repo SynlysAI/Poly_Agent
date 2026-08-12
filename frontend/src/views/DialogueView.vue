@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -22,19 +22,23 @@ import {
 
 import {
   cancelAssistantToolCall,
+  cancelAssistantRun,
   confirmAssistantToolCall,
   createAssistantChat,
-  createAssistantMessage,
+  createAssistantRun,
   createAssistantToolCall,
   deleteAssistantChat,
   downloadArtifact,
   getApiErrorMessage,
   getAssistantChat,
+  getActiveAssistantRun,
+  getAssistantRun,
   getLlmModels,
   listAgentTools,
   listAssistantChats,
+  listAssistantRuns,
   listKnowledgeSystems,
-  streamAssistantChat,
+  streamAssistantRunEvents,
   updateAssistantChat,
   updateAssistantToolCallInput,
   uploadAssistantToolCallInput,
@@ -66,7 +70,8 @@ const route = useRoute()
 const router = useRouter()
 const bodyRef = ref(null)
 const inputText = ref('')
-const sending = ref(false)
+const runStates = ref(new Map())
+const runSubscriptions = new Map()
 const modelLoading = ref(false)
 const knowledgeLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
@@ -85,6 +90,12 @@ const historyQuery = ref('')
 const historyLoading = ref(false)
 const historyArchived = ref(false)
 const historyPanelVisible = ref(loadHistoryPanelPreference())
+const activeRunStatuses = new Set(['queued', 'running'])
+const currentRun = computed(() => runStates.value.get(chatId.value) || null)
+const activeUserRun = computed(() => [...runStates.value.values()].find((run) => activeRunStatuses.has(run.status)) || null)
+const currentRunActive = computed(() => activeRunStatuses.has(currentRun.value?.status))
+const userHasActiveRun = computed(() => Boolean(activeUserRun.value))
+const composerBusy = computed(() => userHasActiveRun.value)
 
 function defaultMessages() {
   return [{
@@ -307,6 +318,7 @@ async function loadChat(chatKey) {
     useWebSearch.value = Boolean(data.use_web_search)
     messages.value = data.messages?.length ? data.messages.map(restoreMessage) : defaultMessages()
     selectDefaultModelForMode(data.model || {})
+    await loadChatRun(chatKey)
     await loadChatHistory()
     scrollToBottom()
   } catch (error) {
@@ -328,14 +340,13 @@ async function ensureChat() {
 }
 
 async function createNewChat() {
-  if (sending.value) return
   chatId.value = ''
   messages.value = defaultMessages()
   await router.push({ path: '/dialogue', query: { mode: chatMode.value } })
 }
 
 async function selectHistoryChat(item) {
-  if (sending.value || !item?.chat_id) return
+  if (!item?.chat_id) return
   await router.push({ path: `/dialogue/${encodeURIComponent(item.chat_id)}` })
   await loadChat(item.chat_id)
 }
@@ -381,76 +392,166 @@ async function sendMessage() {
 
 async function sendPrompt(prompt) {
   const text = String(prompt || '').trim()
-  if (!text || sending.value) return
-  const requestUseWebSearch = Boolean(useWebSearch.value)
+  if (!text || userHasActiveRun.value) return
   try {
     await ensureChat()
   } catch (error) {
     ElMessage.error(`会话保存失败：${getApiErrorMessage(error)}`)
     return
   }
-  messages.value.push({ role: 'user', content: text, tool_calls: [] })
-  const userIndex = messages.value.length - 1
-  try {
-    const savedUserMessage = await createAssistantMessage(chatId.value, { role: 'user', content: text })
-    Object.assign(messages.value[userIndex], savedUserMessage, {
-      tool_calls: messages.value[userIndex].tool_calls || [],
-    })
-    userMessageId.value = savedUserMessage.message_id
-  } catch (error) {
-    messages.value.pop()
-    ElMessage.error(`消息保存失败：${getApiErrorMessage(error)}`)
-    return
-  }
+  const targetChatId = chatId.value
   const requestMessages = buildRequestMessages()
-  const assistantMessage = {
-    role: 'assistant',
-    content: '',
-    reasoning_summary: [],
-    actions: [],
-    references: [],
-    suggested_questions: [],
-    answer_mode: '',
-    answer_scope: '',
-    retrieval_status: '',
-    web_search_requested: requestUseWebSearch,
-    stream_status: '准备回答...',
-    stream_stage: 'queued',
-    streaming: true,
-    error: false,
-    tool_calls: [],
-    pending_tool_call_ids: [],
-  }
-  messages.value.push(assistantMessage)
-  const assistantIndex = messages.value.length - 1
-  inputText.value = ''
-  sending.value = true
-  scrollToBottom()
-  let streamErrorMessage = ''
   try {
-    streamErrorMessage = await runAssistantStream({
-      requestMessages,
+    const run = await createAssistantRun(targetChatId, {
+      content: text,
+      messages: requestMessages,
       context: buildAssistantContext({}),
-      assistantIndex,
     })
-    if (streamErrorMessage) ElMessage.error(`对话失败：${streamErrorMessage}`)
+    userMessageId.value = run.user_message_id
+    messages.value.push({
+      role: 'user',
+      content: text,
+      message_id: run.user_message_id,
+      tool_calls: [],
+    })
+    messages.value.push(runPlaceholder(run))
+    inputText.value = ''
+    registerRun(run)
+    subscribeToRun(run)
+    await loadChatHistory()
+    scrollToBottom()
   } catch (error) {
-    const message = getApiErrorMessage(error)
-    Object.assign(messages.value[assistantIndex], {
-      content: `对话出错：${message}`,
-      stream_status: '',
-      stream_stage: 'error',
-      streaming: false,
-      error: true,
-    })
-    ElMessage.error(`对话失败：${message}`)
-  } finally {
-    if (messages.value[assistantIndex]) {
-      messages.value[assistantIndex].streaming = false
-      messages.value[assistantIndex].stream_status = ''
+    if (error.status === 409 && error.detail?.run_id) {
+      ElMessage.warning('已有会话正在回答，请等待完成或先取消该回答')
+      await refreshActiveRun()
+    } else {
+      ElMessage.error(`回答任务创建失败：${getApiErrorMessage(error)}`)
     }
-    sending.value = false
-    await finalizeAssistantMessage(assistantIndex)
+  }
+}
+
+function runPlaceholder(run) {
+  return {
+    role: 'assistant', content: run.partial_content || '', reasoning_summary: [], actions: [], references: [],
+    suggested_questions: [], answer_mode: '', answer_scope: '', retrieval_status: '',
+    web_search_requested: Boolean(run.request_snapshot?.context?.use_web_search),
+    stream_status: run.status === 'queued' ? '已进入回答队列' : '正在回答...',
+    stream_stage: run.stage || run.status, streaming: activeRunStatuses.has(run.status), error: run.status === 'failed',
+    tool_calls: [], pending_tool_call_ids: [], run_id: run.run_id,
+  }
+}
+
+function registerRun(run) {
+  if (!run?.chat_id) return
+  const next = new Map(runStates.value)
+  const previous = next.get(run.chat_id) || {}
+  next.set(run.chat_id, { ...previous, ...run, lastSeq: run.lastSeq ?? run.event_seq ?? previous.lastSeq ?? 0 })
+  runStates.value = next
+}
+
+function runMessageIndex(runId) {
+  return messages.value.findIndex((message) => message.run_id === runId || message.metadata?.run_id === runId)
+}
+
+async function loadChatRun(chatKey) {
+  try {
+    const data = await listAssistantRuns(chatKey, { page_size: 20 })
+    const run = data?.active || data?.items?.[0]
+    if (!run) return
+    registerRun(run)
+    if (activeRunStatuses.has(run.status)) {
+      if (runMessageIndex(run.run_id) < 0) messages.value.push(runPlaceholder(run))
+      subscribeToRun(run)
+    }
+  } catch (error) {
+    ElMessage.warning(`回答状态恢复失败：${getApiErrorMessage(error)}`)
+  }
+}
+
+async function refreshActiveRun() {
+  try {
+    const run = await getActiveAssistantRun()
+    if (!run) return
+    registerRun(run)
+    subscribeToRun(run)
+  } catch {
+    // The chat-level restore path will retry when the user opens the conversation.
+  }
+}
+
+function applyRunEvent(run, event) {
+  const current = runStates.value.get(run.chat_id) || run
+  current.lastSeq = Math.max(current.lastSeq || 0, event.seq || 0)
+  if (event.type === 'run_status') {
+    current.status = event.status || current.status
+    current.stage = event.stage || current.stage
+    current.error = event.error || current.error
+  }
+  if (event.type === 'reset') {
+    current.status = 'queued'
+    current.stage = 'queued'
+    current.partial_content = ''
+  }
+  const next = new Map(runStates.value)
+  next.set(run.chat_id, current)
+  runStates.value = next
+  if (chatId.value !== run.chat_id) return
+  const index = runMessageIndex(run.run_id)
+  if (index >= 0 && event.type === 'reset') {
+    Object.assign(messages.value[index], {
+      content: '', streaming: true, error: false, stream_stage: 'queued',
+      stream_status: event.message || '正在重新生成回答',
+    })
+  }
+  if (index >= 0 && !['run_status', 'heartbeat'].includes(event.type)) applyAssistantStreamEvent(index, event)
+  if (index >= 0 && event.type === 'run_status') {
+    const target = messages.value[index]
+    target.streaming = activeRunStatuses.has(event.status)
+    target.stream_stage = event.stage || event.status
+    target.stream_status = event.status === 'canceled' ? '回答已取消' : ''
+    if (event.status === 'failed') {
+      target.error = true
+      target.content = target.content || `对话出错：${event.error?.message || '回答失败'}`
+    }
+  }
+}
+
+async function subscribeToRun(run) {
+  if (!run?.run_id || runSubscriptions.has(run.run_id) || !activeRunStatuses.has(run.status)) return
+  const controller = new AbortController()
+  runSubscriptions.set(run.run_id, controller)
+  let retries = 0
+  try {
+    while (!controller.signal.aborted) {
+      const current = runStates.value.get(run.chat_id) || run
+      if (!activeRunStatuses.has(current.status)) break
+      try {
+        await streamAssistantRunEvents(run.run_id, current.lastSeq || 0, (event) => applyRunEvent(run, event), controller.signal)
+        retries = 0
+      } catch (error) {
+        if (controller.signal.aborted) break
+        retries += 1
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * (2 ** (retries - 1)), 8000)))
+        const restored = await getAssistantRun(run.run_id)
+        registerRun({ ...restored, lastSeq: current.lastSeq || 0 })
+      }
+    }
+  } finally {
+    runSubscriptions.delete(run.run_id)
+    const latest = await getAssistantRun(run.run_id).catch(() => null)
+    if (latest) registerRun(latest)
+    if (latest?.status === 'completed' && chatId.value === run.chat_id) await loadChat(run.chat_id)
+  }
+}
+
+async function cancelCurrentRun() {
+  if (!currentRunActive.value) return
+  try {
+    const run = await cancelAssistantRun(currentRun.value.run_id)
+    registerRun(run)
+    applyRunEvent(run, { type: 'run_status', status: run.status, stage: run.stage, seq: run.event_seq })
+  } catch (error) {
+    ElMessage.error(`取消失败：${getApiErrorMessage(error)}`)
   }
 }
 
@@ -473,88 +574,22 @@ function buildAssistantContext(extra = {}) {
   }
 }
 
-async function runAssistantStream({ requestMessages, context, assistantIndex }) {
-  let streamErrorMessage = ''
-  await streamAssistantChat(
-    { messages: requestMessages, context },
-    (event) => {
-      const errorMessage = applyAssistantStreamEvent(assistantIndex, event)
-      if (errorMessage) streamErrorMessage = errorMessage
-      scrollToBottom()
-    },
-  )
-  return streamErrorMessage
-}
-
-async function finalizeAssistantMessage(assistantIndex) {
-  const assistant = messages.value[assistantIndex]
-  if (!assistant) return
-  assistant.streaming = false
-  assistant.stream_status = ''
-  if (assistant.content && !assistant.streaming) {
-    try {
-      await createAssistantMessage(chatId.value, {
-        role: 'assistant',
-        content: assistant.content,
-        references: assistant.references || [],
-        reasoning_summary: assistant.reasoning_summary || [],
-        answer_mode: assistant.answer_mode || null,
-        answer_scope: assistant.answer_scope || null,
-        retrieval_status: assistant.retrieval_status || null,
-        tool_call_ids: assistant.pending_tool_call_ids || [],
-      })
-      await loadChatHistory()
-    } catch (error) {
-      ElMessage.warning(`助手回复未能保存：${getApiErrorMessage(error)}`)
-    }
-  }
-  scrollToBottom()
-}
-
 async function continueToolCall(callId) {
-  if (sending.value) return
-  const assistantMessage = {
-    role: 'assistant',
-    content: '',
-    reasoning_summary: [],
-    actions: [],
-    references: [],
-    suggested_questions: [],
-    answer_mode: '',
-    answer_scope: '',
-    retrieval_status: '',
-    stream_status: '正在基于算法结果生成回答...',
-    stream_stage: 'queued',
-    streaming: true,
-    error: false,
-    tool_calls: [],
-    pending_tool_call_ids: [],
-  }
-  messages.value.push(assistantMessage)
-  const assistantIndex = messages.value.length - 1
-  sending.value = true
-  scrollToBottom()
-  let streamErrorMessage = ''
+  if (composerBusy.value) return
+  const targetChatId = chatId.value
   try {
-    streamErrorMessage = await runAssistantStream({
-      requestMessages: buildRequestMessages(),
+    const run = await createAssistantRun(targetChatId, {
+      content: '',
+      user_message_id: userMessageId.value,
+      messages: buildRequestMessages(),
       context: buildAssistantContext({ tool_call_ids: [callId] }),
-      assistantIndex,
     })
-    if (streamErrorMessage) ElMessage.error(`继续生成失败：${streamErrorMessage}`)
+    messages.value.push(runPlaceholder(run))
+    registerRun(run)
+    subscribeToRun(run)
+    scrollToBottom()
   } catch (error) {
-    const message = getApiErrorMessage(error)
-    Object.assign(messages.value[assistantIndex], {
-      content: `对话出错：${message}`,
-      stream_status: '',
-      stream_stage: 'error',
-      streaming: false,
-      error: true,
-    })
-    ElMessage.error(`继续生成失败：${message}`)
-  } finally {
-    sending.value = false
-    await finalizeAssistantMessage(assistantIndex)
+    ElMessage.error(`继续生成失败：${getApiErrorMessage(error)}`)
   }
 }
 
@@ -972,6 +1007,7 @@ onMounted(() => {
     loadKnowledgeBases(),
     loadAgentTools(),
   ]).then(async () => {
+    await refreshActiveRun()
     if (chatId.value) await loadChat(chatId.value)
     await loadChatHistory()
     if (initialPrompt) await sendPrompt(initialPrompt)
@@ -981,7 +1017,7 @@ onMounted(() => {
 watch(
   [chatMode, selectedModelKey, selectedKnowledgeBaseIds, useWebSearch],
   async () => {
-    if (!chatId.value || sending.value) return
+    if (!chatId.value || currentRunActive.value) return
     try {
       await updateAssistantChat(chatId.value, chatOptionsPayload())
       await loadChatHistory()
@@ -991,6 +1027,11 @@ watch(
   },
   { deep: true },
 )
+
+onUnmounted(() => {
+  for (const controller of runSubscriptions.values()) controller.abort()
+  runSubscriptions.clear()
+})
 
 watch(
   () => route.params.chatId,
@@ -1262,7 +1303,7 @@ watch(
 
     <footer class="dialogue-composer">
       <div class="suggestion-row" aria-label="推荐问题">
-        <button v-for="question in currentSuggestions" :key="question" type="button" :disabled="sending" @click="sendPrompt(question)">
+        <button v-for="question in currentSuggestions" :key="question" type="button" :disabled="composerBusy" @click="sendPrompt(question)">
           {{ question }}
         </button>
       </div>
@@ -1287,7 +1328,7 @@ watch(
             :rows="2"
             placeholder="继续研究..."
             resize="none"
-            :disabled="sending"
+            :disabled="composerBusy"
             @keydown="handleComposerKeydown"
           />
         </div>
@@ -1378,11 +1419,19 @@ watch(
               :loading="modelLoading"
             />
             <el-button
+              v-if="currentRunActive"
+              type="danger"
+              plain
+              @click="cancelCurrentRun"
+            >
+              取消回答
+            </el-button>
+            <el-button
               type="primary"
               circle
               :icon="Promotion"
-              :disabled="!inputText.trim() || sending"
-              :loading="sending"
+              :disabled="!inputText.trim() || composerBusy"
+              :loading="composerBusy"
               aria-label="发送"
               @click="sendMessage"
             />

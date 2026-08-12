@@ -1110,6 +1110,68 @@ export function createAssistantMessage(chatId, payload) {
   return apiClient.post(`/assistant/chats/${encodeURIComponent(chatId)}/messages`, payload).then(unwrapResponse)
 }
 
+export function createAssistantRun(chatId, payload) {
+  return apiClient.post(`/assistant/chats/${encodeURIComponent(chatId)}/runs`, payload).then(unwrapResponse)
+}
+
+export function listAssistantRuns(chatId, params = {}) {
+  return apiClient.get(`/assistant/chats/${encodeURIComponent(chatId)}/runs`, { params }).then(unwrapResponse)
+}
+
+export function getAssistantRun(runId) {
+  return apiClient.get(`/assistant/runs/${encodeURIComponent(runId)}`).then(unwrapResponse)
+}
+
+export function getActiveAssistantRun() {
+  return apiClient.get('/assistant/runs-active/current').then(unwrapResponse)
+}
+
+export function cancelAssistantRun(runId) {
+  return apiClient.post(`/assistant/runs/${encodeURIComponent(runId)}/cancel`).then(unwrapResponse)
+}
+
+export async function streamAssistantRunEvents(runId, afterSeq, onEvent, signal) {
+  const headers = { 'X-Request-Id': generateRequestId() }
+  const authHeader = getAuthorizationHeader()
+  if (authHeader) headers.Authorization = authHeader
+  const params = new URLSearchParams({ after_seq: String(Math.max(0, afterSeq || 0)) })
+  const response = await fetch(`${resolvedBaseUrl}/assistant/runs/${encodeURIComponent(runId)}/events?${params}`, {
+    method: 'GET',
+    headers,
+    signal,
+  })
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`
+    try {
+      const data = await response.json()
+      message = data?.data?.detail || data.detail || data.message || message
+    } catch {
+      // Keep the HTTP status when the response is not JSON.
+    }
+    const error = createApiError('http', typeof message === 'string' ? message : JSON.stringify(message))
+    error.status = response.status
+    throw error
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() || ''
+    for (const rawEvent of events) {
+      const dataLines = rawEvent.split('\n').filter((line) => line.startsWith('data: ')).map((line) => line.slice(6))
+      if (dataLines.length) onEvent(JSON.parse(dataLines.join('\n')))
+    }
+    if (done) break
+  }
+  if (buffer.trim()) {
+    const dataLines = buffer.split('\n').filter((line) => line.startsWith('data: ')).map((line) => line.slice(6))
+    if (dataLines.length) onEvent(JSON.parse(dataLines.join('\n')))
+  }
+}
+
 export function updateAssistantMessage(chatId, messageId, payload) {
   return apiClient.patch(
     `/assistant/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
