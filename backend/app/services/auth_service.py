@@ -9,6 +9,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from app.core.auth import build_access_token
+from app.core.config import settings
 from app.infra.mongo import get_invite_codes_collection, get_users_collection
 from app.infra.repositories import InviteCodeRepository
 from app.infra.repositories import UserRepository
@@ -21,6 +22,8 @@ PASSWORD_HASH_ITERATIONS = 260000
 
 def ensure_identity_indexes() -> None:
     """确保用户与邀请码集合索引已创建。"""
+    if not settings.uses_mongodb:
+        return
     get_users_collection().create_index("username", unique=True)
     get_users_collection().create_index("user_id", unique=True)
     get_invite_codes_collection().create_index("invite_code", unique=True)
@@ -81,6 +84,38 @@ class AuthService:
 
         legacy_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
         return hmac.compare_digest(legacy_hash, password_hash)
+
+    @staticmethod
+    def ensure_default_admin() -> UserRecord | None:
+        """幂等引导默认管理员账号。
+
+        仅在启用认证且允许引导时创建；已存在同名账号则跳过，绝不覆盖
+        已有密码。默认凭据来自 AUTH_USERNAME / AUTH_PASSWORD 配置。
+
+        Returns:
+            新建的管理员记录；未创建时返回 None。
+        """
+        if not settings.auth_enabled or not settings.auth_bootstrap_enabled:
+            return None
+        username = settings.auth_username.strip()
+        if not username:
+            return None
+        if UserRepository.find_by_username(username):
+            return None
+        now = datetime.now()
+        user_record = UserRecord(
+            user_id=f"u_{uuid4().hex[:12]}",
+            username=username,
+            password_hash=AuthService.hash_password(settings.auth_password),
+            role="admin",
+            status="active",
+            created_at=now,
+            updated_at=now,
+            last_login_at=None,
+            created_by="system",
+        )
+        UserRepository.save(user_record)
+        return user_record
 
     @staticmethod
     def register(

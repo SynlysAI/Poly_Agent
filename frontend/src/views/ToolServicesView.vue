@@ -277,6 +277,7 @@ const currentConfig = computed(() => configs.value.find((item) => item.service_k
 const serviceCatalog = {
   mongodb: { name: 'MongoDB', group: '核心存储', hint: 'Poly Agent 主数据库连接状态' },
   'data-asset-mongodb': { name: '数据资产 MongoDB', group: '核心存储', hint: '只读材料数据资产库接入状态' },
+  sqlite: { name: 'SQLite', group: '核心存储', hint: '开发/测试环境本地文档存储' },
   'computation-worker': { name: '计算 Worker', group: '运行组件', hint: '领取 queued run 并执行真实计算 workflow' },
   'artifact-store': { name: 'Artifact 存储', group: '核心存储', hint: '保存结构、日志、结果 JSON 和下载文件' },
   weknora: { name: 'WeKnora', group: '知识服务', hint: '知识库管理、检索问答和引用证据状态' },
@@ -316,7 +317,8 @@ const serviceStatusByKey = computed(() => Object.fromEntries(
   services.value.map((item) => [item.service, item]),
 ))
 
-const CORE_SERVICE_IDS = ['mongodb', 'artifact-store', 'weknora', 'computation-worker']
+const CORE_SERVICE_IDS = ['sqlite', 'mongodb', 'artifact-store', 'weknora', 'computation-worker']
+const ACTIVE_STORAGE_SERVICE_IDS = ['sqlite', 'mongodb']
 const TOOLCHAIN_SERVICE_IDS = ['rdkit', 'openbabel', 'xtb', 'crest', 'orca']
 
 function isReadyStatus(status) {
@@ -325,8 +327,11 @@ function isReadyStatus(status) {
 
 const healthSummary = computed(() => {
   const items = services.value.filter((item) => CORE_SERVICE_IDS.includes(item.service))
-  const ready = items.filter((item) => isReadyStatus(item.status)).length
-  return { ready, total: items.length }
+  const storageItems = items.filter((item) => ACTIVE_STORAGE_SERVICE_IDS.includes(item.service))
+  const otherItems = items.filter((item) => !ACTIVE_STORAGE_SERVICE_IDS.includes(item.service))
+  const storageReady = storageItems.some((item) => isReadyStatus(item.status))
+  const otherReady = otherItems.filter((item) => isReadyStatus(item.status)).length
+  return { ready: otherReady + (storageReady ? 1 : 0), total: otherItems.length + 1 }
 })
 
 const serviceHealthStats = computed(() => {

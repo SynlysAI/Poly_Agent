@@ -153,8 +153,8 @@ export function schemaFieldType(description = '') {
   if (/^(number|float)$/.test(token)) return 'number'
   if (/^(integer|int)$/.test(token)) return 'integer'
   if (/^(boolean|bool)$/.test(token)) return 'boolean'
-  if (/^(list|array)\[/.test(token)) return 'array'
-  if (/^(dict|map)\[/.test(token)) return 'object'
+  if (/^(list|array)(\[|$)/.test(token)) return 'array'
+  if (/^(dict|map)(\[|$)/.test(token)) return 'object'
   return 'string'
 }
 

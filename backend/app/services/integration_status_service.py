@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.core.time import utc_now
+from app.infra.sqlite_store import demo_store
 from app.services.integration_config_service import IntegrationConfigService
 
 
@@ -27,6 +28,7 @@ class IntegrationStatusService:
         }
         items = [
             self._worker_status(checked_at),
+            self._sqlite_status(checked_at),
             self._mongodb_status(checked_at),
             self._data_asset_mongodb_status(checked_at),
             self._artifact_status(checked_at),
@@ -93,6 +95,16 @@ class IntegrationStatusService:
         }
 
     def _mongodb_status(self, checked_at: str) -> dict:
+        if not settings.uses_mongodb:
+            return {
+                "service": "mongodb",
+                "status": "not_configured",
+                "checked_at": checked_at,
+                "details": {
+                    "required": False,
+                    "reason": "当前环境使用本地 SQLite 存储",
+                },
+            }
         available = self._can_connect(settings.mongodb_host, settings.mongodb_port)
         return {
             "service": "mongodb",
@@ -107,7 +119,31 @@ class IntegrationStatusService:
             },
         }
 
+    def _sqlite_status(self, checked_at: str) -> dict:
+        """返回本地 SQLite 存储状态。"""
+        available = settings.uses_sqlite and demo_store.ping()
+        return {
+            "service": "sqlite",
+            "status": "up" if available else ("not_configured" if not settings.uses_sqlite else "down"),
+            "checked_at": checked_at,
+            "details": {
+                "path": str(settings.sqlite_database_path),
+                "backend": settings.storage_backend,
+                "reason": None if available or not settings.uses_sqlite else "SQLite 文件不可读",
+            },
+        }
+
     def _data_asset_mongodb_status(self, checked_at: str) -> dict:
+        if not settings.uses_mongodb:
+            return {
+                "service": "data-asset-mongodb",
+                "status": "not_configured",
+                "checked_at": checked_at,
+                "details": {
+                    "configured": False,
+                    "reason": "当前环境使用本地 SQLite poly data 样本",
+                },
+            }
         host, port = settings.mongodb_host, settings.mongodb_port
         available = bool(host and self._can_connect(host, port))
         return {

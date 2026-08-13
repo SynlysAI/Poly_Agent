@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 from pathlib import Path
@@ -153,6 +154,45 @@ class AssistantToolCallService:
                 },
             )
         return missing, errors
+
+    @staticmethod
+    def _field_type_token(tool: AgentTool, field: str) -> str:
+        description = str((tool.input_schema.fields or {}).get(field, "")).strip()
+        return description.split(" -", 1)[0].strip().lower()
+
+    @classmethod
+    def _coerce_arguments(cls, tool: AgentTool, arguments: dict[str, Any]) -> dict[str, Any]:
+        """修正模型提案里“列表字段传成单个值”的常见错误。
+
+        模型经常把 list 类型的字段直接传成单个对象/字符串，导致校验返回
+        TOOL_INPUT_INVALID。这里对 list/array 字段做保守修复：
+        - 已是 list 原样保留；
+        - 字符串能解析成 JSON list 时直接采用；
+        - 其余非 list 值包装成单元素列表。
+        """
+        coerced = dict(arguments or {})
+        for field, value in list(coerced.items()):
+            token = cls._field_type_token(tool, field)
+            if not token.startswith(("list", "array")):
+                continue
+            if value is None:
+                # 缺失值留给 missing_fields 校验，生成“等待补充参数”卡片。
+                continue
+            if isinstance(value, list):
+                continue
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    parsed = None
+                if isinstance(parsed, list):
+                    coerced[field] = parsed
+                    continue
+                if isinstance(parsed, dict):
+                    coerced[field] = [parsed]
+                    continue
+            coerced[field] = [value]
+        return coerced
 
     @staticmethod
     def _validate_asset_refs(tool: AgentTool, refs: dict[str, Any]) -> None:
@@ -319,6 +359,7 @@ class AssistantToolCallService:
         tool = cls._tool(algorithm_id, current_user)
         arguments = dict(tool.input_schema.field_defaults or {})
         arguments.update(payload.arguments)
+        arguments = cls._coerce_arguments(tool, arguments)
         missing_fields, _ = cls._validate_arguments(tool, arguments)
         cls._validate_asset_refs(tool, payload.input_asset_refs)
         uploaded_assets: list[dict[str, Any]] = []

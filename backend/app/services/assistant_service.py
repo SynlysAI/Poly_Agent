@@ -16,6 +16,7 @@ from typing import Iterable
 from urllib.parse import quote_plus, urljoin, urlparse
 
 import httpx
+from fastapi import HTTPException
 
 from app.core import llm_client
 from app.core.config import settings
@@ -1401,14 +1402,15 @@ class AssistantService:
             "boolean": "boolean",
             "bool": "boolean",
         }
-        list_match = re.match(r"^(?:list|array)\[(.*)\]$", type_token)
-        dict_match = re.match(r"^(?:dict|map)\[(.*)\]$", type_token)
+        list_match = re.match(r"^(?:list|array)(?:\[(.*)\])?$", type_token)
+        dict_match = re.match(r"^(?:dict|map)(?:\[(.*)\])?$", type_token)
         if list_match:
-            inner = list_match.group(1).strip()
-            prop: dict[str, Any] = {
-                "type": "array",
-                "items": {"type": scalar_types.get(inner, "string")},
-            }
+            inner = (list_match.group(1) or "").strip()
+            # 裸的 list/array 没有元素类型信息，不伪造 items，让模型自由传对象或标量；
+            # 服务端会在 assistant_tool_service 中把单个对象包装成列表。
+            prop: dict[str, Any] = {"type": "array"}
+            if inner:
+                prop["items"] = {"type": scalar_types.get(inner, "string")}
         elif dict_match:
             prop = {"type": "object", "additionalProperties": True}
         else:
@@ -1478,6 +1480,7 @@ class AssistantService:
 
         events: list[dict] = []
         pending: list[AssistantToolCall] = []
+        proposal_error: str | None = None
         # A single user prompt may submit at most one vertical algorithm call.
         for call in tool_calls[:1]:
             function = getattr(call, "function", None)
@@ -1510,8 +1513,24 @@ class AssistantService:
                 )
                 pending.append(created)
                 events.extend(AssistantToolCallRepository.list_events(created.call_id))
+            except HTTPException as exc:
+                detail = exc.detail
+                if isinstance(detail, dict):
+                    code = str(detail.get("code") or "")
+                    if code == "TOOL_INPUT_INVALID":
+                        details = detail.get("details") or {}
+                        rendered = "；".join(f"{key}: {value}" for key, value in details.items()) or "参数校验失败"
+                        proposal_error = f"未能生成算法调用卡片：{rendered}。请重新描述参数后发送，或到算法页面直接填写参数运行。"
+                    else:
+                        proposal_error = f"未能生成算法调用卡片：{detail.get('message') or exc.detail}"
+                else:
+                    proposal_error = f"未能生成算法调用卡片：{exc.detail}"
+                logger.warning("assistant tool proposal rejected %s: %s", tool_id, exc)
             except Exception as exc:
+                proposal_error = "生成算法调用卡片时发生异常，请稍后重试。"
                 logger.warning("assistant tool proposal skipped call %s: %s", tool_id, exc)
+        if proposal_error:
+            return [], [], proposal_error, tools
         return events, pending, None, tools
 
     def _continuation_messages(

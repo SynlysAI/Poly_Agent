@@ -11,6 +11,7 @@ BACKEND_ROOT = PROJECT_ROOT / "backend"
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.infra.mongo import get_database  # noqa: E402
+from app.core.config import settings  # noqa: E402
 
 
 INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
@@ -75,6 +76,9 @@ INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
 
 
 def main() -> None:
+    if not settings.uses_mongodb:
+        print(f"skip MongoDB index initialization: storage_backend={settings.storage_backend}")
+        return
     database = get_database()
     for collection_name, specs in INDEXES.items():
         collection = database[collection_name]

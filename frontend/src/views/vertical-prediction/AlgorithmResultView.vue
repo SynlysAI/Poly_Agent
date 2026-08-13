@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Document, Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -30,6 +30,8 @@ const props = defineProps({
 const router = useRouter()
 const tablePagination = ref({})
 const downloadingArtifactId = ref('')
+const expandedOtherSections = ref([])
+const expandedRawPanels = ref([])
 
 const priorityValueKeys = ['value', 'predicted_value', 'prediction', 'score']
 const uncertaintyKeys = ['uncertainty', 'std', 'stddev', 'confidence', 'probability']
@@ -95,6 +97,28 @@ const rawPanels = computed(() => {
   if (props.error) panels.push({ name: 'error', title: '错误 JSON', data: props.error })
   return panels
 })
+
+watch(
+  () => evidence.value.otherSections.map((section) => section.title),
+  (titles) => {
+    const known = new Set(titles)
+    const kept = expandedOtherSections.value.filter((title) => known.has(title))
+    const added = titles.filter((title) => !expandedOtherSections.value.includes(title))
+    expandedOtherSections.value = [...kept, ...added]
+  },
+  { immediate: true },
+)
+
+watch(
+  () => rawPanels.value.map((panel) => panel.name),
+  (names) => {
+    const known = new Set(names)
+    const kept = expandedRawPanels.value.filter((name) => known.has(name))
+    const added = names.filter((name) => !expandedRawPanels.value.includes(name))
+    expandedRawPanels.value = [...kept, ...added]
+  },
+  { immediate: true },
+)
 
 const artifactRows = computed(() => {
   const rows = props.artifactRefs.map((item, index) => ({
@@ -648,7 +672,7 @@ function stringifyJson(value) {
 
       <section v-if="evidence.otherSections.length" class="result-section">
         <h4>其他输出</h4>
-        <el-collapse>
+        <el-collapse v-model="expandedOtherSections">
           <el-collapse-item v-for="section in evidence.otherSections" :key="section.title" :title="section.title" :name="section.title">
             <div class="json-tree-panel"><JsonTreeView :value="section.data" /></div>
           </el-collapse-item>
@@ -707,7 +731,7 @@ function stringifyJson(value) {
 
     <section class="result-section">
       <h4>补充数据</h4>
-      <el-collapse>
+      <el-collapse v-model="expandedRawPanels">
         <el-collapse-item v-for="panel in rawPanels" :key="panel.name" :title="panel.title" :name="panel.name">
           <pre class="json-block">{{ stringifyJson(panel.data) }}</pre>
         </el-collapse-item>
@@ -871,6 +895,15 @@ function stringifyJson(value) {
   margin: 0 0 8px;
   color: var(--app-ink);
   font-size: 14px;
+}
+
+.result-section :deep(.el-collapse-item__header),
+.result-section :deep(.el-collapse-item__wrap) {
+  color: var(--app-ink-body);
+}
+
+.result-section :deep(.el-collapse-item__header.is-active) {
+  color: var(--app-ink);
 }
 
 .section-heading {

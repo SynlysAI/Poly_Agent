@@ -120,7 +120,7 @@ python deploy/toolchain/scripts/verify_toolchain.py --root /path/to/Poly_Agent
 
 1. **核心工具 CLI 验证**：`python --version`、`node --version`、`rdkit` import、`obabel -V`、`xtb --version`、`crest --version`
 2. **MongoDB ping**：`mongosh --eval 'db.runCommand({ping: 1})'`
-3. **后端健康检查**：`GET /api/v1/health`（`api: up`、`mongodb: up`）
+3. **后端健康检查**：`GET /api/v1/health`（生产环境 `storage_backend: mongodb`、`mongodb: up`；开发环境 `storage_backend: sqlite`、`sqlite: up`）
 4. **集成状态**：`GET /api/v1/integrations/status`
 5. **Smoke Demo 1**：`LOCAL_STRUCTURE / RDKit`，输入 `CCO` → `structure.json`、`structure.xyz`、`structure.sdf`
 6. **Smoke Demo 2**：`LOCAL_XTB / XTB`，输入 `O` → CREST + xTB，`normal_termination=true`

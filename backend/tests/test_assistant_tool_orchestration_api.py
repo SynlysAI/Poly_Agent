@@ -18,7 +18,7 @@ from app.infra.research_engine_repositories import (
     AssistantToolCallRepository,
 )
 from app.main import app
-from app.services.assistant_service import SearchOutcome
+from app.services.assistant_service import AssistantService, SearchOutcome
 
 
 class AssistantToolOrchestrationApiTest(ComputationTestCase):
@@ -66,6 +66,51 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
                     "constraints": {"temperature": {"minimum": 0, "maximum": 500}},
                 },
                 "output_schema": {"fields": {"score": "number"}, "required": ["score"]},
+                "input_assets": [],
+                "output_assets": [],
+                "created_by": "owner-1",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        AlgorithmRegistryRepository.save(
+            "algorithm_id",
+            {
+                "algorithm_id": "list-tool",
+                "name": "List Tool",
+                "description": "接收配方对象列表并返回预测结果",
+                "type": "predictor",
+                "algorithm_family": "vertical_prediction",
+                "capability_group": "vertical_algorithm",
+                "visibility": "public",
+                "owner": "owner-1",
+                "status": "active",
+                "deployment_status": "active",
+                "active_version_id": "list-tool-v1",
+                "input_schema": {
+                    "fields": {"formulations": "list"},
+                    "required": ["formulations"],
+                },
+                "output_schema": {"fields": {"results": "list"}, "required": ["results"]},
+                "input_assets": [],
+                "output_assets": [],
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        AlgorithmVersionRepository.save(
+            "version_id",
+            {
+                "version_id": "list-tool-v1",
+                "algorithm_id": "list-tool",
+                "version": "1.0.0",
+                "status": "active",
+                "input_schema": {
+                    "fields": {"formulations": "list"},
+                    "required": ["formulations"],
+                },
+                "output_schema": {"fields": {"results": "list"}, "required": ["results"]},
                 "input_assets": [],
                 "output_assets": [],
                 "created_by": "owner-1",
@@ -168,6 +213,104 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         self.assertIsNotNone(persisted)
         self.assertEqual(persisted["chat_id"], chat_id)
         self.assertEqual(persisted["message_id"], message_id)
+
+    def test_property_schema_maps_bare_list_and_dict(self) -> None:
+        schema = type("FakeSchema", (), {"field_options": {}, "constraints": {}})()
+        self.assertEqual(
+            AssistantService._property_schema("formulations", "list", schema)["type"],
+            "array",
+        )
+        self.assertNotIn(
+            "items",
+            AssistantService._property_schema("formulations", "list", schema),
+        )
+        self.assertEqual(
+            AssistantService._property_schema("formulations", "array", schema)["type"],
+            "array",
+        )
+        self.assertEqual(
+            AssistantService._property_schema("meta", "dict", schema)["type"],
+            "object",
+        )
+        self.assertEqual(
+            AssistantService._property_schema("items", "list[string]", schema)["items"]["type"],
+            "string",
+        )
+
+    def test_stream_wraps_single_object_into_bare_list_field(self) -> None:
+        chat_id, message_id = self._chat_and_message()
+        captured: dict = {}
+
+        def fake_chat_message(messages, **kwargs):
+            captured["tools"] = kwargs.get("tools")
+            return self._fake_message(
+                tool_calls=[
+                    self._tool_call(
+                        "algorithm_list-tool",
+                        '{"formulations": {"lithium_salt": "LiTFSI"}}',
+                    )
+                ],
+            )
+
+        with patch("app.core.llm_client.chat_message", side_effect=fake_chat_message), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测这个配方"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:list-tool"],
+                    },
+                }
+            )
+
+        properties = captured["tools"][0]["function"]["parameters"]["properties"]
+        self.assertEqual(properties["formulations"]["type"], "array")
+        self.assertNotIn("items", properties["formulations"])
+        final = events[-1]
+        self.assertEqual(final["type"], "final")
+        calls = final["data"]["tool_calls"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            calls[0]["arguments"]["formulations"],
+            [{"lithium_salt": "LiTFSI"}],
+        )
+        self.assertEqual(calls[0]["phase"], "awaiting_confirmation")
+
+    def test_stream_surfaces_tool_proposal_validation_error(self) -> None:
+        chat_id, message_id = self._chat_and_message()
+        with patch(
+            "app.core.llm_client.chat_message",
+            return_value=self._fake_message(
+                tool_calls=[
+                    self._tool_call("algorithm_vertical-tool", '{"smiles": "CCO", "bogus": 1}'),
+                ],
+            ),
+        ), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测 CCO 的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        final = events[-1]
+        self.assertEqual(final["type"], "final")
+        self.assertIn("未能生成算法调用卡片", final["data"]["content"])
+        self.assertIn("bogus", final["data"]["content"])
+        self.assertEqual(final["data"]["tool_calls"], [])
 
     def test_stream_continuation_injects_real_run_result(self) -> None:
         chat_id, message_id = self._chat_and_message()

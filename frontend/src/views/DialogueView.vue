@@ -186,13 +186,14 @@ watch(
 )
 
 function cleanInitialQuery() {
-  if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId && !route.query.toolIds) return
+  if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId && !route.query.toolIds && !route.query.history) return
   const query = { ...route.query }
   delete query.prompt
   delete query.mode
   delete query.providerId
   delete query.modelId
   delete query.toolIds
+  delete query.history
   router.replace({ path: route.path, query })
 }
 
@@ -880,6 +881,10 @@ async function downloadToolArtifact(ref) {
   }
 }
 
+function visibleToolArtifactRefs(call) {
+  return (call?.artifact_refs || []).filter((ref) => ref?.name !== '运行结果')
+}
+
 function currentModeLabel() {
   return chatModeOptions.find((item) => item.value === chatMode.value)?.label || '科研问答'
 }
@@ -1093,6 +1098,9 @@ onMounted(() => {
     .filter(Boolean)
   selectedToolIds.value = initialToolIds
   chatMode.value = normalizeMode(route.query.mode)
+  if (route.query.history === 'open') {
+    historyPanelVisible.value = true
+  }
   cleanInitialQuery()
   Promise.all([
     loadLlmModels({ providerId: initialProviderId, modelId: initialModelId }),
@@ -1423,8 +1431,8 @@ watch(
                     :run-id="call.run_id || ''"
                     :show-input="true"
                   />
-                  <div v-if="call.artifact_refs?.length" class="tool-artifacts">
-                    <template v-for="(ref, refIndex) in call.artifact_refs" :key="ref.artifact_id || refIndex">
+                  <div v-if="visibleToolArtifactRefs(call).length" class="tool-artifacts">
+                    <template v-for="(ref, refIndex) in visibleToolArtifactRefs(call)" :key="ref.artifact_id || refIndex">
                       <el-button
                         v-if="ref.artifact_id || ref.id"
                         size="small"
@@ -1771,6 +1779,14 @@ watch(
 .history-docked .dialogue-body,
 .history-docked .dialogue-composer {
   grid-column: 1;
+}
+
+.history-docked .dialogue-header {
+  padding-left: 48px;
+}
+
+.history-docked .dialogue-header-centered {
+  padding-right: 48px;
 }
 
 .dialogue-header {
