@@ -34,6 +34,17 @@ module.exports = {
       max_memory_restart: "2G",
     },
     {
+      name: "poly-agent-computation-worker",
+      cwd: BACKEND_CWD,
+      script: PYTHON_BIN,
+      args: "-m app.workers.computation_worker --worker-id computation-pm2-1",
+      interpreter: "none",
+      env: { PYTHONNOUSERSITE: "1" },
+      watch: false,
+      autorestart: true,
+      max_memory_restart: "1G",
+    },
+    {
       name: "poly-agent-assistant-worker",
       cwd: BACKEND_CWD,
       script: PYTHON_BIN,
