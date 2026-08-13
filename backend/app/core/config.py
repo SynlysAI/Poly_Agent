@@ -23,6 +23,7 @@ DEFAULT_LOCAL_CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5174",
     "http://localhost:5174",
 ]
+STORAGE_BACKENDS = {"sqlite", "mongodb"}
 
 
 class Settings:
@@ -107,12 +108,30 @@ class Settings:
         self.mongodb_password: str = os.getenv("MONGODB_PASSWORD", "")
         self.mongodb_database: str = os.getenv("MONGODB_DATABASE", "poly_agent")
         self.mongodb_auth_source: str = os.getenv("MONGODB_AUTH_SOURCE", "admin")
-        self.require_mongodb: bool = os.getenv("REQUIRE_MONGODB", "true").strip().lower() in {
+        requested_require_mongodb: bool = os.getenv("REQUIRE_MONGODB", "true").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
+        requested_storage_backend = os.getenv("STORAGE_BACKEND", "").strip().lower()
+        default_storage_backend = "sqlite" if self.is_local_env else "mongodb"
+        self.storage_backend: str = requested_storage_backend or default_storage_backend
+        if self.storage_backend not in STORAGE_BACKENDS:
+            raise ValueError(
+                f"STORAGE_BACKEND 必须是 {'/'.join(sorted(STORAGE_BACKENDS))}，"
+                f"当前为 {self.storage_backend!r}"
+            )
+        # SQLite 模式下禁止 MongoDB 强依赖，避免开发环境意外连上远端业务库。
+        self.require_mongodb: bool = (
+            requested_require_mongodb and self.storage_backend == "mongodb"
+        )
+        self.sqlite_database_path: Path = self._resolve_project_path(
+            os.getenv(
+                "SQLITE_DATABASE_PATH",
+                str(self.runtime_root / "poly-agent.sqlite3"),
+            )
+        )
 
         # Stale-run reaper 配置
         self.stale_run_heartbeat_seconds: int = int(os.getenv("STALE_RUN_HEARTBEAT_SECONDS", "60"))
@@ -305,12 +324,24 @@ class Settings:
         """Return whether the configured app environment is local/test-like."""
         return self.app_env.strip().lower() in LOCAL_APP_ENVS
 
+    @property
+    def uses_mongodb(self) -> bool:
+        """Return whether the active storage backend is MongoDB."""
+        return self.storage_backend == "mongodb"
+
+    @property
+    def uses_sqlite(self) -> bool:
+        """Return whether the active storage backend is local SQLite."""
+        return self.storage_backend == "sqlite"
+
     def validate_deployment_security(self) -> None:
         """Enforce authentication settings outside local/test environments."""
         if self.is_local_env:
             return
 
         errors: list[str] = []
+        if self.storage_backend != "mongodb":
+            errors.append("STORAGE_BACKEND must be mongodb outside local/test environments")
         if not self.auth_enabled:
             errors.append("AUTH_ENABLED must be true")
         if self.auth_username == DEFAULT_AUTH_USERNAME:

@@ -117,9 +117,19 @@ def _map_http_error(status_code: int) -> tuple[int, str]:
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    """Startup: 启动后台 stale-run reaper；Shutdown: 取消 reaper 任务。"""
+    """Startup: 引导默认管理员并启动后台 stale-run reaper；Shutdown: 取消 reaper 任务。"""
+    app_logger = get_logger("poly_agent.app")
     stop_event = asyncio.Event()
     logger_reaper = get_logger("poly_agent.stale_reaper")
+
+    try:
+        from app.services.auth_service import AuthService
+
+        created_admin = AuthService.ensure_default_admin()
+        if created_admin:
+            app_logger.info("默认管理员账号已引导：username=%s", created_admin.username)
+    except Exception:
+        app_logger.exception("默认管理员账号引导失败")
 
     async def stale_reaper_loop() -> None:
         logger_reaper.info(

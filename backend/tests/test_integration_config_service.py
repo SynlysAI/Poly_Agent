@@ -210,7 +210,9 @@ class IntegrationConfigServiceTest(ComputationTestCase):
         self.assertIn("无需外部服务", by_service["alchemist-backend"]["details"]["message"])
 
     def test_status_includes_database_and_knowledge_services(self) -> None:
-        with patch.object(IntegrationStatusService, "_can_connect", return_value=False), patch(
+        with patch.object(settings, "storage_backend", "mongodb"), patch.object(
+            settings, "require_mongodb", True
+        ), patch.object(IntegrationStatusService, "_can_connect", return_value=False), patch(
             "app.services.knowledge_service.KnowledgeService.health",
         ) as health:
             health.return_value.status = "unavailable"
@@ -222,10 +224,12 @@ class IntegrationConfigServiceTest(ComputationTestCase):
         by_service = {item["service"]: item for item in items}
 
         self.assertIn("mongodb", by_service)
+        self.assertIn("sqlite", by_service)
         self.assertIn("data-asset-mongodb", by_service)
         self.assertIn("weknora", by_service)
         self.assertIn("knowledge-graph", by_service)
         self.assertEqual(by_service["mongodb"]["details"]["database"], settings.mongodb_database)
+        self.assertEqual(by_service["sqlite"]["status"], "not_configured")
         self.assertEqual(by_service["weknora"]["status"], "not_configured")
         self.assertEqual(by_service["knowledge-graph"]["status"], "not_configured")
 

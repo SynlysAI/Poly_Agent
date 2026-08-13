@@ -25,6 +25,11 @@ class DeploymentSecurityConfigTest(unittest.TestCase):
                 "POLY_AGENT_UPLOAD_ROOT": os.path.join(runtime_root, "uploads"),
                 "POLY_AGENT_OUTPUT_ROOT": os.path.join(runtime_root, "outputs"),
                 "POLY_AGENT_LOG_ROOT": os.path.join(runtime_root, "logs"),
+                "STORAGE_BACKEND": (
+                    env.get("STORAGE_BACKEND", "mongodb")
+                    if str(env.get("APP_ENV", "")).strip().lower() == "production"
+                    else env.get("STORAGE_BACKEND", "sqlite")
+                ),
                 **env,
             }
             with patch.dict(os.environ, merged, clear=False):
@@ -61,6 +66,7 @@ class DeploymentSecurityConfigTest(unittest.TestCase):
         settings = self._settings_with_env(
             {
                 "APP_ENV": "production",
+                "STORAGE_BACKEND": "mongodb",
                 "AUTH_ENABLED": "true",
                 "AUTH_USERNAME": "poly-admin",
                 "AUTH_PASSWORD": "not-the-default-password",

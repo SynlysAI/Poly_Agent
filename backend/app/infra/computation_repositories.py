@@ -11,7 +11,7 @@ from pymongo import ReturnDocument
 
 from app.core.config import settings
 from app.core.time import utc_now as core_utc_now
-from app.infra.demo_store import clone_document, demo_store
+from app.infra.sqlite_store import clone_document, demo_store
 from app.infra.mongo import (
     get_audit_events_collection,
     get_computation_artifacts_collection,
@@ -121,7 +121,7 @@ class BaseRepository:
     @classmethod
     def _can_use_mongo(cls) -> bool:
         """判断当前进程是否继续尝试 MongoDB。"""
-        return not _mongo_unavailable
+        return settings.uses_mongodb and not _mongo_unavailable
 
     @classmethod
     def _mark_mongo_unavailable(cls) -> None:
@@ -205,6 +205,65 @@ class BaseRepository:
         rows = [clone_document(item) for item in data[cls.collection_name] if _matches(item, filters)]
         rows = _sort_documents(rows, sort_field, reverse=reverse)
         return rows[skip : skip + page_size], len(rows)
+
+    @classmethod
+    def update_fields(
+        cls,
+        key_field: str,
+        key_value: Any,
+        fields: dict[str, Any],
+    ) -> bool:
+        """按唯一键更新部分字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {key_field: key_value},
+                    {"$set": fields},
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get(key_field) == key_value:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def delete_one(cls, key_field: str, key_value: Any) -> bool:
+        """按唯一键删除单条文档。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().delete_one({key_field: key_value})
+                return result.deleted_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [
+                item
+                for item in data[cls.collection_name]
+                if item.get(key_field) != key_value
+            ]
+            return len(data[cls.collection_name]) != before
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def count(cls, filters: dict[str, Any]) -> int:
+        """统计匹配文档数量。"""
+        if cls._can_use_mongo():
+            try:
+                return int(cls._collection().count_documents(filters))
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        data = demo_store.load()
+        return sum(1 for item in data[cls.collection_name] if _matches(item, filters))
 
 
 class ComputationRunRepository(BaseRepository):

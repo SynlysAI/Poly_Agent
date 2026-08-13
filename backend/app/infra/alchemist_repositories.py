@@ -1,113 +1,66 @@
-"""ALchemist 实验设计模块 MongoDB 仓储。"""
+"""ALchemist 实验设计模块仓储。
+
+与主业务仓储一致：本地环境使用 SQLite，生产环境使用 MongoDB。
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from pymongo import ReturnDocument
-
 from app.core.time import utc_now
-from app.infra.mongo import (
-    get_alchemist_sessions_collection,
-)
+from app.infra.computation_repositories import BaseRepository
+from app.infra.mongo import get_alchemist_sessions_collection
 
 
-class AlchemistSessionRepository:
+class AlchemistSessionRepository(BaseRepository):
     """ALchemist Session 仓储。"""
 
-    COLLECTION = "alchemist_sessions"
+    collection_name = "alchemist_sessions"
 
-    @staticmethod
-    def _collection():
+    @classmethod
+    def _collection(cls):
         return get_alchemist_sessions_collection()
 
-    @staticmethod
-    def save(session_doc: dict[str, Any]) -> None:
-        """保存或更新 Session 文档。
+    @classmethod
+    def save(cls, session_doc: dict[str, Any]) -> None:
+        """保存或更新 Session 文档。"""
+        payload = dict(session_doc)
+        payload["updated_at"] = utc_now()
+        super().save("session_id", payload)
 
-        Args:
-            session_doc: Session 完整文档。
-        """
-        session_doc["updated_at"] = utc_now()
-        get_alchemist_sessions_collection().update_one(
-            {"session_id": session_doc["session_id"]},
-            {"$set": session_doc},
-            upsert=True,
-        )
+    @classmethod
+    def find_by_id(cls, session_id: str) -> dict[str, Any] | None:
+        """按 session_id 查询。"""
+        return cls.find_one({"session_id": session_id})
 
-    @staticmethod
-    def find_by_id(session_id: str) -> dict[str, Any] | None:
-        """按 session_id 查询。
+    @classmethod
+    def delete(cls, session_id: str) -> bool:
+        """删除 Session。"""
+        return cls.delete_one("session_id", session_id)
 
-        Args:
-            session_id: Session 标识符。
-
-        Returns:
-            Session 文档或 None。
-        """
-        doc = get_alchemist_sessions_collection().find_one(
-            {"session_id": session_id}, {"_id": 0}
-        )
-        return dict(doc) if doc else None
-
-    @staticmethod
-    def delete(session_id: str) -> bool:
-        """删除 Session。
-
-        Args:
-            session_id: Session 标识符。
-
-        Returns:
-            是否成功删除。
-        """
-        result = get_alchemist_sessions_collection().delete_one({"session_id": session_id})
-        return result.deleted_count > 0
-
-    @staticmethod
+    @classmethod
     def list_by_user(
+        cls,
         created_by: str | None = None,
         *,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[dict[str, Any]], int]:
-        """分页查询 Session 列表。
-
-        Args:
-            created_by: 按创建者过滤（None 表示不过滤）。
-            page: 页码。
-            page_size: 每页条数。
-
-        Returns:
-            (文档列表, 总数)。
-        """
+        """分页查询 Session 列表。"""
         filters: dict[str, Any] = {}
         if created_by:
             filters["created_by"] = created_by
-
-        collection = get_alchemist_sessions_collection()
-        total = int(collection.count_documents(filters))
-        skip = (page - 1) * page_size
-        cursor = (
-            collection.find(filters, {"_id": 0})
-            .sort([("updated_at", -1)])
-            .skip(skip)
-            .limit(page_size)
+        return cls.list_all(
+            filters,
+            sort_field="updated_at",
+            reverse=True,
+            page=page,
+            page_size=page_size,
         )
-        return [dict(item) for item in cursor], total
 
-    @staticmethod
-    def update_fields(session_id: str, fields: dict[str, Any]) -> bool:
-        """更新 Session 部分字段。
-
-        Args:
-            session_id: Session 标识符。
-            fields: 待更新的字段字典。
-
-        Returns:
-            是否命中并更新。
-        """
-        fields["updated_at"] = utc_now()
-        result = get_alchemist_sessions_collection().update_one(
-            {"session_id": session_id}, {"$set": fields}
-        )
-        return result.matched_count > 0
+    @classmethod
+    def update_fields(cls, session_id: str, fields: dict[str, Any]) -> bool:
+        """更新 Session 部分字段。"""
+        payload = dict(fields)
+        payload["updated_at"] = utc_now()
+        return super().update_fields("session_id", session_id, payload)

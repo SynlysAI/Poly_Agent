@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Aim, ArrowDown, ChatLineRound, Check, FolderOpened, Histogram, MagicStick, Promotion, Reading, SetUp, Tools,
+  Aim, ArrowDown, ChatLineRound, Check, Expand, FolderOpened, Histogram, MagicStick, Promotion, Reading, SetUp, Tools,
 } from '@element-plus/icons-vue'
 
 import {
@@ -415,6 +415,10 @@ function removeAgentTool(toolId) {
   selectedToolIds.value = selectedToolIds.value.filter((item) => item !== toolId)
 }
 
+function openHistory() {
+  router.push({ path: '/dialogue', query: { history: 'open' } })
+}
+
 onMounted(() => {
   loadDashboardData()
   loadLlmCatalog()
@@ -430,6 +434,14 @@ onMounted(() => {
     </header>
 
     <section v-if="activeView === 'chat'" class="lui-hero">
+      <div class="home-history docked" aria-label="历史会话">
+        <el-tooltip content="展开历史会话" placement="right">
+          <button type="button" class="home-history-icon-btn home-history-dock" aria-label="展开历史会话" @click="openHistory">
+            <el-icon><Expand /></el-icon>
+          </button>
+        </el-tooltip>
+      </div>
+
       <div class="hero-copy">
         <p class="hero-kicker">Poly Agent 工作台</p>
         <h1>{{ homeGreeting.title }}</h1>
@@ -649,7 +661,12 @@ onMounted(() => {
 <style scoped>
 .dashboard-view { max-width: 1440px; margin: 0 auto; display: grid; gap: 16px; }
 .dashboard-switchbar { display: flex; align-items: center; justify-content: flex-start; min-height: 32px; }
-.lui-hero { min-height: calc(100vh - 188px); display: grid; align-content: center; justify-items: center; gap: 16px; padding: 34px 16px 28px; }
+.lui-hero { position: relative; min-height: calc(100vh - 188px); display: grid; align-content: center; justify-items: center; gap: 16px; padding: 34px 16px 28px; }
+.home-history { position: absolute; top: 0; left: 0; z-index: 2; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); background: #ffffff; }
+.home-history.docked { width: 36px; height: 36px; padding: 0; }
+.home-history-icon-btn { display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--app-radius-sm); background: transparent; color: var(--app-ink-muted); cursor: pointer; font: inherit; }
+.home-history-icon-btn:hover, .home-history-icon-btn:focus-visible { background: #f5f8fc; color: var(--app-primary-active); }
+.home-history-dock { width: 34px; height: 34px; }
 .hero-copy { max-width: 760px; text-align: center; }
 .hero-kicker { margin: 0 0 8px; color: var(--app-primary-active); font-size: 13px; font-weight: 700; }
 h1, h2 { margin: 0; color: var(--app-ink); letter-spacing: 0; }

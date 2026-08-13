@@ -123,7 +123,7 @@ Poly_Agent/
 │   ├── computation_adapters/   # mock / local / ORCA fixture adapter
 │   ├── alchemist_core/        # DoE、GP、采集优化和诊断
 │   ├── workers/                # computation worker 与 stale-run reaper
-│   └── infra/                  # MongoDB、repository、demo store
+│   └── infra/                  # MongoDB、SQLite、repository
 ├── frontend/src/
 │   ├── views/                  # 工作台页面
 │   ├── api/                    # Axios API client
@@ -142,7 +142,7 @@ Poly_Agent/
 
 ### 环境准备
 
-要求：Conda、Python 3.12、Node.js 22；MongoDB 可选（演示模式可使用 demo store）。
+要求：Conda、Python 3.12、Node.js 22；开发/测试使用本地 SQLite，生产需要 MongoDB。
 
 ```bash
 # 创建或更新项目环境，并安装前端依赖
@@ -187,6 +187,16 @@ bash scripts/restart_poly_agent_services.sh
 bash scripts/stop_poly_agent_services.sh
 ```
 
+开发/测试环境默认使用本地 SQLite，不再连接远端 MongoDB。poly data 只导入每个数据集最多 100 条样本，验证数据目录功能即可：
+
+```bash
+# 推荐把源 Mongo 只读连接串注入环境变量，避免写入 shell 历史
+export SEED_POLY_DATA_MONGODB_URI='mongodb://<user>:<password>@<host>:27018'
+python scripts/seed_poly_data_sqlite.py --source-database poly_data --sample-size 100
+```
+
+该脚本对源库只读，目标文件默认为 `.runtime/poly-agent.sqlite3`；如需预览样本清单可加 `--dry-run`。默认按集合合并、不清空现有数据；显式加 `--reset` 时只重灌 `poly_data.*` 集合，账号与其它业务数据不会丢失。
+
 ### 生产部署
 
 ```bash
@@ -227,13 +237,14 @@ E2E 默认使用后端 `5201`、前端 `5200` 和 PI Mock `8300`；临时环境�
 |---|---|---|
 | 运行与安全 | `APP_ENV`、`CORS_ALLOWED_ORIGINS`、`CORS_ALLOW_CREDENTIALS` | 非本地环境校验 CORS、认证和密钥安全 |
 | 认证 | `AUTH_ENABLED`、`AUTH_SECRET`、`AUTH_MONGODB_URI` | 支持本地账号和 AI4MS 共享认证库 |
-| 主数据 | `MONGODB_HOST`、`MONGODB_PORT`、`MONGODB_DATABASE`、`REQUIRE_MONGODB` | `REQUIRE_MONGODB=false` 可回退 demo store，不适合生产 |
+| 存储后端 | `STORAGE_BACKEND`、`SQLITE_DATABASE_PATH` | 本地/测试默认 `sqlite`；生产非本地环境默认 `mongodb`，且禁止配置成 `sqlite` |
+| 主数据 | `MONGODB_HOST`、`MONGODB_PORT`、`MONGODB_DATABASE`、`REQUIRE_MONGODB` | 仅 `STORAGE_BACKEND=mongodb` 时启用；SQLite 模式不会连接 MongoDB |
 | 运行时目录 | `POLY_AGENT_RUNTIME_ROOT`、`POLY_AGENT_UPLOAD_ROOT`、`POLY_AGENT_OUTPUT_ROOT`、`POLY_AGENT_LOG_ROOT` | 上传、产物、报告和日志目录 |
 | 计算工具链 | `XTB_EXECUTABLE`、`CREST_EXECUTABLE`、`ORCA_EXECUTABLE`、`ORCA_EXECUTION_MODE` | 真实 xTB/CREST/ORCA 执行依赖本地命令和许可证 |
 | 算法运行时 | `ALGORITHM_RUNTIME_BACKEND`、`ALGORITHM_RUNTIME_MAX_CONCURRENCY`、`ALGORITHM_RUNTIME_MAX_OUTPUT_BYTES` | 上传算法使用受限子进程运行 |
 | LLM 与报告 | `LLM_*`、`REPORT_*` | 助手、Alchemist LLM 辅助和报告生成 |
 | 知识库 | `WEKNORA_*` | WeKnora API 和可选 Neo4j 图谱增强 |
-| 数据资产 | `DATA_ASSET_MONGODB_*`、`MINIO_*` | `poly_data` 数据库和 MinIO 只读资产 |
+| 数据资产 | `DATA_ASSET_MONGODB_*`、`MINIO_*` | 生产读取 `poly_data` 数据库和 MinIO；开发使用本地 SQLite poly data 样本 |
 
 安全边界：集成配置只保存 endpoint、config summary 和 secret refs；API 不返回 API key、object key、storage URI、embedding 或本地敏感路径。生产环境必须设置足够长度的 `AUTH_SECRET`，并关闭不必要的 demo/fallback 路径。
 
@@ -277,4 +288,4 @@ Poly Agent 在产品页面维护统一的来源与引用标注。外部框架和
 
 ## 许可证与使用边界
 
-仓库当前主要面向 AI4MS 产品线内部研发、演示和集成验证。使用外部框架、模型、数据集或算法包时，请遵守其原始许可证、引用和服务条款；不要把 mock、fixture 或 demo store 的结果当作真实实验结论。
+仓库当前主要面向 AI4MS 产品线内部研发、演示和集成验证。使用外部框架、模型、数据集或算法包时，请遵守其原始许可证、引用和服务条款；不要把 mock、fixture 或本地 SQLite 样本的结果当作真实实验结论。
