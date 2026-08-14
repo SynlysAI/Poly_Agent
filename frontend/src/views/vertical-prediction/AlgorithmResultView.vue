@@ -13,6 +13,7 @@ import {
 } from '../../utils/verticalPredictionJson.mjs'
 import { downloadArtifact, getApiErrorMessage } from '../../api/polyAgentApi'
 import { downloadArtifactToBrowser } from '../../utils/artifactDownload.mjs'
+import { authState } from '../../auth/authState'
 
 const props = defineProps({
   outputSummary: { type: [Object, Array, String, Number, Boolean], default: () => ({}) },
@@ -689,7 +690,7 @@ function stringifyJson(value) {
       <div class="image-preview-grid">
         <div v-for="img in imageArtifacts" :key="img.id" class="image-preview-card">
           <span class="image-label">{{ img.name }}</span>
-          <img :src="`/api/v1/artifacts/${img.id}/download`" :alt="img.name" class="preview-image" />
+          <img :src="`/api/v1/artifacts/${img.id}/download?token=${encodeURIComponent(authState.accessToken || '')}`" :alt="img.name" class="preview-image" />
         </div>
       </div>
     </section>
