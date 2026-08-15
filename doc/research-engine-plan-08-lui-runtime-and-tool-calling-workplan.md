@@ -1,6 +1,6 @@
 # Plan 08：LUI Runtime、上下文注入与工具调用增强工作计划
 
-> **状态：进行中（PR-01、PR-02 已完成）**
+> **状态：进行中（PR-01、PR-02、PR-03 已完成）**
 >
 > 日期：2026-08-15
 >
@@ -336,8 +336,8 @@ AssistantRunService
 
 **建议 PR**：PR-03
 
-- [ ] 新增 `backend/app/services/assistant_context_assembler.py`。
-- [ ] 定义 `ContextSection`：
+- [x] 新增 `backend/app/services/assistant_context_assembler.py`。
+- [x] 定义 `ContextSection`：
 
   ```python
   @dataclass(frozen=True)
@@ -351,7 +351,7 @@ AssistantRunService
       digest: str
   ```
 
-- [ ] 内置 provider：
+- [x] 内置 provider：
   - `project_facts`
   - `llm_route`
   - `selected_tools`
@@ -359,11 +359,11 @@ AssistantRunService
   - `web_evidence`
   - `prior_tool_results`
   - `conversation_policy`
-- [ ] 第一版 token 估算使用保守字符估算：`ceil(len(text) / 4)`，不引入 tokenizer 依赖。
-- [ ] 设置 section 级预算和总预算，超预算时记录 `omitted_reason`。
-- [ ] `selected_tools` 只注入简短目录，不重复塞完整 JSON schema；完整 schema 仍走 native tools。
-- [ ] `AssistantService` 的 tool proposal 与 final answer 使用同一 assembler。
-- [ ] 生成 request manifest：
+- [x] 第一版 token 估算使用保守字符估算：`ceil(len(text) / 4)`，不引入 tokenizer 依赖。
+- [x] 设置 section 级预算和总预算，超预算时记录 `omitted_reason`。
+- [x] `selected_tools` 只注入简短目录，不重复塞完整 JSON schema；完整 schema 仍走 native tools。
+- [x] `AssistantService` 的 tool proposal 与 final answer 使用同一 assembler。
+- [x] 生成 request manifest：
 
   ```json
   {
@@ -400,8 +400,8 @@ AssistantRunService
   }
   ```
 
-- [ ] 先保存 manifest、section digest 和工具 schema digest；完整 sanitized prompt snapshot 可作为后续可选项。
-- [ ] assistant message metadata 写入 route 与 context digest。
+- [x] 先保存 manifest、section digest 和工具 schema digest；完整 sanitized prompt snapshot 可作为后续可选项。
+- [x] assistant message metadata 写入 route 与 context digest。
 
 **验收标准**
 
@@ -755,3 +755,4 @@ AssistantRunService
 - 2026-08-15：创建工作计划，状态为待评审 / 未开始。计划基于当前 `develop` 基线和本地 DeepSeek Harness 参考源码整理。
 - 2026-08-15：PR-01 已完成：per-model 能力配置、resolved route、`route.resolved` 事件、run requested/resolved 模型持久化、LUI 模型选择优先级与 `tool_calling` 可见性均已落地；相关后端测试、前端单测与前端构建通过。`tool_capability_override` 留待 PR-02 引入。
 - 2026-08-15：PR-02 已完成：统一 Tool Contract Adapter、稳定 function name、完整 JSON Schema 约束、AgentTool 派生契约、raw arguments / parse error 持久化与展示、提案元数据、provider 错误分类、单工具提示词策略和 `tool_capability_override` 均已落地；相关后端测试、前端单测与前端构建通过。并行工具执行仍保持关闭，留待后续配置化开启。
+- 2026-08-15：PR-03 已完成：Context Assembler v1、7 类内置上下文 section、保守 token 估算、section/总预算与 omitted reason、工具简短目录、tool proposal 与 final answer 统一上下文、request manifest v1、run manifest 持久化、assistant message route/context digest metadata 和 LUI 上下文存证标签均已落地；相关后端测试与前端单测通过。

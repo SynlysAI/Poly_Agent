@@ -60,6 +60,10 @@ import {
   toolPhaseLabel,
   toolPhaseTagType,
 } from '../utils/assistantToolCalls.mjs'
+import {
+  assistantContextLabel,
+  assistantContextTooltip,
+} from '../utils/assistantContext.js'
 import AlgorithmResultView from './vertical-prediction/AlgorithmResultView.vue'
 import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
 import {
@@ -317,6 +321,7 @@ function restoreMessage(item) {
     tool_calls: (item.tool_calls || []).map((call) => normalizeToolCall({ ...call, schema_fields: normalizeSchemaArguments(call) })),
     web_search_requested: item.web_search_requested,
     llm_route: item.metadata?.llm_route || null,
+    context_digest: item.metadata?.context_digest || null,
     streaming: false,
     error: false,
   }
@@ -744,6 +749,7 @@ function applyAssistantStreamEvent(index, event) {
       answer_scope: data.answer_scope || '',
       retrieval_status: data.retrieval_status || target.retrieval_status || '',
       llm_route: data.grounding_facts?.llm_route || target.llm_route || null,
+      context_digest: data.grounding_facts?.context?.digest || target.context_digest || null,
       stream_status: '',
       stream_stage: '',
       streaming: false,
@@ -1240,13 +1246,22 @@ watch(
         >
           <div class="chat-bubble">
             <div class="chat-bubble-text">
-              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status || webSearchRequestLabel(msg) || assistantModelLabel(msg)" class="chat-meta">
+              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status || webSearchRequestLabel(msg) || assistantModelLabel(msg) || assistantContextLabel(msg)" class="chat-meta">
                 <el-tag v-if="webSearchRequestLabel(msg)" size="small" effect="plain" :type="webSearchRequestTagType(msg)">
                   {{ webSearchRequestLabel(msg) }}
                 </el-tag>
                 <el-tag v-if="assistantModelLabel(msg)" size="small" effect="plain" type="success">
                   {{ assistantModelLabel(msg) }}
                 </el-tag>
+                <el-tooltip
+                  v-if="assistantContextLabel(msg)"
+                  :content="assistantContextTooltip(msg)"
+                  placement="top"
+                >
+                  <el-tag size="small" effect="plain" type="success">
+                    {{ assistantContextLabel(msg) }}
+                  </el-tag>
+                </el-tooltip>
                 <el-tag v-if="msg.answer_mode" size="small" effect="plain" type="info">
                   {{ answerModeLabelMap[msg.answer_mode] || msg.answer_mode }}
                 </el-tag>

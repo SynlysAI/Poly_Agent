@@ -49,6 +49,7 @@ class AssistantRun(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    request_manifests: dict[str, Any] = Field(default_factory=dict)
     http_status: int | None = None
     rate_limited: bool = False
     reconnect_count: int = 0

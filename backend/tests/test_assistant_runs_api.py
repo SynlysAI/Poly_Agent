@@ -110,8 +110,28 @@ class AssistantRunsApiTest(ComputationTestCase):
             "model_id": "resolved-model",
             "capabilities": ["chat"],
         }
+        context_manifest = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "request_kind": "final_answer",
+            "route": route,
+            "context": {
+                "digest": "sha256:context-digest",
+                "sections": [
+                    {
+                        "name": "project_facts",
+                        "source": "ProjectGroundingService",
+                        "token_estimate": 8,
+                        "included": True,
+                        "omitted_reason": None,
+                    }
+                ],
+            },
+            "tools": [],
+        }
         events = [
             {"type": "route.resolved", "route": route},
+            {"type": "context.assembled", "manifest": context_manifest},
             {"type": "answer_delta", "delta": "路由回答"},
             {
                 "type": "final",
@@ -120,7 +140,10 @@ class AssistantRunsApiTest(ComputationTestCase):
                     "answer_mode": "fallback",
                     "answer_scope": "unknown",
                     "retrieval_status": "not_needed",
-                    "grounding_facts": {"llm_route": route},
+                    "grounding_facts": {
+                        "llm_route": route,
+                        "context": {"digest": "sha256:context-digest"},
+                    },
                 },
             },
         ]
@@ -132,11 +155,14 @@ class AssistantRunsApiTest(ComputationTestCase):
         self.assertEqual(restored["model_id"], "resolved-model")
         self.assertEqual(restored["route"]["route_reason"], "user_selected")
         self.assertEqual(restored["route"]["requested_model_id"], "requested-model")
+        self.assertEqual(restored["request_manifests"]["final_answer"], context_manifest)
         self.assertTrue(any(event["type"] == "route.resolved" for event in restored["events"]))
+        self.assertTrue(any(event["type"] == "context.assembled" for event in restored["events"]))
 
         chat = self.client.get(f"/api/v1/assistant/chats/{chat_id}").json()["data"]
         assistant_message = next(item for item in chat["messages"] if item["role"] == "assistant")
         self.assertEqual(assistant_message["metadata"]["llm_route"]["model_id"], "resolved-model")
+        self.assertEqual(assistant_message["metadata"]["context_digest"], "sha256:context-digest")
 
     def test_run_access_is_owner_scoped(self) -> None:
         chat_id = self._chat("私有")

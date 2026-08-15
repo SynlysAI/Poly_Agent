@@ -58,13 +58,15 @@ class AssistantRunService:
             if not existing_user_message:
                 raise HTTPException(status_code=422, detail="用于继续生成的用户消息不存在")
         now = utc_now()
+        run_id = f"asrun_{uuid4().hex[:16]}"
         context = dict(payload.context)
         context["chat_id"] = chat_id
+        context["run_id"] = run_id
         model = context.get("model") or {}
         requested_provider_id = model.get("providerId") or model.get("provider_id")
         requested_model_id = model.get("modelId") or model.get("model_id")
         document = {
-            "run_id": f"asrun_{uuid4().hex[:16]}",
+            "run_id": run_id,
             "chat_id": chat_id,
             "created_by": owner_id,
             "user_message_id": payload.user_message_id or "",
@@ -95,6 +97,7 @@ class AssistantRunService:
                 "requested_provider_id": requested_provider_id,
                 "requested_model_id": requested_model_id,
             },
+            "request_manifests": {},
             "prompt_tokens": None,
             "completion_tokens": None,
             "total_tokens": None,
@@ -283,6 +286,13 @@ class AssistantRunService:
                         fields["provider_id"] = route.get("provider_id")
                     if route.get("model_id"):
                         fields["model_id"] = route.get("model_id")
+                elif event.get("type") == "context.assembled":
+                    manifest = dict(event.get("manifest") or {})
+                    request_kind = str(manifest.get("request_kind") or event.get("request_kind") or "")
+                    if request_kind:
+                        manifests = dict(current.get("request_manifests") or {})
+                        manifests[request_kind] = manifest
+                        fields["request_manifests"] = manifests
                 elif event.get("type") == "answer_delta":
                     content += str(event.get("delta") or "")
                     fields["partial_content"] = content
@@ -335,6 +345,9 @@ class AssistantRunService:
                     metadata={
                         "run_id": run_id,
                         "llm_route": ((data.get("grounding_facts") or {}).get("llm_route")) or {},
+                        "context_digest": (
+                            (data.get("grounding_facts") or {}).get("context", {}).get("digest")
+                        ),
                     },
                 ),
                 {"user_id": document["created_by"], "role": document.get("actor_role") or "user"},

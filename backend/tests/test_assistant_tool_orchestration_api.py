@@ -387,6 +387,7 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
                         "mode": "qa",
                         "chat_id": chat_id,
                         "message_id": message_id,
+                        "run_id": "asrun-context-stream",
                         "selected_tool_ids": ["algorithm:vertical-tool"],
                     },
                 }
@@ -411,6 +412,24 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         )
         self.assertIn("一次只提出一个", tool_rules)
         self.assertNotIn("一次可以提出多个", tool_rules)
+        context_event = next(event for event in events if event.get("type") == "context.assembled")
+        manifest = context_event["manifest"]
+        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["request_kind"], "tool_proposal")
+        self.assertEqual(manifest["run_id"], "asrun-context-stream")
+        self.assertEqual(manifest["tools"][0]["tool_id"], "algorithm:vertical-tool")
+        self.assertEqual(
+            manifest["tools"][0]["function_name"],
+            self._function_name("algorithm:vertical-tool"),
+        )
+        self.assertRegex(manifest["tools"][0]["schema_digest"], r"^[0-9a-f]{16}$")
+        context_block = next(
+            item["content"]
+            for item in captured["messages"]
+            if item.get("role") == "system" and "PROJECT_FACTS:" in item.get("content", "")
+        )
+        self.assertIn("SELECTED_TOOLS:", context_block)
+        self.assertNotIn("input_json_schema", context_block)
         tool_events = [event for event in events if event.get("type") == "tool_call"]
         self.assertEqual(
             [event["phase"] for event in tool_events],
@@ -418,6 +437,10 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         )
         final = events[-1]
         self.assertEqual(final["type"], "final")
+        self.assertEqual(
+            final["data"]["grounding_facts"]["context"]["digest"],
+            manifest["context"]["digest"],
+        )
         self.assertEqual(final["data"]["tool_calls"][0]["tool_id"], "algorithm:vertical-tool")
         call_id = final["data"]["tool_calls"][0]["call_id"]
         persisted = AssistantToolCallRepository.find_one({"call_id": call_id})

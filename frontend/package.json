@@ -15,6 +15,7 @@
     "test:data-catalog-analysis": "node src/utils/dataCatalogAnalysis.test.mjs",
     "test:api-error-message": "node src/utils/apiErrorMessage.test.mjs",
     "test:assistant-tool-calls": "node src/utils/assistantToolCalls.test.mjs",
+    "test:assistant-context": "node src/utils/assistantContext.test.mjs",
     "test:tool-menu-categories": "node src/utils/toolMenuCategories.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
