@@ -261,6 +261,24 @@ ps aux | grep uvicorn
 tail -100 .runtime/logs/*.log
 ```
 
+### 统一认证突然全部失效
+
+生产环境必须保持 Poly Agent 与 AI4MS 门户使用同一个 `AUTH_SECRET`，并指向同一个 `ai4ms` 认证库。修改密钥后需同时重启门户与 Poly Agent，已有登录会话会失效。
+
+```bash
+# 1. 检查关键配置（不要把密钥输出到日志）
+grep -E '^(APP_ENV|STORAGE_BACKEND|REQUIRE_MONGODB|AUTH_MONGODB_DATABASE)=' backend/.env
+
+# 2. 重置共享认证库中已有 admin 的强密码；密码只从环境变量传入
+cd backend
+read -s -p 'New admin password: ' POLY_AGENT_ADMIN_NEW_PASSWORD
+export POLY_AGENT_ADMIN_NEW_PASSWORD
+python -m scripts.reset_admin_password --username admin
+unset POLY_AGENT_ADMIN_NEW_PASSWORD
+``+
+
+如果日志出现 `Cannot do inclusion on field chat_id in exclusion projection`，说明 Assistant 事件投影命中了历史缺陷。升级到包含修复的版本后，确认 `REQUIRE_MONGODB=true`，再重启 Poly Agent backend 与 worker；生产模式不允许回落到 SQLite 用户数据。
+
 ### ALchemist 安装失败
 
 ALchemist 是可选的，安装失败不影响主系统。如需重装：
@@ -334,7 +352,7 @@ ResearchEngine 不引入新的 conda 环境或系统依赖。所有计算能力�
 - 部署包版本：0.1.0
 - 最低 Poly_Agent 版本：0.1.0
 - ResearchEngine 兼容版本：≥ v0.3（P0 阶段）
-- 文档更新日期：2026-07-06
+- 文档更新日期：2026-08-15
 
 ### 版本兼容矩阵
 

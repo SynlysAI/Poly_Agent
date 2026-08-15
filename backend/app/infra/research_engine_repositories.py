@@ -1407,7 +1407,7 @@ class AssistantRunRepository(BaseRepository):
                 current = cls._collection().find_one_and_update(
                     {"run_id": run_id},
                     {"$inc": {"event_seq": 1}},
-                    projection={"event_id": 0, "chat_id": 1, "run_id": 1, "created_by": 1, "event_seq": 1},
+                    projection={"chat_id": 1, "run_id": 1, "created_by": 1, "event_seq": 1},
                     return_document=False,
                 )
                 if not current:
