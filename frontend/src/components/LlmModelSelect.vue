@@ -1,6 +1,8 @@
 <script setup>
 import { computed } from 'vue'
 
+import { formatContextWindow, toolProtocolLabel } from '../utils/assistantUi.mjs'
+
 const props = defineProps({
   modelValue: { type: String, default: '' },
   models: { type: Array, default: () => [] },
@@ -38,6 +40,13 @@ function providerLabel(item) {
   return capabilitySource === 'inferred' ? `${providerName} · 能力推断` : providerName
 }
 
+function modelDetailSuffix(item) {
+  return [
+    formatContextWindow(item?.contextWindow),
+    toolProtocolLabel(item?.toolProtocol),
+  ].filter(Boolean).join(' · ')
+}
+
 function selectedLabel(item) {
   if (!item) return props.placeholder
   return item.label
@@ -67,6 +76,9 @@ function selectedLabel(item) {
           </div>
           <div v-if="providerLabel(item)" class="llm-model-option-provider">
             {{ providerLabel(item) }}
+          </div>
+          <div v-if="modelDetailSuffix(item)" class="llm-model-option-detail">
+            {{ modelDetailSuffix(item) }}
           </div>
         </div>
         <div class="llm-model-option-tags">
@@ -154,6 +166,15 @@ function selectedLabel(item) {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--app-ink-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.llm-model-option-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-ink-subtle);
   font-size: 11px;
   line-height: 1.4;
 }

@@ -70,7 +70,7 @@ const rawProposal = normalizeToolCall({
 })
 assert.equal(rawProposal.raw_arguments_text, '{"smiles": "CCO"')
 assert.equal(rawProposal.arguments_parse_error, 'Expecting object')
-assert.deepEqual(normalizeToolCall(null), { arguments_text: '{}', raw_arguments_text: '' })
+assert.deepEqual(normalizeToolCall(null), { arguments_text: '{}', raw_arguments_text: '', events: [] })
 
 assert.deepEqual(parseToolArguments('{"smiles": "CCO"}'), { ok: true, arguments: { smiles: 'CCO' } })
 assert.equal(parseToolArguments('not json').ok, false)

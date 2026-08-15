@@ -1,6 +1,6 @@
 # Plan 08：LUI Runtime、上下文注入与工具调用增强工作计划
 
-> **状态：进行中（PR-01、PR-02、PR-03、PR-04 阶段一已完成）**
+> **状态：进行中（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05 已完成）**
 >
 > 日期：2026-08-15
 >
@@ -528,22 +528,22 @@ AssistantRunService
 
 **建议 PR**：PR-05、PR-07
 
-- [ ] 消息 meta 显示：
+- [x] 消息 meta 显示：
   - provider / model
   - route reason
   - capabilities
   - usage
   - context digest
-- [ ] 点击模型 meta 展示详情：
+- [x] 点击模型 meta 展示详情：
   - capability source
   - context window
   - tool protocol
   - fallback reason
-- [ ] 所选模型无 `tool_calling` 且已选工具时显示 warning：
+- [x] 所选模型无 `tool_calling` 且已选工具时显示 warning：
   - 可继续普通问答
   - 可一键切换 tool-capable 模型
   - 后端仍保留硬拦截
-- [ ] 工具卡片展示：
+- [x] 工具卡片展示：
   - 提议模型
   - provider tool call id
   - function name
@@ -552,7 +552,7 @@ AssistantRunService
   - parse/validation error
   - 模型提议值与用户确认值 diff
   - 事件 timeline
-- [ ] 增加 “本轮上下文” 折叠面板：
+- [x] 增加 “本轮上下文” 折叠面板：
   - route
   - context sections
   - token estimate
@@ -570,7 +570,7 @@ AssistantRunService
   - 基于名称、描述、material scope、输入 schema 做轻量匹配
   - 记录选中原因
   - 显式用户选择优先
-- [ ] 保持 320 / 768 / 1440 响应式验收。
+- [x] 保持 320 / 768 / 1440 响应式验收。
 
 **验收标准**
 
@@ -653,11 +653,11 @@ AssistantRunService
 - [ ] 用户手动选择不被模式切换覆盖。
 - [ ] 历史会话恢复模型。
 - [ ] `tool_calling` 标签展示。
-- [ ] 模型无工具能力时 warning。
+- [x] 模型无工具能力时 warning。
 - [x] event reducer 合并 route / context / tool / answer / final。
 - [x] stale phase 防降级。
 - [x] raw arguments 与 parse error 展示。
-- [ ] 320 / 768 / 1440 布局不溢出。
+- [x] 320 / 768 / 1440 布局不溢出。
 
 ### 7.3 E2E 场景
 
@@ -757,3 +757,4 @@ AssistantRunService
 - 2026-08-15：PR-02 已完成：统一 Tool Contract Adapter、稳定 function name、完整 JSON Schema 约束、AgentTool 派生契约、raw arguments / parse error 持久化与展示、提案元数据、provider 错误分类、单工具提示词策略和 `tool_capability_override` 均已落地；相关后端测试、前端单测与前端构建通过。并行工具执行仍保持关闭，留待后续配置化开启。
 - 2026-08-15：PR-03 已完成：Context Assembler v1、7 类内置上下文 section、保守 token 估算、section/总预算与 omitted reason、工具简短目录、tool proposal 与 final answer 统一上下文、request manifest v1、run manifest 持久化、assistant message route/context digest metadata 和 LUI 上下文存证标签均已落地；相关后端测试与前端单测通过。
 - 2026-08-15：PR-04 阶段一已完成：`assistant_events` append-only 集合、run/call 双写与连续 seq、统一事件回放 fallback、旧数据幂等 backfill 脚本、route/request/tool catalog/schema/confirmed 等事件、run 与 call 关联以及前端 `assistantEvents` reducer 均已落地；相关后端 77 个 assistant 测试、前端 assistant 单测与构建通过。完整 LLM request 生命周期事件、admin trace 展示和 continuation scheduled 事件仍留在 PR-04 后续切片。
+- 2026-08-15：PR-05 已完成：assistant 消息 meta 展示 provider/model、路由原因、能力、usage 与 context digest；模型 meta 支持点击查看 capability source、context window、tool protocol 与 fallback reason；所选模型无 `tool_calling` 且已选工具时提供 warning 与一键切换工具模型入口；工具卡片补齐提议模型、provider call id、function name、schema digest、raw arguments、parse error、模型/用户参数 diff 和事件 timeline；新增“本轮上下文”折叠面板，展示 route、context sections、token estimate、omitted reason、工具 schema digest 与证据引用；相关前端 `assistantUi`、assistant 事件/工具调用单测和 `npm run build` 通过。ToolMenuPicker 健康/版本/确认/文件/成功率增强及自动选择相关工具仍留给 PR-07。

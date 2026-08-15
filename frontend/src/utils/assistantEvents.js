@@ -48,6 +48,7 @@ function applyFinalEvent(state, event) {
   state.content = data.content || state.content || ''
   state.context_digest = data.grounding_facts?.context?.digest || state.context_digest || ''
   state.answer_mode = data.answer_mode || state.answer_mode || ''
+  state.grounding_facts = data.grounding_facts || state.grounding_facts || {}
   state.final = data
   return state
 }
@@ -62,7 +63,14 @@ export function replayAssistantEvents(events) {
   const state = {
     content: '',
     route: null,
+    route_reason: '',
     context_digest: '',
+    context_manifest: null,
+    context_manifests: {},
+    tool_catalog: [],
+    tool_schema: [],
+    usage: null,
+    references: [],
     answer_mode: '',
     stream_stage: '',
     tool_calls: [],
@@ -75,12 +83,33 @@ export function replayAssistantEvents(events) {
         applyToolCallEvent(state, event)
       } else if (event.type === 'route.resolved' || event.type === 'route.fallback') {
         state.route = event.route || state.route
+        state.route_reason = event.route?.route_reason || event.reason || state.route_reason
+        if (event.type === 'route.fallback' && event.reason) {
+          state.route = { ...(state.route || {}), fallback_reason: event.reason }
+        }
+      } else if (event.type === 'route.requested') {
+        state.requested_route = event.route || state.requested_route
       } else if (event.type === 'status') {
         state.stream_stage = event.stage || state.stream_stage
       } else if (event.type === 'answer_delta') {
         state.content += event.delta || ''
       } else if (event.type === 'context.assembled' || event.type === 'request.header') {
         state.context_digest = event.manifest?.context?.digest || state.context_digest
+        state.context_manifest = event.manifest || state.context_manifest
+        if (event.request_kind) {
+          state.context_manifests = {
+            ...(state.context_manifests || {}),
+            [event.request_kind]: event.manifest,
+          }
+        }
+      } else if (event.type === 'tool.catalog.resolved') {
+        state.tool_catalog = event.tools || state.tool_catalog
+      } else if (event.type === 'tool.schema.rendered') {
+        state.tool_schema = event.tools || state.tool_schema
+      } else if (event.type === 'llm.usage.recorded') {
+        state.usage = event.usage || state.usage
+      } else if (event.type === 'evidence' && Array.isArray(event.references)) {
+        state.references = [...state.references, ...event.references]
       } else if (event.type === 'final') {
         applyFinalEvent(state, event)
       }

@@ -65,6 +65,21 @@ import {
   assistantContextTooltip,
 } from '../utils/assistantContext.js'
 import { replayAssistantEvents } from '../utils/assistantEvents.js'
+import {
+  capabilitySourceLabel,
+  contextSectionRows,
+  contextToolRows,
+  formatContextWindow,
+  formatUsage,
+  modelMetaLabel,
+  normalizeAssistantRoute,
+  routeCapabilityLabels,
+  routeReasonLabel,
+  toolArgumentDiff,
+  toolCapableModelOptions,
+  toolProtocolLabel,
+  toolTimelineRows,
+} from '../utils/assistantUi.mjs'
 import AlgorithmResultView from './vertical-prediction/AlgorithmResultView.vue'
 import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
 import {
@@ -89,6 +104,7 @@ const confirmingCallId = ref('')
 const modelLoading = ref(false)
 const modelSelectionOrigin = ref('')
 const initialUrlModel = ref(null)
+const runContexts = ref(new Map())
 const knowledgeLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
 const llmCatalog = ref({ providers: [], routing: {} })
@@ -144,6 +160,9 @@ const selectedModelLacksToolCalling = computed(() =>
       && selectedModel.value
       && !selectedModel.value.capabilities.includes('tool_calling'),
   ))
+const toolCapableModelChoices = computed(() =>
+  toolCapableModelOptions(selectableModels.value),
+)
 const selectedKnowledgeBases = computed(() =>
   selectedKnowledgeBaseIds.value
     .map((systemId) => knowledgeSystems.value.find((item) => item.system_id === systemId))
@@ -232,6 +251,13 @@ function selectDefaultModelForMode(chatModel = null) {
 
 function handleModelManualChange() {
   if (selectedModelKey.value) modelSelectionOrigin.value = 'user'
+}
+
+function switchToToolCapableModel() {
+  const target = toolCapableModelChoices.value[0]
+  if (!target) return
+  selectedModelKey.value = target.key
+  modelSelectionOrigin.value = 'user'
 }
 
 async function loadLlmModels() {
@@ -323,6 +349,10 @@ function restoreMessage(item) {
     web_search_requested: item.web_search_requested,
     llm_route: item.metadata?.llm_route || null,
     context_digest: item.metadata?.context_digest || null,
+    run_id: item.metadata?.run_id || null,
+    context_manifest: item.metadata?.context_manifest || null,
+    tool_schema: item.metadata?.tool_schema || [],
+    tool_catalog: item.metadata?.tool_catalog || [],
     streaming: false,
     error: false,
   }
@@ -330,6 +360,27 @@ function restoreMessage(item) {
 
 function toolCallFields(call) {
   return call?.schema_fields?.length ? call.schema_fields : normalizeSchemaArguments(call)
+}
+
+function toolProposalModelLabel(call) {
+  const route = normalizeAssistantRoute(call?.proposal_route)
+  return route.model_id ? modelMetaLabel(route) : ''
+}
+
+function toolArgumentDiffResult(call) {
+  return toolArgumentDiff(call)
+}
+
+function toolValueText(value) {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function toolCallTimeline(call) {
+  return toolTimelineRows(call)
 }
 
 function setToolArgument(call, field, value) {
@@ -525,6 +576,9 @@ function runPlaceholder(run) {
     stream_stage: run.stage || run.status, streaming: activeRunStatuses.has(run.status), error: run.status === 'failed',
     llm_route: replay.route,
     context_digest: replay.context_digest,
+    context_manifest: replay.context_manifest,
+    tool_schema: replay.tool_schema,
+    tool_catalog: replay.tool_catalog,
     tool_calls: [], pending_tool_call_ids: [], run_id: run.run_id,
   }
 }
@@ -535,22 +589,116 @@ function registerRun(run) {
   const previous = next.get(run.chat_id) || {}
   next.set(run.chat_id, { ...previous, ...run, lastSeq: run.lastSeq ?? run.event_seq ?? previous.lastSeq ?? 0 })
   runStates.value = next
+  registerRunContext(run)
 }
 
 function runMessageIndex(runId) {
   return messages.value.findIndex((message) => message.run_id === runId || message.metadata?.run_id === runId)
 }
 
+function registerRunContext(run) {
+  if (!run?.run_id) return
+  const next = new Map(runContexts.value)
+  const previous = next.get(run.run_id) || {}
+  next.set(run.run_id, { ...previous, ...run })
+  runContexts.value = next
+}
+
+function messageRunId(message) {
+  return message?.run_id || message?.metadata?.run_id || ''
+}
+
+function messageRunContext(message) {
+  const runId = messageRunId(message)
+  return runId ? runContexts.value.get(runId) || null : null
+}
+
+function replayRunContext(run) {
+  if (!run) return null
+  return replayAssistantEvents(run.events || [])
+}
+
+function messageReplay(message) {
+  const run = messageRunContext(message)
+  if (run) {
+    const replay = replayRunContext(run)
+    if (replay?.route || replay?.context_manifest) return replay
+  }
+  return {
+    route: message?.llm_route || null,
+    context_digest: message?.context_digest || '',
+    context_manifest: message?.context_manifest || null,
+    context_manifests: {},
+    tool_catalog: message?.tool_catalog || [],
+    tool_schema: message?.tool_schema || [],
+    usage: null,
+  }
+}
+
+function messageRoute(message) {
+  const normalized = normalizeAssistantRoute(messageReplay(message)?.route)
+  return normalized.model_id ? normalized : normalizeAssistantRoute(message?.llm_route)
+}
+
+function messageUsage(message) {
+  const run = messageRunContext(message)
+  const runUsage = {
+    prompt_tokens: run?.prompt_tokens,
+    completion_tokens: run?.completion_tokens,
+    total_tokens: run?.total_tokens,
+  }
+  return formatUsage(runUsage) || formatUsage(messageReplay(message)?.usage || {})
+}
+
+function messageContextManifest(message) {
+  const replay = messageReplay(message)
+  if (replay?.context_manifest) return replay.context_manifest
+  const run = messageRunContext(message)
+  const manifests = run?.request_manifests || {}
+  return manifests.final_answer || manifests.tool_proposal || null
+}
+
+function messageContextSections(message) {
+  return contextSectionRows(messageContextManifest(message))
+}
+
+function messageContextTools(message) {
+  const replay = messageReplay(message)
+  const schemaRows = Array.isArray(replay?.tool_schema) ? replay.tool_schema : []
+  if (schemaRows.length) return schemaRows
+  return contextToolRows(messageContextManifest(message))
+}
+
+function messageEvidenceReferences(message) {
+  if (Array.isArray(message?.references) && message.references.length) return message.references
+  return []
+}
+
+function hydrateMessagesWithRunContexts() {
+  for (const message of messages.value) {
+    if (message.role !== 'assistant') continue
+    const replay = messageReplay(message)
+    if (replay.route && !message.llm_route) message.llm_route = replay.route
+    if (replay.context_digest && !message.context_digest) message.context_digest = replay.context_digest
+    if (replay.context_manifest && !message.context_manifest) message.context_manifest = replay.context_manifest
+    if (Array.isArray(replay.tool_schema) && !message.tool_schema?.length) message.tool_schema = replay.tool_schema
+    if (Array.isArray(replay.tool_catalog) && !message.tool_catalog?.length) message.tool_catalog = replay.tool_catalog
+  }
+}
+
 async function loadChatRun(chatKey) {
   try {
-    const data = await listAssistantRuns(chatKey, { page_size: 20 })
-    const run = data?.active || data?.items?.[0]
+    const data = await listAssistantRuns(chatKey, { page_size: 200 })
+    const runs = data?.items || []
+    for (const item of runs) registerRunContext(item)
+    const run = data?.active || runs.find((item) => activeRunStatuses.has(item.status)) || runs[0]
     if (!run) return
     registerRun(run)
     if (activeRunStatuses.has(run.status)) {
       if (runMessageIndex(run.run_id) < 0) messages.value.push(runPlaceholder(run))
       subscribeToRun(run)
     }
+    hydrateMessagesWithRunContexts()
   } catch (error) {
     ElMessage.warning(`回答状态恢复失败：${getApiErrorMessage(error)}`)
   }
@@ -570,6 +718,9 @@ async function refreshActiveRun() {
 function applyRunEvent(run, event) {
   const current = runStates.value.get(run.chat_id) || run
   current.lastSeq = Math.max(current.lastSeq || 0, event.seq || 0)
+  if (event?.seq && !(current.events || []).some((item) => Number(item?.seq) === Number(event.seq) && item?.type === event.type)) {
+    current.events = [...(current.events || []), event]
+  }
   if (event.type === 'run_status') {
     current.status = event.status || current.status
     current.stage = event.stage || current.stage
@@ -583,6 +734,7 @@ function applyRunEvent(run, event) {
   const next = new Map(runStates.value)
   next.set(run.chat_id, current)
   runStates.value = next
+  registerRunContext(current)
   if (chatId.value !== run.chat_id) return
   const index = runMessageIndex(run.run_id)
   if (index >= 0 && event.type === 'reset') {
@@ -717,6 +869,30 @@ function applyAssistantStreamEvent(index, event) {
   if (!target || !event) return ''
   if (event.type === 'tool_call' || event.type === 'tool_input_required') {
     applyToolCallEvent(findToolCallMessage(event.call_id) || messages.value[index - 1], event)
+    return ''
+  }
+  if (event.type === 'route.resolved' || event.type === 'route.fallback') {
+    target.llm_route = event.route || target.llm_route
+    if (event.type === 'route.fallback' && event.reason) {
+      target.llm_route = { ...(target.llm_route || {}), fallback_reason: event.reason }
+    }
+    return ''
+  }
+  if (event.type === 'context.assembled' || event.type === 'request.header') {
+    target.context_digest = event.manifest?.context?.digest || target.context_digest
+    target.context_manifest = event.manifest || target.context_manifest
+    return ''
+  }
+  if (event.type === 'tool.catalog.resolved') {
+    target.tool_catalog = event.tools || target.tool_catalog || []
+    return ''
+  }
+  if (event.type === 'tool.schema.rendered') {
+    target.tool_schema = event.tools || target.tool_schema || []
+    return ''
+  }
+  if (event.type === 'llm.usage.recorded') {
+    target.usage = event.usage || target.usage
     return ''
   }
   if (event.type === 'status') {
@@ -912,10 +1088,31 @@ function webSearchRequestLabel(message) {
 }
 
 function assistantModelLabel(message) {
-  const routeInfo = message?.llm_route
-  if (!routeInfo?.model_id) return ''
-  const toolCapable = Array.isArray(routeInfo.capabilities) && routeInfo.capabilities.includes('tool_calling')
-  return toolCapable ? `${routeInfo.model_id} · 工具` : routeInfo.model_id
+  const routeInfo = messageRoute(message)
+  if (!routeInfo.model_id) return ''
+  const label = modelMetaLabel(routeInfo)
+  return routeInfo.capabilities.includes('tool_calling') ? `${label} · 工具` : label
+}
+
+function assistantModelDetailRows(message) {
+  const routeInfo = messageRoute(message)
+  if (!routeInfo.model_id) return []
+  const rows = [
+    { label: 'Provider', value: routeInfo.provider_id || routeInfo.provider_type || '未记录' },
+    { label: '模型', value: routeInfo.model_id },
+    { label: '路由原因', value: routeReasonLabel(routeInfo.route_reason) || '未记录' },
+    { label: '能力', value: routeCapabilityLabels(routeInfo).join('、') || '未记录' },
+    { label: '能力来源', value: capabilitySourceLabel(routeInfo.capability_source) || '未记录' },
+    { label: '工具协议', value: toolProtocolLabel(routeInfo.tool_protocol) || '未记录' },
+    { label: '上下文窗口', value: formatContextWindow(routeInfo.context_window) || '未记录' },
+  ]
+  if (routeInfo.max_output_tokens) rows.push({ label: '最大输出', value: routeInfo.max_output_tokens })
+  if (routeInfo.fallback_reason) rows.push({ label: '兜底原因', value: routeInfo.fallback_reason })
+  return rows
+}
+
+function assistantUsageLabel(message) {
+  return messageUsage(message)
 }
 
 function webSearchRequestTagType(message) {
@@ -1250,12 +1447,34 @@ watch(
         >
           <div class="chat-bubble">
             <div class="chat-bubble-text">
-              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status || webSearchRequestLabel(msg) || assistantModelLabel(msg) || assistantContextLabel(msg)" class="chat-meta">
+              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status || webSearchRequestLabel(msg) || assistantModelLabel(msg) || assistantUsageLabel(msg) || assistantContextLabel(msg)" class="chat-meta">
                 <el-tag v-if="webSearchRequestLabel(msg)" size="small" effect="plain" :type="webSearchRequestTagType(msg)">
                   {{ webSearchRequestLabel(msg) }}
                 </el-tag>
-                <el-tag v-if="assistantModelLabel(msg)" size="small" effect="plain" type="success">
-                  {{ assistantModelLabel(msg) }}
+                <el-popover
+                  v-if="assistantModelLabel(msg)"
+                  trigger="click"
+                  placement="top"
+                  :width="380"
+                  popper-class="assistant-model-detail-popper"
+                >
+                  <template #reference>
+                    <el-tag size="small" effect="plain" type="success" class="model-meta-trigger">
+                      {{ assistantModelLabel(msg) }}
+                    </el-tag>
+                  </template>
+                  <div class="model-detail-panel">
+                    <strong>本轮模型路由</strong>
+                    <dl>
+                      <template v-for="row in assistantModelDetailRows(msg)" :key="row.label">
+                        <dt>{{ row.label }}</dt>
+                        <dd>{{ row.value }}</dd>
+                      </template>
+                    </dl>
+                  </div>
+                </el-popover>
+                <el-tag v-if="assistantUsageLabel(msg)" size="small" effect="plain" type="info">
+                  {{ assistantUsageLabel(msg) }}
                 </el-tag>
                 <el-tooltip
                   v-if="assistantContextLabel(msg)"
@@ -1276,6 +1495,54 @@ watch(
                   {{ msg.stream_status }}
                 </el-tag>
               </div>
+              <details v-if="messageContextSections(msg).length || messageContextTools(msg).length || assistantModelDetailRows(msg).length" class="assistant-context-panel">
+                <summary>本轮上下文</summary>
+                <div class="assistant-context-panel-body">
+                  <section v-if="assistantModelDetailRows(msg).length" class="context-panel-section">
+                    <h4>模型路由</h4>
+                    <dl>
+                      <template v-for="row in assistantModelDetailRows(msg)" :key="`context-${row.label}`">
+                        <dt>{{ row.label }}</dt>
+                        <dd>{{ row.value }}</dd>
+                      </template>
+                    </dl>
+                  </section>
+                  <section v-if="messageContextSections(msg).length" class="context-panel-section">
+                    <h4>上下文 section</h4>
+                    <div v-for="section in messageContextSections(msg)" :key="section.name" class="context-section-row">
+                      <div>
+                        <strong>{{ section.name }}</strong>
+                        <small>{{ section.source }}</small>
+                      </div>
+                      <span :class="{ omitted: !section.included }">
+                        {{ section.included ? `${section.token_estimate} tokens` : section.omitted_reason || '已省略' }}
+                      </span>
+                    </div>
+                  </section>
+                  <section v-if="messageContextTools(msg).length" class="context-panel-section">
+                    <h4>工具 schema</h4>
+                    <div v-for="tool in messageContextTools(msg)" :key="tool.tool_id || tool.function_name" class="context-tool-row">
+                      <div>
+                        <strong>{{ tool.tool_id || tool.function_name }}</strong>
+                        <small>{{ tool.function_name }} · v{{ tool.version || '未知' }}</small>
+                      </div>
+                      <code>{{ tool.schema_digest ? tool.schema_digest.slice(-8) : '未记录' }}</code>
+                    </div>
+                  </section>
+                  <section v-if="messageEvidenceReferences(msg).length" class="context-panel-section">
+                    <h4>证据引用</h4>
+                    <button
+                      v-for="ref in messageEvidenceReferences(msg)"
+                      :key="`${ref.label}-${ref.target}`"
+                      type="button"
+                      class="context-evidence-link"
+                      @click="openAssistantReference(ref)"
+                    >
+                      {{ ref.label }}
+                    </button>
+                  </section>
+                </div>
+              </details>
               <details v-if="msg.reasoning_summary?.length" class="reasoning-summary">
                 <summary>推理摘要</summary>
                 <ol>
@@ -1371,7 +1638,44 @@ watch(
                   </el-tag>
                   <small v-if="call.algorithm_version">v{{ call.algorithm_version }}</small>
                   <small v-if="call.function_name">{{ call.function_name }}</small>
+                  <small v-if="toolProposalModelLabel(call)">提议：{{ toolProposalModelLabel(call) }}</small>
                 </div>
+                <details class="tool-call-details tool-call-audit">
+                  <summary>调用详情</summary>
+                  <div class="tool-call-meta-grid">
+                    <span><em>提议模型</em>{{ toolProposalModelLabel(call) || '未记录' }}</span>
+                    <span><em>Provider call id</em>{{ call.provider_tool_call_id || '未记录' }}</span>
+                    <span><em>Function name</em>{{ call.function_name || '未记录' }}</span>
+                    <span><em>Schema digest</em>{{ call.schema_digest || '未记录' }}</span>
+                    <span><em>Finish reason</em>{{ call.finish_reason || '未记录' }}</span>
+                    <span><em>Proposal usage</em>{{ formatUsage(call.proposal_usage || {}) || '未记录' }}</span>
+                  </div>
+                  <div v-if="toolArgumentDiffResult(call).ok && toolArgumentDiffResult(call).changes.length" class="tool-arg-diff">
+                    <strong>模型提议值与用户确认值差异</strong>
+                    <div v-for="change in toolArgumentDiffResult(call).changes" :key="change.key" class="tool-arg-diff-row">
+                      <code>{{ change.key }}</code>
+                      <span class="tool-arg-diff-proposed">{{ toolValueText(change.proposed) }}</span>
+                      <span>→</span>
+                      <span class="tool-arg-diff-confirmed">{{ toolValueText(change.confirmed) }}</span>
+                    </div>
+                  </div>
+                  <div v-if="toolCallTimeline(call).length" class="tool-event-timeline">
+                    <strong>事件 timeline</strong>
+                    <el-timeline>
+                      <el-timeline-item
+                        v-for="row in toolCallTimeline(call)"
+                        :key="`${row.at}-${row.label}-${row.type}`"
+                        :timestamp="row.at"
+                        :type="row.type === 'tool.failed' ? 'danger' : row.type === 'tool.result' ? 'success' : 'primary'"
+                      >
+                        <div class="tool-event-timeline-row">
+                          <strong>{{ row.label }}</strong>
+                          <small v-if="row.detail">{{ row.detail }}</small>
+                        </div>
+                      </el-timeline-item>
+                    </el-timeline>
+                  </div>
+                </details>
                 <details v-if="call.raw_arguments" class="tool-call-details tool-proposal-details">
                   <summary>模型原始提案</summary>
                   <pre class="tool-proposal-raw">{{ call.raw_arguments_text || call.raw_arguments }}</pre>
@@ -1639,13 +1943,22 @@ watch(
               :loading="modelLoading"
               @change="handleModelManualChange"
             />
-            <span
+            <div
               v-if="selectedModelLacksToolCalling"
               class="composer-model-warning"
               role="status"
             >
-              当前模型不支持工具调用
-            </span>
+              <span>当前模型不支持工具调用</span>
+              <el-button
+                v-if="toolCapableModelChoices.length"
+                size="small"
+                text
+                type="primary"
+                @click="switchToToolCapableModel"
+              >
+                切换到工具模型
+              </el-button>
+            </div>
             <el-button
               v-if="currentRunActive"
               type="danger"
@@ -1928,6 +2241,166 @@ h1 {
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
+}
+
+.model-meta-trigger {
+  cursor: pointer;
+}
+
+.model-detail-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.model-detail-panel > strong {
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.model-detail-panel dl {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.model-detail-panel dt {
+  color: var(--app-ink-muted);
+}
+
+.model-detail-panel dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--app-ink-body);
+  overflow-wrap: anywhere;
+}
+
+.assistant-context-panel {
+  margin-top: 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #f8fbff;
+}
+
+.assistant-context-panel summary {
+  padding: 8px 10px;
+  color: var(--app-ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.assistant-context-panel-body {
+  display: grid;
+  gap: 10px;
+  padding: 2px 10px 10px;
+}
+
+.context-panel-section {
+  display: grid;
+  gap: 6px;
+}
+
+.context-panel-section h4 {
+  margin: 0;
+  color: var(--app-ink-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.context-panel-section dl {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 5px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.context-panel-section dt {
+  color: var(--app-ink-muted);
+}
+
+.context-panel-section dd {
+  margin: 0;
+  color: var(--app-ink-body);
+  overflow-wrap: anywhere;
+}
+
+.context-section-row,
+.context-tool-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.context-section-row > div,
+.context-tool-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.context-section-row strong,
+.context-tool-row strong,
+.context-section-row small,
+.context-tool-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-section-row strong,
+.context-tool-row strong {
+  color: var(--app-ink);
+  font-size: 12px;
+}
+
+.context-section-row small,
+.context-tool-row small {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+}
+
+.context-section-row > span {
+  flex: 0 0 auto;
+  color: #15803d;
+  font-size: 11px;
+}
+
+.context-section-row > span.omitted {
+  color: #b45309;
+}
+
+.context-tool-row code {
+  flex: 0 0 auto;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--app-primary-active);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.context-evidence-link {
+  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--app-radius-pill);
+  background: #eff6ff;
+  color: var(--app-primary-active);
+  cursor: pointer;
+  font-size: 12px;
 }
 
 .reasoning-summary {
@@ -2274,6 +2747,9 @@ h1 {
 
 .composer-model-warning {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: 1px solid #fde68a;
   border-radius: 999px;
   padding: 3px 8px;
@@ -2281,7 +2757,6 @@ h1 {
   background: #fffbeb;
   font-size: 11px;
   line-height: 1.4;
-  white-space: nowrap;
 }
 
 .kb-picker {
@@ -2414,6 +2889,102 @@ h1 {
   color: var(--app-ink-muted);
   cursor: pointer;
   font-size: 12px;
+}
+
+.tool-call-audit {
+  padding: 8px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.tool-call-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin-top: 8px;
+}
+
+.tool-call-meta-grid span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  color: var(--app-ink-body);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.tool-call-meta-grid em {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.tool-arg-diff {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-arg-diff > strong,
+.tool-event-timeline > strong {
+  color: var(--app-ink);
+  font-size: 12px;
+}
+
+.tool-arg-diff-row {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.tool-arg-diff-row code {
+  color: var(--app-primary-active);
+}
+
+.tool-arg-diff-proposed,
+.tool-arg-diff-confirmed {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-arg-diff-proposed {
+  color: #b45309;
+}
+
+.tool-arg-diff-confirmed {
+  color: #15803d;
+}
+
+.tool-event-timeline {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-event-timeline :deep(.el-timeline) {
+  padding-left: 2px;
+}
+
+.tool-event-timeline-row {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.tool-event-timeline-row strong {
+  color: var(--app-ink);
+  font-size: 12px;
+}
+
+.tool-event-timeline-row small {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .tool-schema-form {
@@ -2607,6 +3178,15 @@ h1 {
 
   .mode-trigger {
     flex: 0 0 auto;
+  }
+
+  .tool-call-meta-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tool-arg-diff-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
   }
 }
 </style>
