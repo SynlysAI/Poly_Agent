@@ -25,7 +25,8 @@ def get_database() -> Database:
 @lru_cache(maxsize=1)
 def _get_auth_client() -> MongoClient:
     """获取统一认证（AI4MS）MongoDB 客户端单例。"""
-    return MongoClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
+    uri = settings.auth_mongodb_uri or settings.mongodb_uri
+    return MongoClient(uri, serverSelectionTimeoutMS=5000)
 
 
 def _get_auth_database() -> Database:
