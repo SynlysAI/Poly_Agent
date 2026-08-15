@@ -273,7 +273,8 @@ class Settings:
             "on",
         }
 
-        # 统一认证（AI4MS）数据库名，与主业务库共用 MongoDB 连接。
+        # 统一认证（AI4MS）配置；认证库与业务库分离时显式配置 AUTH_MONGODB_URI。
+        self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "").strip()
         self.auth_database: str = os.getenv("AUTH_MONGODB_DATABASE", "ai4ms")
 
         # 只读材料数据资产 MongoDB 配置；未设置时回退到主业务库连接。

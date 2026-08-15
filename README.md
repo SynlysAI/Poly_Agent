@@ -157,6 +157,12 @@ cp backend/.env.example backend/.env
 # 至少检查 APP_ENV、AUTH_ENABLED、AUTH_SECRET 和 MongoDB 配置
 ```
 
+生产环境接入 AI4MS 门户 SSO 时必须同时满足：
+
+1. `AUTH_SECRET` 与 AI4MS 门户使用同一个 32 字符以上的强随机密钥；
+2. 认证用户读取同一个 `ai4ms.users` 集合；认证库与业务库分离时显式配置 `AUTH_MONGODB_URI`；
+3. AI4MS 门户子平台入口指向 Poly Agent 前端地址，并以 `#token=<access_token>` 传递统一登录令牌。
+
 知识库功能需要可访问的 WeKnora：
 
 ```bash
