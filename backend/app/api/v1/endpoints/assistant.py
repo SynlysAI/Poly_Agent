@@ -160,7 +160,7 @@ def create_assistant_run(
 def list_assistant_runs(
     chat_id: str,
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page_size: int = Query(default=20, ge=1, le=200),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AssistantRunListData]:
     data = assistant_run_service.list_for_chat(chat_id, current_user, page=page, page_size=page_size)

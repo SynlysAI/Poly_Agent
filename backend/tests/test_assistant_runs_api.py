@@ -61,6 +61,19 @@ class AssistantRunsApiTest(ComputationTestCase):
         second_chat = self._chat("用户二")
         self.assertEqual(self._run(second_chat).status_code, 200)
 
+    def test_lui_can_restore_runs_with_page_size_200(self) -> None:
+        """验证 LUI 恢复历史回答上下文时允许一次读取 200 条 run。"""
+        chat_id = self._chat("历史恢复")
+        created = self._run(chat_id)
+        self.assertEqual(created.status_code, 200, created.text)
+
+        restored = self.client.get(f"/api/v1/assistant/chats/{chat_id}/runs?page_size=200")
+
+        self.assertEqual(restored.status_code, 200, restored.text)
+        data = restored.json()["data"]
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["active"]["run_id"], created.json()["data"]["run_id"])
+
     def test_worker_persists_final_answer_and_replay_cursor(self) -> None:
         chat_id = self._chat("执行")
         created = self._run(chat_id)
