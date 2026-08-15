@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 try:
     from ._computation_test_utils import ComputationTestCase
 except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 from app.core.auth import get_current_user
+from app.core.time import utc_now
 from app.main import app
 from app.services.assistant_run_service import assistant_run_service
-from app.infra.research_engine_repositories import AssistantEventRepository, AssistantRunRepository
+from app.infra.research_engine_repositories import (
+    AssistantEventRepository,
+    AssistantRunRepository,
+    AssistantToolCallRepository,
+)
 
 
 class AssistantRunsApiTest(ComputationTestCase):
@@ -227,3 +234,30 @@ class AssistantRunsApiTest(ComputationTestCase):
         self.assertEqual(metrics["active"], 1)
         self.assertEqual(metrics["conflicts"], 1)
         self.assertIsNone(metrics["total_tokens"])
+
+    def test_continuation_conflict_uses_backoff_and_dead_letter(self) -> None:
+        now = utc_now()
+        call = {
+            "call_id": "atc_continuation_retry",
+            "chat_id": "chat_continuation_retry",
+            "created_by": self.user["user_id"],
+            "phase": "completed",
+            "continuation_state": "pending",
+            "continuation_attempts": 4,
+            "continuation_next_retry_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        AssistantToolCallRepository.save("call_id", call)
+
+        assistant_run_service._defer_continuation(
+            call,
+            HTTPException(status_code=409, detail="活动回答冲突"),
+        )
+
+        document = AssistantToolCallRepository.find_one({"call_id": "atc_continuation_retry"})
+        self.assertEqual(document["continuation_state"], "dead_letter")
+        self.assertEqual(document["continuation_attempts"], 5)
+        self.assertIsNone(document["continuation_next_retry_at"])
+        events = AssistantToolCallRepository.list_events("atc_continuation_retry")
+        self.assertTrue(any(event["type"] == "tool.continuation.dead_letter" for event in events))

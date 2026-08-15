@@ -32,6 +32,7 @@ from app.schemas.agent_tools import (
 from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmRunCreate
 from app.services.agent_tool_service import agent_tool_service
 from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID
+from app.services.assistant_runtime_asset_service import assistant_runtime_asset_service
 from app.services.assistant_tool_contract import SENSITIVE_KEYS, missing_inputs, validate_arguments
 from app.services.research_engine_service import ResearchEngineService
 
@@ -292,7 +293,7 @@ class AssistantToolCallService:
             "mode": "qa",
             "model_request": document.get("proposal_route") or {},
             "route_snapshot": document.get("proposal_route") or {},
-            "context_manifest_digest": document.get("schema_digest"),
+            "context_manifest_digest": document.get("context_manifest_digest"),
         }
 
     @classmethod
@@ -329,6 +330,9 @@ class AssistantToolCallService:
 
         update = {
             "continuation_state": "pending",
+            "continuation_attempts": 0,
+            "continuation_next_retry_at": None,
+            "continuation_dead_letter_reason": None,
             "continuation_error": None,
             "updated_at": utc_now(),
         }
@@ -426,6 +430,9 @@ class AssistantToolCallService:
             "continuation_state": None,
             "continuation_run_id": None,
             "continuation_error": None,
+            "continuation_attempts": 0,
+            "continuation_next_retry_at": None,
+            "continuation_dead_letter_reason": None,
             "source_context": _redact(source_context),
             "field_schema": tool.input_schema.model_dump(mode="python"),
             "input_json_schema": tool.input_json_schema,
@@ -573,12 +580,11 @@ class AssistantToolCallService:
         document = AssistantToolCallRepository.find_one({"call_id": call_id}) or {}
         if document.get("phase") not in CALLABLE_PHASES:
             raise HTTPException(status_code=409, detail="当前工具调用已结束，不能上传附件")
-        target_root = settings.runtime_root / "assistant-tool-calls" / call_id
-        target_root.mkdir(parents=True, exist_ok=True)
+        assistant_runtime_asset_service.cleanup_expired()
         uploaded = list(document.get("uploaded_assets") or [])
         tool = cls._tool(document["algorithm_id"], current_user)
         input_specs = {spec.key: spec for spec in tool.input_assets}
-        new_paths: list[Path] = []
+        new_asset_ids: list[str] = []
         for asset_key, upload in uploads.items():
             if asset_key not in input_specs:
                 raise HTTPException(status_code=422, detail=f"未声明的输入文件: {asset_key}")
@@ -592,20 +598,18 @@ class AssistantToolCallService:
                 content,
                 input_specs[asset_key],
             )
-            safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", asset_key)
-            target = target_root / f"{safe_key}-{uuid4().hex[:8]}{Path(filename).suffix}"
-            target.write_bytes(content)
-            new_paths.append(target)
-            uploaded = [item for item in uploaded if item.get("asset_key") != asset_key]
-            uploaded.append(
-                {
-                    "asset_key": asset_key,
-                    "filename": filename,
-                    "content_type": content_type,
-                    "size_bytes": len(content),
-                    "_path": str(target),
-                }
+            stored = assistant_runtime_asset_service.store(
+                call_id=call_id,
+                chat_id=document.get("chat_id"),
+                created_by=document.get("created_by"),
+                asset_key=asset_key,
+                filename=filename,
+                content_type=content_type,
+                content=content,
             )
+            new_asset_ids.append(stored["asset_id"])
+            uploaded = [item for item in uploaded if item.get("asset_key") != asset_key]
+            uploaded.append(assistant_runtime_asset_service.public_metadata(stored))
         missing_fields, _ = cls._validate_arguments(tool, document.get("arguments") or {})
         missing_assets = cls._missing_assets(tool, document.get("input_asset_refs") or {}, uploaded)
         phase = "awaiting_input" if missing_fields or missing_assets else "awaiting_confirmation"
@@ -618,8 +622,8 @@ class AssistantToolCallService:
                 required_assets=[item.model_dump(mode="python") for item in missing_assets],
             )
         except Exception:
-            for path in new_paths:
-                path.unlink(missing_ok=True)
+            for asset_id in new_asset_ids:
+                cls._release_asset_by_id(asset_id)
             raise
         cls._append_input_event(document, tool)
         return cls._public_document(document)
@@ -701,15 +705,7 @@ class AssistantToolCallService:
         legacy_sync = False
         try:
             try:
-                uploads = {
-                    item["asset_key"]: {
-                        "filename": item["filename"],
-                        "content_type": item.get("content_type"),
-                        "content": Path(item["_path"]).read_bytes(),
-                    }
-                    for item in document.get("uploaded_assets") or []
-                    if item.get("_path")
-                }
+                uploads = cls._uploads_from_document(document)
                 run_payload = AlgorithmRunCreate(
                     algorithm_id=document["algorithm_id"],
                     algorithm_version_id=document.get("algorithm_version_id"),
@@ -819,6 +815,26 @@ class AssistantToolCallService:
 
     @staticmethod
     def _cleanup_uploads(document: dict[str, Any]) -> None:
+        call_id = document["call_id"]
+        AssistantToolCallService._release_legacy_paths(document)
+        assistant_runtime_asset_service.release_call_assets(call_id)
+        public_assets = [
+            {
+                key: value
+                for key, value in item.items()
+                if key != "_path" and key != "status"
+            }
+            for item in (document.get("uploaded_assets") or [])
+        ]
+        document["uploaded_assets"] = public_assets
+        AssistantToolCallRepository.update_fields(
+            document["call_id"],
+            {"uploaded_assets": public_assets},
+        )
+
+    @staticmethod
+    def _release_legacy_paths(document: dict[str, Any]) -> None:
+        """兼容旧临时文件路径，迁移期间仍执行本地删除。"""
         root = (settings.runtime_root / "assistant-tool-calls" / document["call_id"]).resolve()
         for item in document.get("uploaded_assets") or []:
             raw_path = item.get("_path")
@@ -835,15 +851,41 @@ class AssistantToolCallService:
             root.rmdir()
         except OSError:
             pass
-        public_assets = [
-            {key: value for key, value in item.items() if key != "_path"}
-            for item in (document.get("uploaded_assets") or [])
-        ]
-        document["uploaded_assets"] = public_assets
-        AssistantToolCallRepository.update_fields(
-            document["call_id"],
-            {"uploaded_assets": public_assets},
-        )
+
+    @staticmethod
+    def _release_asset_by_id(asset_id: str) -> None:
+        """按资产 ID 释放单个受管附件，避免上传半途留下孤儿文件。"""
+        try:
+            assistant_runtime_asset_service.release_call_assets(
+                assistant_runtime_asset_service.get(asset_id).call_id
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _uploads_from_document(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """从工具调用文档构造 ResearchEngine 输入文件上传字典。"""
+        uploads: dict[str, dict[str, Any]] = {}
+        for item in document.get("uploaded_assets") or []:
+            asset_key = str(item.get("asset_key") or "")
+            if not asset_key:
+                continue
+            asset_id = item.get("asset_id")
+            if asset_id:
+                content = assistant_runtime_asset_service.read(
+                    call_id=document["call_id"],
+                    asset_id=str(asset_id),
+                )
+            elif item.get("_path"):
+                content = Path(item["_path"]).read_bytes()
+            else:
+                continue
+            uploads[asset_key] = {
+                "filename": item.get("filename") or asset_key,
+                "content_type": item.get("content_type"),
+                "content": content,
+            }
+        return uploads
 
     @staticmethod
     def _safe_error_message(exc: Exception) -> str:

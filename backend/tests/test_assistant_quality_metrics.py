@@ -16,6 +16,7 @@ from app.infra.research_engine_repositories import (
     AssistantToolCallRepository,
 )
 from app.services.assistant_quality_service import build_quality_metrics
+from app.services import assistant_quality_service
 
 
 class AssistantQualityMetricsTest(ComputationTestCase):
@@ -138,3 +139,19 @@ class AssistantQualityMetricsTest(ComputationTestCase):
         result = build_quality_metrics()
 
         self.assertEqual(result["event_replay_errors"], 2)
+
+    def test_time_window_and_cache_are_applied(self) -> None:
+        assistant_quality_service._QUALITY_CACHE.clear()
+        run = self._run("asrun_quality_window")
+        run["created_at"] = utc_now()
+        self.assertTrue(AssistantRunRepository.create_active(run)[0])
+
+        future = utc_now().replace(year=utc_now().year + 1)
+        empty = build_quality_metrics(since=future.isoformat())
+        self.assertEqual(empty["totals"]["runs"], 0)
+
+        first = build_quality_metrics(use_cache=True)
+        second = build_quality_metrics(use_cache=True)
+        self.assertFalse(first["cache_hit"])
+        self.assertTrue(second["cache_hit"])
+        self.assertEqual(first["totals"]["runs"], second["totals"]["runs"])

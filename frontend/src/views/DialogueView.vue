@@ -95,7 +95,12 @@ import {
   saveKnowledgePreference,
   saveWebSearchPreference,
 } from '../utils/dialoguePreferences'
-import { buildSelectableLlmModels, resolveDefaultModelSelection } from '../utils/llmModels'
+import {
+  buildSelectableLlmModels,
+  modelLacksToolCalling,
+  resolveDefaultModelSelection,
+  shouldKeepManualModelSelection,
+} from '../utils/llmModels'
 
 const route = useRoute()
 const router = useRouter()
@@ -166,11 +171,7 @@ const selectableModels = computed(() =>
 
 const selectedModel = computed(() => selectableModels.value.find((item) => item.key === selectedModelKey.value) || null)
 const selectedModelLacksToolCalling = computed(() =>
-  Boolean(
-    selectedToolIds.value.length
-      && selectedModel.value
-      && !selectedModel.value.capabilities.includes('tool_calling'),
-  ))
+  modelLacksToolCalling(selectedModel.value, selectedToolIds.value))
 const toolCapableModelChoices = computed(() =>
   toolCapableModelOptions(selectableModels.value),
 )
@@ -338,12 +339,8 @@ function routePurpose() {
   return chatMode.value === 'deep' ? 'deep' : 'qa'
 }
 
-function selectedModelKeyExists(key) {
-  return Boolean(key) && selectableModels.value.some((item) => item.key === key)
-}
-
 function selectDefaultModelForMode(chatModel = null) {
-  if (['user', 'url'].includes(modelSelectionOrigin.value) && selectedModelKeyExists(selectedModelKey.value)) return
+  if (shouldKeepManualModelSelection(modelSelectionOrigin.value, selectedModelKey.value, selectableModels.value)) return
   const selection = resolveDefaultModelSelection(selectableModels.value, {
     urlModel: initialUrlModel.value,
     chatModel,

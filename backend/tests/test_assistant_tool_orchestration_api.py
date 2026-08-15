@@ -939,3 +939,12 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         self.assertEqual(len(data["tool_calls"]), 1)
         self.assertEqual(data["tool_calls"][0]["algorithm_id"], "vertical-tool")
         self.assertIn("确认", data["content"])
+
+    def test_parallel_tool_call_budget_is_configurable(self) -> None:
+        service = AssistantService()
+        route = {"supports_parallel_tool_calls": True}
+        with patch.object(settings, "assistant_max_parallel_tool_calls", 3):
+            self.assertEqual(service._max_parallel_tool_calls(route, [object()]), 3)
+        with patch.object(settings, "assistant_max_parallel_tool_calls", 1):
+            self.assertEqual(service._max_parallel_tool_calls(route, [object()]), 1)
+        self.assertEqual(service._max_parallel_tool_calls({"supports_parallel_tool_calls": False}, [object()]), 1)

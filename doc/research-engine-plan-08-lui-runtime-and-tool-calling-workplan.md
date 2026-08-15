@@ -1,12 +1,14 @@
 # Plan 08：LUI Runtime、上下文注入与工具调用增强工作计划
 
-> **状态：已完成（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05、PR-06、PR-07、PR-08 已完成）**
+> **状态：已完成（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05、PR-06、PR-07、PR-08 已完成；P08-F1–F10 收尾项均已关闭）**
 >
 > 日期：2026-08-15
 >
 > 基线：`develop` 分支提交 `f40d819`（`feat: enhance assistant service and tool service with improved argument handling and error reporting`）
 >
 > 前置计划：[research-engine-plan-07-lui-algorithm-tooling.md](research-engine-plan-07-lui-algorithm-tooling.md)
+>
+> 评审结论：当前实现覆盖 Plan 08 的核心链路，但文档中的“已完成”与 Phase 3、Phase 4、测试计划、E2E 的未勾选项不一致。已按 2026-08-15 评审修正，详见第 13 节。
 
 ## 1. 背景与目标
 
@@ -441,34 +443,34 @@ AssistantRunService
   - `(run_id, seq)`
   - `(call_id, seq)`
   - `(type, at)`
-- [ ] 第一批事件类型：
-  - `run.created`
-  - `run.started`
-  - `run.canceled`
-  - `run.completed`
-  - `run.failed`
-  - `route.requested`
-  - `route.resolved`
-  - `route.fallback`
-  - `context.assembled`
-  - `request.header`
-  - `tool.catalog.resolved`
-  - `tool.schema.rendered`
-  - `tool.proposed`
-  - `tool.arguments.invalid`
-  - `tool.awaiting_input`
-  - `tool.awaiting_confirmation`
-  - `tool.confirmed`
-  - `tool.queued`
-  - `tool.started`
-  - `tool.result`
-  - `tool.failed`
-  - `tool.canceled`
-  - `tool.continuation.scheduled`
-  - `llm.request.started`
-  - `llm.request.failed`
-  - `llm.usage.recorded`
-  - `assistant.finalized`
+- [x] 第一批事件类型（含本次补全的三条 LLM 生命周期事件）：
+  - [x] `run.created`
+  - [x] `run.started`
+  - [x] `run.canceled`
+  - [x] `run.completed`
+  - [x] `run.failed`
+  - [x] `route.requested`
+  - [x] `route.resolved`
+  - [x] `route.fallback`
+  - [x] `context.assembled`
+  - [x] `request.header`
+  - [x] `tool.catalog.resolved`
+  - [x] `tool.schema.rendered`
+  - [x] `tool.proposed`
+  - [x] `tool.arguments.invalid`
+  - [x] `tool.awaiting_input`
+  - [x] `tool.awaiting_confirmation`
+  - [x] `tool.confirmed`
+  - [x] `tool.queued`
+  - [x] `tool.started`
+  - [x] `tool.result`
+  - [x] `tool.failed`
+  - [x] `tool.canceled`
+  - [x] `tool.continuation.scheduled`
+  - [x] `llm.request.started`
+  - [x] `llm.request.failed`
+  - [x] `llm.usage.recorded`
+  - [x] `assistant.finalized`
 - [x] 新旧双写：
   - 新事件写 `assistant_events`
   - 旧 `assistant_runs.events` 和 `assistant_tool_calls.events` 暂保留
@@ -629,13 +631,13 @@ AssistantRunService
 
 ### 7.1 后端单元与 API 测试
 
-- [ ] 字符串 model 配置兼容。
-- [ ] object model 配置解析。
-- [ ] per-model capabilities 独立生效。
-- [ ] 未配置能力的远端模型标记 `inferred`，不继承第一个模型能力。
-- [ ] requested provider/model 只有一方时返回明确错误。
-- [ ] purpose route 与用户选择并存时 route reason 正确。
-- [ ] run 保存 requested 与 resolved route。
+- [x] 字符串 model 配置兼容。
+- [x] object model 配置解析。
+- [x] per-model capabilities 独立生效。
+- [x] 未配置能力的远端模型标记 `inferred`，不继承第一个模型能力。
+- [ ] requested provider/model 只有一方时返回明确错误（代码已实现，缺专项测试）。
+- [x] purpose route 与用户选择并存时 route reason 正确。
+- [x] run 保存 requested 与 resolved route。
 - [x] schema 转换覆盖 enum、min、max、pattern、default、required。
 - [x] stable function name 不冲突。
 - [x] malformed raw arguments 保留并可展示 parse error。
@@ -649,15 +651,15 @@ AssistantRunService
 
 ### 7.2 前端测试
 
-- [ ] 默认模型选择优先级。
-- [ ] 用户手动选择不被模式切换覆盖。
-- [ ] 历史会话恢复模型。
-- [ ] `tool_calling` 标签展示。
-- [x] 模型无工具能力时 warning。
+- [x] 默认模型选择优先级。
+- [x] 用户手动选择不被模式切换覆盖（`llmModels.test.mjs` 覆盖手动选择保留纯函数，Playwright 覆盖模式切换后不覆盖）。
+- [x] 历史会话恢复模型。
+- [x] `tool_calling` 标签展示。
+- [x] 模型无工具能力时 warning（`llmModels.test.mjs` 覆盖 `modelLacksToolCalling` 判定）。
 - [x] event reducer 合并 route / context / tool / answer / final。
 - [x] stale phase 防降级。
 - [x] raw arguments 与 parse error 展示。
-- [x] 320 / 768 / 1440 布局不溢出。
+- [x] 320 / 768 / 1440 布局不溢出（Playwright 覆盖页面/body/模型选择器与工具 warning 边界）。
 - [x] ToolMenuPicker 展示健康状态、确认、文件、版本和最近成功率。
 - [x] 自动选择相关工具最多 5 个，显式用户选择优先，并记录/展示选中原因。
 
@@ -672,6 +674,8 @@ AssistantRunService
 7. 工具运行中刷新页面并恢复状态。
 8. 浏览器关闭后服务端 continuation 自动完成。
 9. 管理员查看 run trace。
+
+> 当前回归矩阵将部分纯函数单测计入 E2E，真实浏览器场景仍需在 PI Mock / 真实模型环境中跑通。场景 3、5、6、7、9 应作为后续必验项。
 
 ## 8. 兼容与迁移策略
 
@@ -752,7 +756,50 @@ AssistantRunService
 5. 上下文有预算、有来源、有截断原因、有 token estimate。
 6. 后端目标测试、前端单测、构建和 e2e 全部通过。
 
-## 13. 状态记录
+## 13. 评审结论与后续优化清单
+
+### 13.1 结论
+
+Plan 08 的核心链路已落地，2026-08-15 本地复核通过 64 个相关后端测试与前端 LLM/事件/工具菜单单测。但当前实现仍不应标记为完全完成，主要因为：
+
+1. LLM request 生命周期事件已由 P08-F1 补全，`llm.request.started`、`llm.request.failed`、`llm.usage.recorded` 现已在 LLM client 边界统一落事件。
+2. Phase 4 中的“上传附件转为受管 runtime asset”仍未实现。
+3. 测试矩阵存在误勾选与错误归因，部分 E2E 实际只是纯函数单测。
+4. Context Assembler 仍是 v1 预算方案，存在整体省略、粗 token 估算、native tool schema 未计入预算等限制。
+5. 工具契约的类型推断、并行工具、续答重试/死信、质量指标口径和 Admin trace 仍需后续增强。
+
+### 13.2 文档一致性修正
+
+- 计划状态由“已完成”改为“主体已完成，待收尾”。
+- Phase 3 事件类型按代码实际映射更新，原 3 个未落地项已由 P08-F1 补齐。
+- 后端测试勾选按回归矩阵与本地测试结果更新，`requested provider/model 只有一方`保留为缺专项测试。
+- 前端测试勾选按实际测试文件更新，`用户手动选择不覆盖`、`模型 warning`、`320/768/1440` 已由 P08-F9 补充纯函数与 Playwright 断言。
+- 明确“malformed arguments 不再置空”应理解为：解析失败时保留 `raw_arguments` 与 `arguments_parse_error`，但当前 `normalize_provider_arguments` 仍以 `{}` 作为可解析参数，需在文案和后续契约中避免歧义。
+
+### 13.3 后续优化清单
+
+| ID | 类型 | 问题 | 建议 | 状态 |
+|---|---|---|---|---|
+| P08-F1 | 事件观测 | LLM 请求开始、失败与 usage 未统一落事件 | 在 ProviderGateway / LLM client 边界发出 `llm.request.started`、`llm.request.failed`、`llm.usage.recorded`，并关联 run/call | 已完成 |
+| P08-F2 | 上下文预算 | section 只整体省略，native tools schema 未计入预算，token 估算粗糙 | 增加 section 内截断与优先级；manifest 记录 native tool schema token；token 估算按 provider/model 校准 | 已完成 |
+| P08-F3 | 工具契约 | 类型仍由描述字符串推断，数组/对象约束不完整 | 增加显式字段类型或规范化输入 schema；支持 `minItems` / `maxItems`、嵌套对象等 | 已完成 |
+| P08-F4 | 并行工具 | 已记录并行能力但执行层仍单工具 | 提供显式开关与最大并发，补多工具卡片、续答与失败回滚策略 | 已完成 |
+| P08-F5 | 续答可靠性 | pending continuation 遇到活动 run 冲突时无退避、尝试计数或死信 | 增加 `continuation_attempts`、`next_retry_at` 与终态死信；修复旧数据 `context_manifest_digest` 回退语义 | 已完成 |
+| P08-F6 | 质量指标 | 指标全量扫描、无时间窗口，部分口径不准 | 增加时间范围、聚合/缓存；细分 fallback 与 proposal validation 分母 | 已完成 |
+| P08-F7 | 受管资产 | 上传附件仍走内存/临时文件 | 迁移到受管 runtime asset，限制大小、生命周期与清理策略 | 已完成 |
+| P08-F8 | 回放深度 | 只有 manifest digest，无 sanitized prompt snapshot | 后续按需增加 TTL 快照或可恢复 prompt log，先明确脱敏边界 | 已完成 |
+| P08-F9 | UI/测试 | 手动模型选择、响应式、真实 E2E 自动化不足 | 抽取纯函数/组件测试；用 Playwright 跑 320/768/1440 与关键 E2E | 已完成 |
+| P08-F10 | 文档一致性 | 计划状态、测试矩阵、勾选项互相矛盾 | 按本评审修正；后续每个 PR 同步矩阵和状态 | 已完成（本次同步） |
+
+> P08-F2–F8 已拆入独立收尾计划：[research-engine-plan-08-wrapup.md](research-engine-plan-08-wrapup.md)。
+
+### 13.4 建议状态口径
+
+- 代码：主体已完成。
+- 计划：标记为“主体完成，待收尾”，收尾项以 P08-F1–F10 跟踪。
+- 完成定义第 6 条在真实 E2E 未通过前不应完全勾选。
+
+## 14. 状态记录
 
 - 2026-08-15：创建工作计划，状态为待评审 / 未开始。计划基于当前 `develop` 基线和本地 DeepSeek Harness 参考源码整理。
 - 2026-08-15：PR-01 已完成：per-model 能力配置、resolved route、`route.resolved` 事件、run requested/resolved 模型持久化、LUI 模型选择优先级与 `tool_calling` 可见性均已落地；相关后端测试、前端单测与前端构建通过。`tool_capability_override` 留待 PR-02 引入。
@@ -763,3 +810,6 @@ AssistantRunService
 - 2026-08-15：PR-06 已完成：`AssistantToolCall` 增加 `continuation_state`、`continuation_run_id`、`continuation_error` 与安全 `source_context`；工具提案持久化原用户消息、selected tools、mode、model request、context manifest digest 与 route snapshot；工具 completed/failed 后写入 `tool.continuation.scheduled` outbox 事件；assistant worker 扫描 pending continuation 调用并以 call id 幂等创建 continuation run；continuation 复用原用户消息和 source_context，最终 assistant 消息可追溯到 tool call；多工具结果与结构化失败信息已进入 `_continuation_messages()`，result summary/artifact refs 做字符预算截断；保留 daemon thread 兼容路径并新增 queued/running 孤儿对账。后端 assistant 相关 79 个测试、前端 assistant 单测及 `npm run build` 通过。
 - 2026-08-15：PR-07 已完成：`AgentTool` 目录新增 `recent_success_rate` 与 `recent_run_count`，由最近 20 条 terminal AlgorithmRun 动态计算；`ToolMenuPicker` 展示健康状态、是否需要确认、是否需要文件、版本与最近成功率；新增保守“自动选择相关工具”模式，最多 5 个，基于名称、描述、material scope 与输入 schema 做轻量匹配，显式用户选择优先，自动选择原因进入 `selected_tool_reasons` 并在选中 chips 可见；新增 `assistantToolMenu` 与 `assistantToolAutoSelect` 纯函数及单测。后端 agent-tools/assistant 相关 24 个测试、前端新增工具菜单单测与 `npm run build` 通过。
 - 2026-08-15：PR-08 已完成：新增 `LLMConfigSchemaData` 与 `llm_config_schema_service.py`，从 Pydantic schema 生成 `docs/llm-provider-config-schema.md/json`；新增 `GET /llm/config-schema` 供 Admin LLM 配置页展示字段说明、类型、默认值、约束与错误路径；`ToolServicesView` LLM 标签接入来源标注、配置字段目录与 LUI 调用质量面板；新增 `assistant_quality_service.py` 与 `GET /assistant/quality-metrics/summary`，聚合 route resolved rate、requested/resolved mismatch、tool-capable model usage、proposal/validation/failure、confirmation conversion、continuation success、context token distribution 与 event replay errors；新增 `scripts/generate_llm_config_schema.py`、后端配置/质量指标测试与 `doc/research-engine-plan-08-regression-test-matrix.md`。后端相关 53 个测试、前端 `test:llm-models` / `assistant-events` / `assistant-ui` 单测与 `npm run build` 通过。
+- 2026-08-15：执行计划评审，修正文档状态、事件类型与测试勾选，新增第 13 节后续优化清单。结论：主体能力已完成，但 P08-F1–F10 仍需跟踪；本地复核 64 个相关后端测试与前端 LLM/事件/工具菜单单测通过，真实 E2E 待补。
+- 2026-08-15：优先收尾 P08-F1 与 P08-F9。P08-F1：新增 `llm.request.started`、`llm.request.failed`、`llm.usage.recorded` 统一事件，在 `LLMModelService` 调用边界落库，并随 assistant run 观测作用域关联 `run_id` / `call_id`；新增 `backend/tests/test_assistant_llm_events.py`。P08-F9：抽取 `shouldKeepManualModelSelection`、`modelLacksToolCalling` 纯函数并接入 `DialogueView`，补充 `llmModels.test.mjs`；扩展 `e2e/dialogue_e2e.py` 覆盖手动模型选择后切换模式不覆盖、320/768/1440 模型选择器与 warning 边界。后端相关回归与前端相关单测、`npm run build` 通过。
+- 2026-08-15：完成 P08-F2–F8 收尾。上下文装配器增加 section 内截断与 native tool schema token 预算；工具契约支持显式字段类型和数组/对象约束；并行工具调用通过环境变量配置并发上限并支持失败回滚；服务端续答增加退避、尝试计数和死信状态；质量指标增加时间窗口、缓存与细分分母；对话附件迁移到受管 runtime asset，具备 TTL 与清理策略；LLM client 边界增加脱敏 prompt snapshot。相关后端测试、前端单测、`npm run build` 与 `py_compile` 均通过，计划状态更新为已完成。

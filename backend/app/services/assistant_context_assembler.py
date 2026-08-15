@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
 from app.schemas.agent_tools import AgentTool
-from app.services.assistant_tool_contract import safe_function_name
+from app.services.assistant_tool_contract import build_function_tool, safe_function_name
 
 
 DEFAULT_CONTEXT_TOKEN_BUDGET = 6144
@@ -54,6 +54,8 @@ class ContextSection:
     included: bool
     omitted_reason: str | None
     digest: str
+    truncated: bool = False
+    truncated_to_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -64,19 +66,41 @@ class ContextAssembly:
     sections: tuple[ContextSection, ...]
     digest: str
     token_estimate: int
+    native_tool_schema_token_estimate: int
+    budget_token_estimate: int
+    chars_per_token: float
     rendered: str
 
 
-def estimate_tokens(text: str) -> int:
+def estimate_tokens(text: str, chars_per_token: float = 4) -> int:
     """Estimate tokens conservatively from UTF-8 character length.
 
     Args:
         text: Text that may be included in a model request.
+        chars_per_token: Estimated number of characters per token.
 
     Returns:
-        Estimated token count. Version 1 deliberately avoids tokenizer dependencies.
+        Estimated token count.
     """
-    return math.ceil(len(str(text or "")) / 4)
+    divisor = max(0.1, float(chars_per_token or 4))
+    return math.ceil(len(str(text or "")) / divisor)
+
+
+def estimate_native_tool_schema_tokens(tools: Sequence[Any]) -> int:
+    """Estimate native tool schema tokens for OpenAI-compatible requests.
+
+    Args:
+        tools: Tool definitions or AgentTool objects.
+
+    Returns:
+        Estimated token count of serialized native tool schemas.
+    """
+    definitions = [
+        build_function_tool(tool) if hasattr(tool, "tool_id") else tool
+        for tool in tools
+    ]
+    serialized = json.dumps(definitions, ensure_ascii=False, sort_keys=True, default=str)
+    return estimate_tokens(serialized)
 
 
 class AssistantContextAssembler:
@@ -96,6 +120,9 @@ class AssistantContextAssembler:
         prior_tool_messages: Sequence[Mapping[str, Any]] | None = None,
         total_token_budget: int | None = None,
         section_token_budgets: Mapping[str, int] | None = None,
+        native_tool_schema_tokens: int | None = None,
+        chars_per_token: float = 4,
+        allow_section_truncation: bool = False,
     ) -> ContextAssembly:
         """Assemble built-in context sections under section and total budgets.
 
@@ -111,12 +138,18 @@ class AssistantContextAssembler:
             prior_tool_messages: Provider tool-result messages for continuation.
             total_token_budget: Optional total token budget override.
             section_token_budgets: Optional per-section token budget overrides.
+            native_tool_schema_tokens: Estimated tokens consumed by native tools.
+            chars_per_token: Estimator denominator used for explainability.
+            allow_section_truncation: Whether over-budget sections may be truncated
+                instead of omitted entirely.
 
         Returns:
             A deterministic assembly containing all section decisions.
         """
         safe_route = dict(route or {})
         budget = self._total_budget(total_token_budget, safe_route)
+        divisor = max(0.1, float(chars_per_token or 4))
+        native_tokens = max(0, int(native_tool_schema_tokens or 0))
         budgets = {**DEFAULT_SECTION_TOKEN_BUDGETS, **(section_token_budgets or {})}
         contents = {
             "project_facts": self._project_facts(facts),
@@ -129,20 +162,32 @@ class AssistantContextAssembler:
         }
 
         sections: list[ContextSection] = []
-        remaining = budget
+        section_pool = max(0, budget - native_tokens)
+        remaining = section_pool
         for name in SECTION_ORDER:
             content = contents[name]
-            estimate = estimate_tokens(content)
+            estimate = estimate_tokens(content, divisor)
             section_budget = max(0, int(budgets.get(name, 0)))
-            included = estimate <= section_budget and estimate <= remaining
+            truncated_to_tokens: int | None = None
+            included = True
             omitted_reason: str | None = None
-            if not included:
-                omitted_reason = (
-                    "section_budget_exceeded"
-                    if estimate > section_budget
-                    else "total_budget_exceeded"
-                )
-            else:
+            if estimate > section_budget:
+                if allow_section_truncation and section_budget > 0:
+                    content = self._truncate_content(content, section_budget, divisor)
+                    estimate = estimate_tokens(content, divisor)
+                    truncated_to_tokens = estimate
+                else:
+                    included = False
+                    omitted_reason = "section_budget_exceeded"
+            if included and estimate > remaining:
+                if allow_section_truncation and remaining > 0:
+                    content = self._truncate_content(content, remaining, divisor)
+                    estimate = estimate_tokens(content, divisor)
+                    truncated_to_tokens = estimate
+                else:
+                    included = False
+                    omitted_reason = "total_budget_exceeded"
+            if included:
                 remaining -= estimate
             sections.append(
                 ContextSection(
@@ -153,6 +198,8 @@ class AssistantContextAssembler:
                     included=included,
                     omitted_reason=omitted_reason,
                     digest=self._digest(content),
+                    truncated=truncated_to_tokens is not None,
+                    truncated_to_tokens=truncated_to_tokens,
                 )
             )
 
@@ -166,6 +213,9 @@ class AssistantContextAssembler:
             sections=tuple(sections),
             digest=self._context_digest(included_sections),
             token_estimate=sum(section.token_estimate for section in included_sections),
+            native_tool_schema_token_estimate=native_tokens,
+            budget_token_estimate=sum(section.token_estimate for section in included_sections) + native_tokens,
+            chars_per_token=divisor,
             rendered=rendered,
         )
 
@@ -197,7 +247,13 @@ class AssistantContextAssembler:
             "route": self._manifest_route(route),
             "context": {
                 "digest": assembly.digest,
-                "token_estimate": assembly.token_estimate,
+                "token_estimate": assembly.budget_token_estimate,
+                "section_token_estimate": assembly.token_estimate,
+                "native_tool_schema_token_estimate": assembly.native_tool_schema_token_estimate,
+                "token_estimation": {
+                    "method": "char_count",
+                    "chars_per_token": assembly.chars_per_token,
+                },
                 "sections": [
                     {
                         "name": section.name,
@@ -205,6 +261,8 @@ class AssistantContextAssembler:
                         "token_estimate": section.token_estimate,
                         "included": section.included,
                         "omitted_reason": section.omitted_reason,
+                        "truncated": section.truncated,
+                        "truncated_to_tokens": section.truncated_to_tokens,
                     }
                     for section in assembly.sections
                 ],
@@ -338,6 +396,27 @@ class AssistantContextAssembler:
     def _digest(content: str) -> str:
         """Return a stable SHA-256 content digest."""
         return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _truncate_content(content: str, token_budget: int, chars_per_token: float) -> str:
+        """Truncate text to a token budget while preserving a stable marker.
+
+        Args:
+            content: Original context content.
+            token_budget: Maximum estimated tokens allowed.
+            chars_per_token: Token estimator denominator.
+
+        Returns:
+            Truncated text with a deterministic suffix.
+        """
+        if token_budget <= 0:
+            return ""
+        max_chars = int(math.floor(token_budget * max(0.1, float(chars_per_token))))
+        suffix = "\n[section_truncated]"
+        available = max(0, max_chars - len(suffix))
+        if available >= len(content):
+            return content
+        return content[:available] + suffix
 
     @staticmethod
     def _context_digest(sections: Iterable[ContextSection]) -> str:

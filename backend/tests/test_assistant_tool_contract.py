@@ -119,6 +119,36 @@ def test_schema_digest_is_stable_and_sensitive_to_version() -> None:
     assert schema_digest(tool) != schema_digest(changed)
 
 
+def test_explicit_field_types_and_array_bounds_are_supported() -> None:
+    tool = _tool().model_copy(
+        update={
+            "input_schema": AlgorithmIOSchema(
+                fields={
+                    "tags": "array - 标签",
+                    "config": "object - 配置",
+                },
+                field_types={
+                    "tags": "array",
+                    "config": "object",
+                },
+                required=["tags"],
+                constraints={
+                    "tags": {"min_items": 1, "max_items": 3},
+                },
+            )
+        }
+    )
+    schema = build_json_schema(tool)
+    assert schema["properties"]["tags"]["type"] == "array"
+    assert schema["properties"]["tags"]["minItems"] == 1
+    assert schema["properties"]["tags"]["maxItems"] == 3
+    assert schema["properties"]["config"]["type"] == "object"
+
+    missing, errors = validate_arguments(tool, {"tags": [], "config": {"a": 1}})
+    assert missing == []
+    assert errors["tags"] == "参数数组长度不能小于 1"
+
+
 def test_classify_provider_error_codes() -> None:
     class AuthenticationError(Exception):
         status_code = 401

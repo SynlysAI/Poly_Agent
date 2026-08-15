@@ -203,6 +203,55 @@ def assert_tool_picker_fits(page) -> None:
     page.keyboard.press("Escape")
 
 
+def assert_composer_controls_fit(page) -> None:
+    """断言模型选择器与工具 warning 不超出当前视口。"""
+    model_select = page.locator(".composer-model-select").first
+    model_select.wait_for(state="visible", timeout=10_000)
+    box = model_select.bounding_box()
+    assert box is not None, "模型选择器没有渲染"
+    assert box["x"] >= -1 and box["x"] + box["width"] <= page.viewport_size["width"] + 1, (
+        f"模型选择器超出视口: {box}"
+    )
+    warning = page.locator(".composer-model-warning")
+    if warning.count():
+        warning_box = warning.first.bounding_box()
+        assert warning_box is not None, "工具调用 warning 没有渲染"
+        assert (
+            warning_box["x"] >= -1
+            and warning_box["x"] + warning_box["width"] <= page.viewport_size["width"] + 1
+        ), f"工具调用 warning 超出视口: {warning_box}"
+
+
+def run_manual_model_selection_flow(page) -> None:
+    """选择非默认模型后切换模式，断言手动选择不被模式默认值覆盖。"""
+    model_select = page.locator(".llm-model-select").first
+    model_select.click()
+    options = page.locator(".llm-model-select-popper .el-select-dropdown__item")
+    options.first.wait_for(state="visible", timeout=30_000)
+    if options.count() < 2:
+        print("SKIP manual model selection flow: only one model available")
+        page.keyboard.press("Escape")
+        return
+
+    before = model_select.locator(".el-select__selected-item").inner_text().strip()
+    options.nth(1).click()
+    after = model_select.locator(".el-select__selected-item").inner_text().strip()
+    assert after and after != before, f"模型选择未切换: before={before!r} after={after!r}"
+
+    mode_trigger = page.locator(".mode-trigger")
+    current_mode = mode_trigger.inner_text().strip()
+    target_label = "深度思考" if "科研问答" in current_mode else "科研问答"
+    mode_trigger.click()
+    target_item = page.locator(".el-dropdown-menu__item", has_text=target_label).first
+    target_item.click()
+    expect(mode_trigger).to_contain_text(target_label)
+
+    after_mode_switch = model_select.locator(".el-select__selected-item").inner_text().strip()
+    assert after_mode_switch == after, (
+        f"切换模式后手动模型选择被覆盖: before={after!r} after={after_mode_switch!r}"
+    )
+
+
 def run_dashboard_flow(page) -> None:
     """工作台勾选工具后发送，工具选择应作为草稿透传到对话页。"""
     dashboard = page.locator(".lui-hero")
@@ -257,6 +306,7 @@ def main() -> int:
                 page.wait_for_timeout(800)
                 assert_no_horizontal_overflow(page)
                 assert_tool_picker_fits(page)
+                assert_composer_controls_fit(page)
                 page.screenshot(path=str(screenshots_dir / f"dialogue-{width}.png"), full_page=True)
                 print(f"PASS viewport {width}x{height}")
 
@@ -267,6 +317,24 @@ def main() -> int:
             ]
             assert not page_errors, f"浏览器控制台存在错误: {page_errors[:10]}"
             print("PASS real-model E2E flow + responsive checks")
+        finally:
+            browser.close()
+
+        browser, model_page, model_errors = open_authenticated_page(
+            playwright,
+            frontend_url,
+            token,
+            (1440, 900),
+        )
+        try:
+            run_manual_model_selection_flow(model_page)
+            model_errors = [
+                item
+                for item in model_errors
+                if "favicon" not in item and "vite" not in item.lower()
+            ]
+            assert not model_errors, f"手动模型选择浏览器控制台存在错误: {model_errors[:10]}"
+            print("PASS manual model selection persistence flow")
         finally:
             browser.close()
 

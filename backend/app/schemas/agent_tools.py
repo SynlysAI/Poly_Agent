@@ -28,6 +28,7 @@ AssistantToolContinuationState = Literal[
     "scheduled",
     "completed",
     "failed",
+    "dead_letter",
     "skipped",
 ]
 
@@ -129,6 +130,26 @@ class AgentToolListData(BaseModel):
 
     items: list[AgentTool]
     total: int
+
+
+class AssistantRuntimeAsset(BaseModel):
+    """受管 LUI 运行时附件元数据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    call_id: str
+    chat_id: str | None = None
+    created_by: str | None = None
+    asset_key: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    path: str
+    status: Literal["active", "released", "expired"] = "active"
+    expires_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class AgentToolRegistryData(BaseModel):
@@ -279,6 +300,9 @@ class AssistantToolCall(BaseModel):
     continuation_state: AssistantToolContinuationState | None = None
     continuation_run_id: str | None = None
     continuation_error: dict[str, Any] | None = None
+    continuation_attempts: int = Field(default=0, ge=0)
+    continuation_next_retry_at: datetime | None = None
+    continuation_dead_letter_reason: str | None = None
     run_status: str | None = None
     result_summary: dict[str, Any] = Field(default_factory=dict)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)

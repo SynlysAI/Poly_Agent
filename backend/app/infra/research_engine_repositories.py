@@ -14,6 +14,7 @@ from uuid import uuid4
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
+from app.core.time import utc_now
 from app.infra.computation_repositories import (
     BaseRepository,
     _apply_update_fields,
@@ -35,6 +36,7 @@ from app.infra.mongo import (
     get_assistant_events_collection,
     get_assistant_messages_collection,
     get_assistant_runs_collection,
+    get_assistant_runtime_assets_collection,
     get_assistant_tool_calls_collection,
     get_execution_decisions_collection,
     get_manual_algorithm_workflows_collection,
@@ -560,7 +562,7 @@ class AssistantToolCallRepository(BaseRepository):
             limit: 单次扫描最多处理的调用数。
 
         Returns:
-            按 updated_at 升序排列的待续答调用文档列表。
+            按 updated_at 升序排列、已到重试时间的待续答调用文档列表。
         """
         filters = {
             "continuation_state": "pending",
@@ -573,7 +575,27 @@ class AssistantToolCallRepository(BaseRepository):
             page=1,
             page_size=limit,
         )
-        return items
+        now = utc_now()
+        return [
+            item
+            for item in items
+            if cls._continuation_retry_due(item, now)
+        ]
+
+    @staticmethod
+    def _continuation_retry_due(document: dict[str, Any], now: datetime) -> bool:
+        """判断 pending continuation 是否已到下一次重试时间。"""
+        retry_at = document.get("continuation_next_retry_at")
+        if not retry_at:
+            return True
+        if isinstance(retry_at, datetime):
+            return retry_at <= now
+        if isinstance(retry_at, str):
+            try:
+                return datetime.fromisoformat(retry_at) <= now
+            except ValueError:
+                return True
+        return True
 
     @classmethod
     def list_orphan_running(cls, *, limit: int = 200) -> list[dict[str, Any]]:
@@ -641,6 +663,81 @@ class AssistantToolCallRepository(BaseRepository):
             return before - len(data[cls.collection_name])
 
         return int(demo_store.mutate(mutate))
+
+
+class AssistantRuntimeAssetRepository(BaseRepository):
+    """受管 LUI 运行时附件仓储。"""
+
+    collection_name = "assistant_runtime_assets"
+
+    @classmethod
+    def _collection(cls):
+        return get_assistant_runtime_assets_collection()
+
+    @classmethod
+    def update_fields(cls, asset_id: str, fields: dict[str, Any]) -> bool:
+        """更新单个受管附件字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"asset_id": asset_id},
+                    {"$set": fields},
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("asset_id") == asset_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def list_for_call(cls, call_id: str) -> list[dict[str, Any]]:
+        """按工具调用读取受管附件。"""
+        items, _ = cls.list_all(
+            {"call_id": call_id},
+            sort_field="created_at",
+            reverse=False,
+            page=1,
+            page_size=100,
+        )
+        return items
+
+    @classmethod
+    def list_expired(cls, *, limit: int = 200) -> list[dict[str, Any]]:
+        """读取已过期但仍处于 active 状态的受管附件。"""
+        items, _ = cls.list_all(
+            {"status": "active"},
+            sort_field="expires_at",
+            reverse=False,
+            page=1,
+            page_size=limit,
+        )
+        now = utc_now()
+        return [
+            item
+            for item in items
+            if cls._expired(item, now)
+        ]
+
+    @staticmethod
+    def _expired(document: dict[str, Any], now: datetime) -> bool:
+        expires_at = document.get("expires_at")
+        if not expires_at:
+            return False
+        if isinstance(expires_at, datetime):
+            return expires_at <= now
+        if isinstance(expires_at, str):
+            try:
+                return datetime.fromisoformat(expires_at) <= now
+            except ValueError:
+                return False
+        return False
 
 
 class AssistantChatRepository(BaseRepository):
@@ -902,6 +999,8 @@ class AssistantEventRepository(BaseRepository):
         if event_type in {
             "tool.continuation.scheduled",
             "tool.continuation.run_created",
+            "tool.continuation.retry_scheduled",
+            "tool.continuation.dead_letter",
             "tool.continuation.failed",
             "tool.continuation.finished",
         }:

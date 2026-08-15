@@ -217,9 +217,16 @@ def assistant_run_metrics(
 
 
 @router.get("/quality-metrics/summary", response_model=ApiResponse[dict], dependencies=[Depends(require_admin)])
-def assistant_quality_metrics() -> ApiResponse[dict]:
+def assistant_quality_metrics(
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+) -> ApiResponse[dict]:
     """聚合 LUI 路由、工具提案、执行与续答质量指标。"""
-    return ApiResponse(code=0, message="ok", data=build_quality_metrics())
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=build_quality_metrics(since=since, until=until, use_cache=True),
+    )
 
 
 @router.post("/chat", response_model=ApiResponse[AssistantChatResponse])

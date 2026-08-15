@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.core.llm_context import record_llm_observation_scope, reset_llm_observation_scope
 from app.core.logging import get_logger
 from app.core.time import utc_now
 from app.core import llm_client
@@ -28,6 +29,9 @@ from app.services.assistant_tool_service import assistant_tool_call_service
 
 logger = get_logger("poly_agent.assistant_runs")
 TERMINAL_STATUSES = {"completed", "failed", "canceled"}
+MAX_CONTINUATION_ATTEMPTS = 5
+CONTINUATION_BACKOFF_BASE_SECONDS = 2
+CONTINUATION_MAX_BACKOFF_SECONDS = 300
 
 
 class AssistantRunService:
@@ -270,10 +274,7 @@ class AssistantRunService:
                     )
             except HTTPException as exc:
                 if exc.status_code == 409:
-                    logger.info(
-                        "assistant continuation deferred for active run conflict call_id=%s",
-                        call_id,
-                    )
+                    self._defer_continuation(call, exc)
                     continue
                 self._record_continuation_failure(call, exc)
             except Exception as exc:
@@ -371,6 +372,9 @@ class AssistantRunService:
             {
                 "continuation_state": "scheduled",
                 "continuation_run_id": run_id,
+                "continuation_attempts": 0,
+                "continuation_next_retry_at": None,
+                "continuation_dead_letter_reason": None,
                 "continuation_error": None,
                 "updated_at": utc_now(),
             },
@@ -383,6 +387,58 @@ class AssistantRunService:
                 "continuation_run_id": run_id,
                 "created_at": utc_now(),
             },
+        )
+
+    def _defer_continuation(self, call: dict[str, Any], exc: Exception) -> None:
+        """对活动 run 冲突做指数退避，并在超过尝试上限后转入死信。"""
+        call_id = str(call.get("call_id") or "")
+        if not call_id:
+            return
+        attempts = int(call.get("continuation_attempts") or 0) + 1
+        now = utc_now()
+        error = {
+            "error_type": type(exc).__name__,
+            "message": str(exc)[:2000],
+        }
+        if attempts >= MAX_CONTINUATION_ATTEMPTS:
+            update = {
+                "continuation_state": "dead_letter",
+                "continuation_attempts": attempts,
+                "continuation_next_retry_at": None,
+                "continuation_dead_letter_reason": "活动回答冲突重试超限",
+                "continuation_error": error,
+                "updated_at": now,
+            }
+            event_type = "tool.continuation.dead_letter"
+        else:
+            backoff_seconds = min(
+                CONTINUATION_MAX_BACKOFF_SECONDS,
+                CONTINUATION_BACKOFF_BASE_SECONDS * (2 ** (attempts - 1)),
+            )
+            update = {
+                "continuation_state": "pending",
+                "continuation_attempts": attempts,
+                "continuation_next_retry_at": now + timedelta(seconds=backoff_seconds),
+                "continuation_dead_letter_reason": None,
+                "continuation_error": error,
+                "updated_at": now,
+            }
+            event_type = "tool.continuation.retry_scheduled"
+        AssistantToolCallRepository.update_fields(call_id, update)
+        AssistantToolCallRepository.append_event(
+            call_id,
+            {
+                "type": event_type,
+                "call_id": call_id,
+                "continuation_attempts": attempts,
+                "continuation_error": error,
+                "created_at": now,
+            },
+        )
+        logger.info(
+            "assistant continuation deferred call_id=%s attempts=%d",
+            call_id,
+            attempts,
         )
 
     @staticmethod
@@ -478,6 +534,7 @@ class AssistantRunService:
         first_token_ms: int | None = None
         content = ""
         try:
+            record_llm_observation_scope({"run_id": run_id})
             llm_client.reset_stream_usage()
             for event in stream_chat_assistant(
                 request, {"user_id": document["created_by"], "role": document.get("actor_role") or "user"}
@@ -537,6 +594,8 @@ class AssistantRunService:
         except Exception as exc:
             logger.exception("assistant run failed run_id=%s", run_id)
             self._finish_failed(run_id, worker_id, str(exc), started, http_status=getattr(exc, "status_code", None))
+        finally:
+            reset_llm_observation_scope()
 
     def _finish_completed(self, document: dict[str, Any], data: dict[str, Any], content: str, started: float) -> None:
         run_id = document["run_id"]

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
+from datetime import datetime
+import time
 from typing import Any
 
 from app.infra.research_engine_repositories import (
@@ -14,6 +17,8 @@ from app.infra.research_engine_repositories import (
 
 EXECUTING_TOOL_PHASES = {"queued", "running", "completed", "failed"}
 TERMINAL_TOOL_PHASES = {"completed", "failed"}
+QUALITY_CACHE_TTL_SECONDS = 60
+_QUALITY_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -122,8 +127,76 @@ def _event_replay_errors(events: list[dict[str, Any]]) -> int:
     return errors
 
 
-def build_quality_metrics() -> dict[str, Any]:
-    """从 assistant run、tool call 与事件日志聚合 LUI 调用质量指标。"""
+def _parse_time(value: str | datetime | None) -> datetime | None:
+    """把查询时间转换为可比较的 datetime。"""
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _value_time(value: Any) -> datetime | None:
+    """读取文档或事件中可比较的时间字段。"""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _within_window(document: dict[str, Any], since: datetime | None, until: datetime | None) -> bool:
+    """判断文档是否落在指定时间窗口内。"""
+    if not since and not until:
+        return True
+    candidate = _value_time(
+        document.get("at")
+        or document.get("created_at")
+        or document.get("updated_at")
+    )
+    if candidate is None:
+        return False
+    if since and candidate < since:
+        return False
+    if until and candidate > until:
+        return False
+    return True
+
+
+def build_quality_metrics(
+    *,
+    since: str | datetime | None = None,
+    until: str | datetime | None = None,
+    use_cache: bool = False,
+) -> dict[str, Any]:
+    """从 assistant run、tool call 与事件日志聚合 LUI 调用质量指标。
+
+    Args:
+        since: 统计起始时间，包含边界。
+        until: 统计结束时间，包含边界。
+        use_cache: 是否使用短 TTL 聚合缓存。
+
+    Returns:
+        含窗口、缓存状态与指标的汇总结果。
+    """
+    since_value = _parse_time(since)
+    until_value = _parse_time(until)
+    cache_key = (
+        since_value.isoformat() if since_value else "",
+        until_value.isoformat() if until_value else "",
+    )
+    now_monotonic = time.monotonic()
+    if use_cache and cache_key in _QUALITY_CACHE:
+        cached_at, cached_value = _QUALITY_CACHE[cache_key]
+        if now_monotonic - cached_at < QUALITY_CACHE_TTL_SECONDS:
+            result = copy.deepcopy(cached_value)
+            result["cache_hit"] = True
+            return result
+
     runs, _ = AssistantRunRepository.list_all(page=1, page_size=10_000)
     calls, _ = AssistantToolCallRepository.list_all(page=1, page_size=10_000)
     events, _ = AssistantEventRepository.list_all(
@@ -132,6 +205,9 @@ def build_quality_metrics() -> dict[str, Any]:
         sort_field="seq",
         reverse=False,
     )
+    runs = [run for run in runs if _within_window(run, since_value, until_value)]
+    calls = [call for call in calls if _within_window(call, since_value, until_value)]
+    events = [event for event in events if _within_window(event, since_value, until_value)]
 
     resolved_runs = [
         run for run in runs
@@ -188,12 +264,17 @@ def build_quality_metrics() -> dict[str, Any]:
     context_distribution = _context_token_distribution(runs)
     context_tokens = sum(int(row["token_total"]) for row in context_distribution)
 
-    return {
+    result = {
         "totals": {
             "runs": len(runs),
             "tool_calls": len(calls),
             "events": len(events),
         },
+        "window": {
+            "since": since_value.isoformat() if since_value else None,
+            "until": until_value.isoformat() if until_value else None,
+        },
+        "cache_hit": False,
         "metrics": [
             _metric(
                 "route_resolved_rate",
@@ -230,17 +311,20 @@ def build_quality_metrics() -> dict[str, Any]:
             _metric(
                 "tool_proposal_validation_failure",
                 "tool proposal validation failure",
-                _ratio(len(validation_failed_calls), len(calls)),
+                _ratio(len(validation_failed_calls), len(route_calls)),
                 len(validation_failed_calls),
-                len(calls),
+                len(route_calls),
                 target="下降",
             ),
             _metric(
                 "unsupported_model_fallback",
                 "unsupported model fallback",
-                _ratio(len(unsupported_fallback_events), len(resolved_runs)),
+                _ratio(
+                    len(unsupported_fallback_events),
+                    len(selected_tool_runs) or len(resolved_runs),
+                ),
                 len(unsupported_fallback_events),
-                len(resolved_runs),
+                len(selected_tool_runs) or len(resolved_runs),
                 target="下降且明确展示",
             ),
             _metric(
@@ -274,3 +358,5 @@ def build_quality_metrics() -> dict[str, Any]:
         },
         "event_replay_errors": _event_replay_errors(events),
     }
+    _QUALITY_CACHE[cache_key] = (now_monotonic, copy.deepcopy(result))
+    return result

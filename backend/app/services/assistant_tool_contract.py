@@ -51,16 +51,17 @@ def safe_function_name(tool_id: str) -> str:
     return f"{base[:max_base]}{suffix}"
 
 
-def _json_type(description: str) -> dict[str, Any]:
+def _json_type(description: str, explicit_type: str | None = None) -> dict[str, Any]:
     """从算法字段描述解析 JSON Schema 类型。
 
     Args:
         description: 形如 `list[string] - 物料列表` 的字段描述。
+        explicit_type: 字段显式类型，优先于描述字符串推断。
 
     Returns:
         JSON Schema 类型节点。
     """
-    token = str(description or "").strip().split(" -", 1)[0].strip().lower()
+    token = (str(explicit_type or "").strip().lower() or str(description or "").strip().split(" -", 1)[0].strip().lower())
     scalar_types = {
         "string": "string",
         "str": "string",
@@ -72,13 +73,22 @@ def _json_type(description: str) -> dict[str, Any]:
         "boolean": "boolean",
         "bool": "boolean",
     }
+    if token in scalar_types:
+        return {"type": scalar_types[token]}
+    if token == "array":
+        return {"type": "array"}
+    if token in {"object", "dict", "map"}:
+        return {"type": "object", "additionalProperties": True}
     list_match = re.match(r"^(?:list|array)(?:\[(.*)\])?$", token)
     dict_match = re.match(r"^(?:dict|map)(?:\[(.*)\])?$", token)
     if list_match:
         result: dict[str, Any] = {"type": "array"}
         inner = (list_match.group(1) or "").strip()
         if inner:
-            result["items"] = {"type": scalar_types.get(inner, "string")}
+            if inner in {"dict", "map", "object"}:
+                result["items"] = {"type": "object", "additionalProperties": True}
+            else:
+                result["items"] = {"type": scalar_types.get(inner, "string")}
         return result
     if dict_match:
         return {"type": "object", "additionalProperties": True}
@@ -98,7 +108,12 @@ def build_json_schema(tool: AgentTool) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     for field_name, description in (schema.fields or {}).items():
         prop: dict[str, Any] = {"description": str(description or "").strip()}
-        prop.update(_json_type(str(description)))
+        prop.update(
+            _json_type(
+                str(description),
+                explicit_type=(schema.field_types or {}).get(field_name),
+            )
+        )
         options = list((schema.field_options or {}).get(field_name) or [])
         if options:
             prop["enum"] = options
@@ -110,6 +125,8 @@ def build_json_schema(tool: AgentTool) -> dict[str, Any]:
                 ("min_length", "minLength"),
                 ("max_length", "maxLength"),
                 ("pattern", "pattern"),
+                ("min_items", "minItems"),
+                ("max_items", "maxItems"),
             ):
                 if constraints.get(source) is not None:
                     prop[target] = constraints[source]
@@ -191,6 +208,13 @@ def validate_arguments(tool: AgentTool, arguments: dict[str, Any]) -> tuple[list
         if not valid:
             errors[field] = f"参数类型不匹配，期望 {expected}"
             continue
+        if expected == "array":
+            min_items = json_schema["properties"][field].get("minItems")
+            max_items = json_schema["properties"][field].get("maxItems")
+            if min_items is not None and len(value) < min_items:
+                errors[field] = f"参数数组长度不能小于 {min_items}"
+            if max_items is not None and len(value) > max_items:
+                errors[field] = f"参数数组长度不能大于 {max_items}"
         allowed = (schema.field_options or {}).get(field) or []
         if allowed and value not in allowed:
             errors[field] = f"参数值不在允许范围: {', '.join(str(item) for item in allowed)}"

@@ -972,6 +972,11 @@ class AlgorithmIOSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fields: dict[str, str] = Field(default_factory=dict)
+    field_types: dict[str, str] = Field(default_factory=dict)
+    """字段显式 JSON Schema 类型，例如 ``string`` / ``array`` / ``object``。
+
+    为空时仍按 ``fields`` 描述字符串兼容推断。
+    """
     required: list[str] = Field(default_factory=list)
     constraints: dict[str, dict] = Field(default_factory=dict)
     field_defaults: dict[str, object] = Field(default_factory=dict)

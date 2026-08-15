@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 
-import { buildSelectableLlmModels, resolveDefaultModelSelection } from './llmModels.js'
+import {
+  buildSelectableLlmModels,
+  modelLacksToolCalling,
+  resolveDefaultModelSelection,
+  shouldKeepManualModelSelection,
+} from './llmModels.js'
 
 const catalog = {
   routing: {},
@@ -99,3 +104,27 @@ assert.deepEqual(
   resolveDefaultModelSelection([toolRow], { routing: {}, purpose: 'deep' }),
   { key: 'default_openai::DeepSeek-V4-Flash-w8a8-mtp', origin: 'fallback' },
 )
+
+assert.equal(
+  shouldKeepManualModelSelection('user', 'default_openai::DeepSeek-V4-Flash-w8a8-mtp', qaRows),
+  true,
+)
+assert.equal(
+  shouldKeepManualModelSelection('url', 'qwen_reasoning_primary::Qwen3.6-35B-A3B', qaRows),
+  true,
+)
+assert.equal(
+  shouldKeepManualModelSelection('chat', 'default_openai::DeepSeek-V4-Flash-w8a8-mtp', qaRows),
+  false,
+)
+assert.equal(
+  shouldKeepManualModelSelection('user', 'missing::model', qaRows),
+  false,
+)
+
+assert.equal(modelLacksToolCalling(toolRow, ['algorithm:demo']), false)
+assert.equal(modelLacksToolCalling(qaRows[1], ['algorithm:demo']), true)
+assert.equal(modelLacksToolCalling(toolRow, []), false)
+assert.equal(modelLacksToolCalling(null, ['algorithm:demo']), false)
+
+console.log('llm model helpers tests passed')

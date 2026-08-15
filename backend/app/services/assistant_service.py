@@ -32,7 +32,11 @@ from app.schemas.assistant import AssistantRetrievalStatus
 from app.schemas.agent_tools import AgentTool, AssistantToolCall, AssistantToolCallCreate
 from app.services.agent_tool_service import agent_tool_service
 from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID, classify_provider_error
-from app.services.assistant_context_assembler import AssistantContextAssembler, ContextAssembly
+from app.services.assistant_context_assembler import (
+    AssistantContextAssembler,
+    ContextAssembly,
+    estimate_native_tool_schema_tokens,
+)
 from app.services.assistant_tool_contract import (
     build_function_tool,
     normalize_provider_arguments,
@@ -1228,8 +1232,15 @@ class AssistantAnswerSynthesizer:
         evidence: SearchOutcome | None,
         extra_messages: list[dict] | None = None,
         context_assembly: ContextAssembly | None = None,
+        max_parallel_tool_calls: int = 1,
     ) -> list[dict]:
         """构建用于工具提议的模型消息，包含项目事实与工具使用规则。"""
+        parallel_rule = (
+            f"当前产品最多允许提出 {max_parallel_tool_calls} 个最必要的算法调用；"
+            "只有多个独立算法都对当前回答有明确收益时才并行提出。"
+            if max_parallel_tool_calls > 1
+            else "当前产品一次只提出一个最必要的算法调用。"
+        )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -1246,7 +1257,7 @@ class AssistantAnswerSynthesizer:
                 "role": "system",
                 "content": (
                     "TOOL_USE_RULES: 只有用户明确请求运行某个已启用算法、或回答需要算法计算/预测结果时，"
-                    "才发起算法工具调用；其余情况直接回答。当前产品一次只提出一个最必要的算法调用。"
+                    f"才发起算法工具调用；其余情况直接回答。{parallel_rule}"
                     "不要把文件路径、密钥或内部字段放入参数。"
                 ),
             },
@@ -1413,16 +1424,23 @@ class AssistantService:
         prior_tool_messages: list[dict] | None = None,
     ) -> ContextAssembly:
         """构造一次模型请求的预算化上下文。"""
+        safe_route = self._safe_llm_route(llm_route)
+        native_tool_schema_tokens = 0
+        if request_kind == "tool_proposal" and selected_tools:
+            native_tool_schema_tokens = estimate_native_tool_schema_tokens(selected_tools)
         return self.context_assembler.assemble(
             request_kind=request_kind,
             intent_scope=intent.scope,
             deep=intent.deep,
             facts=facts,
-            route=self._safe_llm_route(llm_route),
+            route=safe_route,
             selected_tools=selected_tools or [],
             knowledge_evidence=self._knowledge_context_items(knowledge),
             web_evidence=self._web_context_items(evidence),
             prior_tool_messages=prior_tool_messages or [],
+            native_tool_schema_tokens=native_tool_schema_tokens,
+            chars_per_token=float(safe_route.get("token_estimate_chars_per_token") or 4),
+            allow_section_truncation=True,
         )
 
     def _context_event(
@@ -1603,6 +1621,16 @@ class AssistantService:
         _function_tools, name_map = self._build_function_tools(selected_tool_ids, current_user)
         return list(name_map.values())
 
+    @staticmethod
+    def _max_parallel_tool_calls(
+        llm_route: dict,
+        selected_tools: list[AgentTool],
+    ) -> int:
+        """计算当前请求允许的最大并行工具调用数。"""
+        if not selected_tools or not llm_route.get("supports_parallel_tool_calls"):
+            return 1
+        return max(1, min(int(settings.assistant_max_parallel_tool_calls), 3))
+
     def _propose_tool_calls(
         self,
         *,
@@ -1624,6 +1652,7 @@ class AssistantService:
         if not tools:
             return [], [], None, [], None
         selected_tools = list(name_map.values())
+        max_parallel_tool_calls = self._max_parallel_tool_calls(llm_route, selected_tools)
         assembly = self._assemble_context(
             request_kind="tool_proposal",
             request=request,
@@ -1662,6 +1691,7 @@ class AssistantService:
             knowledge=knowledge,
             evidence=evidence,
             context_assembly=assembly,
+            max_parallel_tool_calls=max_parallel_tool_calls,
         )
         try:
             message = llm_client.chat_message(
@@ -1683,14 +1713,23 @@ class AssistantService:
             return [], [], f"算法工具调用失败：{provider_error['message']}", tools, context_event
 
         tool_calls = getattr(message, "tool_calls", None) or []
+        message_metadata = get_message_metadata() or {}
         if not tool_calls:
+            self.llm_model_service.emit_tool_proposal_usage(
+                call_id="",
+                route=llm_route,
+                usage=message_metadata.get("usage"),
+                finish_reason=message_metadata.get("finish_reason"),
+                request_id=message_metadata.get("request_id"),
+            )
             return [], [], getattr(message, "content", "") or "", tools, context_event
 
         events: list[dict] = []
         pending: list[AssistantToolCall] = []
         proposal_error: str | None = None
-        # A single user prompt may submit at most one vertical algorithm call.
-        for call in tool_calls[:1]:
+        usage_emitted_for_call = False
+        call_budget = max_parallel_tool_calls if max_parallel_tool_calls > 1 else 1
+        for call in tool_calls[:call_budget]:
             function = getattr(call, "function", None)
             if function is None:
                 continue
@@ -1700,7 +1739,6 @@ class AssistantService:
                 logger.warning("assistant tool proposal references unknown function: %s", function_name)
                 continue
             provider_arguments = normalize_provider_arguments(getattr(function, "arguments", None))
-            message_metadata = get_message_metadata() or {}
             proposal_usage = message_metadata.get("usage")
             try:
                 created = assistant_tool_call_service.create(
@@ -1725,9 +1763,19 @@ class AssistantService:
                     ),
                     current_user,
                 )
+                self.llm_model_service.emit_tool_proposal_usage(
+                    call_id=created.call_id,
+                    route=llm_route,
+                    usage=proposal_usage,
+                    finish_reason=message_metadata.get("finish_reason"),
+                    request_id=message_metadata.get("request_id"),
+                )
+                usage_emitted_for_call = True
                 pending.append(created)
                 events.extend(AssistantToolCallRepository.list_events(created.call_id))
             except HTTPException as exc:
+                self._rollback_tool_proposal(pending, current_user)
+                pending = []
                 detail = exc.detail
                 if isinstance(detail, dict):
                     code = str(detail.get("code") or "")
@@ -1743,12 +1791,40 @@ class AssistantService:
                 else:
                     proposal_error = f"未能生成算法调用卡片：{exc.detail}"
                 logger.warning("assistant tool proposal rejected %s: %s", tool.tool_id, exc)
+                break
             except Exception as exc:
+                self._rollback_tool_proposal(pending, current_user)
+                pending = []
                 proposal_error = "生成算法调用卡片时发生异常，请稍后重试。"
                 logger.warning("assistant tool proposal skipped call %s: %s", tool.tool_id, exc)
+                break
+        if not usage_emitted_for_call:
+            self.llm_model_service.emit_tool_proposal_usage(
+                call_id="",
+                route=llm_route,
+                usage=message_metadata.get("usage"),
+                finish_reason=message_metadata.get("finish_reason"),
+                request_id=message_metadata.get("request_id"),
+            )
         if proposal_error:
             return [], [], proposal_error, tools, context_event
         return events, pending, None, tools, context_event
+
+    @staticmethod
+    def _rollback_tool_proposal(
+        pending: list[AssistantToolCall],
+        current_user: dict | None,
+    ) -> None:
+        """并行工具提案失败时，取消同一批次已创建但未执行的调用。"""
+        for created in pending:
+            try:
+                assistant_tool_call_service.cancel(created.call_id, current_user)
+            except Exception as exc:
+                logger.warning(
+                    "assistant tool proposal rollback failed call_id=%s: %s",
+                    created.call_id,
+                    exc,
+                )
 
     def _continuation_messages(
         self,

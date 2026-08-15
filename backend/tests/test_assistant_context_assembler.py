@@ -148,6 +148,8 @@ def test_manifest_records_context_and_tool_digests() -> None:
     assert manifest["context"]["digest"] == assembly.digest
     assert manifest["context"]["sections"][0]["name"] == "project_facts"
     assert manifest["context"]["sections"][0]["token_estimate"] > 0
+    assert manifest["context"]["native_tool_schema_token_estimate"] == 0
+    assert manifest["context"]["token_estimation"]["method"] == "char_count"
     assert manifest["tools"] == [
         {
             "tool_id": "algorithm:vertical/tool:a",
@@ -156,3 +158,35 @@ def test_manifest_records_context_and_tool_digests() -> None:
             "schema_digest": "0123456789abcdef",
         }
     ]
+
+
+def test_truncation_and_native_tool_schema_tokens_are_recorded() -> None:
+    assembler = AssistantContextAssembler()
+    assembly = assembler.assemble(
+        request_kind="tool_proposal",
+        intent_scope="project",
+        deep=False,
+        facts={"project": "x" * 400},
+        route={"provider_id": "provider-a", "model_id": "model-a"},
+        selected_tools=[_tool()],
+        total_token_budget=80,
+        section_token_budgets={"project_facts": 20, "llm_route": 4, "conversation_policy": 100},
+        native_tool_schema_tokens=35,
+        allow_section_truncation=True,
+    )
+
+    facts_section = next(section for section in assembly.sections if section.name == "project_facts")
+    assert facts_section.included is True
+    assert facts_section.truncated is True
+    assert assembly.native_tool_schema_token_estimate == 35
+    assert assembly.budget_token_estimate == assembly.token_estimate + 35
+
+    manifest = assembler.build_manifest(
+        run_id="asrun_truncation",
+        request_kind="tool_proposal",
+        route={"provider_id": "provider-a", "model_id": "model-a"},
+        assembly=assembly,
+        tools=[_tool()],
+    )
+    assert manifest["context"]["native_tool_schema_token_estimate"] == 35
+    assert manifest["context"]["sections"][0]["truncated"] is True
