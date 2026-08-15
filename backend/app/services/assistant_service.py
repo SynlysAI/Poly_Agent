@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html as html_module
-import hashlib
 import ipaddress
 import json
 import re
@@ -20,6 +19,7 @@ from fastapi import HTTPException
 
 from app.core import llm_client
 from app.core.config import settings
+from app.core.llm_context import get_message_metadata
 from app.core.logging import get_logger
 from app.infra.research_engine_repositories import AssistantToolCallRepository
 from app.schemas.assistant import AssistantAction
@@ -31,6 +31,12 @@ from app.schemas.assistant import AssistantReference
 from app.schemas.assistant import AssistantRetrievalStatus
 from app.schemas.agent_tools import AgentTool, AssistantToolCall, AssistantToolCallCreate
 from app.services.agent_tool_service import agent_tool_service
+from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID, classify_provider_error
+from app.services.assistant_tool_contract import (
+    build_function_tool,
+    normalize_provider_arguments,
+    safe_function_name,
+)
 from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.integration_status_service import IntegrationStatusService
 from app.services.knowledge_service import KnowledgeService
@@ -1233,7 +1239,7 @@ class AssistantAnswerSynthesizer:
                 "role": "system",
                 "content": (
                     "TOOL_USE_RULES: 只有用户明确请求运行某个已启用算法、或回答需要算法计算/预测结果时，"
-                    "才发起算法工具调用；其余情况直接回答。一次可以提出多个相互独立的算法调用。"
+                    "才发起算法工具调用；其余情况直接回答。当前产品一次只提出一个最必要的算法调用。"
                     "不要把文件路径、密钥或内部字段放入参数。"
                 ),
             },
@@ -1333,21 +1339,17 @@ class AssistantService:
 
     @staticmethod
     def _safe_tool_name(tool_id: str) -> str:
-        base = re.sub(r"[^A-Za-z0-9_-]", "_", str(tool_id or ""))
-        if len(base) <= 64:
-            return base
-        digest = hashlib.sha1(str(tool_id or "").encode("utf-8")).hexdigest()[:8]
-        return f"{base[:55]}_{digest}"
+        return safe_function_name(tool_id)
 
     def _build_function_tools(
         self,
         selected_tool_ids: list[str],
         current_user: dict | None,
-    ) -> tuple[list[dict], dict[str, str]]:
+    ) -> tuple[list[dict], dict[str, AgentTool]]:
         """把当前用户可调用的已选算法转为 function schema，并记录安全名到 tool_id 的映射。"""
         user_id, role, is_admin = self._tool_actor_context(current_user)
         tools: list[dict] = []
-        name_map: dict[str, str] = {}
+        name_map: dict[str, AgentTool] = {}
         for tool_id in selected_tool_ids or []:
             if not isinstance(tool_id, str) or not tool_id.startswith("algorithm:"):
                 continue
@@ -1360,78 +1362,15 @@ class AssistantService:
             )
             if tool is None:
                 continue
-            tools.append(self._function_schema(tool))
-            name_map[self._safe_tool_name(tool_id)] = tool_id
+            function_tool = build_function_tool(tool)
+            tools.append(function_tool)
+            name_map[function_tool["function"]["name"]] = tool
         return tools, name_map
 
     @classmethod
     def _function_schema(cls, tool: AgentTool) -> dict:
-        schema = tool.input_schema
-        properties = {
-            field_name: cls._property_schema(field_name, description, schema)
-            for field_name, description in (schema.fields or {}).items()
-        }
-        parameters: dict[str, Any] = {"type": "object", "properties": properties}
-        if schema.required:
-            parameters["required"] = list(schema.required)
-        description_parts = [str(tool.description or tool.name)]
-        if tool.input_assets:
-            keys = ", ".join(spec.key for spec in tool.input_assets)
-            description_parts.append(f"文件输入由用户在界面补充，不要放入参数: {keys}")
-        return {
-            "type": "function",
-            "function": {
-                "name": cls._safe_tool_name(tool.tool_id),
-                "description": " ".join(description_parts),
-                "parameters": parameters,
-            },
-        }
-
-    @staticmethod
-    def _property_schema(field_name: str, description: str, schema) -> dict:
-        raw = str(description or "").strip()
-        type_token = raw.split(" -", 1)[0].strip().lower()
-        scalar_types = {
-            "string": "string",
-            "str": "string",
-            "text": "string",
-            "number": "number",
-            "float": "number",
-            "integer": "integer",
-            "int": "integer",
-            "boolean": "boolean",
-            "bool": "boolean",
-        }
-        list_match = re.match(r"^(?:list|array)(?:\[(.*)\])?$", type_token)
-        dict_match = re.match(r"^(?:dict|map)(?:\[(.*)\])?$", type_token)
-        if list_match:
-            inner = (list_match.group(1) or "").strip()
-            # 裸的 list/array 没有元素类型信息，不伪造 items，让模型自由传对象或标量；
-            # 服务端会在 assistant_tool_service 中把单个对象包装成列表。
-            prop: dict[str, Any] = {"type": "array"}
-            if inner:
-                prop["items"] = {"type": scalar_types.get(inner, "string")}
-        elif dict_match:
-            prop = {"type": "object", "additionalProperties": True}
-        else:
-            prop = {"type": scalar_types.get(type_token, "string")}
-        notes: list[str] = []
-        options = (schema.field_options or {}).get(field_name) or []
-        if options:
-            notes.append("可选值: " + ", ".join(str(item) for item in options))
-        constraints = (schema.constraints or {}).get(field_name) or {}
-        if isinstance(constraints, dict):
-            for key, label in (
-                ("minimum", "最小值"),
-                ("maximum", "最大值"),
-                ("min_length", "最小长度"),
-                ("max_length", "最大长度"),
-                ("pattern", "正则"),
-            ):
-                if constraints.get(key) is not None:
-                    notes.append(f"{label}: {constraints[key]}")
-        prop["description"] = "; ".join([raw, *notes]) if notes else raw
-        return prop
+        """保留旧调用入口，统一委托给 Tool Contract Adapter。"""
+        return build_function_tool(tool)
 
     def _propose_tool_calls(
         self,
@@ -1478,8 +1417,13 @@ class AssistantService:
                 tool_choice="auto",
             )
         except Exception as exc:
-            logger.warning("assistant tool calling unsupported, fallback to QA: %s", exc)
-            return [], [], None, tools
+            provider_error = classify_provider_error(exc)
+            logger.warning(
+                "assistant tool calling provider error (%s), stop tool proposal: %s",
+                provider_error["code"],
+                exc,
+            )
+            return [], [], f"算法工具调用失败：{provider_error['message']}", tools
 
         tool_calls = getattr(message, "tool_calls", None) or []
         if not tool_calls:
@@ -1494,26 +1438,30 @@ class AssistantService:
             if function is None:
                 continue
             function_name = str(getattr(function, "name", "") or "")
-            tool_id = name_map.get(function_name)
-            if not tool_id:
+            tool = name_map.get(function_name)
+            if tool is None:
                 logger.warning("assistant tool proposal references unknown function: %s", function_name)
                 continue
-            raw_arguments = str(getattr(function, "arguments", None) or "{}")
-            try:
-                arguments = json.loads(raw_arguments)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                arguments = {}
-            if not isinstance(arguments, dict):
-                arguments = {}
+            provider_arguments = normalize_provider_arguments(getattr(function, "arguments", None))
+            message_metadata = get_message_metadata() or {}
+            proposal_usage = message_metadata.get("usage")
             try:
                 created = assistant_tool_call_service.create(
                     AssistantToolCallCreate(
-                        tool_id=tool_id,
+                        tool_id=tool.tool_id,
                         provider_tool_call_id=getattr(call, "id", None),
+                        provider_tool_call_index=getattr(call, "index", 0),
                         chat_id=request.context.get("chat_id"),
                         message_id=request.context.get("message_id"),
-                        arguments=arguments,
-                        selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool_id}",
+                        arguments=provider_arguments.arguments,
+                        function_name=function_name,
+                        raw_arguments=provider_arguments.raw_arguments,
+                        arguments_parse_error=provider_arguments.parse_error,
+                        finish_reason=message_metadata.get("finish_reason"),
+                        proposal_route=self._safe_llm_route(llm_route),
+                        proposal_usage=proposal_usage,
+                        schema_digest=tool.schema_digest,
+                        selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool.tool_id}",
                         selection_confidence=0.5,
                     ),
                     current_user,
@@ -1524,18 +1472,21 @@ class AssistantService:
                 detail = exc.detail
                 if isinstance(detail, dict):
                     code = str(detail.get("code") or "")
-                    if code == "TOOL_INPUT_INVALID":
+                    if code == TOOL_ARGUMENTS_INVALID:
                         details = detail.get("details") or {}
-                        rendered = "；".join(f"{key}: {value}" for key, value in details.items()) or "参数校验失败"
+                        rendered = (
+                            "；".join(f"{key}: {value}" for key, value in details.items())
+                            or str(detail.get("message") or "参数校验失败")
+                        )
                         proposal_error = f"未能生成算法调用卡片：{rendered}。请重新描述参数后发送，或到算法页面直接填写参数运行。"
                     else:
                         proposal_error = f"未能生成算法调用卡片：{detail.get('message') or exc.detail}"
                 else:
                     proposal_error = f"未能生成算法调用卡片：{exc.detail}"
-                logger.warning("assistant tool proposal rejected %s: %s", tool_id, exc)
+                logger.warning("assistant tool proposal rejected %s: %s", tool.tool_id, exc)
             except Exception as exc:
                 proposal_error = "生成算法调用卡片时发生异常，请稍后重试。"
-                logger.warning("assistant tool proposal skipped call %s: %s", tool_id, exc)
+                logger.warning("assistant tool proposal skipped call %s: %s", tool.tool_id, exc)
         if proposal_error:
             return [], [], proposal_error, tools
         return events, pending, None, tools
@@ -1574,7 +1525,7 @@ class AssistantService:
                         "id": call.provider_tool_call_id or call.call_id,
                         "type": "function",
                         "function": {
-                            "name": self._safe_tool_name(call.tool_id),
+                            "name": call.function_name or self._safe_tool_name(call.tool_id),
                             "arguments": json.dumps(call.arguments, ensure_ascii=False),
                         },
                     }
@@ -2042,8 +1993,14 @@ class AssistantService:
         requested_provider_id, requested_model_id = self._requested_model_identifiers(requested_model)
         if (requested_provider_id or requested_model_id) and not (requested_provider_id and requested_model_id):
             raise ValueError("所选 LLM 模型不可用：providerId 和 modelId 必须同时提供")
+        requires_tool_calling = bool((request.context or {}).get("selected_tool_ids"))
         try:
-            return self.llm_model_service.resolve_route(
+            resolve_method = (
+                self.llm_model_service.resolve_tool_capable_route
+                if requires_tool_calling
+                else self.llm_model_service.resolve_route
+            )
+            return resolve_method(
                 purpose=purpose,
                 requested_model=requested_model,
             )

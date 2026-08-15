@@ -47,6 +47,7 @@ export function normalizeToolCall(call) {
   return {
     ...(call || {}),
     arguments_text: JSON.stringify((call?.arguments) || {}, null, 2),
+    raw_arguments_text: call?.raw_arguments || '',
   }
 }
 
@@ -159,6 +160,19 @@ export function schemaFieldType(description = '') {
 }
 
 export function normalizeSchemaArguments(call) {
+  const jsonSchema = call?.input_json_schema
+  if (jsonSchema?.properties) {
+    const values = { ...(call?.arguments || {}) }
+    const required = new Set(jsonSchema.required || [])
+    return Object.entries(jsonSchema.properties).map(([key, property]) => ({
+      key,
+      description: property?.description || '',
+      type: property?.type || 'string',
+      value: values[key] ?? property?.default ?? '',
+      required: (call?.missing_fields || []).includes(key) || required.has(key),
+      options: property?.enum || [],
+    }))
+  }
   const fields = call?.field_schema?.fields || call?.input_schema?.fields || {}
   const values = { ...(call?.arguments || {}) }
   return Object.entries(fields).map(([key, description]) => ({

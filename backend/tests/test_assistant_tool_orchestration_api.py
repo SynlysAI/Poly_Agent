@@ -15,6 +15,7 @@ except ImportError:
 
 from app.core.config import settings
 from app.core.auth import get_current_user
+from app.core.llm_context import record_message_metadata
 from app.infra.computation_repositories import utc_now
 from app.infra.llm_repositories import LLMRoutingRepository
 from app.infra.research_engine_repositories import (
@@ -23,7 +24,10 @@ from app.infra.research_engine_repositories import (
     AssistantToolCallRepository,
 )
 from app.main import app
+from app.schemas.assistant import AssistantChatRequest
 from app.services.assistant_service import AssistantService, SearchOutcome
+from app.services.assistant_tool_contract import build_json_schema, safe_function_name
+from app.services.agent_tool_service import agent_tool_service
 
 
 class AssistantToolOrchestrationApiTest(ComputationTestCase):
@@ -162,7 +166,13 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
                                 "capabilities": ["chat", "tool_calling"],
                                 "recommended_for": ["qa", "deep"],
                                 "tool_protocol": "openai_chat_tools",
-                            }
+                            },
+                            {
+                                "model_id": "plain-model",
+                                "display_name": "Plain Model",
+                                "capabilities": ["chat"],
+                                "recommended_for": ["qa"],
+                            },
                         ],
                     }
                 ]
@@ -236,15 +246,28 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         function = type("FakeFunction", (), {"name": name, "arguments": arguments})()
         return type("FakeToolCall", (), {"id": call_id, "type": "function", "function": function})()
 
-    def test_stream_proposes_tool_call_and_persists_pending_call(self) -> None:
+    @staticmethod
+    def _function_name(tool_id: str) -> str:
+        return safe_function_name(tool_id)
+
+    def test_stream_preserves_malformed_raw_arguments_and_proposal_metadata(self) -> None:
         chat_id, message_id = self._chat_and_message()
-        captured: dict = {}
 
         def fake_chat_message(messages, **kwargs):
-            captured["tools"] = kwargs.get("tools")
-            captured["messages"] = messages
+            record_message_metadata(
+                {
+                    "finish_reason": "tool_calls",
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+                }
+            )
             return self._fake_message(
-                tool_calls=[self._tool_call("algorithm_vertical-tool", '{"smiles": "CCO"}')],
+                tool_calls=[
+                    self._tool_call(
+                        self._function_name("algorithm:vertical-tool"),
+                        '{"smiles": "CCO", "temperature":',
+                        call_id="provider-call-malformed",
+                    )
+                ],
             )
 
         with patch("app.core.llm_client.chat_message", side_effect=fake_chat_message), patch(
@@ -263,7 +286,116 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
                 }
             )
 
-        self.assertEqual(captured["tools"][0]["function"]["name"], "algorithm_vertical-tool")
+        final = events[-1]
+        self.assertEqual(final["type"], "final")
+        call = final["data"]["tool_calls"][0]
+        self.assertEqual(call["phase"], "awaiting_input")
+        self.assertEqual(call["missing_fields"], ["smiles"])
+        self.assertEqual(call["raw_arguments"], '{"smiles": "CCO", "temperature":')
+        self.assertTrue(call["arguments_parse_error"])
+        self.assertTrue(call["function_name"].startswith("algorithm_vertical-tool_"))
+        self.assertEqual(call["finish_reason"], "tool_calls")
+        self.assertEqual(call["proposal_usage"]["total_tokens"], 16)
+        persisted = AssistantToolCallRepository.find_one({"call_id": call["call_id"]})
+        self.assertEqual(persisted["provider_tool_call_id"], "provider-call-malformed")
+        self.assertEqual(persisted["raw_arguments"], '{"smiles": "CCO", "temperature":')
+        self.assertTrue(persisted["arguments_parse_error"])
+        self.assertRegex(persisted["schema_digest"], r"^[0-9a-f]{16}$")
+
+    def test_stream_reports_provider_error_without_claiming_unsupported_capability(self) -> None:
+        chat_id, message_id = self._chat_and_message()
+
+        class AuthenticationError(Exception):
+            status_code = 401
+
+        with patch(
+            "app.core.llm_client.chat_message",
+            side_effect=AuthenticationError("invalid api key"),
+        ), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测 CCO 的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        final = events[-1]
+        self.assertEqual(final["type"], "final")
+        self.assertIn("模型服务鉴权失败", final["data"]["content"])
+        self.assertFalse(
+            any(
+                event.get("type") == "status" and "不支持算法工具调用" in event.get("message", "")
+                for event in events
+            )
+        )
+
+    def test_selected_tool_overrides_plain_model_route(self) -> None:
+        plain_selection = {"provider_id": "tool_calling_primary", "model_id": "plain-model"}
+        LLMRoutingRepository.save(
+            "config_id",
+            {
+                "config_id": "global",
+                "routing": {
+                    "qa": plain_selection,
+                    "deep": {"provider_id": "tool_calling_primary", "model_id": "tool-calling-model"},
+                    "report": plain_selection,
+                },
+            },
+        )
+        request = AssistantChatRequest.model_validate(
+            {
+                "messages": [{"role": "user", "content": "预测 CCO"}],
+                "context": {
+                    "selected_tool_ids": ["algorithm:vertical-tool"],
+                    "model": plain_selection,
+                },
+            }
+        )
+        route = AssistantService()._resolve_llm_route(mode="qa", request=request)
+        self.assertEqual(route["route_reason"], "tool_capability_override")
+        self.assertEqual(route["requested_model_id"], "plain-model")
+        self.assertEqual(route["model_id"], "tool-calling-model")
+        self.assertIn("tool_calling", route["capabilities"])
+
+    def test_stream_proposes_tool_call_and_persists_pending_call(self) -> None:
+        chat_id, message_id = self._chat_and_message()
+        captured: dict = {}
+
+        def fake_chat_message(messages, **kwargs):
+            captured["tools"] = kwargs.get("tools")
+            captured["messages"] = messages
+            return self._fake_message(
+                tool_calls=[self._tool_call(self._function_name("algorithm:vertical-tool"), '{"smiles": "CCO"}')],
+            )
+
+        with patch("app.core.llm_client.chat_message", side_effect=fake_chat_message), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测 CCO 的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        self.assertEqual(
+            captured["tools"][0]["function"]["name"],
+            self._function_name("algorithm:vertical-tool"),
+        )
         self.assertEqual(
             captured["tools"][0]["function"]["parameters"]["required"],
             ["smiles"],
@@ -272,6 +404,13 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             captured["tools"][0]["function"]["parameters"]["properties"]["temperature"]["type"],
             "number",
         )
+        tool_rules = next(
+            item["content"]
+            for item in captured["messages"]
+            if item.get("role") == "system" and "TOOL_USE_RULES" in item.get("content", "")
+        )
+        self.assertIn("一次只提出一个", tool_rules)
+        self.assertNotIn("一次可以提出多个", tool_rules)
         tool_events = [event for event in events if event.get("type") == "tool_call"]
         self.assertEqual(
             [event["phase"] for event in tool_events],
@@ -286,28 +425,17 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         self.assertEqual(persisted["chat_id"], chat_id)
         self.assertEqual(persisted["message_id"], message_id)
 
-    def test_property_schema_maps_bare_list_and_dict(self) -> None:
-        schema = type("FakeSchema", (), {"field_options": {}, "constraints": {}})()
-        self.assertEqual(
-            AssistantService._property_schema("formulations", "list", schema)["type"],
-            "array",
+    def test_json_schema_maps_bare_list_and_dict(self) -> None:
+        tool = agent_tool_service.resolve_callable(
+            "list-tool",
+            user_id="user-1",
+            role="user",
+            is_admin=False,
         )
-        self.assertNotIn(
-            "items",
-            AssistantService._property_schema("formulations", "list", schema),
-        )
-        self.assertEqual(
-            AssistantService._property_schema("formulations", "array", schema)["type"],
-            "array",
-        )
-        self.assertEqual(
-            AssistantService._property_schema("meta", "dict", schema)["type"],
-            "object",
-        )
-        self.assertEqual(
-            AssistantService._property_schema("items", "list[string]", schema)["items"]["type"],
-            "string",
-        )
+        self.assertIsNotNone(tool)
+        properties = build_json_schema(tool)["properties"]
+        self.assertEqual(properties["formulations"]["type"], "array")
+        self.assertNotIn("items", properties["formulations"])
 
     def test_stream_wraps_single_object_into_bare_list_field(self) -> None:
         chat_id, message_id = self._chat_and_message()
@@ -318,7 +446,7 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             return self._fake_message(
                 tool_calls=[
                     self._tool_call(
-                        "algorithm_list-tool",
+                        self._function_name("algorithm:list-tool"),
                         '{"formulations": {"lithium_salt": "LiTFSI"}}',
                     )
                 ],
@@ -359,7 +487,10 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             "app.core.llm_client.chat_message",
             return_value=self._fake_message(
                 tool_calls=[
-                    self._tool_call("algorithm_vertical-tool", '{"smiles": "CCO", "bogus": 1}'),
+                    self._tool_call(
+                        self._function_name("algorithm:vertical-tool"),
+                        '{"smiles": "CCO", "bogus": 1}',
+                    ),
                 ],
             ),
         ), patch(
@@ -464,7 +595,7 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             return self._fake_message(
                 tool_calls=[
                     self._tool_call(
-                        "algorithm_vertical-tool",
+                        self._function_name("algorithm:vertical-tool"),
                         '{"smiles": "CCO"}',
                         call_id="provider-call-123",
                     )
@@ -566,10 +697,20 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         chat_id, message_id = self._chat_and_message()
         with patch(
             "app.core.llm_client.chat_message",
-            side_effect=RuntimeError("tools not supported"),
+            side_effect=AssertionError("tool proposal should not start"),
         ), patch("app.core.llm_client.chat_stream", return_value=iter(["普通回答"])), patch(
             "app.services.assistant_service.AssistantWebSearchService.search",
             side_effect=self._no_web_search,
+        ), patch.object(
+            AssistantService,
+            "_resolve_llm_route",
+            return_value={
+                "purpose": "qa",
+                "provider_id": "tool_calling_primary",
+                "provider_type": "openai_compatible",
+                "model_id": "plain-model",
+                "capabilities": ["chat"],
+            },
         ):
             events = self._stream_events(
                 {
@@ -594,7 +735,7 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         with patch(
             "app.core.llm_client.chat_message",
             return_value=self._fake_message(
-                tool_calls=[self._tool_call("algorithm_vertical-tool", '{"smiles": "CCO"}')],
+                tool_calls=[self._tool_call(self._function_name("algorithm:vertical-tool"), '{"smiles": "CCO"}')],
             ),
         ), patch(
             "app.services.assistant_service.AssistantWebSearchService.search",

@@ -1351,7 +1351,15 @@ watch(
                     {{ toolPhaseLabel(call.phase) }}
                   </el-tag>
                   <small v-if="call.algorithm_version">v{{ call.algorithm_version }}</small>
+                  <small v-if="call.function_name">{{ call.function_name }}</small>
                 </div>
+                <details v-if="call.raw_arguments" class="tool-call-details tool-proposal-details">
+                  <summary>模型原始提案</summary>
+                  <pre class="tool-proposal-raw">{{ call.raw_arguments_text || call.raw_arguments }}</pre>
+                  <p v-if="call.arguments_parse_error" class="tool-proposal-error">
+                    参数解析失败：{{ call.arguments_parse_error }}
+                  </p>
+                </details>
                 <details v-if="canEditToolCall(call)" class="tool-call-details" open>
                   <summary>参数</summary>
                   <div v-if="toolCallFields(call).length" class="tool-schema-form">
@@ -2430,6 +2438,26 @@ h1 {
 .tool-args-editor :deep(textarea) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+
+.tool-proposal-details {
+  margin-top: 8px;
+}
+
+.tool-proposal-raw,
+.tool-proposal-error {
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: var(--app-radius-sm);
+  background: #f1f5f9;
+  color: var(--app-ink-body);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-proposal-error {
+  color: #b91c1c;
 }
 
 .tool-call-actions {

@@ -153,6 +153,18 @@ class AssistantToolCallApiTest(ComputationTestCase):
             ["requested", "awaiting_input", "awaiting_confirmation", "running", "completed"],
         )
 
+    def test_invalid_arguments_use_contract_error_code(self) -> None:
+        response = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={
+                "tool_id": "algorithm:vertical-tool",
+                "chat_id": "chat-invalid",
+                "arguments": {"smiles": "CCO", "bogus": 1},
+            },
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["data"]["detail"]["code"], "TOOL_ARGUMENTS_INVALID")
+
     def test_cancel_is_terminal_and_confirm_cannot_execute(self) -> None:
         response = self.client.post(
             "/api/v1/assistant/tool-calls",

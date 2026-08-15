@@ -119,6 +119,12 @@ class AgentToolsApiTest(ComputationTestCase):
         )
         self.assertEqual(items[0]["version"], "1.0.0")
         self.assertEqual(items[0]["input_schema"]["required"], ["smiles"])
+        demo = next(item for item in items if item["algorithm_id"] == "vertical-demo")
+        self.assertTrue(demo["function_name"].startswith("algorithm_vertical"))
+        self.assertEqual(demo["input_json_schema"]["additionalProperties"], False)
+        self.assertEqual(demo["input_json_schema"]["properties"]["smiles"]["type"], "string")
+        self.assertRegex(demo["schema_digest"], r"^[0-9a-f]{16}$")
+        self.assertIn("fields", demo["presentation"])
 
     def test_private_tool_is_visible_to_owner_but_not_other_user(self) -> None:
         app.dependency_overrides[get_current_user] = lambda: {

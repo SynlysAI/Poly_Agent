@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from openai import OpenAI
 
 from app.core.config import settings
+from app.core.llm_context import record_message_metadata, reset_message_metadata
 from app.infra.llm_repositories import LLMRoutingRepository
 from app.schemas.llm_models import LLMModelCatalogData
 from app.schemas.llm_models import LLMModelConfigInput
@@ -112,6 +113,52 @@ class LLMModelService:
             requested_model_id=requested_model_id or None,
         )
 
+    def resolve_tool_capable_route(
+        self,
+        *,
+        purpose: LLMRoutePurpose,
+        requested_model: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """优先返回原路由；若其缺少工具能力，则改选可调用工具的模型。
+
+        Args:
+            purpose: 当前助手用途（qa / deep / report）。
+            requested_model: 用户显式选择的 provider/model。
+
+        Returns:
+            原路由或带 `tool_capability_override` reason 的新路由。
+        """
+        original = self.resolve_route(purpose=purpose, requested_model=requested_model)
+        if "tool_calling" in (original.get("capabilities") or []):
+            return original
+
+        providers = self._build_providers()
+        candidates: list[tuple[LLMProviderInfo, LLMModelInfo]] = []
+        for provider in providers:
+            for model in provider.models:
+                if "tool_calling" in model.capabilities:
+                    candidates.append((provider, model))
+        if not candidates:
+            return original
+
+        provider, model = min(
+            candidates,
+            key=lambda item: (
+                purpose not in (item[1].recommended_for or []),
+                item[1].capability_source != "configured",
+                item[0].provider_id,
+                item[1].model_id,
+            ),
+        )
+        return self._route_payload(
+            provider,
+            model,
+            purpose=purpose,
+            route_reason="tool_capability_override",
+            requested_provider_id=original.get("requested_provider_id"),
+            requested_model_id=original.get("requested_model_id"),
+        )
+
     def complete_text(
         self,
         *,
@@ -142,12 +189,21 @@ class LLMModelService:
         """返回完整的 chat completion message，保留 tool_calls 等结构化字段。"""
         route = self._resolve_chat_route(purpose=purpose, provider_id=provider_id, model=model)
         client = self._chat_client(route)
+        reset_message_metadata()
         response = client.chat.completions.create(
             model=route["model_id"],
             messages=messages,
             **kwargs,
         )
-        return response.choices[0].message
+        choice = response.choices[0]
+        usage = getattr(response, "usage", None)
+        record_message_metadata(
+            {
+                "finish_reason": choice.finish_reason,
+                "usage": usage.model_dump(mode="python") if hasattr(usage, "model_dump") else None,
+            }
+        )
+        return choice.message
 
     def stream_text(
         self,

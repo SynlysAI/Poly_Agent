@@ -1,6 +1,6 @@
 # Plan 08：LUI Runtime、上下文注入与工具调用增强工作计划
 
-> **状态：待评审 / 未开始**
+> **状态：进行中（PR-01、PR-02 已完成）**
 >
 > 日期：2026-08-15
 >
@@ -270,7 +270,8 @@ AssistantRunService
 
 **建议 PR**：PR-02
 
-- [ ] 新增 `backend/app/services/assistant_tool_contract.py`，提供：
+- [x] 已选择算法工具时，若当前模型缺少 `tool_calling`，路由自动改选可用工具模型，并记录 `tool_capability_override`。
+- [x] 新增 `backend/app/services/assistant_tool_contract.py`，提供：
   - `safe_function_name(tool_id)`
   - `build_json_schema(tool)`
   - `build_function_tool(tool)`
@@ -278,12 +279,12 @@ AssistantRunService
   - `missing_inputs(tool, arguments, asset_refs)`
   - `schema_digest(tool)`
   - `normalize_provider_arguments(raw_arguments)`
-- [ ] `AgentTool` 响应增加派生字段：
+- [x] `AgentTool` 响应增加派生字段：
   - `function_name`
   - `input_json_schema`
   - `schema_digest`
   - `presentation`
-- [ ] JSON Schema 支持：
+- [x] JSON Schema 支持：
   - string / integer / number / boolean / array / object
   - enum
   - minimum / maximum
@@ -291,11 +292,11 @@ AssistantRunService
   - default
   - required
   - additionalProperties
-- [ ] function name 使用稳定 hash 后缀，避免同名冲突和超长名称。
-- [ ] `AssistantService._propose_tool_calls()` 改用统一 adapter。
-- [ ] `AssistantToolCallService` 参数校验改用统一 adapter，保留现有兼容 coercion。
-- [ ] 前端优先使用后端 `input_json_schema` / `presentation`，旧 `field_schema` 仅作 fallback。
-- [ ] `AssistantToolCall` 增加提案元数据：
+- [x] function name 使用稳定 hash 后缀，避免同名冲突和超长名称。
+- [x] `AssistantService._propose_tool_calls()` 改用统一 adapter。
+- [x] `AssistantToolCallService` 参数校验改用统一 adapter，保留现有兼容 coercion。
+- [x] 前端优先使用后端 `input_json_schema` / `presentation`，旧 `field_schema` 仅作 fallback。
+- [x] `AssistantToolCall` 增加提案元数据：
   - `function_name`
   - `provider_tool_call_index`
   - `raw_arguments`
@@ -304,8 +305,8 @@ AssistantRunService
   - `proposal_route`
   - `proposal_usage`
   - `schema_digest`
-- [ ] malformed arguments 不再置空；创建 `awaiting_input` 时同时保存 raw output 和 parse error。
-- [ ] 定义错误码：
+- [x] malformed arguments 不再置空；创建 `awaiting_input` 时同时保存 raw output 和 parse error。
+- [x] 定义错误码：
   - `MODEL_TOOL_CAPABILITY_UNAVAILABLE`
   - `PROVIDER_AUTH_FAILED`
   - `PROVIDER_TIMEOUT`
@@ -314,7 +315,7 @@ AssistantRunService
   - `TOOL_ARGUMENTS_INVALID`
   - `UNKNOWN_TOOL_NAME`
   - `PROVIDER_REQUEST_FAILED`
-- [ ] 多工具调用策略：
+- [x] 多工具调用策略（第一版仅统一为单工具提示词，不开放并行执行）：
   - 默认保持单工具卡片，系统提示词与实现一致；
   - 当模型和工具都声明支持并行调用时，通过配置开启最多 3 个；
   - 保守起见第一版可先只改提示词，不开放多工具执行。
@@ -635,12 +636,12 @@ AssistantRunService
 - [ ] requested provider/model 只有一方时返回明确错误。
 - [ ] purpose route 与用户选择并存时 route reason 正确。
 - [ ] run 保存 requested 与 resolved route。
-- [ ] schema 转换覆盖 enum、min、max、pattern、default、required。
-- [ ] stable function name 不冲突。
-- [ ] malformed raw arguments 保留并可展示 parse error。
-- [ ] 模型无 tool calling 时不发起 provider 请求。
-- [ ] provider 鉴权、超时、模型不存在错误分类正确。
-- [ ] 多工具提案在未开启并行时被明确限制。
+- [x] schema 转换覆盖 enum、min、max、pattern、default、required。
+- [x] stable function name 不冲突。
+- [x] malformed raw arguments 保留并可展示 parse error。
+- [x] 模型无 tool calling 时不发起 provider 请求。
+- [x] provider 鉴权、超时、模型不存在错误分类正确。
+- [x] 多工具提案在未开启并行时被明确限制。
 - [ ] request manifest 记录所有 section 和 omitted reason。
 - [ ] assistant event seq 连续且不更新。
 - [ ] 事件重放不会降级 tool phase。
@@ -655,7 +656,7 @@ AssistantRunService
 - [ ] 模型无工具能力时 warning。
 - [ ] event reducer 合并 route / context / tool / answer / final。
 - [ ] stale phase 防降级。
-- [ ] raw arguments 与 parse error 展示。
+- [x] raw arguments 与 parse error 展示。
 - [ ] 320 / 768 / 1440 布局不溢出。
 
 ### 7.3 E2E 场景
@@ -753,3 +754,4 @@ AssistantRunService
 
 - 2026-08-15：创建工作计划，状态为待评审 / 未开始。计划基于当前 `develop` 基线和本地 DeepSeek Harness 参考源码整理。
 - 2026-08-15：PR-01 已完成：per-model 能力配置、resolved route、`route.resolved` 事件、run requested/resolved 模型持久化、LUI 模型选择优先级与 `tool_calling` 可见性均已落地；相关后端测试、前端单测与前端构建通过。`tool_capability_override` 留待 PR-02 引入。
+- 2026-08-15：PR-02 已完成：统一 Tool Contract Adapter、稳定 function name、完整 JSON Schema 约束、AgentTool 派生契约、raw arguments / parse error 持久化与展示、提案元数据、provider 错误分类、单工具提示词策略和 `tool_capability_override` 均已落地；相关后端测试、前端单测与前端构建通过。并行工具执行仍保持关闭，留待后续配置化开启。

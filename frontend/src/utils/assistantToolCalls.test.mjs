@@ -32,6 +32,21 @@ assert.equal(schemaFieldType('array'), 'array')
 assert.equal(schemaFieldType('dict'), 'object')
 assert.equal(schemaFieldType('map[string]'), 'object')
 assert.equal(normalizeSchemaArguments({ field_schema: { fields: { smiles: 'string' }, required: ['smiles'] }, arguments: { smiles: 'CCO' } })[0].value, 'CCO')
+const schemaDrivenFields = normalizeSchemaArguments({
+  input_json_schema: {
+    properties: {
+      temperature: { type: 'number', description: '温度', minimum: 0, maximum: 500, default: 298 },
+      mode: { type: 'string', enum: ['fast', 'accurate'] },
+    },
+    required: ['temperature'],
+  },
+  arguments: { temperature: 300 },
+})
+assert.equal(schemaDrivenFields.length, 2)
+assert.equal(schemaDrivenFields[0].type, 'number')
+assert.equal(schemaDrivenFields[0].required, true)
+assert.deepEqual(schemaDrivenFields[0].options, [])
+assert.deepEqual(schemaDrivenFields[1].options, ['fast', 'accurate'])
 
 assert.equal(canEditToolCall({ phase: 'awaiting_input' }), true)
 assert.equal(canEditToolCall({ phase: 'awaiting_confirmation' }), true)
@@ -47,7 +62,15 @@ assert.equal(isStaleToolCallPhase('', 'awaiting_confirmation'), false)
 
 const normalized = normalizeToolCall({ call_id: 'atc-1', arguments: { smiles: 'CCO' } })
 assert.equal(normalized.arguments_text, JSON.stringify({ smiles: 'CCO' }, null, 2))
-assert.deepEqual(normalizeToolCall(null), { arguments_text: '{}' })
+const rawProposal = normalizeToolCall({
+  call_id: 'atc-raw',
+  arguments: {},
+  raw_arguments: '{"smiles": "CCO"',
+  arguments_parse_error: 'Expecting object',
+})
+assert.equal(rawProposal.raw_arguments_text, '{"smiles": "CCO"')
+assert.equal(rawProposal.arguments_parse_error, 'Expecting object')
+assert.deepEqual(normalizeToolCall(null), { arguments_text: '{}', raw_arguments_text: '' })
 
 assert.deepEqual(parseToolArguments('{"smiles": "CCO"}'), { ok: true, arguments: { smiles: 'CCO' } })
 assert.equal(parseToolArguments('not json').ok, false)

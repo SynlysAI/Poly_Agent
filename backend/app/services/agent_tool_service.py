@@ -25,6 +25,11 @@ from app.schemas.agent_tools import (
     AgentToolSyncData,
 )
 from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmIOSchema
+from app.services.assistant_tool_contract import (
+    build_json_schema,
+    safe_function_name,
+    schema_digest,
+)
 
 
 UNAVAILABLE_DEPLOYMENT_STATUSES = {
@@ -129,7 +134,7 @@ class AgentToolService:
 
         schema_source = version or registry
         owner = registry.get("owner") or (version or {}).get("created_by")
-        return AgentToolRegistryItem(
+        tool = AgentToolRegistryItem(
             tool_id=f"algorithm:{algorithm_id}",
             algorithm_id=algorithm_id,
             name=str(registry.get("name") or algorithm_id),
@@ -158,6 +163,30 @@ class AgentToolService:
             status=str(registry.get("status") or "unknown"),
             deployment_status=registry.get("deployment_status"),
             runtime_health=runtime_health,
+        )
+        presentation = {
+            "layout": "schema-form",
+            "fields": dict(tool.input_schema.ui_hints or {}),
+            "assets": [
+                {
+                    "key": item.key,
+                    "label": item.label,
+                    "required": item.required,
+                    "data_kind": item.data_kind,
+                    "mime_types": list(item.mime_types),
+                    "extensions": list(item.extensions),
+                    "description": item.description,
+                }
+                for item in tool.input_assets
+            ],
+        }
+        return tool.model_copy(
+            update={
+                "function_name": safe_function_name(tool.tool_id),
+                "input_json_schema": build_json_schema(tool),
+                "schema_digest": schema_digest(tool),
+                "presentation": presentation,
+            }
         )
 
     @classmethod

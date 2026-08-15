@@ -31,24 +31,13 @@ from app.schemas.agent_tools import (
 )
 from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmRunCreate
 from app.services.agent_tool_service import agent_tool_service
+from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID
+from app.services.assistant_tool_contract import SENSITIVE_KEYS, missing_inputs, validate_arguments
 from app.services.research_engine_service import ResearchEngineService
 
 
 CALLABLE_PHASES = {"requested", "awaiting_input", "awaiting_confirmation"}
 TERMINAL_PHASES = {"completed", "failed", "canceled"}
-SENSITIVE_KEYS = {
-    "access-key",
-    "api_key",
-    "api-key",
-    "access_key",
-    "authorization",
-    "credential",
-    "password",
-    "secret",
-    "secret-key",
-    "secret_key",
-    "token",
-}
 
 
 def _actor_context(current_user: dict[str, str] | None) -> tuple[str, str, bool]:
@@ -86,69 +75,32 @@ class AssistantToolCallService:
 
     @staticmethod
     def _validate_arguments(tool: AgentTool, arguments: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
-        schema = tool.input_schema
-        fields = schema.fields or {}
-        sensitive = sorted(set(arguments) & SENSITIVE_KEYS)
-        if sensitive:
+        missing, errors = validate_arguments(tool, arguments)
+        sensitive_error = errors.pop("__sensitive__", None)
+        if sensitive_error:
             raise HTTPException(
                 status_code=422,
-                detail=f"对话参数不能包含凭据字段: {', '.join(sensitive)}",
+                detail={
+                    "code": TOOL_ARGUMENTS_INVALID,
+                    "message": sensitive_error,
+                    "details": {},
+                },
             )
-        unknown = sorted(set(arguments) - set(fields))
-        if unknown:
-            raise HTTPException(status_code=422, detail=f"参数不在算法契约中: {', '.join(unknown)}")
-        missing = [
-            field
-            for field in schema.required
-            if field not in arguments or arguments[field] is None or arguments[field] == ""
-        ]
-        errors: dict[str, str] = {}
-        for field, value in arguments.items():
-            description = str(fields.get(field, "")).lower()
-            type_name = description.split(" -", 1)[0].strip()
-            normalized_type = (
-                "list"
-                if type_name.startswith(("list[", "array["))
-                else "object"
-                if type_name.startswith(("dict[", "map["))
-                else type_name
+        unknown_error = errors.pop("__unknown__", None)
+        if unknown_error:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": TOOL_ARGUMENTS_INVALID,
+                    "message": unknown_error,
+                    "details": {},
+                },
             )
-            valid = (
-                normalized_type in {"", "any"}
-                or normalized_type == "object" and isinstance(value, dict)
-                or normalized_type in {"string", "str", "text"} and isinstance(value, str)
-                or normalized_type in {"number", "float"}
-                and isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                or normalized_type in {"integer", "int"}
-                and isinstance(value, int)
-                and not isinstance(value, bool)
-                or normalized_type in {"boolean", "bool"} and isinstance(value, bool)
-                or normalized_type in {"array", "list"} and isinstance(value, list)
-            )
-            if not valid:
-                errors[field] = f"参数类型不匹配，期望 {type_name or 'object'}"
-            allowed = schema.field_options.get(field) or []
-            if allowed and value not in allowed:
-                errors[field] = f"参数值不在允许范围: {', '.join(allowed)}"
-            constraints = schema.constraints.get(field) or {}
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                if constraints.get("minimum") is not None and value < constraints["minimum"]:
-                    errors[field] = f"参数不能小于 {constraints['minimum']}"
-                if constraints.get("maximum") is not None and value > constraints["maximum"]:
-                    errors[field] = f"参数不能大于 {constraints['maximum']}"
-            if isinstance(value, str):
-                if constraints.get("min_length") is not None and len(value) < constraints["min_length"]:
-                    errors[field] = f"参数长度不能小于 {constraints['min_length']}"
-                if constraints.get("max_length") is not None and len(value) > constraints["max_length"]:
-                    errors[field] = f"参数长度不能大于 {constraints['max_length']}"
-                if constraints.get("pattern") and not re.fullmatch(str(constraints["pattern"]), value):
-                    errors[field] = "参数格式不符合约束"
         if errors:
             raise HTTPException(
                 status_code=422,
                 detail={
-                    "code": "TOOL_INPUT_INVALID",
+                    "code": TOOL_ARGUMENTS_INVALID,
                     "message": "算法参数校验失败",
                     "details": errors,
                 },
@@ -281,6 +233,14 @@ class AssistantToolCallService:
             tool_name=document["tool_name"],
             phase=document["phase"],
             arguments=_redact(document.get("arguments") or {}),
+            function_name=document.get("function_name"),
+            provider_tool_call_index=document.get("provider_tool_call_index"),
+            raw_arguments=_redact(document.get("raw_arguments")),
+            arguments_parse_error=document.get("arguments_parse_error"),
+            finish_reason=document.get("finish_reason"),
+            proposal_route=document.get("proposal_route"),
+            proposal_usage=document.get("proposal_usage"),
+            schema_digest=document.get("schema_digest"),
             result_summary=_redact(document.get("result_summary") or {}),
             artifact_refs=document.get("artifact_refs") or [],
             error=_redact(document.get("error")) if document.get("error") else None,
@@ -306,6 +266,8 @@ class AssistantToolCallService:
             call_id=document["call_id"],
             missing_fields=missing_fields,
             field_schema=tool.input_schema,
+            input_json_schema=tool.input_json_schema,
+            presentation=tool.presentation,
             required_assets=required_assets,
             created_at=utc_now(),
         ).model_dump(mode="python")
@@ -363,7 +325,8 @@ class AssistantToolCallService:
         missing_fields, _ = cls._validate_arguments(tool, arguments)
         cls._validate_asset_refs(tool, payload.input_asset_refs)
         uploaded_assets: list[dict[str, Any]] = []
-        missing_assets = cls._missing_assets(tool, payload.input_asset_refs, uploaded_assets)
+        missing_result = missing_inputs(tool, arguments, payload.input_asset_refs, uploaded_assets)
+        missing_assets = missing_result["assets"]
         next_phase = "awaiting_input" if missing_fields or missing_assets else "awaiting_confirmation"
         now = utc_now()
         document = {
@@ -380,6 +343,8 @@ class AssistantToolCallService:
             "selection_confidence": payload.selection_confidence,
             "phase": "requested",
             "field_schema": tool.input_schema.model_dump(mode="python"),
+            "input_json_schema": tool.input_json_schema,
+            "presentation": tool.presentation,
             "output_schema": tool.output_schema.model_dump(mode="python"),
             "attributions": [
                 item.model_dump(mode="python")
@@ -387,6 +352,14 @@ class AssistantToolCallService:
                 if item is not None
             ],
             "arguments": _redact(arguments),
+            "function_name": payload.function_name,
+            "provider_tool_call_index": payload.provider_tool_call_index,
+            "raw_arguments": _redact(payload.raw_arguments),
+            "arguments_parse_error": payload.arguments_parse_error,
+            "finish_reason": payload.finish_reason,
+            "proposal_route": payload.proposal_route,
+            "proposal_usage": payload.proposal_usage,
+            "schema_digest": payload.schema_digest or tool.schema_digest,
             "input_asset_refs": _redact(payload.input_asset_refs),
             "uploaded_assets": uploaded_assets,
             "missing_fields": missing_fields,
