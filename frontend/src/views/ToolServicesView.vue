@@ -13,8 +13,10 @@ import {
   checkLlmModels,
   checkIntegrationConfig,
   getAlgorithm,
+  getAssistantQualityMetrics,
   getApiErrorMessage,
   getIntegrationStatus,
+  getLlmConfigSchema,
   getLlmModels,
   listAgentToolRegistry,
   listAgentTools,
@@ -31,14 +33,18 @@ const router = useRouter()
 const services = ref([])
 const configs = ref([])
 const llmCatalog = ref({ providers: [], routing: {} })
+const llmConfigSchema = ref({ provider_fields: [], per_model_fields: [] })
+const llmQualityMetrics = ref(null)
 const loadingStatus = ref(false)
 const loadingConfigs = ref(false)
 const loadingLlm = ref(false)
+const loadingLlmExtras = ref(false)
 const saving = ref(false)
 const savingLlmRouting = ref(false)
 const actionLoading = ref('')
 const configError = ref('')
 const llmError = ref('')
+const llmExtrasError = ref('')
 const editVisible = ref(false)
 const editingServiceKey = ref('')
 const activeTab = ref(normalizeTab(route.query.tab))
@@ -470,6 +476,26 @@ function llmCapabilityTag(capability) {
   return 'info'
 }
 
+function formatSchemaDefault(value) {
+  if (value === null || value === undefined) return 'null'
+  if (typeof value === 'string') return value
+  return JSON.stringify(value)
+}
+
+function formatSchemaConstraints(constraints = {}) {
+  const entries = Object.entries(constraints || {})
+  if (!entries.length) return '-'
+  return entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join('；')
+}
+
+function qualityMetricType(metric) {
+  const key = metric?.key || ''
+  if (['tool_run_failure', 'tool_proposal_validation_failure', 'unsupported_model_fallback'].includes(key)) return 'danger'
+  if (['route_resolved_rate', 'continuation_success'].includes(key)) return 'success'
+  if (['confirmation_conversion', 'tool_capable_model_usage', 'tool_proposal_rate'].includes(key)) return 'primary'
+  return 'info'
+}
+
 function servicePrimaryDetail(row) {
   const details = row.details || {}
   if (details.path) return details.path
@@ -624,6 +650,23 @@ async function loadLlmModels({ quiet = false } = {}) {
   }
 }
 
+async function loadLlmExtras({ quiet = false } = {}) {
+  loadingLlmExtras.value = true
+  llmExtrasError.value = ''
+  try {
+    const requests = [getLlmConfigSchema()]
+    if (isAdmin.value) requests.push(getAssistantQualityMetrics())
+    const [schema, quality] = await Promise.all(requests)
+    llmConfigSchema.value = schema || { provider_fields: [], per_model_fields: [] }
+    llmQualityMetrics.value = quality || null
+  } catch (error) {
+    llmExtrasError.value = getApiErrorMessage(error)
+    if (!quiet) ElMessage.error(llmExtrasError.value)
+  } finally {
+    loadingLlmExtras.value = false
+  }
+}
+
 async function refreshLlmModels() {
   loadingLlm.value = true
   llmError.value = ''
@@ -631,6 +674,7 @@ async function refreshLlmModels() {
     llmCatalog.value = await checkLlmModels()
     syncLlmRouteForm()
     ElMessage.success('LLM 模型状态已刷新')
+    await loadLlmExtras({ quiet: true })
   } catch (error) {
     llmError.value = getApiErrorMessage(error)
     ElMessage.error(llmError.value)
@@ -735,6 +779,7 @@ onMounted(() => {
   loadAlgos()
   loadAgentToolItems()
   loadLlmModels({ quiet: true })
+  loadLlmExtras({ quiet: true })
 })
 
 watch(
@@ -1000,6 +1045,7 @@ watch(activeTab, (tab) => {
 
       <el-tab-pane label="LLM 模型" name="llm-models">
         <section class="tools-section">
+            <AttributionBanner module-id="llm" label="模型服务来自" compact />
             <div class="llm-toolbar">
               <div>
                 <h4>LLM 模型选择</h4>
@@ -1011,6 +1057,7 @@ watch(activeTab, (tab) => {
               </div>
             </div>
             <el-alert v-if="llmError" :title="llmError" type="warning" :closable="false" class="config-alert" />
+            <el-alert v-if="llmExtrasError" :title="llmExtrasError" type="warning" :closable="false" class="config-alert" />
             <div v-loading="loadingLlm" class="llm-model-panel">
               <div class="llm-stat-grid">
                 <article v-for="stat in llmProviderStats" :key="stat.label" class="llm-stat">
@@ -1019,6 +1066,111 @@ watch(activeTab, (tab) => {
                   <small>{{ stat.hint }}</small>
                 </article>
               </div>
+
+              <section v-if="llmQualityMetrics" v-loading="loadingLlmExtras" class="llm-routing-card">
+                <div class="llm-routing-head">
+                  <div>
+                    <strong>LUI 调用质量</strong>
+                    <span>路由、工具提案、执行与续答的成功率和失败阶段。</span>
+                  </div>
+                </div>
+                <div class="llm-quality-metrics">
+                  <el-table :data="llmQualityMetrics.metrics || []" size="small" border>
+                    <el-table-column prop="label" label="指标" min-width="190" />
+                    <el-table-column label="当前值" min-width="110" align="right">
+                      <template #default="{ row }">
+                        <el-tag size="small" :type="qualityMetricType(row)">{{ row.display }}</el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="numerator" label="分子" width="80" align="right" />
+                    <el-table-column prop="denominator" label="分母" width="80" align="right" />
+                    <el-table-column prop="target" label="目标" min-width="150" />
+                  </el-table>
+                </div>
+                <div v-if="llmQualityMetrics.context_token_distribution?.sections?.length" class="llm-context-distribution">
+                  <div class="llm-routing-head">
+                    <div>
+                      <strong>上下文 token 分布</strong>
+                      <span>总计 {{ llmQualityMetrics.context_token_distribution.total_tokens }} tokens。</span>
+                    </div>
+                  </div>
+                  <el-table :data="llmQualityMetrics.context_token_distribution.sections" size="small" border>
+                    <el-table-column prop="name" label="Section" min-width="150" />
+                    <el-table-column prop="source" label="来源" min-width="170" />
+                    <el-table-column prop="count" label="次数" width="80" align="right" />
+                    <el-table-column prop="token_total" label="Token 合计" width="110" align="right" />
+                    <el-table-column prop="token_avg" label="平均" width="90" align="right" />
+                    <el-table-column prop="token_max" label="最大" width="90" align="right" />
+                    <el-table-column prop="omitted_count" label="省略次数" width="100" align="right" />
+                  </el-table>
+                </div>
+                <p v-if="llmQualityMetrics.event_replay_errors" class="llm-quality-note">
+                  事件重放异常：{{ llmQualityMetrics.event_replay_errors }}。
+                </p>
+              </section>
+
+              <section v-loading="loadingLlmExtras" class="llm-routing-card">
+                <div class="llm-routing-head">
+                  <div>
+                    <strong>配置字段说明</strong>
+                    <span>字段类型、默认值、约束与错误路径由 Pydantic schema 生成。</span>
+                  </div>
+                </div>
+                <div class="llm-schema-section">
+                  <h5>Provider 字段</h5>
+                  <el-table :data="llmConfigSchema.provider_fields || []" size="small" border>
+                    <el-table-column prop="field_name" label="字段" min-width="180">
+                      <template #default="{ row }">
+                        <code>{{ row.field_name }}</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="description" label="说明" min-width="220" />
+                    <el-table-column prop="type" label="类型" min-width="150" />
+                    <el-table-column label="默认值" min-width="120">
+                      <template #default="{ row }">
+                        <code>{{ formatSchemaDefault(row.default_value) }}</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="约束" min-width="190">
+                      <template #default="{ row }">
+                        <span>{{ formatSchemaConstraints(row.constraints) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="错误路径" min-width="230">
+                      <template #default="{ row }">
+                        <code>{{ row.error_path }}</code>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+                <div class="llm-schema-section">
+                  <h5>Per-model 字段</h5>
+                  <el-table :data="llmConfigSchema.per_model_fields || []" size="small" border>
+                    <el-table-column prop="field_name" label="字段" min-width="180">
+                      <template #default="{ row }">
+                        <code>{{ row.field_name }}</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="description" label="说明" min-width="220" />
+                    <el-table-column prop="type" label="类型" min-width="150" />
+                    <el-table-column label="默认值" min-width="120">
+                      <template #default="{ row }">
+                        <code>{{ formatSchemaDefault(row.default_value) }}</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="约束" min-width="190">
+                      <template #default="{ row }">
+                        <span>{{ formatSchemaConstraints(row.constraints) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="错误路径" min-width="250">
+                      <template #default="{ row }">
+                        <code>{{ row.error_path }}</code>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </section>
 
               <section class="llm-routing-card">
                 <div class="llm-routing-head">
@@ -1621,6 +1773,38 @@ watch(activeTab, (tab) => {
   margin: -2px 0 12px;
   color: var(--app-ink-muted);
   font-size: 12px;
+}
+
+.llm-quality-metrics,
+.llm-context-distribution,
+.llm-schema-section {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.llm-quality-metrics + .llm-context-distribution,
+.llm-schema-section + .llm-schema-section {
+  margin-top: 18px;
+}
+
+.llm-quality-note {
+  margin: 12px 0 0;
+  color: var(--app-ink-muted);
+  font-size: 13px;
+}
+
+.llm-schema-section h5 {
+  margin: 0 0 8px;
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.llm-schema-section code,
+.llm-quality-metrics code,
+.llm-context-distribution code {
+  font-family: var(--app-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .llm-model-list {

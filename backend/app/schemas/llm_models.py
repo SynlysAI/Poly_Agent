@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -19,16 +19,25 @@ class LLMModelInfo(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model_id: str = Field(min_length=1, max_length=200)
-    display_name: str = Field(min_length=1, max_length=200)
-    capabilities: list[LLMCapability] = Field(default_factory=lambda: ["chat"])
-    recommended_for: list[LLMRoutePurpose] = Field(default_factory=list)
-    is_default: bool = False
-    context_window: int | None = Field(default=None, ge=1)
-    max_output_tokens: int | None = Field(default=None, ge=1)
-    tool_protocol: str | None = Field(default=None, max_length=80)
-    supports_parallel_tool_calls: bool | None = None
-    capability_source: LLMCapabilitySource | None = None
+    model_id: str = Field(min_length=1, max_length=200, description="模型 ID，用于请求 provider 时的 model 参数")
+    display_name: str = Field(min_length=1, max_length=200, description="前端展示名称")
+    capabilities: list[LLMCapability] = Field(
+        default_factory=lambda: ["chat"],
+        description="模型能力集合，至少包含 chat",
+    )
+    recommended_for: list[LLMRoutePurpose] = Field(
+        default_factory=list,
+        description="推荐用途路由（qa / deep / report）",
+    )
+    is_default: bool = Field(default=False, description="是否为该 provider 的默认模型")
+    context_window: int | None = Field(default=None, ge=1, description="上下文窗口 token 上限")
+    max_output_tokens: int | None = Field(default=None, ge=1, description="单次输出 token 上限")
+    tool_protocol: str | None = Field(default=None, max_length=80, description="工具调用协议标识")
+    supports_parallel_tool_calls: bool | None = Field(default=None, description="是否支持并行工具调用")
+    capability_source: LLMCapabilitySource | None = Field(
+        default=None,
+        description="能力来源：configured / probed / inferred",
+    )
 
 
 class LLMModelConfigInput(BaseModel):
@@ -36,14 +45,14 @@ class LLMModelConfigInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model_id: str = Field(min_length=1, max_length=200)
-    display_name: str | None = Field(default=None, min_length=1, max_length=200)
-    capabilities: list[LLMCapability] | None = None
-    recommended_for: list[LLMRoutePurpose] | None = None
-    context_window: int | None = Field(default=None, ge=1)
-    max_output_tokens: int | None = Field(default=None, ge=1)
-    tool_protocol: str | None = Field(default=None, max_length=80)
-    supports_parallel_tool_calls: bool | None = None
+    model_id: str = Field(min_length=1, max_length=200, description="模型 ID，用于请求 provider 时的 model 参数")
+    display_name: str | None = Field(default=None, min_length=1, max_length=200, description="前端展示名称")
+    capabilities: list[LLMCapability] | None = Field(default=None, description="模型能力集合")
+    recommended_for: list[LLMRoutePurpose] | None = Field(default=None, description="推荐用途路由")
+    context_window: int | None = Field(default=None, ge=1, description="上下文窗口 token 上限")
+    max_output_tokens: int | None = Field(default=None, ge=1, description="单次输出 token 上限")
+    tool_protocol: str | None = Field(default=None, max_length=80, description="工具调用协议标识")
+    supports_parallel_tool_calls: bool | None = Field(default=None, description="是否支持并行工具调用")
 
 
 class LLMProviderInfo(BaseModel):
@@ -104,15 +113,27 @@ class LLMProviderConfigInput(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    provider_id: str = Field(min_length=1, max_length=120)
-    display_name: str | None = Field(default=None, max_length=160)
-    provider_type: LLMProviderType = "openai_compatible"
-    base_url: str | None = Field(default=None, max_length=500)
-    api_key_env: str | None = Field(default=None, max_length=120)
-    model: str | None = Field(default=None, max_length=200)
-    models: list[str | LLMModelConfigInput] = Field(default_factory=list)
-    capabilities: list[LLMCapability] = Field(default_factory=lambda: ["chat"])
-    recommended_for: list[LLMRoutePurpose] = Field(default_factory=list)
+    provider_id: str = Field(min_length=1, max_length=120, description="唯一 provider ID")
+    display_name: str | None = Field(default=None, max_length=160, description="前端展示名称")
+    provider_type: LLMProviderType = Field(
+        default="openai_compatible",
+        description="provider 协议类型：openai_compatible / ollama / custom_http",
+    )
+    base_url: str | None = Field(default=None, max_length=500, description="OpenAI 兼容 API Base URL")
+    api_key_env: str | None = Field(default=None, max_length=120, description="API Key 环境变量名，必须为大写标识")
+    model: str | None = Field(default=None, max_length=200, description="兼容旧配置的单一模型 ID")
+    models: list[str | LLMModelConfigInput] = Field(
+        default_factory=list,
+        description="模型 ID 字符串或 per-model 对象配置",
+    )
+    capabilities: list[LLMCapability] = Field(
+        default_factory=lambda: ["chat"],
+        description="provider 级能力集合；未单独配置的模型继承该集合",
+    )
+    recommended_for: list[LLMRoutePurpose] = Field(
+        default_factory=list,
+        description="provider 级推荐用途路由",
+    )
 
     @field_validator("models", mode="before")
     @classmethod
@@ -146,3 +167,23 @@ class LLMProviderConfigInput(BaseModel):
         if normalized != normalized.upper() or not normalized.replace("_", "").isalnum():
             raise ValueError("api_key_env must be an uppercase env var reference")
         return normalized
+
+
+class LLMConfigFieldDoc(BaseModel):
+    """面向 Admin 配置页的单字段文档元数据。"""
+
+    field_name: str
+    description: str
+    type: str
+    default_value: Any | None = None
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    error_path: str
+
+
+class LLMConfigSchemaData(BaseModel):
+    """从 Pydantic schema 生成的 LLM provider 配置字段目录。"""
+
+    schema_version: int = 1
+    generated_from: str = "backend.app.schemas.llm_models.LLMProviderConfigInput"
+    provider_fields: list[LLMConfigFieldDoc] = Field(default_factory=list)
+    per_model_fields: list[LLMConfigFieldDoc] = Field(default_factory=list)

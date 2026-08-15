@@ -122,6 +122,23 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertIn("reasoning", default_capabilities)
         self.assertIn("structured_json", default_capabilities)
 
+    def test_config_schema_endpoint_documents_provider_and_per_model_fields(self) -> None:
+        resp = self.client.get("/api/v1/llm/config-schema")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        data = resp.json()["data"]
+        provider_fields = {item["field_name"]: item for item in data["provider_fields"]}
+        per_model_fields = {item["field_name"]: item for item in data["per_model_fields"]}
+        self.assertIn("provider_id", provider_fields)
+        self.assertIn("models", provider_fields)
+        self.assertEqual(provider_fields["provider_id"]["description"], "唯一 provider ID")
+        self.assertEqual(provider_fields["provider_type"]["default_value"], "openai_compatible")
+        self.assertIn("LLM_PROVIDER_CONFIGS_FILE", provider_fields["provider_id"]["error_path"])
+        self.assertIn("model_id", per_model_fields)
+        self.assertIn("context_window", per_model_fields)
+        self.assertEqual(per_model_fields["supports_parallel_tool_calls"]["type"], "boolean")
+        self.assertIn("models[]", per_model_fields["model_id"]["error_path"])
+
     def test_deep_route_falls_back_to_fast_reasoning_default_model(self) -> None:
         settings.llm_provider_configs_file = str(self.provider_config_path)
 

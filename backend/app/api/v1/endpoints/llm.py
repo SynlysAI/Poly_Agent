@@ -12,8 +12,10 @@ from app.core.llm_client import chat
 from app.core.logging import get_logger
 from app.schemas.common import ApiResponse
 from app.schemas.llm_models import LLMModelCatalogData
+from app.schemas.llm_models import LLMConfigSchemaData
 from app.schemas.llm_models import LLMRoutingData
 from app.schemas.llm_models import LLMRoutingUpdateRequest
+from app.services.llm_config_schema_service import build_config_schema_data
 from app.services.llm_model_service import LLMModelService
 
 logger = get_logger("poly_agent.llm")
@@ -100,6 +102,12 @@ def check_llm_models() -> ApiResponse[LLMModelCatalogData]:
 def get_llm_routing() -> ApiResponse[LLMRoutingData]:
     """Return global default LLM routes."""
     return ApiResponse(data=model_service.get_routing())
+
+
+@router.get("/config-schema", response_model=ApiResponse[LLMConfigSchemaData])
+def get_llm_config_schema() -> ApiResponse[LLMConfigSchemaData]:
+    """Return the LLM provider configuration schema catalog for the Admin page."""
+    return ApiResponse(data=build_config_schema_data())
 
 
 @router.put(

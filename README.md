@@ -6,7 +6,7 @@ Poly Agent 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec A
 
 当前仓库的定位是 **“计算智能 + ResearchEngine P0 双通道闭环”演示与迭代基线**：本地结构生成、xTB、受控 ORCA/ComputeEngine fixture、Alchemist 优化、WeKnora 知识库、算法包管理和报告链路已经可以组合使用；真实 ORCA/HPC/AiiDA、SpecLabOS 设备提交和生产级外部模型服务仍通过集成配置逐步接入。
 
-> 文档状态：2026-08-10。README 描述以当前代码和 `doc/` 进度文档为准；mock、fixture、demo store 和 fallback 只用于本地演示或验收，不代表生产模型或真实实验结果。
+> 文档状态：2026-08-15。README 描述以当前代码和 `doc/` 进度文档为准；mock、fixture、demo store 和 fallback 只用于本地演示或验收，不代表生产模型或真实实验结果。
 
 ## 先看这几张图
 
@@ -55,7 +55,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 - **垂类预测**：支持 `.zip/.tar.gz` 算法包注册、版本管理、在线测试、运行历史、结果查看和 handoff；算法通过契约声明输入、输出、来源和运行时边界。
 - **Knowledge Base**：KnowledgeService 统一转发 WeKnora 的知识库列表、问答流和无总结检索；前端展示证据卡片，后端可用 Neo4j 补充 Entity 关系，并过滤 API key、object key 和 embedding 等敏感元数据。
 - **Data Catalog**：面向材料数据资产提供目录、分类和筛选；业务运行态写入 `poly_agent`，材料资产使用 `poly_data` MongoDB 和 MinIO `datasets/` 路径。
-- **助手与报告**：助手基于项目实时事实返回入口、算法、计算和审批引导；`/dialogue` 支持按用户隔离的历史会话、已部署垂类算法工具选择、参数确认、AlgorithmRun 结果与 artifact 回链；报告链路支持 OpenAI/Ollama/Edison/Codex/自定义 HTTP provider，以及 HTML/LaTeX/Markdown/PDF renderer。
+- **助手与报告**：助手基于项目实时事实返回入口、算法、计算和审批引导；`/dialogue` 支持按用户隔离的历史会话、已部署垂类算法工具选择、参数确认、AlgorithmRun 结果与 artifact 回链；LUI Runtime 提供模型路由、上下文 manifest、统一事件、服务端续答、配置 schema 与调用质量指标；报告链路支持 OpenAI/Ollama/Edison/Codex/自定义 HTTP provider，以及 HTML/LaTeX/Markdown/PDF renderer。
 
 ## 当前项目状态
 
@@ -218,6 +218,7 @@ pm2 save
 | `make check-all` | 后端测试、前端构建和对话 LUI e2e 验收 |
 | `npm --prefix frontend run test:llm-models` | LLM 模型配置单测 |
 | `npm --prefix frontend run test:vertical-prediction` | 垂类预测与 artifact 下载单测 |
+| `python scripts/generate_llm_config_schema.py` | 从 Pydantic schema 生成 `docs/llm-provider-config-schema.md/json` |
 | `npm --prefix frontend run test:assistant-tool-calls` | 对话算法工具 SSE/reducer 单测 |
 | `npm --prefix frontend run test:tool-menu-categories` | 对话工具菜单分类与筛选单测 |
 | `make init-mongo-indexes` | 初始化生产查询索引 |

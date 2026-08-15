@@ -557,6 +557,16 @@ export function updateLlmRouting(payload) {
   return apiClient.put('/llm/routing', payload).then(unwrapResponse)
 }
 
+/** LLM provider 配置字段说明目录 */
+export function getLlmConfigSchema() {
+  return apiClient.get('/llm/config-schema').then(unwrapResponse)
+}
+
+/** LUI 调用质量指标 */
+export function getAssistantQualityMetrics() {
+  return apiClient.get('/assistant/quality-metrics/summary').then(unwrapResponse)
+}
+
 // ── ResearchEngine API ──
 
 // ── ProblemSpec ──

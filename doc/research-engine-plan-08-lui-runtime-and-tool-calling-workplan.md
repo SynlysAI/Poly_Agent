@@ -1,6 +1,6 @@
 # Plan 08：LUI Runtime、上下文注入与工具调用增强工作计划
 
-> **状态：进行中（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05、PR-06、PR-07 已完成）**
+> **状态：已完成（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05、PR-06、PR-07、PR-08 已完成）**
 >
 > 日期：2026-08-15
 >
@@ -587,11 +587,11 @@ AssistantRunService
 
 **建议 PR**：PR-08
 
-- [ ] 从 Pydantic schema 生成：
+- [x] 从 Pydantic schema 生成：
   - `docs/llm-provider-config-schema.md`
   - `docs/llm-provider-config-schema.json`
-- [ ] Admin LLM 配置页展示字段说明、类型、默认值和错误路径。
-- [ ] 新增 LUI 调用质量指标：
+- [x] Admin LLM 配置页展示字段说明、类型、默认值和错误路径。
+- [x] 新增 LUI 调用质量指标：
   - route resolved rate
   - requested vs resolved mismatch
   - tool-capable model usage
@@ -603,8 +603,8 @@ AssistantRunService
   - continuation success
   - context token distribution
   - event replay errors
-- [ ] 增加回归测试矩阵（见第 7 节）。
-- [ ] 更新 README、Plan 07 状态和本计划状态。
+- [x] 增加回归测试矩阵（见 [research-engine-plan-08-regression-test-matrix.md](research-engine-plan-08-regression-test-matrix.md)）。
+- [x] 更新 README、Plan 07 状态和本计划状态。
 
 **验收标准**
 
@@ -762,3 +762,4 @@ AssistantRunService
 - 2026-08-15：PR-05 已完成：assistant 消息 meta 展示 provider/model、路由原因、能力、usage 与 context digest；模型 meta 支持点击查看 capability source、context window、tool protocol 与 fallback reason；所选模型无 `tool_calling` 且已选工具时提供 warning 与一键切换工具模型入口；工具卡片补齐提议模型、provider call id、function name、schema digest、raw arguments、parse error、模型/用户参数 diff 和事件 timeline；新增“本轮上下文”折叠面板，展示 route、context sections、token estimate、omitted reason、工具 schema digest 与证据引用；相关前端 `assistantUi`、assistant 事件/工具调用单测和 `npm run build` 通过。ToolMenuPicker 健康/版本/确认/文件/成功率增强及自动选择相关工具仍留给 PR-07。
 - 2026-08-15：PR-06 已完成：`AssistantToolCall` 增加 `continuation_state`、`continuation_run_id`、`continuation_error` 与安全 `source_context`；工具提案持久化原用户消息、selected tools、mode、model request、context manifest digest 与 route snapshot；工具 completed/failed 后写入 `tool.continuation.scheduled` outbox 事件；assistant worker 扫描 pending continuation 调用并以 call id 幂等创建 continuation run；continuation 复用原用户消息和 source_context，最终 assistant 消息可追溯到 tool call；多工具结果与结构化失败信息已进入 `_continuation_messages()`，result summary/artifact refs 做字符预算截断；保留 daemon thread 兼容路径并新增 queued/running 孤儿对账。后端 assistant 相关 79 个测试、前端 assistant 单测及 `npm run build` 通过。
 - 2026-08-15：PR-07 已完成：`AgentTool` 目录新增 `recent_success_rate` 与 `recent_run_count`，由最近 20 条 terminal AlgorithmRun 动态计算；`ToolMenuPicker` 展示健康状态、是否需要确认、是否需要文件、版本与最近成功率；新增保守“自动选择相关工具”模式，最多 5 个，基于名称、描述、material scope 与输入 schema 做轻量匹配，显式用户选择优先，自动选择原因进入 `selected_tool_reasons` 并在选中 chips 可见；新增 `assistantToolMenu` 与 `assistantToolAutoSelect` 纯函数及单测。后端 agent-tools/assistant 相关 24 个测试、前端新增工具菜单单测与 `npm run build` 通过。
+- 2026-08-15：PR-08 已完成：新增 `LLMConfigSchemaData` 与 `llm_config_schema_service.py`，从 Pydantic schema 生成 `docs/llm-provider-config-schema.md/json`；新增 `GET /llm/config-schema` 供 Admin LLM 配置页展示字段说明、类型、默认值、约束与错误路径；`ToolServicesView` LLM 标签接入来源标注、配置字段目录与 LUI 调用质量面板；新增 `assistant_quality_service.py` 与 `GET /assistant/quality-metrics/summary`，聚合 route resolved rate、requested/resolved mismatch、tool-capable model usage、proposal/validation/failure、confirmation conversion、continuation success、context token distribution 与 event replay errors；新增 `scripts/generate_llm_config_schema.py`、后端配置/质量指标测试与 `doc/research-engine-plan-08-regression-test-matrix.md`。后端相关 53 个测试、前端 `test:llm-models` / `assistant-events` / `assistant-ui` 单测与 `npm run build` 通过。
