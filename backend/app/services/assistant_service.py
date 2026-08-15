@@ -1472,6 +1472,98 @@ class AssistantService:
             ],
         }
 
+    def _tool_source_context(
+        self,
+        *,
+        request: AssistantChatRequest,
+        llm_route: dict,
+        assembly: ContextAssembly,
+        selected_tool_ids: list[str],
+    ) -> dict:
+        """构造工具调用的可续答来源快照。
+
+        Args:
+            request: 触发工具提案的 assistant 请求。
+            llm_route: 当前解析后的模型路由。
+            assembly: 工具提案请求的上下文装配结果。
+            selected_tool_ids: 用户已选择的算法工具。
+
+        Returns:
+            不包含消息正文与凭据的安全上下文快照。
+        """
+        context = request.context or {}
+        requested_provider_id, requested_model_id = self._requested_model_identifiers(context.get("model"))
+        return {
+            "original_user_message_id": context.get("message_id"),
+            "chat_id": context.get("chat_id"),
+            "selected_tool_ids": list(selected_tool_ids or []),
+            "mode": context.get("mode") or "qa",
+            "model_request": (
+                {"providerId": requested_provider_id, "modelId": requested_model_id}
+                if requested_provider_id or requested_model_id
+                else {}
+            ),
+            "route_snapshot": self._safe_llm_route(llm_route),
+            "context_manifest_digest": assembly.digest,
+        }
+
+    @staticmethod
+    def _truncate_result_summary(summary: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+        """压缩超大工具结果，避免续答请求超出上下文预算。"""
+        if not isinstance(summary, dict) or not summary:
+            return {}
+        serialized = json.dumps(summary, ensure_ascii=False, default=str)
+        if len(serialized) <= max_chars:
+            return summary
+        compact: dict[str, Any] = {}
+        per_value = max(80, max_chars // max(1, len(summary)))
+        for key, value in summary.items():
+            if isinstance(value, str):
+                compact[key] = value[:per_value]
+            elif isinstance(value, (int, float, bool)) or value is None:
+                compact[key] = value
+            elif isinstance(value, list):
+                compact[key] = value[:5]
+            else:
+                compact[key] = str(value)[:200]
+        compact["_truncated"] = True
+        return compact
+
+    @classmethod
+    def _continuation_tool_payload(cls, call: AssistantToolCall) -> dict[str, Any]:
+        """生成续答使用的结构化工具结果，并做字符预算截断。"""
+        max_chars = 12_000
+        if call.phase == "completed":
+            artifact_refs = (call.artifact_refs or [])[:20]
+            payload: dict[str, Any] = {
+                "status": "completed",
+                "run_id": call.run_id,
+                "result_summary": cls._truncate_result_summary(
+                    call.result_summary or {},
+                    max_chars=max_chars // 2,
+                ),
+                "artifact_refs": artifact_refs,
+            }
+        else:
+            error = call.error or {}
+            payload = {
+                "status": "failed",
+                "error": error,
+                "result_summary": {},
+                "suggested_next_step": "请根据错误信息调整输入或到算法运行详情页排查后重试。",
+            }
+        serialized = json.dumps(payload, ensure_ascii=False, default=str)
+        if len(serialized) <= max_chars:
+            return payload
+        return {
+            "status": payload["status"],
+            "run_id": payload.get("run_id"),
+            "result_summary": {"_truncated": True, "note": "工具结果过大，请查看算法运行详情"},
+            "artifact_refs": (payload.get("artifact_refs") or [])[:5],
+            "error": payload.get("error") if isinstance(payload.get("error"), dict) else {},
+            "suggested_next_step": payload.get("suggested_next_step"),
+        }
+
     @staticmethod
     def _knowledge_context_items(outcome: KnowledgeOutcome | None) -> list[dict]:
         """把知识库检索结果转换为 assembler provider 输入。"""
@@ -1541,6 +1633,12 @@ class AssistantService:
             evidence=evidence,
             llm_route=llm_route,
             selected_tools=selected_tools,
+        )
+        tool_source_context = self._tool_source_context(
+            request=request,
+            llm_route=llm_route,
+            assembly=assembly,
+            selected_tool_ids=selected_tool_ids,
         )
         context_event = self._context_event(
             request=request,
@@ -1623,6 +1721,7 @@ class AssistantService:
                         schema_digest=tool.schema_digest,
                         selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool.tool_id}",
                         selection_confidence=0.5,
+                        source_context=tool_source_context,
                     ),
                     current_user,
                 )
@@ -1695,15 +1794,7 @@ class AssistantService:
         ]
         for call in continuation_calls:
             provider_tool_call_id = call.provider_tool_call_id or call.call_id
-            if call.phase == "completed":
-                payload = {
-                    "status": "completed",
-                    "run_id": call.run_id,
-                    "result_summary": call.result_summary,
-                    "artifact_refs": call.artifact_refs,
-                }
-            else:
-                payload = {"status": "failed", "error": call.error or {}, "result_summary": {}}
+            payload = self._continuation_tool_payload(call)
             messages.append(
                 {
                     "role": "tool",

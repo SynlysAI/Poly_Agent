@@ -23,6 +23,13 @@ AssistantToolCallPhase = Literal[
     "failed",
     "canceled",
 ]
+AssistantToolContinuationState = Literal[
+    "pending",
+    "scheduled",
+    "completed",
+    "failed",
+    "skipped",
+]
 
 
 class AgentToolPolicy(BaseModel):
@@ -161,6 +168,7 @@ class AssistantToolCallCreate(BaseModel):
     schema_digest: str | None = Field(default=None, min_length=16, max_length=16)
     selection_reason: str | None = Field(default=None, max_length=500)
     selection_confidence: float | None = Field(default=None, ge=0, le=1)
+    source_context: dict[str, Any] | None = None
 
 
 class AssistantToolCallInputUpdate(BaseModel):
@@ -266,6 +274,9 @@ class AssistantToolCall(BaseModel):
     selection_confidence: float | None = None
     task_route: dict[str, Any] | None = None
     source_context: dict[str, Any] | None = None
+    continuation_state: AssistantToolContinuationState | None = None
+    continuation_run_id: str | None = None
+    continuation_error: dict[str, Any] | None = None
     run_status: str | None = None
     result_summary: dict[str, Any] = Field(default_factory=dict)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)

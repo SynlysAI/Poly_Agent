@@ -13,12 +13,17 @@ from fastapi import HTTPException
 from app.core.logging import get_logger
 from app.core.time import utc_now
 from app.core import llm_client
-from app.infra.research_engine_repositories import AssistantMessageRepository, AssistantRunRepository
+from app.infra.research_engine_repositories import (
+    AssistantMessageRepository,
+    AssistantRunRepository,
+    AssistantToolCallRepository,
+)
 from app.schemas.assistant import AssistantChatRequest
 from app.schemas.assistant_chats import AssistantMessageCreate
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate, AssistantRunListData
 from app.services.assistant_chat_service import actor_id, assistant_chat_service
 from app.services.assistant_service import stream_chat_assistant
+from app.services.assistant_tool_service import assistant_tool_call_service
 
 
 logger = get_logger("poly_agent.assistant_runs")
@@ -240,6 +245,210 @@ class AssistantRunService:
                 yield {"type": "heartbeat", "seq": cursor, "status": document.get("status")}
             time.sleep(1)
 
+    def process_continuations(self, worker_id: str) -> int:
+        """扫描 terminal 工具调用并创建服务端续答 run。
+
+        Args:
+            worker_id: 当前 assistant worker ID，仅用于日志。
+
+        Returns:
+            本轮成功创建的 continuation run 数量。
+        """
+        assistant_tool_call_service.reconcile_orphans()
+        created = 0
+        for call in AssistantToolCallRepository.list_continuation_pending(limit=20):
+            call_id = str(call.get("call_id") or "")
+            if not call_id:
+                continue
+            try:
+                if self._ensure_continuation_run(call):
+                    created += 1
+                    logger.info(
+                        "assistant continuation run created worker_id=%s call_id=%s",
+                        worker_id,
+                        call_id,
+                    )
+            except HTTPException as exc:
+                if exc.status_code == 409:
+                    logger.info(
+                        "assistant continuation deferred for active run conflict call_id=%s",
+                        call_id,
+                    )
+                    continue
+                self._record_continuation_failure(call, exc)
+            except Exception as exc:
+                logger.exception("assistant continuation creation failed call_id=%s", call_id)
+                self._record_continuation_failure(call, exc)
+        return created
+
+    def _ensure_continuation_run(self, call: dict[str, Any]) -> bool:
+        """为一个工具调用幂等创建 continuation run。
+
+        Args:
+            call: completed/failed 工具调用文档。
+
+        Returns:
+            ``True`` 表示本轮新建 run；``False`` 表示已存在或仅补记关联。
+        """
+        call_id = str(call.get("call_id") or "")
+        existing = AssistantRunRepository.find_by_continuation_key(call_id)
+        if existing:
+            self._record_continuation_run(call, str(existing.get("run_id") or ""))
+            return False
+
+        owner_id = str(call.get("created_by") or "")
+        chat_id = str(call.get("chat_id") or "")
+        if not owner_id or not chat_id:
+            raise HTTPException(status_code=422, detail="工具调用缺少会话归属信息，无法自动续答")
+
+        source_context = call.get("source_context") or {}
+        message_id = str(source_context.get("original_user_message_id") or call.get("message_id") or "")
+        if not message_id:
+            raise HTTPException(status_code=422, detail="工具调用缺少原用户消息，无法自动续答")
+        user_message = AssistantMessageRepository.find_one({
+            "message_id": message_id,
+            "chat_id": chat_id,
+            "created_by": owner_id,
+            "role": "user",
+        })
+        if not user_message:
+            raise HTTPException(status_code=422, detail="原用户消息不存在，无法自动续答")
+
+        user_content = str(user_message.get("content") or "")
+        request_messages = [{"role": "user", "content": user_content}] if user_content.strip() else []
+        context = self._continuation_context(call, source_context, message_id)
+        actor = {"user_id": owner_id, "role": call.get("_actor_role") or "user"}
+        run = self.create(
+            chat_id,
+            AssistantRunCreate(
+                content="",
+                user_message_id=message_id,
+                messages=request_messages,
+                context=context,
+            ),
+            actor,
+        )
+        self._record_continuation_run(call, run.run_id)
+        return True
+
+    @staticmethod
+    def _continuation_context(
+        call: dict[str, Any],
+        source_context: dict[str, Any],
+        message_id: str,
+    ) -> dict[str, Any]:
+        """构造 continuation run 的请求上下文。"""
+        route_snapshot = source_context.get("route_snapshot") or call.get("proposal_route") or {}
+        return {
+            "chat_id": call.get("chat_id"),
+            "mode": source_context.get("mode") or "qa",
+            "selected_tool_ids": list(source_context.get("selected_tool_ids") or [call.get("tool_id")]),
+            "model": source_context.get("model_request") or {},
+            "tool_call_ids": [call.get("call_id")],
+            "continuation_key": call.get("call_id"),
+            "continuation_source": {
+                "call_id": call.get("call_id"),
+                "original_user_message_id": message_id,
+                "context_manifest_digest": source_context.get("context_manifest_digest"),
+                "route_snapshot": route_snapshot,
+            },
+        }
+
+    @staticmethod
+    def _record_continuation_run(call: dict[str, Any], run_id: str) -> None:
+        """把 continuation run 关联写回工具调用。"""
+        call_id = str(call.get("call_id") or "")
+        if not call_id or not run_id:
+            return
+        current = AssistantToolCallRepository.find_one({"call_id": call_id}) or call
+        if (
+            current.get("continuation_run_id") == run_id
+            and current.get("continuation_state") in {"scheduled", "completed"}
+        ):
+            return
+        AssistantToolCallRepository.update_fields(
+            call_id,
+            {
+                "continuation_state": "scheduled",
+                "continuation_run_id": run_id,
+                "continuation_error": None,
+                "updated_at": utc_now(),
+            },
+        )
+        AssistantToolCallRepository.append_event(
+            call_id,
+            {
+                "type": "tool.continuation.run_created",
+                "call_id": call_id,
+                "continuation_run_id": run_id,
+                "created_at": utc_now(),
+            },
+        )
+
+    @staticmethod
+    def _record_continuation_failure(call: dict[str, Any], exc: Exception) -> None:
+        """记录自动续答创建失败，避免同一调用反复重试。"""
+        call_id = str(call.get("call_id") or "")
+        if not call_id:
+            return
+        error = {
+            "error_type": type(exc).__name__,
+            "message": str(exc)[:2000],
+        }
+        AssistantToolCallRepository.update_fields(
+            call_id,
+            {
+                "continuation_state": "failed",
+                "continuation_error": error,
+                "updated_at": utc_now(),
+            },
+        )
+        AssistantToolCallRepository.append_event(
+            call_id,
+            {
+                "type": "tool.continuation.failed",
+                "call_id": call_id,
+                "continuation_error": error,
+                "created_at": utc_now(),
+            },
+        )
+
+    @staticmethod
+    def _finalize_continuation_calls(run_id: str, *, status: str, error: dict[str, Any] | None = None) -> None:
+        """在 continuation run 结束后回写关联工具调用状态。"""
+        if not run_id:
+            return
+        calls, _ = AssistantToolCallRepository.list_all(
+            {"continuation_run_id": run_id},
+            sort_field="updated_at",
+            reverse=False,
+            page=1,
+            page_size=100,
+        )
+        state = "completed" if status == "completed" else "failed"
+        for call in calls:
+            call_id = str(call.get("call_id") or "")
+            if not call_id:
+                continue
+            AssistantToolCallRepository.update_fields(
+                call_id,
+                {
+                    "continuation_state": state,
+                    "continuation_error": error,
+                    "updated_at": utc_now(),
+                },
+            )
+            AssistantToolCallRepository.append_event(
+                call_id,
+                {
+                    "type": "tool.continuation.finished",
+                    "call_id": call_id,
+                    "continuation_state": state,
+                    "continuation_error": error,
+                    "created_at": utc_now(),
+                },
+            )
+
     def execute_next(self, worker_id: str) -> str | None:
         now = utc_now()
         document = AssistantRunRepository.claim_next(worker_id, now)
@@ -341,6 +550,19 @@ class AssistantRunService:
             })
             assistant_message_id = existing.get("message_id") if existing else None
         if not assistant_message_id:
+            response_tool_call_ids = [
+                call.get("call_id")
+                for call in data.get("tool_calls") or []
+                if call.get("call_id")
+            ]
+            continuation_tool_call_ids = (
+                (document.get("request_snapshot") or {}).get("context") or {}
+            ).get("tool_call_ids") or []
+            tool_call_ids = list(dict.fromkeys([
+                str(call_id)
+                for call_id in [*response_tool_call_ids, *continuation_tool_call_ids]
+                if str(call_id)
+            ]))
             message = assistant_chat_service.create_message(
                 document["chat_id"],
                 AssistantMessageCreate(
@@ -351,13 +573,14 @@ class AssistantRunService:
                     answer_mode=data.get("answer_mode"),
                     answer_scope=data.get("answer_scope"),
                     retrieval_status=data.get("retrieval_status"),
-                    tool_call_ids=[call.get("call_id") for call in data.get("tool_calls") or [] if call.get("call_id")],
+                    tool_call_ids=tool_call_ids,
                     metadata={
                         "run_id": run_id,
                         "llm_route": ((data.get("grounding_facts") or {}).get("llm_route")) or {},
                         "context_digest": (
                             (data.get("grounding_facts") or {}).get("context", {}).get("digest")
                         ),
+                        "continuation_tool_call_ids": continuation_tool_call_ids,
                     },
                 ),
                 {"user_id": document["created_by"], "role": document.get("actor_role") or "user"},
@@ -375,6 +598,7 @@ class AssistantRunService:
             },
         )
         self._event(run_id, {"type": "run_status", "status": "completed", "stage": "completed", "assistant_message_id": assistant_message_id})
+        self._finalize_continuation_calls(run_id, status="completed")
         logger.info("assistant run completed run_id=%s duration_ms=%d", run_id, duration_ms)
 
     def _finish_failed(self, run_id: str, worker_id: str, message: str, started: float, http_status: int | None = None) -> None:
@@ -388,6 +612,11 @@ class AssistantRunService:
              "http_status": 429 if rate_limited else http_status, "rate_limited": rate_limited},
         )
         self._event(run_id, {"type": "run_status", "status": "failed", "stage": "failed", "error": {"message": message}})
+        self._finalize_continuation_calls(
+            run_id,
+            status="failed",
+            error={"message": message},
+        )
         logger.warning("assistant run failed run_id=%s duration_ms=%d rate_limited=%s", run_id, duration_ms, rate_limited)
 
     @staticmethod

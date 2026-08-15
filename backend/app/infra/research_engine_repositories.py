@@ -553,6 +553,49 @@ class AssistantToolCallRepository(BaseRepository):
         return bool(demo_store.mutate(mutate))
 
     @classmethod
+    def list_continuation_pending(cls, *, limit: int = 20) -> list[dict[str, Any]]:
+        """读取待服务端自动续答的 completed/failed 工具调用。
+
+        Args:
+            limit: 单次扫描最多处理的调用数。
+
+        Returns:
+            按 updated_at 升序排列的待续答调用文档列表。
+        """
+        filters = {
+            "continuation_state": "pending",
+            "phase": {"$in": ["completed", "failed"]},
+        }
+        items, _ = cls.list_all(
+            filters,
+            sort_field="updated_at",
+            reverse=False,
+            page=1,
+            page_size=limit,
+        )
+        return items
+
+    @classmethod
+    def list_orphan_running(cls, *, limit: int = 200) -> list[dict[str, Any]]:
+        """读取可能需要与 AlgorithmRun 对账的 queued/running 工具调用。
+
+        Args:
+            limit: 单次扫描最多处理的调用数。
+
+        Returns:
+            待对账的调用文档列表。
+        """
+        filters = {"phase": {"$in": ["queued", "running"]}}
+        items, _ = cls.list_all(
+            filters,
+            sort_field="updated_at",
+            reverse=False,
+            page=1,
+            page_size=limit,
+        )
+        return items
+
+    @classmethod
     def list_events(cls, call_id: str) -> list[dict[str, Any]]:
         document = cls.find_one({"call_id": call_id})
         return list(document.get("events") or []) if document else []
@@ -856,6 +899,13 @@ class AssistantEventRepository(BaseRepository):
             }.get(phase, event_type)
         if event_type == "tool_input_required":
             return "tool.awaiting_input"
+        if event_type in {
+            "tool.continuation.scheduled",
+            "tool.continuation.run_created",
+            "tool.continuation.failed",
+            "tool.continuation.finished",
+        }:
+            return event_type
         if event_type == "final":
             return "assistant.finalized"
         return event_type
@@ -1130,6 +1180,18 @@ class AssistantRunRepository(BaseRepository):
     def find_active_for_chat(cls, chat_id: str, created_by: str) -> dict[str, Any] | None:
         filters = {"chat_id": chat_id, "created_by": created_by, "status": {"$in": ["queued", "running"]}}
         return cls.find_one(filters)
+
+    @classmethod
+    def find_by_continuation_key(cls, continuation_key: str) -> dict[str, Any] | None:
+        """按工具调用幂等键查找已创建的 continuation run。
+
+        Args:
+            continuation_key: 通常为 AssistantToolCall.call_id。
+
+        Returns:
+            匹配的 run 文档；未找到时返回 ``None``。
+        """
+        return cls.find_one({"request_snapshot.context.continuation_key": continuation_key})
 
     @classmethod
     def update_if_status(cls, run_id: str, statuses: list[str], fields: dict[str, Any]) -> bool:

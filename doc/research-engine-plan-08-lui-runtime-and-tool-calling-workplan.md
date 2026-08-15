@@ -1,6 +1,6 @@
 # Plan 08：LUI Runtime、上下文注入与工具调用增强工作计划
 
-> **状态：进行中（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05 已完成）**
+> **状态：进行中（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05、PR-06 已完成）**
 >
 > 日期：2026-08-15
 >
@@ -492,25 +492,25 @@ AssistantRunService
 
 **建议 PR**：PR-06
 
-- [ ] `AssistantToolCall` 增加：
+- [x] `AssistantToolCall` 增加：
   - `continuation_state`
   - `continuation_run_id`
   - `continuation_error`
   - `source_context`
-- [ ] 工具提案时保存安全 `source_context`：
+- [x] 工具提案时保存安全 `source_context`：
   - original user message id
   - selected tools
   - mode
   - model request
   - context manifest digest
   - route snapshot
-- [ ] 工具进入 terminal 状态后写入 continuation outbox 事件。
-- [ ] assistant worker 扫描 `completed/failed` 且 `continuation_state=pending` 的调用。
-- [ ] 以 tool call id 作为幂等键创建 continuation run。
-- [ ] continuation context 复用原 user message 和 `source_context`，并携带 `tool_call_ids`。
-- [ ] `_continuation_messages()` 支持多工具结果和结构化失败信息。
-- [ ] 对 result summary 和 artifact 引用做 token 截断，避免工具输出挤爆上下文。
-- [ ] 保留现有 daemon thread 兼容路径，但增加孤儿 queued/running 调用扫描。
+- [x] 工具进入 terminal 状态后写入 continuation outbox 事件。
+- [x] assistant worker 扫描 `completed/failed` 且 `continuation_state=pending` 的调用。
+- [x] 以 tool call id 作为幂等键创建 continuation run。
+- [x] continuation context 复用原 user message 和 `source_context`，并携带 `tool_call_ids`。
+- [x] `_continuation_messages()` 支持多工具结果和结构化失败信息。
+- [x] 对 result summary 和 artifact 引用做 token 截断，避免工具输出挤爆上下文。
+- [x] 保留现有 daemon thread 兼容路径，但增加孤儿 queued/running 调用扫描。
 - [ ] 后续将上传附件转为受管 runtime asset，减少进程内存和临时文件依赖。
 
 **验收标准**
@@ -645,7 +645,7 @@ AssistantRunService
 - [x] request manifest 记录所有 section 和 omitted reason。
 - [x] assistant event seq 连续且不更新。
 - [x] 事件重放不会降级 tool phase。
-- [ ] continuation 幂等。
+- [x] continuation 幂等。
 
 ### 7.2 前端测试
 
@@ -758,3 +758,4 @@ AssistantRunService
 - 2026-08-15：PR-03 已完成：Context Assembler v1、7 类内置上下文 section、保守 token 估算、section/总预算与 omitted reason、工具简短目录、tool proposal 与 final answer 统一上下文、request manifest v1、run manifest 持久化、assistant message route/context digest metadata 和 LUI 上下文存证标签均已落地；相关后端测试与前端单测通过。
 - 2026-08-15：PR-04 阶段一已完成：`assistant_events` append-only 集合、run/call 双写与连续 seq、统一事件回放 fallback、旧数据幂等 backfill 脚本、route/request/tool catalog/schema/confirmed 等事件、run 与 call 关联以及前端 `assistantEvents` reducer 均已落地；相关后端 77 个 assistant 测试、前端 assistant 单测与构建通过。完整 LLM request 生命周期事件、admin trace 展示和 continuation scheduled 事件仍留在 PR-04 后续切片。
 - 2026-08-15：PR-05 已完成：assistant 消息 meta 展示 provider/model、路由原因、能力、usage 与 context digest；模型 meta 支持点击查看 capability source、context window、tool protocol 与 fallback reason；所选模型无 `tool_calling` 且已选工具时提供 warning 与一键切换工具模型入口；工具卡片补齐提议模型、provider call id、function name、schema digest、raw arguments、parse error、模型/用户参数 diff 和事件 timeline；新增“本轮上下文”折叠面板，展示 route、context sections、token estimate、omitted reason、工具 schema digest 与证据引用；相关前端 `assistantUi`、assistant 事件/工具调用单测和 `npm run build` 通过。ToolMenuPicker 健康/版本/确认/文件/成功率增强及自动选择相关工具仍留给 PR-07。
+- 2026-08-15：PR-06 已完成：`AssistantToolCall` 增加 `continuation_state`、`continuation_run_id`、`continuation_error` 与安全 `source_context`；工具提案持久化原用户消息、selected tools、mode、model request、context manifest digest 与 route snapshot；工具 completed/failed 后写入 `tool.continuation.scheduled` outbox 事件；assistant worker 扫描 pending continuation 调用并以 call id 幂等创建 continuation run；continuation 复用原用户消息和 source_context，最终 assistant 消息可追溯到 tool call；多工具结果与结构化失败信息已进入 `_continuation_messages()`，result summary/artifact refs 做字符预算截断；保留 daemon thread 兼容路径并新增 queued/running 孤儿对账。后端 assistant 相关 79 个测试、前端 assistant 单测及 `npm run build` 通过。

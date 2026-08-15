@@ -38,6 +38,8 @@ from app.services.research_engine_service import ResearchEngineService
 
 CALLABLE_PHASES = {"requested", "awaiting_input", "awaiting_confirmation"}
 TERMINAL_PHASES = {"completed", "failed", "canceled"}
+CONTINUATION_TERMINAL_PHASES = {"completed", "failed"}
+CONTINUATION_EVENT_TYPE = "tool.continuation.scheduled"
 
 
 def _actor_context(current_user: dict[str, str] | None) -> tuple[str, str, bool]:
@@ -274,6 +276,75 @@ class AssistantToolCallService:
         AssistantToolCallRepository.append_event(document["call_id"], event)
 
     @classmethod
+    def _fallback_source_context(cls, document: dict[str, Any]) -> dict[str, Any]:
+        """为历史数据构建最小可续答上下文。
+
+        Args:
+            document: 旧版工具调用文档。
+
+        Returns:
+            包含原消息、会话和模型快照的可续答上下文。
+        """
+        return {
+            "original_user_message_id": document.get("message_id"),
+            "chat_id": document.get("chat_id"),
+            "selected_tool_ids": [document.get("tool_id")] if document.get("tool_id") else [],
+            "mode": "qa",
+            "model_request": document.get("proposal_route") or {},
+            "route_snapshot": document.get("proposal_route") or {},
+            "context_manifest_digest": document.get("schema_digest"),
+        }
+
+    @classmethod
+    def _schedule_continuation(cls, document: dict[str, Any]) -> None:
+        """在工具成功或失败后写入服务端续答 outbox。"""
+        if document.get("phase") not in CONTINUATION_TERMINAL_PHASES:
+            return
+        if document.get("continuation_state") in {"scheduled", "completed"} and document.get("continuation_run_id"):
+            return
+        source_context = document.get("source_context") or cls._fallback_source_context(document)
+        if not source_context.get("original_user_message_id") and not document.get("message_id"):
+            AssistantToolCallRepository.update_fields(
+                document["call_id"],
+                {
+                    "continuation_state": "skipped",
+                    "continuation_error": {
+                        "error_type": "MISSING_CONTINUATION_CONTEXT",
+                        "message": "缺少原用户消息，无法自动续答",
+                    },
+                    "updated_at": utc_now(),
+                },
+            )
+            document.update(
+                {
+                    "continuation_state": "skipped",
+                    "continuation_error": {
+                        "error_type": "MISSING_CONTINUATION_CONTEXT",
+                        "message": "缺少原用户消息，无法自动续答",
+                    },
+                    "updated_at": utc_now(),
+                }
+            )
+            return
+
+        update = {
+            "continuation_state": "pending",
+            "continuation_error": None,
+            "updated_at": utc_now(),
+        }
+        AssistantToolCallRepository.update_fields(document["call_id"], update)
+        document.update(update)
+        AssistantToolCallRepository.append_event(
+            document["call_id"],
+            {
+                "type": CONTINUATION_EVENT_TYPE,
+                "call_id": document["call_id"],
+                "continuation_state": "pending",
+                "source_context": _redact(source_context),
+            },
+        )
+
+    @classmethod
     def _transition(cls, document: dict[str, Any], phase: str, **fields: Any) -> dict[str, Any]:
         now = utc_now()
         update = {"phase": phase, "updated_at": now, **fields}
@@ -286,6 +357,8 @@ class AssistantToolCallService:
                 {"updated_at": now},
             )
         cls._append_phase_event(document)
+        if phase in CONTINUATION_TERMINAL_PHASES:
+            cls._schedule_continuation(document)
         return document
 
     @classmethod
@@ -329,6 +402,13 @@ class AssistantToolCallService:
         missing_assets = missing_result["assets"]
         next_phase = "awaiting_input" if missing_fields or missing_assets else "awaiting_confirmation"
         now = utc_now()
+        source_context = dict(payload.source_context or {})
+        source_context.setdefault("original_user_message_id", payload.message_id)
+        source_context.setdefault("chat_id", payload.chat_id)
+        source_context.setdefault("selected_tool_ids", [payload.tool_id])
+        source_context.setdefault("model_request", payload.proposal_route or {})
+        source_context.setdefault("route_snapshot", payload.proposal_route or {})
+        source_context.setdefault("context_manifest_digest", payload.schema_digest)
         document = {
             "call_id": f"atc_{uuid4().hex[:16]}",
             "provider_tool_call_id": payload.provider_tool_call_id,
@@ -343,6 +423,10 @@ class AssistantToolCallService:
             "selection_reason": payload.selection_reason,
             "selection_confidence": payload.selection_confidence,
             "phase": "requested",
+            "continuation_state": None,
+            "continuation_run_id": None,
+            "continuation_error": None,
+            "source_context": _redact(source_context),
             "field_schema": tool.input_schema.model_dump(mode="python"),
             "input_json_schema": tool.input_json_schema,
             "presentation": tool.presentation,
@@ -428,6 +512,24 @@ class AssistantToolCallService:
         cls._append_phase_event(document)
         if phase in TERMINAL_PHASES:
             cls._cleanup_uploads(document)
+        if phase in CONTINUATION_TERMINAL_PHASES:
+            cls._schedule_continuation(document)
+
+    @classmethod
+    def reconcile_orphans(cls) -> int:
+        """扫描 queued/running 工具调用并对账其 AlgorithmRun 状态。
+
+        Returns:
+            本轮对账的调用数量。
+        """
+        count = 0
+        for document in AssistantToolCallRepository.list_orphan_running():
+            run_id = document.get("run_id")
+            if not run_id:
+                continue
+            cls._sync_run_state(document, None)
+            count += 1
+        return count
 
     @classmethod
     def update_input(

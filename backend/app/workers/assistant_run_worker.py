@@ -29,8 +29,9 @@ def main() -> None:
     recovered = assistant_run_service.requeue_stale()
     logger.info("assistant worker started worker_id=%s recovered=%d", args.worker_id, recovered)
     while not stopping:
+        continuation_count = assistant_run_service.process_continuations(args.worker_id)
         run_id = assistant_run_service.execute_next(args.worker_id)
-        if not run_id:
+        if not run_id and not continuation_count:
             time.sleep(max(0.1, args.interval))
     logger.info("assistant worker stopped worker_id=%s", args.worker_id)
 

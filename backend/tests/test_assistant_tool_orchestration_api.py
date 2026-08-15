@@ -22,11 +22,13 @@ from app.infra.research_engine_repositories import (
     AlgorithmRegistryRepository,
     AlgorithmVersionRepository,
     AssistantEventRepository,
+    AssistantRunRepository,
     AssistantToolCallRepository,
 )
 from app.main import app
 from app.schemas.assistant import AssistantChatRequest
 from app.services.assistant_service import AssistantService, SearchOutcome
+from app.services.assistant_run_service import assistant_run_service
 from app.services.assistant_tool_contract import build_json_schema, safe_function_name
 from app.services.agent_tool_service import agent_tool_service
 
@@ -465,6 +467,16 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         self.assertIsNotNone(persisted)
         self.assertEqual(persisted["chat_id"], chat_id)
         self.assertEqual(persisted["message_id"], message_id)
+        self.assertEqual(
+            persisted["source_context"]["original_user_message_id"],
+            message_id,
+        )
+        self.assertEqual(
+            persisted["source_context"]["selected_tool_ids"],
+            ["algorithm:vertical-tool"],
+        )
+        self.assertIn("tool-calling-model", str(persisted["source_context"]["route_snapshot"]))
+        self.assertTrue(persisted["source_context"]["context_manifest_digest"])
 
     def test_json_schema_maps_bare_list_and_dict(self) -> None:
         tool = agent_tool_service.resolve_callable(
@@ -733,6 +745,133 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             2,
         )
         self.assertEqual(continuation[-1]["type"], "final")
+
+    def test_server_continuation_is_scheduled_and_idempotent(self) -> None:
+        chat_id, message_id = self._chat_and_message()
+        call = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={
+                "tool_id": "algorithm:vertical-tool",
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "arguments": {"smiles": "CCO", "temperature": 300},
+            },
+        ).json()["data"]
+        call_id = call["call_id"]
+
+        def fake_run(_service, payload, *, actor_user_id, is_admin=False, request_id=None, input_asset_uploads=None):
+            return type(
+                "FakeRun",
+                (),
+                {
+                    "run_id": "arun-server-continuation-1",
+                    "algorithm_id": payload.algorithm_id,
+                    "algorithm_version_id": payload.algorithm_version_id,
+                    "status": "completed",
+                    "output_summary": {"score": 0.91},
+                    "artifact_refs": [{"artifact_id": "artifact-x", "name": "result.json"}],
+                    "error": None,
+                },
+            )()
+
+        with patch(
+            "app.services.assistant_tool_service.ResearchEngineService.create_algorithm_run",
+            new=fake_run,
+        ):
+            confirmed = self.client.post(f"/api/v1/assistant/tool-calls/{call_id}/confirm")
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+
+        persisted = AssistantToolCallRepository.find_one({"call_id": call_id})
+        self.assertEqual(persisted["phase"], "completed")
+        self.assertEqual(persisted["continuation_state"], "pending")
+        events = AssistantToolCallRepository.list_events(call_id)
+        self.assertTrue(any(event["type"] == "tool.continuation.scheduled" for event in events))
+
+        self.assertEqual(assistant_run_service.process_continuations("continuation-worker"), 1)
+        run_doc = AssistantRunRepository.find_by_continuation_key(call_id)
+        self.assertIsNotNone(run_doc)
+        run_context = run_doc["request_snapshot"]["context"]
+        self.assertEqual(run_context["tool_call_ids"], [call_id])
+        self.assertEqual(run_context["continuation_key"], call_id)
+        self.assertEqual(run_context["continuation_source"]["original_user_message_id"], message_id)
+
+        self.assertEqual(assistant_run_service.process_continuations("continuation-worker"), 0)
+        persisted = AssistantToolCallRepository.find_one({"call_id": call_id})
+        self.assertEqual(persisted["continuation_run_id"], run_doc["run_id"])
+        self.assertEqual(persisted["continuation_state"], "scheduled")
+
+        chat = self.client.get(f"/api/v1/assistant/chats/{chat_id}").json()["data"]
+        self.assertEqual([item["role"] for item in chat["messages"]], ["user"])
+
+    def test_server_continuation_executes_and_finalizes_tool_call(self) -> None:
+        chat_id, message_id = self._chat_and_message()
+        call = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={
+                "tool_id": "algorithm:vertical-tool",
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "arguments": {"smiles": "CCO", "temperature": 300},
+            },
+        ).json()["data"]
+        call_id = call["call_id"]
+
+        def fake_run(_service, payload, *, actor_user_id, is_admin=False, request_id=None, input_asset_uploads=None):
+            return type(
+                "FakeRun",
+                (),
+                {
+                    "run_id": "arun-server-continuation-2",
+                    "algorithm_id": payload.algorithm_id,
+                    "algorithm_version_id": payload.algorithm_version_id,
+                    "status": "completed",
+                    "output_summary": {"score": 0.92},
+                    "artifact_refs": [],
+                    "error": None,
+                },
+            )()
+
+        with patch(
+            "app.services.assistant_tool_service.ResearchEngineService.create_algorithm_run",
+            new=fake_run,
+        ):
+            confirmed = self.client.post(f"/api/v1/assistant/tool-calls/{call_id}/confirm")
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+
+        self.assertEqual(assistant_run_service.process_continuations("continuation-worker"), 1)
+        run_doc = AssistantRunRepository.find_by_continuation_key(call_id)
+        self.assertIsNotNone(run_doc)
+        run_id = run_doc["run_id"]
+
+        events = [
+            {"type": "status", "stage": "generation", "message": "正在生成回答..."},
+            {"type": "answer_delta", "delta": "基于运行结果：分数 0.92。"},
+            {
+                "type": "final",
+                "data": {
+                    "content": "基于运行结果：分数 0.92。",
+                    "answer_mode": "fallback",
+                    "answer_scope": "unknown",
+                    "retrieval_status": "not_needed",
+                },
+            },
+        ]
+        with patch(
+            "app.services.assistant_run_service.stream_chat_assistant",
+            return_value=iter(events),
+        ):
+            self.assertEqual(assistant_run_service.execute_next("continuation-exec-worker"), run_id)
+
+        chat = self.client.get(f"/api/v1/assistant/chats/{chat_id}").json()["data"]
+        self.assertEqual([item["role"] for item in chat["messages"]], ["user", "assistant"])
+        self.assertEqual(chat["messages"][1]["tool_call_ids"], [call_id])
+        self.assertEqual(
+            chat["messages"][1]["metadata"]["continuation_tool_call_ids"],
+            [call_id],
+        )
+        persisted = AssistantToolCallRepository.find_one({"call_id": call_id})
+        self.assertEqual(persisted["continuation_state"], "completed")
+        self.assertEqual(persisted["continuation_run_id"], run_id)
 
     def test_stream_falls_back_to_qa_when_model_does_not_support_tools(self) -> None:
         chat_id, message_id = self._chat_and_message()
