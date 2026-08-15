@@ -1,8 +1,10 @@
 import axios from 'axios'
 
 import { clearAuthSession, getAuthorizationHeader } from '../auth/authState'
-
-const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
+import {
+  handleUnauthorizedResponse,
+  emitAuthExpired,
+} from '../utils/apiAuth.mjs'
 
 const resolvedBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 const HIDDEN_KNOWLEDGE_SYSTEM_IDS = new Set([
@@ -46,10 +48,7 @@ apiClient.interceptors.response.use(
       return Promise.reject(createApiError(kind, error.message))
     }
     const { status, data } = error.response
-    if (status === 401) {
-      clearAuthSession()
-      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT_NAME))
-    }
+    if (status === 401) emitAuthExpired(clearAuthSession)
     const message = data?.message || data?.detail || error.message
     const err = createApiError('http', message)
     err.status = status
@@ -65,6 +64,34 @@ function createApiError(kind, message) {
   const error = new Error(message || '未知错误')
   error.kind = kind
   error.isApiError = true
+  return error
+}
+
+/**
+ * 将 fetch 错误响应转换为统一 API 错误，并处理 401 登录失效。
+ *
+ * Args:
+ *   response: fetch 返回的 Response 对象。
+ *
+ * Returns:
+ *   带 HTTP 状态码的 API 错误对象。
+ */
+async function createFetchApiError(response) {
+  handleUnauthorizedResponse(response, clearAuthSession)
+  let message = `HTTP ${response.status}`
+  try {
+    const data = await response.json()
+    message = (
+      data?.data?.detail ||
+      data?.detail ||
+      data?.message ||
+      message
+    )
+  } catch {
+    // Keep the HTTP status when the response is not JSON.
+  }
+  const error = createApiError('http', typeof message === 'string' ? message : JSON.stringify(message))
+  error.status = response.status
   return error
 }
 
@@ -443,16 +470,7 @@ export async function streamKnowledgeQuery(payload, onEvent) {
     body: JSON.stringify(payload),
   })
   if (!response.ok) {
-    let message = `HTTP ${response.status}`
-    try {
-      const data = await response.json()
-      message = data.detail || data.message || message
-    } catch {
-      // Keep the HTTP status when the response is not JSON.
-    }
-    const error = createApiError('http', message)
-    error.status = response.status
-    throw error
+    throw await createFetchApiError(response)
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -495,16 +513,7 @@ export async function streamAssistantChat(payload, onEvent) {
     body: JSON.stringify(payload),
   })
   if (!response.ok) {
-    let message = `HTTP ${response.status}`
-    try {
-      const data = await response.json()
-      message = data.detail || data.message || message
-    } catch {
-      // Keep the HTTP status when the response is not JSON.
-    }
-    const error = createApiError('http', message)
-    error.status = response.status
-    throw error
+    throw await createFetchApiError(response)
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -1151,16 +1160,7 @@ export async function streamAssistantRunEvents(runId, afterSeq, onEvent, signal)
     signal,
   })
   if (!response.ok) {
-    let message = `HTTP ${response.status}`
-    try {
-      const data = await response.json()
-      message = data?.data?.detail || data.detail || data.message || message
-    } catch {
-      // Keep the HTTP status when the response is not JSON.
-    }
-    const error = createApiError('http', typeof message === 'string' ? message : JSON.stringify(message))
-    error.status = response.status
-    throw error
+    throw await createFetchApiError(response)
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -1252,16 +1252,7 @@ export async function streamAssistantToolCallEvents(callId, onEvent) {
     headers,
   })
   if (!response.ok) {
-    let message = `HTTP ${response.status}`
-    try {
-      const data = await response.json()
-      message = data.detail || data.message || message
-    } catch {
-      // Keep the HTTP status when the response is not JSON.
-    }
-    const error = createApiError('http', message)
-    error.status = response.status
-    throw error
+    throw await createFetchApiError(response)
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

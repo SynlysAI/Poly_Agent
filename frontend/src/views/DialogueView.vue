@@ -48,6 +48,8 @@ import {
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import ToolMenuPicker from '../components/ToolMenuPicker.vue'
+import { isUnauthorizedStatus } from '../utils/apiAuth.mjs'
+import { shouldAbortDialogueInitialization } from '../utils/dialogueInit.mjs'
 import {
   applyToolCallEvent,
   buildToolCallConfirmPayload,
@@ -368,6 +370,7 @@ async function loadLlmModels() {
     llmCatalog.value = await getLlmModels()
     selectDefaultModelForMode()
   } catch (error) {
+    if (isUnauthorizedStatus(error?.status)) throw error
     ElMessage.warning(`模型列表加载失败：${getApiErrorMessage(error)}`)
   } finally {
     modelLoading.value = false
@@ -384,6 +387,7 @@ async function loadKnowledgeBases() {
       selectedKnowledgeBaseIds.value = selectedKnowledgeBaseIds.value.filter((systemId) => validIds.has(systemId))
     }
   } catch (error) {
+    if (isUnauthorizedStatus(error?.status)) throw error
     knowledgeSystems.value = []
     ElMessage.warning(`知识库列表加载失败：${getApiErrorMessage(error)}`)
   } finally {
@@ -402,6 +406,7 @@ async function loadAgentTools() {
         : selectedToolIds.value)
     }
   } catch (error) {
+    if (isUnauthorizedStatus(error?.status)) throw error
     agentTools.value = []
     ElMessage.warning(`算法工具加载失败：${getApiErrorMessage(error)}`)
   } finally {
@@ -1434,11 +1439,12 @@ onMounted(() => {
     historyPanelVisible.value = true
   }
   cleanInitialQuery()
-  Promise.all([
+  Promise.allSettled([
     loadLlmModels(),
     loadKnowledgeBases(),
     loadAgentTools(),
-  ]).then(async () => {
+  ]).then(async (initializationResults) => {
+    if (shouldAbortDialogueInitialization(initializationResults)) return
     await refreshActiveRun()
     if (chatId.value) await loadChat(chatId.value)
     await loadChatHistory()

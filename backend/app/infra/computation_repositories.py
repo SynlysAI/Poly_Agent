@@ -6,8 +6,11 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
-from pymongo.errors import PyMongoError
 from pymongo import ReturnDocument
+from pymongo.errors import AutoReconnect
+from pymongo.errors import NetworkTimeout
+from pymongo.errors import PyMongoError
+from pymongo.errors import ServerSelectionTimeoutError
 
 from app.core.config import settings
 from app.core.time import utc_now as core_utc_now
@@ -24,6 +27,12 @@ from app.infra.mongo import (
 )
 
 _mongo_unavailable = False
+
+MONGO_TRANSIENT_ERRORS = (
+    AutoReconnect,
+    NetworkTimeout,
+    ServerSelectionTimeoutError,
+)
 
 
 def _without_mongo_id(document: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -121,7 +130,9 @@ class BaseRepository:
     @classmethod
     def _can_use_mongo(cls) -> bool:
         """判断当前进程是否继续尝试 MongoDB。"""
-        return settings.uses_mongodb and not _mongo_unavailable
+        return settings.uses_mongodb and (
+            settings.require_mongodb or not _mongo_unavailable
+        )
 
     @classmethod
     def _mark_mongo_unavailable(cls) -> None:
@@ -131,13 +142,14 @@ class BaseRepository:
 
     @classmethod
     def _handle_mongo_error(cls, exc: PyMongoError) -> None:
-        """Handle MongoDB errors according to the deployment storage policy."""
-        cls._mark_mongo_unavailable()
-        if settings.require_mongodb:
+        """按部署存储策略处理 MongoDB 异常。"""
+        is_transient = isinstance(exc, MONGO_TRANSIENT_ERRORS)
+        if settings.require_mongodb or not is_transient:
             raise HTTPException(
                 status_code=503,
-                detail=f"MongoDB 不可用，已禁止本地 demo-store 兜底：{exc.__class__.__name__}",
+                detail=f"MongoDB 操作失败，已禁止本地 demo-store 兜底：{exc.__class__.__name__}",
             ) from exc
+        cls._mark_mongo_unavailable()
 
     @classmethod
     def _collection(cls):
