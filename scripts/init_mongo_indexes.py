@@ -63,6 +63,10 @@ INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
         ("call_seq", [("call_id", 1), ("seq", 1)]),
         ("type_at", [("type", 1), ("at", 1)]),
     ],
+    "assistant_runtime_assets": [
+        ("asset_id", [("asset_id", 1)]),
+        ("call_status_expires", [("call_id", 1), ("status", 1), ("expires_at", 1)]),
+    ],
     "assistant_chats": [
         ("owner_updated", [("created_by", 1), ("updated_at", -1)]),
         ("owner_archived_updated", [("created_by", 1), ("archived", 1), ("updated_at", -1)]),
