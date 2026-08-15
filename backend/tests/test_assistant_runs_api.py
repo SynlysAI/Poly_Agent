@@ -85,6 +85,59 @@ class AssistantRunsApiTest(ComputationTestCase):
         self.assertEqual(second.json()["data"]["status"], "canceled")
         self.assertEqual(self._run(chat_id, "取消后重试").status_code, 200)
 
+    def test_worker_persists_resolved_route_and_message_model_meta(self) -> None:
+        """run 区分请求模型与实际解析模型，并把模型信息写入消息元数据。"""
+        chat_id = self._chat("模型路由")
+        created = self.client.post(
+            f"/api/v1/assistant/chats/{chat_id}/runs",
+            json={
+                "content": "路由问题",
+                "messages": [],
+                "context": {
+                    "mode": "qa",
+                    "model": {"providerId": "requested-provider", "modelId": "requested-model"},
+                },
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["data"]["run_id"]
+        route = {
+            "purpose": "qa",
+            "route_reason": "user_selected",
+            "requested_provider_id": "requested-provider",
+            "requested_model_id": "requested-model",
+            "provider_id": "resolved-provider",
+            "model_id": "resolved-model",
+            "capabilities": ["chat"],
+        }
+        events = [
+            {"type": "route.resolved", "route": route},
+            {"type": "answer_delta", "delta": "路由回答"},
+            {
+                "type": "final",
+                "data": {
+                    "content": "路由回答",
+                    "answer_mode": "fallback",
+                    "answer_scope": "unknown",
+                    "retrieval_status": "not_needed",
+                    "grounding_facts": {"llm_route": route},
+                },
+            },
+        ]
+        with patch("app.services.assistant_run_service.stream_chat_assistant", return_value=iter(events)):
+            self.assertEqual(assistant_run_service.execute_next("route-worker"), run_id)
+
+        restored = self.client.get(f"/api/v1/assistant/runs/{run_id}").json()["data"]
+        self.assertEqual(restored["provider_id"], "resolved-provider")
+        self.assertEqual(restored["model_id"], "resolved-model")
+        self.assertEqual(restored["route"]["route_reason"], "user_selected")
+        self.assertEqual(restored["route"]["requested_model_id"], "requested-model")
+        self.assertTrue(any(event["type"] == "route.resolved" for event in restored["events"]))
+
+        chat = self.client.get(f"/api/v1/assistant/chats/{chat_id}").json()["data"]
+        assistant_message = next(item for item in chat["messages"] if item["role"] == "assistant")
+        self.assertEqual(assistant_message["metadata"]["llm_route"]["model_id"], "resolved-model")
+
     def test_run_access_is_owner_scoped(self) -> None:
         chat_id = self._chat("私有")
         run_id = self._run(chat_id).json()["data"]["run_id"]

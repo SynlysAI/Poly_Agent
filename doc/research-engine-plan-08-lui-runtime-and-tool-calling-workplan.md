@@ -205,7 +205,7 @@ AssistantRunService
 
 **建议 PR**：PR-01
 
-- [ ] 扩展 `LLMProviderConfigInput`，允许 `models` 同时兼容字符串和对象：
+- [x] 扩展 `LLMProviderConfigInput`，允许 `models` 同时兼容字符串和对象：
 
   ```json
   {
@@ -228,31 +228,31 @@ AssistantRunService
   }
   ```
 
-- [ ] 为 `LLMModelInfo` 增加可空字段：
+- [x] 为 `LLMModelInfo` 增加可空字段：
   - `context_window`
   - `max_output_tokens`
   - `tool_protocol`
   - `supports_parallel_tool_calls`
   - `capability_source`
-- [ ] 内部统一将字符串 model 配置 normalize 为 object，旧配置不报错。
-- [ ] `_provider_with_models()` 不再把第一个已知模型能力直接赋给所有新发现模型；未配置模型能力标记为 `inferred`。
-- [ ] `resolve_route()` 返回：
+- [x] 内部统一将字符串 model 配置 normalize 为 object，旧配置不报错。
+- [x] `_provider_with_models()` 不再把第一个已知模型能力直接赋给所有新发现模型；未配置模型能力标记为 `inferred`。
+- [x] `resolve_route()` 返回：
   - requested provider/model
   - resolved provider/model
   - route reason：`user_selected` / `purpose_default` / `tool_capability_override` / `fallback`
   - capabilities 与 tool protocol
   - context window
-- [ ] `AssistantRunService.create()` 保存 requested model；worker 解析后保存 resolved route。
-- [ ] 新增 `route.resolved` 事件并写入 run event stream。
-- [ ] `LlmModelSelect.vue` 展示 `tool_calling` 标签和 provider/model 双重信息。
-- [ ] `DialogueView.vue` 修正默认选择顺序：
+- [x] `AssistantRunService.create()` 保存 requested model；worker 解析后保存 resolved route。
+- [x] 新增 `route.resolved` 事件并写入 run event stream。
+- [x] `LlmModelSelect.vue` 展示 `tool_calling` 标签和 provider/model 双重信息。
+- [x] `DialogueView.vue` 修正默认选择顺序：
     1. URL 显式指定
     2. 历史会话保存的模型
     3. 当前 purpose 默认 route
     4. recommended model
     5. 第一个可用模型
-- [ ] 引入 `modelSelectionOrigin`，区分 `url` / `chat` / `route` / `user` / `fallback`；用户手动选择后不被模式切换覆盖。
-- [ ] assistant message meta 展示实际模型与能力。
+- [x] 引入 `modelSelectionOrigin`，区分 `url` / `chat` / `route` / `user` / `fallback`；用户手动选择后不被模式切换覆盖。
+- [x] assistant message meta 展示实际模型与能力。
 
 **验收标准**
 
@@ -752,3 +752,4 @@ AssistantRunService
 ## 13. 状态记录
 
 - 2026-08-15：创建工作计划，状态为待评审 / 未开始。计划基于当前 `develop` 基线和本地 DeepSeek Harness 参考源码整理。
+- 2026-08-15：PR-01 已完成：per-model 能力配置、resolved route、`route.resolved` 事件、run requested/resolved 模型持久化、LUI 模型选择优先级与 `tool_calling` 可见性均已落地；相关后端测试、前端单测与前端构建通过。`tool_capability_override` 留待 PR-02 引入。

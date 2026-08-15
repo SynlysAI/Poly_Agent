@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { buildSelectableLlmModels } from './llmModels.js'
+import { buildSelectableLlmModels, resolveDefaultModelSelection } from './llmModels.js'
 
 const catalog = {
   routing: {},
@@ -26,8 +26,12 @@ const catalog = {
         {
           model_id: 'DeepSeek-V4-Flash-w8a8-mtp',
           display_name: 'DeepSeek-V4-Flash-w8a8-mtp',
-          capabilities: ['chat', 'fast', 'reasoning', 'structured_json'],
+          capabilities: ['chat', 'fast', 'reasoning', 'structured_json', 'tool_calling'],
           recommended_for: ['qa'],
+          tool_protocol: 'openai_chat_tools',
+          supports_parallel_tool_calls: true,
+          context_window: 131072,
+          capability_source: 'configured',
         },
       ],
     },
@@ -50,3 +54,48 @@ const deepRows = buildSelectableLlmModels(catalog, {
 assert.equal(deepRows[0].providerId, 'qwen_reasoning_primary')
 assert.equal(deepRows[0].modelId, 'Qwen3.6-35B-A3B')
 
+const toolRow = qaRows.find((row) => row.modelId === 'DeepSeek-V4-Flash-w8a8-mtp')
+assert.equal(toolRow.toolProtocol, 'openai_chat_tools')
+assert.equal(toolRow.supportsParallelToolCalls, true)
+assert.equal(toolRow.contextWindow, 131072)
+assert.equal(toolRow.capabilitySource, 'configured')
+assert.ok(toolRow.capabilities.includes('tool_calling'))
+
+const routing = {
+  qa: { provider_id: 'default_openai', model_id: 'DeepSeek-V4-Flash-w8a8-mtp' },
+  deep: { provider_id: 'qwen_reasoning_primary', model_id: 'Qwen3.6-35B-A3B' },
+}
+
+assert.deepEqual(
+  resolveDefaultModelSelection(qaRows, {
+    urlModel: { providerId: 'qwen_reasoning_primary', modelId: 'Qwen3.6-35B-A3B' },
+    chatModel: { providerId: 'default_openai', modelId: 'DeepSeek-V4-Flash-w8a8-mtp' },
+    routing,
+    purpose: 'qa',
+  }),
+  { key: 'qwen_reasoning_primary::Qwen3.6-35B-A3B', origin: 'url' },
+)
+
+assert.deepEqual(
+  resolveDefaultModelSelection(qaRows, {
+    chatModel: { providerId: 'qwen_reasoning_primary', modelId: 'Qwen3.6-35B-A3B' },
+    routing,
+    purpose: 'qa',
+  }),
+  { key: 'qwen_reasoning_primary::Qwen3.6-35B-A3B', origin: 'chat' },
+)
+
+assert.deepEqual(
+  resolveDefaultModelSelection(deepRows, { routing, purpose: 'deep' }),
+  { key: 'qwen_reasoning_primary::Qwen3.6-35B-A3B', origin: 'route' },
+)
+
+assert.deepEqual(
+  resolveDefaultModelSelection(qaRows, { routing: {}, purpose: 'qa' }),
+  { key: 'default_openai::DeepSeek-V4-Flash-w8a8-mtp', origin: 'route' },
+)
+
+assert.deepEqual(
+  resolveDefaultModelSelection([toolRow], { routing: {}, purpose: 'deep' }),
+  { key: 'default_openai::DeepSeek-V4-Flash-w8a8-mtp', origin: 'fallback' },
+)

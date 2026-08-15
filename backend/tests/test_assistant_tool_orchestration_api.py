@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 try:
@@ -10,8 +13,10 @@ try:
 except ImportError:
     from _computation_test_utils import ComputationTestCase
 
+from app.core.config import settings
 from app.core.auth import get_current_user
 from app.infra.computation_repositories import utc_now
+from app.infra.llm_repositories import LLMRoutingRepository
 from app.infra.research_engine_repositories import (
     AlgorithmRegistryRepository,
     AlgorithmVersionRepository,
@@ -24,6 +29,7 @@ from app.services.assistant_service import AssistantService, SearchOutcome
 class AssistantToolOrchestrationApiTest(ComputationTestCase):
     def setUp(self) -> None:
         super().setUp()
+        self._isolate_llm_config()
         self.user = {"user_id": "user-1", "username": "user", "role": "user", "status": "active"}
         app.dependency_overrides[get_current_user] = lambda: self.user
         now = utc_now()
@@ -121,7 +127,73 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
 
     def tearDown(self) -> None:
         app.dependency_overrides.pop(get_current_user, None)
+        self._restore_llm_config()
         super().tearDown()
+
+    def _isolate_llm_config(self) -> None:
+        """使用自带 tool-capable 模型，隔离环境中的 LLM 配置。"""
+        self.original_llm_settings = {
+            "llm_model": settings.llm_model,
+            "llm_base_url": settings.llm_base_url,
+            "llm_api_key": settings.llm_api_key,
+            "llm_default_provider": getattr(settings, "llm_default_provider", ""),
+            "llm_default_model": getattr(settings, "llm_default_model", ""),
+            "llm_reasoning_provider": getattr(settings, "llm_reasoning_provider", ""),
+            "llm_reasoning_model": getattr(settings, "llm_reasoning_model", ""),
+            "llm_provider_configs_file": getattr(settings, "llm_provider_configs_file", ""),
+            "llm_provider_configs_json": getattr(settings, "llm_provider_configs_json", ""),
+            "report_ollama_base_url": settings.report_ollama_base_url,
+            "report_ollama_model": settings.report_ollama_model,
+        }
+        self.llm_temp_dir = tempfile.TemporaryDirectory()
+        provider_path = Path(self.llm_temp_dir.name) / "providers.json"
+        provider_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "provider_id": "tool_calling_primary",
+                        "display_name": "Tool Calling Primary",
+                        "provider_type": "openai_compatible",
+                        "base_url": "https://tool-calling.example.test/v1",
+                        "models": [
+                            {
+                                "model_id": "tool-calling-model",
+                                "display_name": "Tool Calling Model",
+                                "capabilities": ["chat", "tool_calling"],
+                                "recommended_for": ["qa", "deep"],
+                                "tool_protocol": "openai_chat_tools",
+                            }
+                        ],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        settings.llm_model = ""
+        settings.llm_base_url = ""
+        settings.llm_api_key = ""
+        settings.llm_default_provider = ""
+        settings.llm_default_model = ""
+        settings.llm_reasoning_provider = ""
+        settings.llm_reasoning_model = ""
+        settings.llm_provider_configs_file = str(provider_path)
+        settings.llm_provider_configs_json = ""
+        settings.report_ollama_base_url = ""
+        settings.report_ollama_model = ""
+        self.original_routing = LLMRoutingRepository.find_one({"config_id": "global"})
+        selection = {"provider_id": "tool_calling_primary", "model_id": "tool-calling-model"}
+        LLMRoutingRepository.save(
+            "config_id",
+            {"config_id": "global", "routing": {"qa": selection, "deep": selection, "report": selection}},
+        )
+
+    def _restore_llm_config(self) -> None:
+        """恢复测试前的 LLM 环境配置。"""
+        for key, value in self.original_llm_settings.items():
+            setattr(settings, key, value)
+        restored_routing = self.original_routing or {"config_id": "global", "routing": {}}
+        LLMRoutingRepository.save("config_id", restored_routing)
+        self.llm_temp_dir.cleanup()
 
     def _chat_and_message(self) -> tuple[str, str]:
         created = self.client.post(
