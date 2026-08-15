@@ -21,6 +21,7 @@ from app.infra.llm_repositories import LLMRoutingRepository
 from app.infra.research_engine_repositories import (
     AlgorithmRegistryRepository,
     AlgorithmVersionRepository,
+    AssistantEventRepository,
     AssistantToolCallRepository,
 )
 from app.main import app
@@ -412,7 +413,15 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         )
         self.assertIn("一次只提出一个", tool_rules)
         self.assertNotIn("一次可以提出多个", tool_rules)
+        catalog_event = next(event for event in events if event.get("type") == "tool.catalog.resolved")
+        self.assertEqual(catalog_event["tools"], [{"tool_id": "algorithm:vertical-tool"}])
+        schema_event = next(event for event in events if event.get("type") == "tool.schema.rendered")
+        self.assertEqual(schema_event["tools"][0]["tool_id"], "algorithm:vertical-tool")
+        self.assertRegex(schema_event["tools"][0]["schema_digest"], r"^[0-9a-f]{16}$")
+        header_event = next(event for event in events if event.get("type") == "request.header")
         context_event = next(event for event in events if event.get("type") == "context.assembled")
+        self.assertEqual(header_event["manifest"], context_event["manifest"])
+        self.assertLess(events.index(header_event), events.index(context_event))
         manifest = context_event["manifest"]
         self.assertEqual(manifest["schema_version"], 1)
         self.assertEqual(manifest["request_kind"], "tool_proposal")
@@ -435,6 +444,15 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             [event["phase"] for event in tool_events],
             ["requested", "awaiting_confirmation"],
         )
+        unified_tool_events, _ = AssistantEventRepository.list_all(
+            {"call_id": tool_events[0]["call_id"]},
+            sort_field="seq",
+            reverse=False,
+            page=1,
+            page_size=100,
+        )
+        self.assertTrue(unified_tool_events)
+        self.assertTrue(all(event["run_id"] == "asrun-context-stream" for event in unified_tool_events))
         final = events[-1]
         self.assertEqual(final["type"], "final")
         self.assertEqual(

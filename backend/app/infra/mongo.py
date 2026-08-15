@@ -155,6 +155,11 @@ def get_assistant_runs_collection() -> Collection:
     return get_database()["assistant_runs"]
 
 
+def get_assistant_events_collection() -> Collection:
+    """获取 assistant_events append-only 事件集合。"""
+    return get_database()["assistant_events"]
+
+
 def get_algorithm_packages_collection() -> Collection:
     """获取 algorithm_packages 集合。"""
     return get_database()["algorithm_packages"]

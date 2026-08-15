@@ -56,6 +56,13 @@ INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
         ("owner_chat_updated", [("created_by", 1), ("chat_id", 1), ("updated_at", -1)]),
         ("owner_phase_updated", [("created_by", 1), ("phase", 1), ("updated_at", -1)]),
     ],
+    "assistant_events": [
+        ("event_id", [("event_id", 1)]),
+        ("run_seq", [("run_id", 1), ("seq", 1)]),
+        ("owner_chat_seq", [("chat_id", 1), ("created_by", 1), ("seq", 1)]),
+        ("call_seq", [("call_id", 1), ("seq", 1)]),
+        ("type_at", [("type", 1), ("at", 1)]),
+    ],
     "assistant_chats": [
         ("owner_updated", [("created_by", 1), ("updated_at", -1)]),
         ("owner_archived_updated", [("created_by", 1), ("archived", 1), ("updated_at", -1)]),

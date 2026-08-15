@@ -64,6 +64,7 @@ import {
   assistantContextLabel,
   assistantContextTooltip,
 } from '../utils/assistantContext.js'
+import { replayAssistantEvents } from '../utils/assistantEvents.js'
 import AlgorithmResultView from './vertical-prediction/AlgorithmResultView.vue'
 import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
 import {
@@ -515,12 +516,15 @@ async function sendPrompt(prompt) {
 }
 
 function runPlaceholder(run) {
+  const replay = replayAssistantEvents(run.events || [])
   return {
     role: 'assistant', content: run.partial_content || '', reasoning_summary: [], actions: [], references: [],
     suggested_questions: [], answer_mode: '', answer_scope: '', retrieval_status: '',
     web_search_requested: Boolean(run.request_snapshot?.context?.use_web_search),
     stream_status: run.status === 'queued' ? '已进入回答队列' : '正在回答...',
     stream_stage: run.stage || run.status, streaming: activeRunStatuses.has(run.status), error: run.status === 'failed',
+    llm_route: replay.route,
+    context_digest: replay.context_digest,
     tool_calls: [], pending_tool_call_ids: [], run_id: run.run_id,
   }
 }

@@ -149,6 +149,7 @@ class AssistantRunService:
             {"user_message_id": message_id, "request_snapshot": document["request_snapshot"], "updated_at": utc_now()},
         )
         self._event(document["run_id"], {"type": "status", "stage": "queued", "message": "已进入回答队列"})
+        self._event(document["run_id"], {"type": "route.requested", "route": document["route"]})
         return self.get(document["run_id"], current_user)
 
     def get(self, run_id: str, current_user: dict[str, str] | None) -> AssistantRun:
@@ -307,6 +308,15 @@ class AssistantRunService:
                     failed_message = str(event.get("message") or "回答生成失败")
                 if not AssistantRunRepository.update_claim(run_id, worker_id, fields):
                     return
+                if event.get("type") == "final" and final_data.get("answer_mode") == "fallback":
+                    self._event(
+                        run_id,
+                        {
+                            "type": "route.fallback",
+                            "reason": "final_answer_fallback",
+                            "route": current.get("route") or {},
+                        },
+                    )
                 self._event(run_id, event)
             if failed_message or not final_data:
                 self._finish_failed(run_id, worker_id, failed_message or "回答未返回最终结果", started)

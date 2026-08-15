@@ -334,6 +334,7 @@ class AssistantToolCallService:
             "provider_tool_call_id": payload.provider_tool_call_id,
             "chat_id": payload.chat_id,
             "message_id": payload.message_id,
+            "assistant_run_id": payload.assistant_run_id,
             "tool_id": payload.tool_id,
             "algorithm_id": algorithm_id,
             "algorithm_version_id": tool.active_version_id,
@@ -580,6 +581,15 @@ class AssistantToolCallService:
                 return cls._public_document(latest)
             raise HTTPException(status_code=409, detail="当前工具调用不能确认")
         document.update(running_fields)
+        AssistantToolCallRepository.append_event(
+            call_id,
+            {
+                "type": "tool.confirmed",
+                "call_id": call_id,
+                "arguments": _redact(arguments),
+                "confirmed_at": now,
+            },
+        )
         cls._audit(
             document,
             "assistant_tool_call_confirmed",

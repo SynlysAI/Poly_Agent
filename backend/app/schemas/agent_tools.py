@@ -148,6 +148,7 @@ class AssistantToolCallCreate(BaseModel):
     provider_tool_call_id: str | None = Field(default=None, max_length=255)
     chat_id: str | None = Field(default=None, max_length=120)
     message_id: str | None = Field(default=None, max_length=120)
+    assistant_run_id: str | None = Field(default=None, max_length=120)
     arguments: dict[str, Any] = Field(default_factory=dict)
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
     function_name: str | None = Field(default=None, max_length=64)
@@ -233,6 +234,7 @@ class AssistantToolCall(BaseModel):
     call_id: str
     provider_tool_call_id: str | None = None
     chat_id: str | None = None
+    assistant_run_id: str | None = None
     message_id: str | None = None
     tool_id: str
     algorithm_id: str

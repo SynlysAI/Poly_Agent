@@ -1,6 +1,6 @@
 # Plan 08：LUI Runtime、上下文注入与工具调用增强工作计划
 
-> **状态：进行中（PR-01、PR-02、PR-03 已完成）**
+> **状态：进行中（PR-01、PR-02、PR-03、PR-04 阶段一已完成）**
 >
 > 日期：2026-08-15
 >
@@ -418,8 +418,8 @@ AssistantRunService
 
 **建议 PR**：PR-04
 
-- [ ] 新增 Mongo collection：`assistant_events`。
-- [ ] 文档结构：
+- [x] 新增 Mongo collection：`assistant_events`。
+- [x] 文档结构：
 
   ```json
   {
@@ -436,11 +436,11 @@ AssistantRunService
   }
   ```
 
-- [ ] 建立索引：
+- [x] 建立索引：
   - `(chat_id, created_by, seq)`
   - `(run_id, seq)`
   - `(call_id, seq)`
-  - `(type, created_at)`
+  - `(type, at)`
 - [ ] 第一批事件类型：
   - `run.created`
   - `run.started`
@@ -469,13 +469,13 @@ AssistantRunService
   - `llm.request.failed`
   - `llm.usage.recorded`
   - `assistant.finalized`
-- [ ] 新旧双写：
+- [x] 新旧双写：
   - 新事件写 `assistant_events`
   - 旧 `assistant_runs.events` 和 `assistant_tool_calls.events` 暂保留
   - 读取时优先新事件，无新事件 fallback 旧字段
-- [ ] 编写 backfill 脚本，将旧 embedded events 迁移到新集合，不修改旧文档语义。
-- [ ] 事件只追加不更新；run 内 seq 连续。
-- [ ] 前端新增 `assistantEvents.mjs`，统一按 seq 合并事件，保留现有 stale phase 防降级逻辑。
+- [x] 编写 backfill 脚本，将旧 embedded events 迁移到新集合，不修改旧文档语义。
+- [x] 事件只追加不更新；run/call 内 seq 连续。
+- [x] 前端新增 `assistantEvents.mjs`，统一按 seq 合并事件，保留现有 stale phase 防降级逻辑。
 
 **验收标准**
 
@@ -642,9 +642,9 @@ AssistantRunService
 - [x] 模型无 tool calling 时不发起 provider 请求。
 - [x] provider 鉴权、超时、模型不存在错误分类正确。
 - [x] 多工具提案在未开启并行时被明确限制。
-- [ ] request manifest 记录所有 section 和 omitted reason。
-- [ ] assistant event seq 连续且不更新。
-- [ ] 事件重放不会降级 tool phase。
+- [x] request manifest 记录所有 section 和 omitted reason。
+- [x] assistant event seq 连续且不更新。
+- [x] 事件重放不会降级 tool phase。
 - [ ] continuation 幂等。
 
 ### 7.2 前端测试
@@ -654,8 +654,8 @@ AssistantRunService
 - [ ] 历史会话恢复模型。
 - [ ] `tool_calling` 标签展示。
 - [ ] 模型无工具能力时 warning。
-- [ ] event reducer 合并 route / context / tool / answer / final。
-- [ ] stale phase 防降级。
+- [x] event reducer 合并 route / context / tool / answer / final。
+- [x] stale phase 防降级。
 - [x] raw arguments 与 parse error 展示。
 - [ ] 320 / 768 / 1440 布局不溢出。
 
@@ -756,3 +756,4 @@ AssistantRunService
 - 2026-08-15：PR-01 已完成：per-model 能力配置、resolved route、`route.resolved` 事件、run requested/resolved 模型持久化、LUI 模型选择优先级与 `tool_calling` 可见性均已落地；相关后端测试、前端单测与前端构建通过。`tool_capability_override` 留待 PR-02 引入。
 - 2026-08-15：PR-02 已完成：统一 Tool Contract Adapter、稳定 function name、完整 JSON Schema 约束、AgentTool 派生契约、raw arguments / parse error 持久化与展示、提案元数据、provider 错误分类、单工具提示词策略和 `tool_capability_override` 均已落地；相关后端测试、前端单测与前端构建通过。并行工具执行仍保持关闭，留待后续配置化开启。
 - 2026-08-15：PR-03 已完成：Context Assembler v1、7 类内置上下文 section、保守 token 估算、section/总预算与 omitted reason、工具简短目录、tool proposal 与 final answer 统一上下文、request manifest v1、run manifest 持久化、assistant message route/context digest metadata 和 LUI 上下文存证标签均已落地；相关后端测试与前端单测通过。
+- 2026-08-15：PR-04 阶段一已完成：`assistant_events` append-only 集合、run/call 双写与连续 seq、统一事件回放 fallback、旧数据幂等 backfill 脚本、route/request/tool catalog/schema/confirmed 等事件、run 与 call 关联以及前端 `assistantEvents` reducer 均已落地；相关后端 77 个 assistant 测试、前端 assistant 单测与构建通过。完整 LLM request 生命周期事件、admin trace 展示和 continuation scheduled 事件仍留在 PR-04 后续切片。

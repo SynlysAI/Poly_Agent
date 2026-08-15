@@ -1445,6 +1445,15 @@ class AssistantService:
         return {"type": "context.assembled", "request_kind": request_kind, "manifest": manifest}
 
     @staticmethod
+    def _request_header_event(context_event: dict) -> dict:
+        """从 request manifest 构造统一事件流的请求头事件。"""
+        return {
+            "type": "request.header",
+            "request_kind": context_event.get("request_kind"),
+            "manifest": context_event.get("manifest"),
+        }
+
+    @staticmethod
     def _context_metadata(assembly: ContextAssembly) -> dict:
         """提取响应和消息 metadata 所需的上下文摘要。"""
         return {
@@ -1603,6 +1612,7 @@ class AssistantService:
                         provider_tool_call_index=getattr(call, "index", 0),
                         chat_id=request.context.get("chat_id"),
                         message_id=request.context.get("message_id"),
+                        assistant_run_id=request.context.get("run_id"),
                         arguments=provider_arguments.arguments,
                         function_name=function_name,
                         raw_arguments=provider_arguments.raw_arguments,
@@ -1964,15 +1974,35 @@ class AssistantService:
                     prior_tool_messages=extra_messages,
                 )
                 response_facts["context"] = self._context_metadata(final_assembly)
-                yield self._context_event(
+                context_event = self._context_event(
                     request=request,
                     request_kind="final_answer",
                     route=llm_route,
                     assembly=final_assembly,
                     tools=[],
                 )
+                yield self._request_header_event(context_event)
+                yield context_event
             elif selected_ids:
                 yield {"type": "status", "stage": "tools", "message": "正在分析算法工具调用..."}
+                selected_tools = self._resolve_selected_tools(selected_ids, current_user)
+                if selected_tools:
+                    yield {
+                        "type": "tool.catalog.resolved",
+                        "tools": [{"tool_id": tool.tool_id} for tool in selected_tools],
+                    }
+                    yield {
+                        "type": "tool.schema.rendered",
+                        "tools": [
+                            {
+                                "tool_id": tool.tool_id,
+                                "function_name": tool.function_name,
+                                "version": tool.version,
+                                "schema_digest": tool.schema_digest,
+                            }
+                            for tool in selected_tools
+                        ],
+                    }
                 tool_events, calls, direct_content, built_tools, context_event = self._propose_tool_calls(
                     request=request,
                     intent=intent,
@@ -1983,6 +2013,7 @@ class AssistantService:
                     current_user=current_user,
                 )
                 if context_event:
+                    yield self._request_header_event(context_event)
                     yield context_event
                 if calls:
                     for event in tool_events:
@@ -2046,13 +2077,15 @@ class AssistantService:
                     selected_tools=selected_tools,
                 )
                 response_facts["context"] = self._context_metadata(final_assembly)
-                yield self._context_event(
+                context_event = self._context_event(
                     request=request,
                     request_kind="final_answer",
                     route=llm_route,
                     assembly=final_assembly,
                     tools=selected_tools,
                 )
+                yield self._request_header_event(context_event)
+                yield context_event
             if intent.deep:
                 for item in reasoning_summary:
                     yield {"type": "reasoning_summary_delta", "item": item}

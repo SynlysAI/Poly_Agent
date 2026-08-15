@@ -16,6 +16,7 @@ from app.infra.research_engine_repositories import (
     AgentToolPolicyRepository,
     AlgorithmRegistryRepository,
     AlgorithmVersionRepository,
+    AssistantEventRepository,
     AssistantToolCallRepository,
 )
 from app.schemas.agent_tools import AssistantToolCall
@@ -152,6 +153,14 @@ class AssistantToolCallApiTest(ComputationTestCase):
             [phase for phase in phases if phase],
             ["requested", "awaiting_input", "awaiting_confirmation", "running", "completed"],
         )
+        unified_events, _ = AssistantEventRepository.list_all(
+            {"call_id": call["call_id"]},
+            sort_field="seq",
+            reverse=False,
+            page=1,
+            page_size=100,
+        )
+        self.assertIn("tool.confirmed", [event["type"] for event in unified_events])
 
     def test_invalid_arguments_use_contract_error_code(self) -> None:
         response = self.client.post(

@@ -12,7 +12,7 @@ except ImportError:
 from app.core.auth import get_current_user
 from app.main import app
 from app.services.assistant_run_service import assistant_run_service
-from app.infra.research_engine_repositories import AssistantRunRepository
+from app.infra.research_engine_repositories import AssistantEventRepository, AssistantRunRepository
 
 
 class AssistantRunsApiTest(ComputationTestCase):
@@ -58,6 +58,8 @@ class AssistantRunsApiTest(ComputationTestCase):
         chat_id = self._chat("执行")
         created = self._run(chat_id)
         run_id = created.json()["data"]["run_id"]
+        restored = self.client.get(f"/api/v1/assistant/runs/{run_id}").json()["data"]
+        self.assertTrue(any(event["type"] == "route.requested" for event in restored["events"]))
         events = [
             {"type": "status", "stage": "generation", "message": "生成中"},
             {"type": "answer_delta", "delta": "持久化回答"},
@@ -67,6 +69,8 @@ class AssistantRunsApiTest(ComputationTestCase):
             self.assertEqual(assistant_run_service.execute_next("test-worker"), run_id)
         restored = self.client.get(f"/api/v1/assistant/runs/{run_id}").json()["data"]
         self.assertEqual(restored["status"], "completed")
+        unified_events = AssistantEventRepository.list_for_run(run_id)
+        self.assertTrue(any(event["type"] == "route.fallback" for event in unified_events))
         self.assertEqual(restored["partial_content"], "持久化回答")
         chat = self.client.get(f"/api/v1/assistant/chats/{chat_id}").json()["data"]
         self.assertEqual([item["role"] for item in chat["messages"]], ["user", "assistant"])
