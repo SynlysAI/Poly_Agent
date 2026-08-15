@@ -47,6 +47,8 @@ export function normalizeToolCall(call) {
   return {
     ...(call || {}),
     arguments_text: JSON.stringify((call?.arguments) || {}, null, 2),
+    raw_arguments_text: call?.raw_arguments || '',
+    events: Array.isArray(call?.events) ? call.events.map((event) => ({ ...event })) : [],
   }
 }
 
@@ -83,6 +85,38 @@ export function buildToolCallConfirmPayload(call) {
   }
 }
 
+function toolCallEventKey(event) {
+  return [
+    event?.call_id || '',
+    event?.seq || 0,
+    event?.type || '',
+    event?.phase || '',
+    event?.at || '',
+  ].join(':')
+}
+
+/**
+ * 合并工具调用的 append-only 事件列表，避免重放重复事件。
+ *
+ * @param {Array<object>} current 已有事件。
+ * @param {Array<object>|object|undefined} incoming 新事件或事件列表。
+ * @returns {Array<object>} 按 seq 排序去重后的完整事件列表。
+ */
+export function mergeToolCallEvents(current, incoming) {
+  const list = Array.isArray(current) ? current.map((event) => ({ ...event })) : []
+  const nextItems = Array.isArray(incoming) ? incoming : incoming ? [incoming] : []
+  const seen = new Set(list.map(toolCallEventKey))
+  for (const event of nextItems) {
+    if (!event) continue
+    const key = toolCallEventKey(event)
+    if (!seen.has(key)) {
+      seen.add(key)
+      list.push({ ...event })
+    }
+  }
+  return list.sort((a, b) => (Number(a?.seq || 0) || 0) - (Number(b?.seq || 0) || 0))
+}
+
 /**
  * 把 SSE 的 tool_call / tool_input_required 事件归并到消息的 tool_calls 列表。
  */
@@ -97,6 +131,7 @@ export function applyToolCallEvent(message, event) {
     ...event,
     ...(stalePhase ? { phase: existing.phase } : {}),
   })
+  record.events = mergeToolCallEvents(existing?.events, event)
   if (existingIndex >= 0) calls.splice(existingIndex, 1, record)
   else calls.push(record)
   message.tool_calls = calls
@@ -117,10 +152,12 @@ export function mergeToolCalls(existing, incoming) {
     }
     const current = merged[index]
     const stalePhase = isStaleToolCallPhase(current.phase, call.phase)
+    const mergedEvents = mergeToolCallEvents(current.events, incomingRecord.events)
     merged[index] = normalizeToolCall({
       ...current,
       ...incomingRecord,
       ...(stalePhase ? { phase: current.phase } : {}),
+      events: mergedEvents,
     })
   }
   return merged
@@ -159,6 +196,19 @@ export function schemaFieldType(description = '') {
 }
 
 export function normalizeSchemaArguments(call) {
+  const jsonSchema = call?.input_json_schema
+  if (jsonSchema?.properties) {
+    const values = { ...(call?.arguments || {}) }
+    const required = new Set(jsonSchema.required || [])
+    return Object.entries(jsonSchema.properties).map(([key, property]) => ({
+      key,
+      description: property?.description || '',
+      type: property?.type || 'string',
+      value: values[key] ?? property?.default ?? '',
+      required: (call?.missing_fields || []).includes(key) || required.has(key),
+      options: property?.enum || [],
+    }))
+  }
   const fields = call?.field_schema?.fields || call?.input_schema?.fields || {}
   const values = { ...(call?.arguments || {}) }
   return Object.entries(fields).map(([key, description]) => ({

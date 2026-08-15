@@ -245,6 +245,16 @@ class Settings:
         self.assistant_web_fetch_max_bytes: int = int(os.getenv("ASSISTANT_WEB_FETCH_MAX_BYTES", "400000"))
         self.assistant_web_blocked_domains: list[str] = self._parse_csv(os.getenv("ASSISTANT_WEB_BLOCKED_DOMAINS", ""))
         self.assistant_web_allowed_domains: list[str] = self._parse_csv(os.getenv("ASSISTANT_WEB_ALLOWED_DOMAINS", ""))
+        self.assistant_max_parallel_tool_calls: int = max(
+            1,
+            min(3, int(os.getenv("ASSISTANT_MAX_PARALLEL_TOOL_CALLS", "1"))),
+        )
+        self.assistant_runtime_asset_ttl_seconds: int = int(
+            os.getenv("ASSISTANT_RUNTIME_ASSET_TTL_SECONDS", "86400")
+        )
+        self.assistant_prompt_snapshot_ttl_seconds: int = int(
+            os.getenv("ASSISTANT_PROMPT_SNAPSHOT_TTL_SECONDS", "86400")
+        )
         self.report_ollama_base_url: str = os.getenv("REPORT_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
         self.report_ollama_model: str = os.getenv("REPORT_OLLAMA_MODEL", "")
         self.report_codex_bin: str = os.getenv("REPORT_CODEX_BIN", "codex").strip() or "codex"

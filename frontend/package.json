@@ -15,7 +15,12 @@
     "test:data-catalog-analysis": "node src/utils/dataCatalogAnalysis.test.mjs",
     "test:api-error-message": "node src/utils/apiErrorMessage.test.mjs",
     "test:assistant-tool-calls": "node src/utils/assistantToolCalls.test.mjs",
+    "test:assistant-events": "node src/utils/assistantEvents.test.mjs",
+    "test:assistant-context": "node src/utils/assistantContext.test.mjs",
+    "test:assistant-ui": "node src/utils/assistantUi.test.mjs",
     "test:tool-menu-categories": "node src/utils/toolMenuCategories.test.mjs",
+    "test:assistant-tool-menu": "node src/utils/assistantToolMenu.test.mjs",
+    "test:assistant-tool-auto-select": "node src/utils/assistantToolAutoSelect.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

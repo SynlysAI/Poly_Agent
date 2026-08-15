@@ -1,0 +1,266 @@
+{
+  "$defs": {
+    "LLMModelConfigInput": {
+      "additionalProperties": false,
+      "description": "Per-model provider configuration entry.",
+      "properties": {
+        "model_id": {
+          "description": "模型 ID，用于请求 provider 时的 model 参数",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model Id",
+          "type": "string"
+        },
+        "display_name": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "前端展示名称",
+          "title": "Display Name"
+        },
+        "capabilities": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "chat",
+                  "fast",
+                  "reasoning",
+                  "structured_json",
+                  "tool_calling",
+                  "long_context",
+                  "local"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "模型能力集合",
+          "title": "Capabilities"
+        },
+        "recommended_for": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "qa",
+                  "deep",
+                  "report"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "推荐用途路由",
+          "title": "Recommended For"
+        },
+        "context_window": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "上下文窗口 token 上限",
+          "title": "Context Window"
+        },
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "单次输出 token 上限",
+          "title": "Max Output Tokens"
+        },
+        "tool_protocol": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工具调用协议标识",
+          "title": "Tool Protocol"
+        },
+        "supports_parallel_tool_calls": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "是否支持并行工具调用",
+          "title": "Supports Parallel Tool Calls"
+        }
+      },
+      "required": [
+        "model_id"
+      ],
+      "title": "LLMModelConfigInput",
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "Provider config loaded from env JSON.",
+  "properties": {
+    "provider_id": {
+      "description": "唯一 provider ID",
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Provider Id",
+      "type": "string"
+    },
+    "display_name": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "前端展示名称",
+      "title": "Display Name"
+    },
+    "provider_type": {
+      "default": "openai_compatible",
+      "description": "provider 协议类型：openai_compatible / ollama / custom_http",
+      "enum": [
+        "openai_compatible",
+        "ollama",
+        "custom_http"
+      ],
+      "title": "Provider Type",
+      "type": "string"
+    },
+    "base_url": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OpenAI 兼容 API Base URL",
+      "title": "Base Url"
+    },
+    "api_key_env": {
+      "anyOf": [
+        {
+          "maxLength": 120,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "API Key 环境变量名，必须为大写标识",
+      "title": "Api Key Env"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "兼容旧配置的单一模型 ID",
+      "title": "Model"
+    },
+    "models": {
+      "description": "模型 ID 字符串或 per-model 对象配置",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/$defs/LLMModelConfigInput"
+          }
+        ]
+      },
+      "title": "Models",
+      "type": "array"
+    },
+    "capabilities": {
+      "description": "provider 级能力集合；未单独配置的模型继承该集合",
+      "items": {
+        "enum": [
+          "chat",
+          "fast",
+          "reasoning",
+          "structured_json",
+          "tool_calling",
+          "long_context",
+          "local"
+        ],
+        "type": "string"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "recommended_for": {
+      "description": "provider 级推荐用途路由",
+      "items": {
+        "enum": [
+          "qa",
+          "deep",
+          "report"
+        ],
+        "type": "string"
+      },
+      "title": "Recommended For",
+      "type": "array"
+    }
+  },
+  "required": [
+    "provider_id"
+  ],
+  "title": "LLMProviderConfigInput",
+  "type": "object"
+}

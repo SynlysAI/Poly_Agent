@@ -11,6 +11,13 @@ import {
   Tools,
 } from '@element-plus/icons-vue'
 
+import {
+  toolHealthClass,
+  toolHealthLabel,
+  toolRecentSuccessClass,
+  toolRecentSuccessText,
+  toolRequiresFile,
+} from '../utils/assistantToolMenu.mjs'
 import { categorizeTool, groupToolsByCategory } from '../utils/toolMenuCategories.mjs'
 
 const props = defineProps({
@@ -181,6 +188,17 @@ function categoryIcon(name) {
             <span class="tool-menu-item-main">
               <strong>{{ tool.name }}</strong>
               <small>{{ tool.description || tool.algorithm_id }}</small>
+              <span class="tool-menu-item-flags">
+                <span :class="`tool-flag ${toolHealthClass(tool.health_status)}`">
+                  {{ toolHealthLabel(tool.health_status) }}
+                </span>
+                <span v-if="tool.requires_confirmation" class="tool-flag is-confirmation">需确认</span>
+                <span v-if="toolRequiresFile(tool)" class="tool-flag is-file">需文件</span>
+                <span v-if="tool.version" class="tool-flag is-version">v{{ tool.version }}</span>
+                <span :class="`tool-flag ${toolRecentSuccessClass(tool)}`">
+                  {{ toolRecentSuccessText(tool) }}
+                </span>
+              </span>
             </span>
           </button>
           <p v-if="!visibleTools.length" class="tool-menu-empty">{{ activeCategory.emptyText }}</p>
@@ -439,6 +457,64 @@ function categoryIcon(name) {
 .tool-menu-item-main small {
   color: var(--app-ink-muted);
   font-size: 12px;
+}
+
+.tool-menu-item-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.tool-flag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 5px;
+  border-radius: var(--app-radius-pill);
+  background: #f1f5f9;
+  color: var(--app-ink-muted);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.tool-flag.is-healthy,
+.tool-flag.is-success {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.tool-flag.is-unknown,
+.tool-flag.is-muted {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.tool-flag.is-unavailable,
+.tool-flag.is-danger {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.tool-flag.is-warning {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.tool-flag.is-confirmation {
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.tool-flag.is-file {
+  background: #f0fdfa;
+  color: #0f766e;
+}
+
+.tool-flag.is-version {
+  background: #fdf4ff;
+  color: #a21caf;
 }
 
 .tool-menu-empty {

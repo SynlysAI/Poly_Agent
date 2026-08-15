@@ -11,6 +11,7 @@ from app.core.auth import get_current_user
 from app.infra.computation_repositories import utc_now
 from app.infra.research_engine_repositories import (
     AlgorithmRegistryRepository,
+    AlgorithmRunRepository,
     AlgorithmVersionRepository,
 )
 from app.main import app
@@ -119,6 +120,47 @@ class AgentToolsApiTest(ComputationTestCase):
         )
         self.assertEqual(items[0]["version"], "1.0.0")
         self.assertEqual(items[0]["input_schema"]["required"], ["smiles"])
+        demo = next(item for item in items if item["algorithm_id"] == "vertical-demo")
+        self.assertTrue(demo["function_name"].startswith("algorithm_vertical"))
+        self.assertEqual(demo["input_json_schema"]["additionalProperties"], False)
+        self.assertEqual(demo["input_json_schema"]["properties"]["smiles"]["type"], "string")
+        self.assertRegex(demo["schema_digest"], r"^[0-9a-f]{16}$")
+        self.assertIn("fields", demo["presentation"])
+        self.assertIsNone(demo["recent_success_rate"])
+        self.assertEqual(demo["recent_run_count"], 0)
+
+    def test_recent_success_rate_is_derived_from_terminal_algorithm_runs(self) -> None:
+        """工具目录应只统计最近的 completed/failed/cancelled 运行。"""
+        now = utc_now()
+        base = {
+            "algorithm_id": "vertical-demo",
+            "trigger_source": "human_workflow",
+            "input_snapshot": {},
+            "output_summary": {},
+            "artifact_refs": [],
+            "error": None,
+            "created_by": "tester",
+            "created_at": now,
+            "updated_at": now,
+        }
+        for index, status in enumerate(["completed", "failed", "completed", "cancelled", "queued"]):
+            AlgorithmRunRepository.save(
+                "run_id",
+                {
+                    **base,
+                    "run_id": f"ar-recent-{index}",
+                    "status": status,
+                },
+            )
+
+        response = self.client.get(self.base_url)
+        self.assertEqual(response.status_code, 200, response.text)
+        demo = next(
+            item for item in response.json()["data"]["items"]
+            if item["algorithm_id"] == "vertical-demo"
+        )
+        self.assertEqual(demo["recent_run_count"], 4)
+        self.assertAlmostEqual(demo["recent_success_rate"], 0.5)
 
     def test_private_tool_is_visible_to_owner_but_not_other_user(self) -> None:
         app.dependency_overrides[get_current_user] = lambda: {

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html as html_module
-import hashlib
 import ipaddress
 import json
 import re
@@ -20,6 +19,7 @@ from fastapi import HTTPException
 
 from app.core import llm_client
 from app.core.config import settings
+from app.core.llm_context import get_message_metadata
 from app.core.logging import get_logger
 from app.infra.research_engine_repositories import AssistantToolCallRepository
 from app.schemas.assistant import AssistantAction
@@ -31,6 +31,17 @@ from app.schemas.assistant import AssistantReference
 from app.schemas.assistant import AssistantRetrievalStatus
 from app.schemas.agent_tools import AgentTool, AssistantToolCall, AssistantToolCallCreate
 from app.services.agent_tool_service import agent_tool_service
+from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID, classify_provider_error
+from app.services.assistant_context_assembler import (
+    AssistantContextAssembler,
+    ContextAssembly,
+    estimate_native_tool_schema_tokens,
+)
+from app.services.assistant_tool_contract import (
+    build_function_tool,
+    normalize_provider_arguments,
+    safe_function_name,
+)
 from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.integration_status_service import IntegrationStatusService
 from app.services.knowledge_service import KnowledgeService
@@ -1120,12 +1131,14 @@ class AssistantAnswerSynthesizer:
         evidence: SearchOutcome | None,
         llm_route: dict,
         extra_messages: list[dict] | None = None,
+        context_assembly: ContextAssembly | None = None,
     ) -> SynthesizedAnswer:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "system",
-                "content": self._build_context_block(
+                "content": self._render_context(
+                    context_assembly,
                     intent=intent,
                     facts=facts,
                     knowledge=knowledge,
@@ -1171,12 +1184,14 @@ class AssistantAnswerSynthesizer:
         evidence: SearchOutcome | None,
         llm_route: dict,
         extra_messages: list[dict] | None = None,
+        context_assembly: ContextAssembly | None = None,
     ) -> Iterator[str]:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "system",
-                "content": self._build_context_block(
+                "content": self._render_context(
+                    context_assembly,
                     intent=intent,
                     facts=facts,
                     knowledge=knowledge,
@@ -1216,13 +1231,22 @@ class AssistantAnswerSynthesizer:
         knowledge: KnowledgeOutcome | None,
         evidence: SearchOutcome | None,
         extra_messages: list[dict] | None = None,
+        context_assembly: ContextAssembly | None = None,
+        max_parallel_tool_calls: int = 1,
     ) -> list[dict]:
         """构建用于工具提议的模型消息，包含项目事实与工具使用规则。"""
+        parallel_rule = (
+            f"当前产品最多允许提出 {max_parallel_tool_calls} 个最必要的算法调用；"
+            "只有多个独立算法都对当前回答有明确收益时才并行提出。"
+            if max_parallel_tool_calls > 1
+            else "当前产品一次只提出一个最必要的算法调用。"
+        )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "system",
-                "content": self._build_context_block(
+                "content": self._render_context(
+                    context_assembly,
                     intent=intent,
                     facts=facts,
                     knowledge=knowledge,
@@ -1233,7 +1257,7 @@ class AssistantAnswerSynthesizer:
                 "role": "system",
                 "content": (
                     "TOOL_USE_RULES: 只有用户明确请求运行某个已启用算法、或回答需要算法计算/预测结果时，"
-                    "才发起算法工具调用；其余情况直接回答。一次可以提出多个相互独立的算法调用。"
+                    f"才发起算法工具调用；其余情况直接回答。{parallel_rule}"
                     "不要把文件路径、密钥或内部字段放入参数。"
                 ),
             },
@@ -1242,6 +1266,25 @@ class AssistantAnswerSynthesizer:
             messages.extend(extra_messages)
         messages.extend({"role": item.role, "content": item.content} for item in request.messages)
         return messages
+
+    @staticmethod
+    def _render_context(
+        assembly: ContextAssembly | None,
+        *,
+        intent: AssistantIntent,
+        facts: dict,
+        knowledge: KnowledgeOutcome | None,
+        evidence: SearchOutcome | None,
+    ) -> str:
+        """渲染预算化上下文；旧调用路径保留原有上下文格式。"""
+        if assembly is not None:
+            return assembly.rendered
+        return AssistantAnswerSynthesizer._build_context_block(
+            intent=intent,
+            facts=facts,
+            knowledge=knowledge,
+            evidence=evidence,
+        )
 
     def _parse_deep_response(self, raw_content: str) -> SynthesizedAnswer:
         content = str(raw_content or "").strip()
@@ -1321,6 +1364,7 @@ class AssistantService:
         self.knowledge_service = KnowledgeService()
         self.answer_synthesizer = AssistantAnswerSynthesizer()
         self.llm_model_service = LLMModelService()
+        self.context_assembler = AssistantContextAssembler()
 
     # ── 算法工具编排 ──
 
@@ -1333,21 +1377,17 @@ class AssistantService:
 
     @staticmethod
     def _safe_tool_name(tool_id: str) -> str:
-        base = re.sub(r"[^A-Za-z0-9_-]", "_", str(tool_id or ""))
-        if len(base) <= 64:
-            return base
-        digest = hashlib.sha1(str(tool_id or "").encode("utf-8")).hexdigest()[:8]
-        return f"{base[:55]}_{digest}"
+        return safe_function_name(tool_id)
 
     def _build_function_tools(
         self,
         selected_tool_ids: list[str],
         current_user: dict | None,
-    ) -> tuple[list[dict], dict[str, str]]:
+    ) -> tuple[list[dict], dict[str, AgentTool]]:
         """把当前用户可调用的已选算法转为 function schema，并记录安全名到 tool_id 的映射。"""
         user_id, role, is_admin = self._tool_actor_context(current_user)
         tools: list[dict] = []
-        name_map: dict[str, str] = {}
+        name_map: dict[str, AgentTool] = {}
         for tool_id in selected_tool_ids or []:
             if not isinstance(tool_id, str) or not tool_id.startswith("algorithm:"):
                 continue
@@ -1360,78 +1400,236 @@ class AssistantService:
             )
             if tool is None:
                 continue
-            tools.append(self._function_schema(tool))
-            name_map[self._safe_tool_name(tool_id)] = tool_id
+            function_tool = build_function_tool(tool)
+            tools.append(function_tool)
+            name_map[function_tool["function"]["name"]] = tool
         return tools, name_map
 
     @classmethod
     def _function_schema(cls, tool: AgentTool) -> dict:
-        schema = tool.input_schema
-        properties = {
-            field_name: cls._property_schema(field_name, description, schema)
-            for field_name, description in (schema.fields or {}).items()
-        }
-        parameters: dict[str, Any] = {"type": "object", "properties": properties}
-        if schema.required:
-            parameters["required"] = list(schema.required)
-        description_parts = [str(tool.description or tool.name)]
-        if tool.input_assets:
-            keys = ", ".join(spec.key for spec in tool.input_assets)
-            description_parts.append(f"文件输入由用户在界面补充，不要放入参数: {keys}")
+        """保留旧调用入口，统一委托给 Tool Contract Adapter。"""
+        return build_function_tool(tool)
+
+    def _assemble_context(
+        self,
+        *,
+        request_kind: str,
+        request: AssistantChatRequest,
+        intent: AssistantIntent,
+        facts: dict,
+        knowledge: KnowledgeOutcome | None,
+        evidence: SearchOutcome | None,
+        llm_route: dict,
+        selected_tools: list[AgentTool] | None = None,
+        prior_tool_messages: list[dict] | None = None,
+    ) -> ContextAssembly:
+        """构造一次模型请求的预算化上下文。"""
+        safe_route = self._safe_llm_route(llm_route)
+        native_tool_schema_tokens = 0
+        if request_kind == "tool_proposal" and selected_tools:
+            native_tool_schema_tokens = estimate_native_tool_schema_tokens(selected_tools)
+        return self.context_assembler.assemble(
+            request_kind=request_kind,
+            intent_scope=intent.scope,
+            deep=intent.deep,
+            facts=facts,
+            route=safe_route,
+            selected_tools=selected_tools or [],
+            knowledge_evidence=self._knowledge_context_items(knowledge),
+            web_evidence=self._web_context_items(evidence),
+            prior_tool_messages=prior_tool_messages or [],
+            native_tool_schema_tokens=native_tool_schema_tokens,
+            chars_per_token=float(safe_route.get("token_estimate_chars_per_token") or 4),
+            allow_section_truncation=True,
+        )
+
+    def _context_event(
+        self,
+        *,
+        request: AssistantChatRequest,
+        request_kind: str,
+        route: dict,
+        assembly: ContextAssembly,
+        tools: list[AgentTool],
+    ) -> dict:
+        """构造可持久化的 request manifest 事件。"""
+        manifest = self.context_assembler.build_manifest(
+            run_id=request.context.get("run_id"),
+            request_kind=request_kind,
+            route=route,
+            assembly=assembly,
+            tools=tools,
+        )
+        return {"type": "context.assembled", "request_kind": request_kind, "manifest": manifest}
+
+    @staticmethod
+    def _request_header_event(context_event: dict) -> dict:
+        """从 request manifest 构造统一事件流的请求头事件。"""
         return {
-            "type": "function",
-            "function": {
-                "name": cls._safe_tool_name(tool.tool_id),
-                "description": " ".join(description_parts),
-                "parameters": parameters,
-            },
+            "type": "request.header",
+            "request_kind": context_event.get("request_kind"),
+            "manifest": context_event.get("manifest"),
         }
 
     @staticmethod
-    def _property_schema(field_name: str, description: str, schema) -> dict:
-        raw = str(description or "").strip()
-        type_token = raw.split(" -", 1)[0].strip().lower()
-        scalar_types = {
-            "string": "string",
-            "str": "string",
-            "text": "string",
-            "number": "number",
-            "float": "number",
-            "integer": "integer",
-            "int": "integer",
-            "boolean": "boolean",
-            "bool": "boolean",
+    def _context_metadata(assembly: ContextAssembly) -> dict:
+        """提取响应和消息 metadata 所需的上下文摘要。"""
+        return {
+            "digest": assembly.digest,
+            "token_estimate": assembly.token_estimate,
+            "sections": [
+                {
+                    "name": section.name,
+                    "source": section.source,
+                    "digest": section.digest,
+                    "token_estimate": section.token_estimate,
+                    "included": section.included,
+                    "omitted_reason": section.omitted_reason,
+                }
+                for section in assembly.sections
+            ],
         }
-        list_match = re.match(r"^(?:list|array)(?:\[(.*)\])?$", type_token)
-        dict_match = re.match(r"^(?:dict|map)(?:\[(.*)\])?$", type_token)
-        if list_match:
-            inner = (list_match.group(1) or "").strip()
-            # 裸的 list/array 没有元素类型信息，不伪造 items，让模型自由传对象或标量；
-            # 服务端会在 assistant_tool_service 中把单个对象包装成列表。
-            prop: dict[str, Any] = {"type": "array"}
-            if inner:
-                prop["items"] = {"type": scalar_types.get(inner, "string")}
-        elif dict_match:
-            prop = {"type": "object", "additionalProperties": True}
+
+    def _tool_source_context(
+        self,
+        *,
+        request: AssistantChatRequest,
+        llm_route: dict,
+        assembly: ContextAssembly,
+        selected_tool_ids: list[str],
+    ) -> dict:
+        """构造工具调用的可续答来源快照。
+
+        Args:
+            request: 触发工具提案的 assistant 请求。
+            llm_route: 当前解析后的模型路由。
+            assembly: 工具提案请求的上下文装配结果。
+            selected_tool_ids: 用户已选择的算法工具。
+
+        Returns:
+            不包含消息正文与凭据的安全上下文快照。
+        """
+        context = request.context or {}
+        requested_provider_id, requested_model_id = self._requested_model_identifiers(context.get("model"))
+        return {
+            "original_user_message_id": context.get("message_id"),
+            "chat_id": context.get("chat_id"),
+            "selected_tool_ids": list(selected_tool_ids or []),
+            "mode": context.get("mode") or "qa",
+            "model_request": (
+                {"providerId": requested_provider_id, "modelId": requested_model_id}
+                if requested_provider_id or requested_model_id
+                else {}
+            ),
+            "route_snapshot": self._safe_llm_route(llm_route),
+            "context_manifest_digest": assembly.digest,
+        }
+
+    @staticmethod
+    def _truncate_result_summary(summary: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+        """压缩超大工具结果，避免续答请求超出上下文预算。"""
+        if not isinstance(summary, dict) or not summary:
+            return {}
+        serialized = json.dumps(summary, ensure_ascii=False, default=str)
+        if len(serialized) <= max_chars:
+            return summary
+        compact: dict[str, Any] = {}
+        per_value = max(80, max_chars // max(1, len(summary)))
+        for key, value in summary.items():
+            if isinstance(value, str):
+                compact[key] = value[:per_value]
+            elif isinstance(value, (int, float, bool)) or value is None:
+                compact[key] = value
+            elif isinstance(value, list):
+                compact[key] = value[:5]
+            else:
+                compact[key] = str(value)[:200]
+        compact["_truncated"] = True
+        return compact
+
+    @classmethod
+    def _continuation_tool_payload(cls, call: AssistantToolCall) -> dict[str, Any]:
+        """生成续答使用的结构化工具结果，并做字符预算截断。"""
+        max_chars = 12_000
+        if call.phase == "completed":
+            artifact_refs = (call.artifact_refs or [])[:20]
+            payload: dict[str, Any] = {
+                "status": "completed",
+                "run_id": call.run_id,
+                "result_summary": cls._truncate_result_summary(
+                    call.result_summary or {},
+                    max_chars=max_chars // 2,
+                ),
+                "artifact_refs": artifact_refs,
+            }
         else:
-            prop = {"type": scalar_types.get(type_token, "string")}
-        notes: list[str] = []
-        options = (schema.field_options or {}).get(field_name) or []
-        if options:
-            notes.append("可选值: " + ", ".join(str(item) for item in options))
-        constraints = (schema.constraints or {}).get(field_name) or {}
-        if isinstance(constraints, dict):
-            for key, label in (
-                ("minimum", "最小值"),
-                ("maximum", "最大值"),
-                ("min_length", "最小长度"),
-                ("max_length", "最大长度"),
-                ("pattern", "正则"),
-            ):
-                if constraints.get(key) is not None:
-                    notes.append(f"{label}: {constraints[key]}")
-        prop["description"] = "; ".join([raw, *notes]) if notes else raw
-        return prop
+            error = call.error or {}
+            payload = {
+                "status": "failed",
+                "error": error,
+                "result_summary": {},
+                "suggested_next_step": "请根据错误信息调整输入或到算法运行详情页排查后重试。",
+            }
+        serialized = json.dumps(payload, ensure_ascii=False, default=str)
+        if len(serialized) <= max_chars:
+            return payload
+        return {
+            "status": payload["status"],
+            "run_id": payload.get("run_id"),
+            "result_summary": {"_truncated": True, "note": "工具结果过大，请查看算法运行详情"},
+            "artifact_refs": (payload.get("artifact_refs") or [])[:5],
+            "error": payload.get("error") if isinstance(payload.get("error"), dict) else {},
+            "suggested_next_step": payload.get("suggested_next_step"),
+        }
+
+    @staticmethod
+    def _knowledge_context_items(outcome: KnowledgeOutcome | None) -> list[dict]:
+        """把知识库检索结果转换为 assembler provider 输入。"""
+        if not outcome:
+            return []
+        return [
+            {
+                "title": item.title,
+                "source_id": item.source_id,
+                "snippet": item.snippet,
+                "score": item.score,
+            }
+            for item in outcome.results
+        ]
+
+    @staticmethod
+    def _web_context_items(outcome: SearchOutcome | None) -> list[dict]:
+        """把网页检索结果转换为 assembler provider 输入。"""
+        if not outcome:
+            return []
+        return [
+            {
+                "title": item.title,
+                "url": item.url,
+                "snippet": item.snippet,
+                "content": item.content,
+            }
+            for item in outcome.results
+        ]
+
+    def _resolve_selected_tools(
+        self,
+        selected_tool_ids: list[str],
+        current_user: dict | None,
+    ) -> list[AgentTool]:
+        """解析当前用户可见的已选算法工具目录。"""
+        _function_tools, name_map = self._build_function_tools(selected_tool_ids, current_user)
+        return list(name_map.values())
+
+    @staticmethod
+    def _max_parallel_tool_calls(
+        llm_route: dict,
+        selected_tools: list[AgentTool],
+    ) -> int:
+        """计算当前请求允许的最大并行工具调用数。"""
+        if not selected_tools or not llm_route.get("supports_parallel_tool_calls"):
+            return 1
+        return max(1, min(int(settings.assistant_max_parallel_tool_calls), 3))
 
     def _propose_tool_calls(
         self,
@@ -1443,22 +1641,57 @@ class AssistantService:
         evidence: SearchOutcome | None,
         llm_route: dict,
         current_user: dict | None,
-    ) -> tuple[list[dict], list[AssistantToolCall], str | None, list[dict]]:
+    ) -> tuple[list[dict], list[AssistantToolCall], str | None, list[dict], dict | None]:
         """让模型基于 function schema 提出算法调用。
 
         Returns:
-            (事件列表, pending 调用, 无工具调用时的直接回答, 已构建的 function schema)
+            (事件列表, pending 调用, 无工具调用时的直接回答, 已构建的 function schema, context 事件)
         """
         selected_tool_ids = request.context.get("selected_tool_ids") or []
         tools, name_map = self._build_function_tools(selected_tool_ids, current_user)
         if not tools:
-            return [], [], None, []
+            return [], [], None, [], None
+        selected_tools = list(name_map.values())
+        max_parallel_tool_calls = self._max_parallel_tool_calls(llm_route, selected_tools)
+        assembly = self._assemble_context(
+            request_kind="tool_proposal",
+            request=request,
+            intent=intent,
+            facts=facts,
+            knowledge=knowledge,
+            evidence=evidence,
+            llm_route=llm_route,
+            selected_tools=selected_tools,
+        )
+        tool_source_context = self._tool_source_context(
+            request=request,
+            llm_route=llm_route,
+            assembly=assembly,
+            selected_tool_ids=selected_tool_ids,
+        )
+        context_event = self._context_event(
+            request=request,
+            request_kind="tool_proposal",
+            route=llm_route,
+            assembly=assembly,
+            tools=selected_tools,
+        )
+        facts["context"] = self._context_metadata(assembly)
+        if "tool_calling" not in (llm_route.get("capabilities") or []):
+            logger.warning(
+                "assistant tool calling skipped: model lacks tool_calling capability provider=%s model=%s",
+                llm_route.get("provider_id"),
+                llm_route.get("model_id"),
+            )
+            return [], [], None, tools, context_event
         messages = self.answer_synthesizer.tool_call_messages(
             request=request,
             intent=intent,
             facts=facts,
             knowledge=knowledge,
             evidence=evidence,
+            context_assembly=assembly,
+            max_parallel_tool_calls=max_parallel_tool_calls,
         )
         try:
             message = llm_client.chat_message(
@@ -1471,67 +1704,127 @@ class AssistantService:
                 tool_choice="auto",
             )
         except Exception as exc:
-            logger.warning("assistant tool calling unsupported, fallback to QA: %s", exc)
-            return [], [], None, tools
+            provider_error = classify_provider_error(exc)
+            logger.warning(
+                "assistant tool calling provider error (%s), stop tool proposal: %s",
+                provider_error["code"],
+                exc,
+            )
+            return [], [], f"算法工具调用失败：{provider_error['message']}", tools, context_event
 
         tool_calls = getattr(message, "tool_calls", None) or []
+        message_metadata = get_message_metadata() or {}
         if not tool_calls:
-            return [], [], getattr(message, "content", "") or "", tools
+            self.llm_model_service.emit_tool_proposal_usage(
+                call_id="",
+                route=llm_route,
+                usage=message_metadata.get("usage"),
+                finish_reason=message_metadata.get("finish_reason"),
+                request_id=message_metadata.get("request_id"),
+            )
+            return [], [], getattr(message, "content", "") or "", tools, context_event
 
         events: list[dict] = []
         pending: list[AssistantToolCall] = []
         proposal_error: str | None = None
-        # A single user prompt may submit at most one vertical algorithm call.
-        for call in tool_calls[:1]:
+        usage_emitted_for_call = False
+        call_budget = max_parallel_tool_calls if max_parallel_tool_calls > 1 else 1
+        for call in tool_calls[:call_budget]:
             function = getattr(call, "function", None)
             if function is None:
                 continue
             function_name = str(getattr(function, "name", "") or "")
-            tool_id = name_map.get(function_name)
-            if not tool_id:
+            tool = name_map.get(function_name)
+            if tool is None:
                 logger.warning("assistant tool proposal references unknown function: %s", function_name)
                 continue
-            raw_arguments = str(getattr(function, "arguments", None) or "{}")
-            try:
-                arguments = json.loads(raw_arguments)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                arguments = {}
-            if not isinstance(arguments, dict):
-                arguments = {}
+            provider_arguments = normalize_provider_arguments(getattr(function, "arguments", None))
+            proposal_usage = message_metadata.get("usage")
             try:
                 created = assistant_tool_call_service.create(
                     AssistantToolCallCreate(
-                        tool_id=tool_id,
+                        tool_id=tool.tool_id,
                         provider_tool_call_id=getattr(call, "id", None),
+                        provider_tool_call_index=getattr(call, "index", 0),
                         chat_id=request.context.get("chat_id"),
                         message_id=request.context.get("message_id"),
-                        arguments=arguments,
-                        selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool_id}",
+                        assistant_run_id=request.context.get("run_id"),
+                        arguments=provider_arguments.arguments,
+                        function_name=function_name,
+                        raw_arguments=provider_arguments.raw_arguments,
+                        arguments_parse_error=provider_arguments.parse_error,
+                        finish_reason=message_metadata.get("finish_reason"),
+                        proposal_route=self._safe_llm_route(llm_route),
+                        proposal_usage=proposal_usage,
+                        schema_digest=tool.schema_digest,
+                        selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool.tool_id}",
                         selection_confidence=0.5,
+                        source_context=tool_source_context,
                     ),
                     current_user,
                 )
+                self.llm_model_service.emit_tool_proposal_usage(
+                    call_id=created.call_id,
+                    route=llm_route,
+                    usage=proposal_usage,
+                    finish_reason=message_metadata.get("finish_reason"),
+                    request_id=message_metadata.get("request_id"),
+                )
+                usage_emitted_for_call = True
                 pending.append(created)
                 events.extend(AssistantToolCallRepository.list_events(created.call_id))
             except HTTPException as exc:
+                self._rollback_tool_proposal(pending, current_user)
+                pending = []
                 detail = exc.detail
                 if isinstance(detail, dict):
                     code = str(detail.get("code") or "")
-                    if code == "TOOL_INPUT_INVALID":
+                    if code == TOOL_ARGUMENTS_INVALID:
                         details = detail.get("details") or {}
-                        rendered = "；".join(f"{key}: {value}" for key, value in details.items()) or "参数校验失败"
+                        rendered = (
+                            "；".join(f"{key}: {value}" for key, value in details.items())
+                            or str(detail.get("message") or "参数校验失败")
+                        )
                         proposal_error = f"未能生成算法调用卡片：{rendered}。请重新描述参数后发送，或到算法页面直接填写参数运行。"
                     else:
                         proposal_error = f"未能生成算法调用卡片：{detail.get('message') or exc.detail}"
                 else:
                     proposal_error = f"未能生成算法调用卡片：{exc.detail}"
-                logger.warning("assistant tool proposal rejected %s: %s", tool_id, exc)
+                logger.warning("assistant tool proposal rejected %s: %s", tool.tool_id, exc)
+                break
             except Exception as exc:
+                self._rollback_tool_proposal(pending, current_user)
+                pending = []
                 proposal_error = "生成算法调用卡片时发生异常，请稍后重试。"
-                logger.warning("assistant tool proposal skipped call %s: %s", tool_id, exc)
+                logger.warning("assistant tool proposal skipped call %s: %s", tool.tool_id, exc)
+                break
+        if not usage_emitted_for_call:
+            self.llm_model_service.emit_tool_proposal_usage(
+                call_id="",
+                route=llm_route,
+                usage=message_metadata.get("usage"),
+                finish_reason=message_metadata.get("finish_reason"),
+                request_id=message_metadata.get("request_id"),
+            )
         if proposal_error:
-            return [], [], proposal_error, tools
-        return events, pending, None, tools
+            return [], [], proposal_error, tools, context_event
+        return events, pending, None, tools, context_event
+
+    @staticmethod
+    def _rollback_tool_proposal(
+        pending: list[AssistantToolCall],
+        current_user: dict | None,
+    ) -> None:
+        """并行工具提案失败时，取消同一批次已创建但未执行的调用。"""
+        for created in pending:
+            try:
+                assistant_tool_call_service.cancel(created.call_id, current_user)
+            except Exception as exc:
+                logger.warning(
+                    "assistant tool proposal rollback failed call_id=%s: %s",
+                    created.call_id,
+                    exc,
+                )
 
     def _continuation_messages(
         self,
@@ -1567,7 +1860,7 @@ class AssistantService:
                         "id": call.provider_tool_call_id or call.call_id,
                         "type": "function",
                         "function": {
-                            "name": self._safe_tool_name(call.tool_id),
+                            "name": call.function_name or self._safe_tool_name(call.tool_id),
                             "arguments": json.dumps(call.arguments, ensure_ascii=False),
                         },
                     }
@@ -1577,15 +1870,7 @@ class AssistantService:
         ]
         for call in continuation_calls:
             provider_tool_call_id = call.provider_tool_call_id or call.call_id
-            if call.phase == "completed":
-                payload = {
-                    "status": "completed",
-                    "run_id": call.run_id,
-                    "result_summary": call.result_summary,
-                    "artifact_refs": call.artifact_refs,
-                }
-            else:
-                payload = {"status": "failed", "error": call.error or {}, "result_summary": {}}
+            payload = self._continuation_tool_payload(call)
             messages.append(
                 {
                     "role": "tool",
@@ -1650,10 +1935,21 @@ class AssistantService:
         continuation_ids = request.context.get("tool_call_ids") or []
         selected_ids = request.context.get("selected_tool_ids") or []
         extra_messages: list[dict] = []
+        final_assembly: ContextAssembly | None = None
         if continuation_ids:
             _tool_events, extra_messages = self._continuation_messages(continuation_ids, current_user)
+            final_assembly = self._assemble_context(
+                request_kind="final_answer",
+                request=request,
+                intent=intent,
+                facts=response_facts,
+                knowledge=knowledge_outcome,
+                evidence=web_outcome,
+                llm_route=llm_route,
+                prior_tool_messages=extra_messages,
+            )
         elif selected_ids:
-            _events, calls, direct_content, _tools = self._propose_tool_calls(
+            _events, calls, direct_content, _tools, _context_event = self._propose_tool_calls(
                 request=request,
                 intent=intent,
                 facts=response_facts,
@@ -1689,6 +1985,19 @@ class AssistantService:
                     retrieval_status=retrieval_status,
                 )
 
+        if final_assembly is None:
+            final_assembly = self._assemble_context(
+                request_kind="final_answer",
+                request=request,
+                intent=intent,
+                facts=response_facts,
+                knowledge=knowledge_outcome,
+                evidence=web_outcome,
+                llm_route=llm_route,
+                selected_tools=self._resolve_selected_tools(selected_ids, current_user),
+            )
+        response_facts["context"] = self._context_metadata(final_assembly)
+
         try:
             synthesized = self.answer_synthesizer.synthesize(
                 request=request,
@@ -1698,6 +2007,7 @@ class AssistantService:
                 evidence=web_outcome,
                 llm_route=llm_route,
                 extra_messages=extra_messages,
+                context_assembly=final_assembly,
             )
             content = synthesized.content
             reasoning_summary = synthesized.reasoning_summary
@@ -1746,6 +2056,7 @@ class AssistantService:
                 llm_route.get("provider_id"),
                 llm_route.get("model_id"),
             )
+            yield {"type": "route.resolved", "route": self._safe_llm_route(llm_route)}
 
             if mode == "model":
                 response_facts = self._build_response_facts(
@@ -1814,13 +2125,52 @@ class AssistantService:
             continuation_ids = request.context.get("tool_call_ids") or []
             selected_ids = request.context.get("selected_tool_ids") or []
             extra_messages: list[dict] = []
+            final_assembly: ContextAssembly | None = None
             if continuation_ids:
                 tool_events, extra_messages = self._continuation_messages(continuation_ids, current_user)
                 for event in tool_events:
                     yield event
+                final_assembly = self._assemble_context(
+                    request_kind="final_answer",
+                    request=request,
+                    intent=intent,
+                    facts=response_facts,
+                    knowledge=knowledge_outcome,
+                    evidence=web_outcome,
+                    llm_route=llm_route,
+                    prior_tool_messages=extra_messages,
+                )
+                response_facts["context"] = self._context_metadata(final_assembly)
+                context_event = self._context_event(
+                    request=request,
+                    request_kind="final_answer",
+                    route=llm_route,
+                    assembly=final_assembly,
+                    tools=[],
+                )
+                yield self._request_header_event(context_event)
+                yield context_event
             elif selected_ids:
                 yield {"type": "status", "stage": "tools", "message": "正在分析算法工具调用..."}
-                tool_events, calls, direct_content, built_tools = self._propose_tool_calls(
+                selected_tools = self._resolve_selected_tools(selected_ids, current_user)
+                if selected_tools:
+                    yield {
+                        "type": "tool.catalog.resolved",
+                        "tools": [{"tool_id": tool.tool_id} for tool in selected_tools],
+                    }
+                    yield {
+                        "type": "tool.schema.rendered",
+                        "tools": [
+                            {
+                                "tool_id": tool.tool_id,
+                                "function_name": tool.function_name,
+                                "version": tool.version,
+                                "schema_digest": tool.schema_digest,
+                            }
+                            for tool in selected_tools
+                        ],
+                    }
+                tool_events, calls, direct_content, built_tools, context_event = self._propose_tool_calls(
                     request=request,
                     intent=intent,
                     facts=response_facts,
@@ -1829,6 +2179,9 @@ class AssistantService:
                     llm_route=llm_route,
                     current_user=current_user,
                 )
+                if context_event:
+                    yield self._request_header_event(context_event)
+                    yield context_event
                 if calls:
                     for event in tool_events:
                         yield event
@@ -1878,6 +2231,28 @@ class AssistantService:
                 knowledge_outcome=knowledge_outcome,
                 web_outcome=web_outcome,
             )
+            if final_assembly is None:
+                selected_tools = self._resolve_selected_tools(selected_ids, current_user)
+                final_assembly = self._assemble_context(
+                    request_kind="final_answer",
+                    request=request,
+                    intent=intent,
+                    facts=response_facts,
+                    knowledge=knowledge_outcome,
+                    evidence=web_outcome,
+                    llm_route=llm_route,
+                    selected_tools=selected_tools,
+                )
+                response_facts["context"] = self._context_metadata(final_assembly)
+                context_event = self._context_event(
+                    request=request,
+                    request_kind="final_answer",
+                    route=llm_route,
+                    assembly=final_assembly,
+                    tools=selected_tools,
+                )
+                yield self._request_header_event(context_event)
+                yield context_event
             if intent.deep:
                 for item in reasoning_summary:
                     yield {"type": "reasoning_summary_delta", "item": item}
@@ -1892,6 +2267,7 @@ class AssistantService:
                 evidence=web_outcome,
                 llm_route=llm_route,
                 extra_messages=extra_messages,
+                context_assembly=final_assembly,
             ):
                 if not chunk:
                     continue
@@ -2034,8 +2410,14 @@ class AssistantService:
         requested_provider_id, requested_model_id = self._requested_model_identifiers(requested_model)
         if (requested_provider_id or requested_model_id) and not (requested_provider_id and requested_model_id):
             raise ValueError("所选 LLM 模型不可用：providerId 和 modelId 必须同时提供")
+        requires_tool_calling = bool((request.context or {}).get("selected_tool_ids"))
         try:
-            return self.llm_model_service.resolve_route(
+            resolve_method = (
+                self.llm_model_service.resolve_tool_capable_route
+                if requires_tool_calling
+                else self.llm_model_service.resolve_route
+            )
+            return resolve_method(
                 purpose=purpose,
                 requested_model=requested_model,
             )
@@ -2064,11 +2446,21 @@ class AssistantService:
         return provider_id, model_id
 
     def _safe_llm_route(self, route: dict) -> dict:
+        """Build a serializable route snapshot without provider credentials."""
         return {
             "purpose": route.get("purpose"),
+            "route_reason": route.get("route_reason"),
+            "requested_provider_id": route.get("requested_provider_id"),
+            "requested_model_id": route.get("requested_model_id"),
             "provider_id": route.get("provider_id"),
+            "provider_type": route.get("provider_type"),
             "model_id": route.get("model_id"),
             "capabilities": list(route.get("capabilities") or []),
+            "capability_source": route.get("capability_source"),
+            "tool_protocol": route.get("tool_protocol"),
+            "supports_parallel_tool_calls": route.get("supports_parallel_tool_calls"),
+            "context_window": route.get("context_window"),
+            "max_output_tokens": route.get("max_output_tokens"),
             "reasoning_model_available": bool(route.get("reasoning_model_available")),
         }
 

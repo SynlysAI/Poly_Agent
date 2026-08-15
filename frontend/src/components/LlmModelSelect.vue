@@ -1,6 +1,8 @@
 <script setup>
 import { computed } from 'vue'
 
+import { formatContextWindow, toolProtocolLabel } from '../utils/assistantUi.mjs'
+
 const props = defineProps({
   modelValue: { type: String, default: '' },
   models: { type: Array, default: () => [] },
@@ -26,8 +28,23 @@ function capabilityLabels(item) {
   if (capabilities.includes('reasoning')) labels.push('推理')
   if (capabilities.includes('long_context')) labels.push('长上下文')
   if (capabilities.includes('structured_json')) labels.push('JSON')
+  if (capabilities.includes('tool_calling')) labels.push('工具调用')
   if (capabilities.includes('local')) labels.push('本地')
   return labels.length ? labels.slice(0, 4) : ['模型']
+}
+
+function providerLabel(item) {
+  const providerName = item?.providerName || ''
+  const capabilitySource = item?.capabilitySource
+  if (!providerName) return ''
+  return capabilitySource === 'inferred' ? `${providerName} · 能力推断` : providerName
+}
+
+function modelDetailSuffix(item) {
+  return [
+    formatContextWindow(item?.contextWindow),
+    toolProtocolLabel(item?.toolProtocol),
+  ].filter(Boolean).join(' · ')
 }
 
 function selectedLabel(item) {
@@ -57,12 +74,18 @@ function selectedLabel(item) {
           <div class="llm-model-option-title">
             <strong>{{ item.label }}</strong>
           </div>
+          <div v-if="providerLabel(item)" class="llm-model-option-provider">
+            {{ providerLabel(item) }}
+          </div>
+          <div v-if="modelDetailSuffix(item)" class="llm-model-option-detail">
+            {{ modelDetailSuffix(item) }}
+          </div>
         </div>
         <div class="llm-model-option-tags">
           <span
             v-for="tag in capabilityLabels(item)"
             :key="`${item.key}-${tag}`"
-            :class="{ primary: tag === '推理', fast: tag === '快速' }"
+            :class="{ primary: tag === '推理', fast: tag === '快速', tools: tag === '工具调用' }"
           >
             {{ tag }}
           </span>
@@ -138,6 +161,24 @@ function selectedLabel(item) {
   white-space: nowrap;
 }
 
+.llm-model-option-provider {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-ink-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.llm-model-option-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-ink-subtle);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .llm-model-option-title strong {
   color: var(--app-ink);
   font-size: 13px;
@@ -171,6 +212,12 @@ function selectedLabel(item) {
   border-color: #bfdbfe;
   color: #1d4ed8;
   background: #eff6ff;
+}
+
+.llm-model-option-tags span.tools {
+  border-color: #ddd6fe;
+  color: #6d28d9;
+  background: #f5f3ff;
 }
 
 @media (max-width: 640px) {

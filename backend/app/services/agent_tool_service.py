@@ -12,6 +12,7 @@ from app.infra.computation_repositories import AuditEventRepository
 from app.infra.research_engine_repositories import (
     AgentToolPolicyRepository,
     AlgorithmRegistryRepository,
+    AlgorithmRunRepository,
     AlgorithmVersionRepository,
 )
 from app.schemas.agent_tools import (
@@ -25,6 +26,11 @@ from app.schemas.agent_tools import (
     AgentToolSyncData,
 )
 from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmIOSchema
+from app.services.assistant_tool_contract import (
+    build_json_schema,
+    safe_function_name,
+    schema_digest,
+)
 
 
 UNAVAILABLE_DEPLOYMENT_STATUSES = {
@@ -36,6 +42,7 @@ UNAVAILABLE_DEPLOYMENT_STATUSES = {
     "frozen",
     "disabled",
 }
+RECENT_RUN_SAMPLE_SIZE = 20
 
 
 class AgentToolService:
@@ -96,6 +103,30 @@ class AgentToolService:
             return "healthy", None, {"status": normalized, "backend": deployment.get("backend")}
         return "unknown", None, {"status": normalized, "backend": deployment.get("backend")}
 
+    @staticmethod
+    def _recent_success_metrics(algorithm_id: str) -> tuple[float | None, int]:
+        """统计算法最近的 terminal run 成功率。
+
+        Args:
+            algorithm_id: 算法 ID。
+
+        Returns:
+            (成功率, 样本数) 元组；没有 terminal run 时成功率为 None。
+        """
+        runs, _ = AlgorithmRunRepository.list_runs(
+            algorithm_id=algorithm_id,
+            page=1,
+            page_size=RECENT_RUN_SAMPLE_SIZE,
+        )
+        terminal_runs = [
+            item for item in runs
+            if item.get("status") in {"completed", "failed", "cancelled"}
+        ]
+        if not terminal_runs:
+            return None, 0
+        success_count = len([item for item in terminal_runs if item.get("status") == "completed"])
+        return success_count / len(terminal_runs), len(terminal_runs)
+
     @classmethod
     def _derive_registry_item(cls, registry: dict[str, Any]) -> AgentToolRegistryItem:
         algorithm_id = str(registry.get("algorithm_id") or "")
@@ -129,7 +160,7 @@ class AgentToolService:
 
         schema_source = version or registry
         owner = registry.get("owner") or (version or {}).get("created_by")
-        return AgentToolRegistryItem(
+        tool = AgentToolRegistryItem(
             tool_id=f"algorithm:{algorithm_id}",
             algorithm_id=algorithm_id,
             name=str(registry.get("name") or algorithm_id),
@@ -158,6 +189,33 @@ class AgentToolService:
             status=str(registry.get("status") or "unknown"),
             deployment_status=registry.get("deployment_status"),
             runtime_health=runtime_health,
+        )
+        presentation = {
+            "layout": "schema-form",
+            "fields": dict(tool.input_schema.ui_hints or {}),
+            "assets": [
+                {
+                    "key": item.key,
+                    "label": item.label,
+                    "required": item.required,
+                    "data_kind": item.data_kind,
+                    "mime_types": list(item.mime_types),
+                    "extensions": list(item.extensions),
+                    "description": item.description,
+                }
+                for item in tool.input_assets
+            ],
+        }
+        recent_success_rate, recent_run_count = cls._recent_success_metrics(algorithm_id)
+        return tool.model_copy(
+            update={
+                "function_name": safe_function_name(tool.tool_id),
+                "input_json_schema": build_json_schema(tool),
+                "schema_digest": schema_digest(tool),
+                "presentation": presentation,
+                "recent_success_rate": recent_success_rate,
+                "recent_run_count": recent_run_count,
+            }
         )
 
     @classmethod

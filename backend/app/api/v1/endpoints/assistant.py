@@ -33,6 +33,7 @@ from app.services.assistant_service import chat_assistant
 from app.services.assistant_service import stream_chat_assistant
 from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.assistant_chat_service import assistant_chat_service
+from app.services.assistant_quality_service import build_quality_metrics
 from app.services.assistant_run_service import assistant_run_service
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -213,6 +214,19 @@ def assistant_run_metrics(
         created_by=created_by, provider_id=provider_id, model_id=model_id, status=status,
     )
     return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/quality-metrics/summary", response_model=ApiResponse[dict], dependencies=[Depends(require_admin)])
+def assistant_quality_metrics(
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+) -> ApiResponse[dict]:
+    """聚合 LUI 路由、工具提案、执行与续答质量指标。"""
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=build_quality_metrics(since=since, until=until, use_cache=True),
+    )
 
 
 @router.post("/chat", response_model=ApiResponse[AssistantChatResponse])

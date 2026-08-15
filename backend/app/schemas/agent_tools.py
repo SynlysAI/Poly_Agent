@@ -23,6 +23,14 @@ AssistantToolCallPhase = Literal[
     "failed",
     "canceled",
 ]
+AssistantToolContinuationState = Literal[
+    "pending",
+    "scheduled",
+    "completed",
+    "failed",
+    "dead_letter",
+    "skipped",
+]
 
 
 class AgentToolPolicy(BaseModel):
@@ -90,6 +98,10 @@ class AgentTool(BaseModel):
     version: str | None = None
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    function_name: str = ""
+    input_json_schema: dict[str, Any] = Field(default_factory=dict)
+    schema_digest: str = ""
+    presentation: dict[str, Any] = Field(default_factory=dict)
     input_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
     output_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
     developer_attribution: AttributionItem | None = None
@@ -100,6 +112,8 @@ class AgentTool(BaseModel):
     phase: AgentToolPhase
     health_status: AgentToolHealthStatus
     unavailable_reason: str | None = None
+    recent_success_rate: float | None = Field(default=None, ge=0, le=1)
+    recent_run_count: int = Field(default=0, ge=0)
 
 
 class AgentToolRegistryItem(AgentTool):
@@ -116,6 +130,26 @@ class AgentToolListData(BaseModel):
 
     items: list[AgentTool]
     total: int
+
+
+class AssistantRuntimeAsset(BaseModel):
+    """受管 LUI 运行时附件元数据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    call_id: str
+    chat_id: str | None = None
+    created_by: str | None = None
+    asset_key: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    path: str
+    status: Literal["active", "released", "expired"] = "active"
+    expires_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class AgentToolRegistryData(BaseModel):
@@ -144,10 +178,20 @@ class AssistantToolCallCreate(BaseModel):
     provider_tool_call_id: str | None = Field(default=None, max_length=255)
     chat_id: str | None = Field(default=None, max_length=120)
     message_id: str | None = Field(default=None, max_length=120)
+    assistant_run_id: str | None = Field(default=None, max_length=120)
     arguments: dict[str, Any] = Field(default_factory=dict)
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
+    function_name: str | None = Field(default=None, max_length=64)
+    provider_tool_call_index: int | None = Field(default=None, ge=0)
+    raw_arguments: str | None = Field(default=None, max_length=100000)
+    arguments_parse_error: str | None = Field(default=None, max_length=2000)
+    finish_reason: str | None = Field(default=None, max_length=64)
+    proposal_route: dict[str, Any] | None = None
+    proposal_usage: dict[str, Any] | None = None
+    schema_digest: str | None = Field(default=None, min_length=16, max_length=16)
     selection_reason: str | None = Field(default=None, max_length=500)
     selection_confidence: float | None = Field(default=None, ge=0, le=1)
+    source_context: dict[str, Any] | None = None
 
 
 class AssistantToolCallInputUpdate(BaseModel):
@@ -182,6 +226,14 @@ class AssistantToolCallEvent(BaseModel):
     tool_name: str
     phase: AssistantToolCallPhase
     arguments: dict[str, Any] = Field(default_factory=dict)
+    function_name: str | None = None
+    provider_tool_call_index: int | None = None
+    raw_arguments: str | None = None
+    arguments_parse_error: str | None = None
+    finish_reason: str | None = None
+    proposal_route: dict[str, Any] | None = None
+    proposal_usage: dict[str, Any] | None = None
+    schema_digest: str | None = None
     result_summary: dict[str, Any] = Field(default_factory=dict)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     error: dict[str, Any] | None = None
@@ -197,6 +249,8 @@ class AssistantToolInputRequiredEvent(BaseModel):
     call_id: str
     missing_fields: list[str] = Field(default_factory=list)
     field_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    input_json_schema: dict[str, Any] = Field(default_factory=dict)
+    presentation: dict[str, Any] = Field(default_factory=dict)
     required_assets: list[AlgorithmAssetSpec] = Field(default_factory=list)
     created_at: datetime
 
@@ -211,6 +265,7 @@ class AssistantToolCall(BaseModel):
     call_id: str
     provider_tool_call_id: str | None = None
     chat_id: str | None = None
+    assistant_run_id: str | None = None
     message_id: str | None = None
     tool_id: str
     algorithm_id: str
@@ -219,9 +274,19 @@ class AssistantToolCall(BaseModel):
     tool_name: str
     phase: AssistantToolCallPhase
     field_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    input_json_schema: dict[str, Any] = Field(default_factory=dict)
+    presentation: dict[str, Any] = Field(default_factory=dict)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     attributions: list[AttributionItem] = Field(default_factory=list)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    function_name: str | None = None
+    provider_tool_call_index: int | None = None
+    raw_arguments: str | None = None
+    arguments_parse_error: str | None = None
+    finish_reason: str | None = None
+    proposal_route: dict[str, Any] | None = None
+    proposal_usage: dict[str, Any] | None = None
+    schema_digest: str | None = None
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
     uploaded_assets: list[dict[str, Any]] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
@@ -232,6 +297,12 @@ class AssistantToolCall(BaseModel):
     selection_confidence: float | None = None
     task_route: dict[str, Any] | None = None
     source_context: dict[str, Any] | None = None
+    continuation_state: AssistantToolContinuationState | None = None
+    continuation_run_id: str | None = None
+    continuation_error: dict[str, Any] | None = None
+    continuation_attempts: int = Field(default=0, ge=0)
+    continuation_next_retry_at: datetime | None = None
+    continuation_dead_letter_reason: str | None = None
     run_status: str | None = None
     result_summary: dict[str, Any] = Field(default_factory=dict)
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)

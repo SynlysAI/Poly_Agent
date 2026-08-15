@@ -392,6 +392,12 @@ class AssistantApiTest(ComputationTestCase):
         self.assertTrue(any(ref["type"] == "web" for ref in final["references"]))
 
     def test_assistant_stream_can_force_web_search_for_project_questions(self) -> None:
+        captured_messages: list[dict] = []
+
+        def fake_stream(messages, **_kwargs):  # noqa: ANN001, ANN003
+            captured_messages.extend(messages)
+            return iter(["联网项目回答"])
+
         def fake_search(_service, query: str, *, deep: bool):  # noqa: ANN001
             from app.services.assistant_service import SearchOutcome
             from app.services.assistant_service import WebEvidence
@@ -415,7 +421,7 @@ class AssistantApiTest(ComputationTestCase):
 
         with patch("app.services.assistant_service.AssistantWebSearchService.search", new=fake_search), patch(
             "app.core.llm_client.chat_stream",
-            return_value=iter(["联网项目回答"]),
+            side_effect=fake_stream,
             create=True,
         ):
             events = self._assistant_stream_events(
@@ -434,6 +440,19 @@ class AssistantApiTest(ComputationTestCase):
         self.assertEqual(final["answer_scope"], "hybrid")
         self.assertEqual(final["retrieval_status"], "searched")
         self.assertEqual(final["grounding_facts"]["request_context"]["use_web_search"], True)
+        context_event = next(event for event in events if event.get("type") == "context.assembled")
+        self.assertEqual(context_event["manifest"]["request_kind"], "final_answer")
+        self.assertEqual(
+            context_event["manifest"]["context"]["digest"],
+            final["grounding_facts"]["context"]["digest"],
+        )
+        context_block = next(
+            item["content"]
+            for item in captured_messages
+            if item.get("role") == "system" and "PROJECT_FACTS:" in item.get("content", "")
+        )
+        self.assertIn("WEB_EVIDENCE:", context_block)
+        self.assertIn("CONVERSATION_POLICY:", context_block)
 
     def test_assistant_stream_returns_error_event_when_llm_stream_fails(self) -> None:
         def failing_stream(*_args, **_kwargs):  # noqa: ANN002, ANN003

@@ -31,24 +31,16 @@ from app.schemas.agent_tools import (
 )
 from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmRunCreate
 from app.services.agent_tool_service import agent_tool_service
+from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID
+from app.services.assistant_runtime_asset_service import assistant_runtime_asset_service
+from app.services.assistant_tool_contract import SENSITIVE_KEYS, missing_inputs, validate_arguments
 from app.services.research_engine_service import ResearchEngineService
 
 
 CALLABLE_PHASES = {"requested", "awaiting_input", "awaiting_confirmation"}
 TERMINAL_PHASES = {"completed", "failed", "canceled"}
-SENSITIVE_KEYS = {
-    "access-key",
-    "api_key",
-    "api-key",
-    "access_key",
-    "authorization",
-    "credential",
-    "password",
-    "secret",
-    "secret-key",
-    "secret_key",
-    "token",
-}
+CONTINUATION_TERMINAL_PHASES = {"completed", "failed"}
+CONTINUATION_EVENT_TYPE = "tool.continuation.scheduled"
 
 
 def _actor_context(current_user: dict[str, str] | None) -> tuple[str, str, bool]:
@@ -86,69 +78,32 @@ class AssistantToolCallService:
 
     @staticmethod
     def _validate_arguments(tool: AgentTool, arguments: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
-        schema = tool.input_schema
-        fields = schema.fields or {}
-        sensitive = sorted(set(arguments) & SENSITIVE_KEYS)
-        if sensitive:
+        missing, errors = validate_arguments(tool, arguments)
+        sensitive_error = errors.pop("__sensitive__", None)
+        if sensitive_error:
             raise HTTPException(
                 status_code=422,
-                detail=f"对话参数不能包含凭据字段: {', '.join(sensitive)}",
+                detail={
+                    "code": TOOL_ARGUMENTS_INVALID,
+                    "message": sensitive_error,
+                    "details": {},
+                },
             )
-        unknown = sorted(set(arguments) - set(fields))
-        if unknown:
-            raise HTTPException(status_code=422, detail=f"参数不在算法契约中: {', '.join(unknown)}")
-        missing = [
-            field
-            for field in schema.required
-            if field not in arguments or arguments[field] is None or arguments[field] == ""
-        ]
-        errors: dict[str, str] = {}
-        for field, value in arguments.items():
-            description = str(fields.get(field, "")).lower()
-            type_name = description.split(" -", 1)[0].strip()
-            normalized_type = (
-                "list"
-                if type_name.startswith(("list[", "array["))
-                else "object"
-                if type_name.startswith(("dict[", "map["))
-                else type_name
+        unknown_error = errors.pop("__unknown__", None)
+        if unknown_error:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": TOOL_ARGUMENTS_INVALID,
+                    "message": unknown_error,
+                    "details": {},
+                },
             )
-            valid = (
-                normalized_type in {"", "any"}
-                or normalized_type == "object" and isinstance(value, dict)
-                or normalized_type in {"string", "str", "text"} and isinstance(value, str)
-                or normalized_type in {"number", "float"}
-                and isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                or normalized_type in {"integer", "int"}
-                and isinstance(value, int)
-                and not isinstance(value, bool)
-                or normalized_type in {"boolean", "bool"} and isinstance(value, bool)
-                or normalized_type in {"array", "list"} and isinstance(value, list)
-            )
-            if not valid:
-                errors[field] = f"参数类型不匹配，期望 {type_name or 'object'}"
-            allowed = schema.field_options.get(field) or []
-            if allowed and value not in allowed:
-                errors[field] = f"参数值不在允许范围: {', '.join(allowed)}"
-            constraints = schema.constraints.get(field) or {}
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                if constraints.get("minimum") is not None and value < constraints["minimum"]:
-                    errors[field] = f"参数不能小于 {constraints['minimum']}"
-                if constraints.get("maximum") is not None and value > constraints["maximum"]:
-                    errors[field] = f"参数不能大于 {constraints['maximum']}"
-            if isinstance(value, str):
-                if constraints.get("min_length") is not None and len(value) < constraints["min_length"]:
-                    errors[field] = f"参数长度不能小于 {constraints['min_length']}"
-                if constraints.get("max_length") is not None and len(value) > constraints["max_length"]:
-                    errors[field] = f"参数长度不能大于 {constraints['max_length']}"
-                if constraints.get("pattern") and not re.fullmatch(str(constraints["pattern"]), value):
-                    errors[field] = "参数格式不符合约束"
         if errors:
             raise HTTPException(
                 status_code=422,
                 detail={
-                    "code": "TOOL_INPUT_INVALID",
+                    "code": TOOL_ARGUMENTS_INVALID,
                     "message": "算法参数校验失败",
                     "details": errors,
                 },
@@ -281,6 +236,14 @@ class AssistantToolCallService:
             tool_name=document["tool_name"],
             phase=document["phase"],
             arguments=_redact(document.get("arguments") or {}),
+            function_name=document.get("function_name"),
+            provider_tool_call_index=document.get("provider_tool_call_index"),
+            raw_arguments=_redact(document.get("raw_arguments")),
+            arguments_parse_error=document.get("arguments_parse_error"),
+            finish_reason=document.get("finish_reason"),
+            proposal_route=document.get("proposal_route"),
+            proposal_usage=document.get("proposal_usage"),
+            schema_digest=document.get("schema_digest"),
             result_summary=_redact(document.get("result_summary") or {}),
             artifact_refs=document.get("artifact_refs") or [],
             error=_redact(document.get("error")) if document.get("error") else None,
@@ -306,10 +269,84 @@ class AssistantToolCallService:
             call_id=document["call_id"],
             missing_fields=missing_fields,
             field_schema=tool.input_schema,
+            input_json_schema=tool.input_json_schema,
+            presentation=tool.presentation,
             required_assets=required_assets,
             created_at=utc_now(),
         ).model_dump(mode="python")
         AssistantToolCallRepository.append_event(document["call_id"], event)
+
+    @classmethod
+    def _fallback_source_context(cls, document: dict[str, Any]) -> dict[str, Any]:
+        """为历史数据构建最小可续答上下文。
+
+        Args:
+            document: 旧版工具调用文档。
+
+        Returns:
+            包含原消息、会话和模型快照的可续答上下文。
+        """
+        return {
+            "original_user_message_id": document.get("message_id"),
+            "chat_id": document.get("chat_id"),
+            "selected_tool_ids": [document.get("tool_id")] if document.get("tool_id") else [],
+            "mode": "qa",
+            "model_request": document.get("proposal_route") or {},
+            "route_snapshot": document.get("proposal_route") or {},
+            "context_manifest_digest": document.get("context_manifest_digest"),
+        }
+
+    @classmethod
+    def _schedule_continuation(cls, document: dict[str, Any]) -> None:
+        """在工具成功或失败后写入服务端续答 outbox。"""
+        if document.get("phase") not in CONTINUATION_TERMINAL_PHASES:
+            return
+        if document.get("continuation_state") in {"scheduled", "completed"} and document.get("continuation_run_id"):
+            return
+        source_context = document.get("source_context") or cls._fallback_source_context(document)
+        if not source_context.get("original_user_message_id") and not document.get("message_id"):
+            AssistantToolCallRepository.update_fields(
+                document["call_id"],
+                {
+                    "continuation_state": "skipped",
+                    "continuation_error": {
+                        "error_type": "MISSING_CONTINUATION_CONTEXT",
+                        "message": "缺少原用户消息，无法自动续答",
+                    },
+                    "updated_at": utc_now(),
+                },
+            )
+            document.update(
+                {
+                    "continuation_state": "skipped",
+                    "continuation_error": {
+                        "error_type": "MISSING_CONTINUATION_CONTEXT",
+                        "message": "缺少原用户消息，无法自动续答",
+                    },
+                    "updated_at": utc_now(),
+                }
+            )
+            return
+
+        update = {
+            "continuation_state": "pending",
+            "continuation_attempts": 0,
+            "continuation_next_retry_at": None,
+            "continuation_dead_letter_reason": None,
+            "continuation_error": None,
+            "updated_at": utc_now(),
+        }
+        AssistantToolCallRepository.update_fields(document["call_id"], update)
+        document.update(update)
+        AssistantToolCallRepository.append_event(
+            document["call_id"],
+            {
+                "type": CONTINUATION_EVENT_TYPE,
+                "call_id": document["call_id"],
+                "continuation_state": "pending",
+                "source_context": _redact(source_context),
+            },
+        )
 
     @classmethod
     def _transition(cls, document: dict[str, Any], phase: str, **fields: Any) -> dict[str, Any]:
@@ -324,6 +361,8 @@ class AssistantToolCallService:
                 {"updated_at": now},
             )
         cls._append_phase_event(document)
+        if phase in CONTINUATION_TERMINAL_PHASES:
+            cls._schedule_continuation(document)
         return document
 
     @classmethod
@@ -363,14 +402,23 @@ class AssistantToolCallService:
         missing_fields, _ = cls._validate_arguments(tool, arguments)
         cls._validate_asset_refs(tool, payload.input_asset_refs)
         uploaded_assets: list[dict[str, Any]] = []
-        missing_assets = cls._missing_assets(tool, payload.input_asset_refs, uploaded_assets)
+        missing_result = missing_inputs(tool, arguments, payload.input_asset_refs, uploaded_assets)
+        missing_assets = missing_result["assets"]
         next_phase = "awaiting_input" if missing_fields or missing_assets else "awaiting_confirmation"
         now = utc_now()
+        source_context = dict(payload.source_context or {})
+        source_context.setdefault("original_user_message_id", payload.message_id)
+        source_context.setdefault("chat_id", payload.chat_id)
+        source_context.setdefault("selected_tool_ids", [payload.tool_id])
+        source_context.setdefault("model_request", payload.proposal_route or {})
+        source_context.setdefault("route_snapshot", payload.proposal_route or {})
+        source_context.setdefault("context_manifest_digest", payload.schema_digest)
         document = {
             "call_id": f"atc_{uuid4().hex[:16]}",
             "provider_tool_call_id": payload.provider_tool_call_id,
             "chat_id": payload.chat_id,
             "message_id": payload.message_id,
+            "assistant_run_id": payload.assistant_run_id,
             "tool_id": payload.tool_id,
             "algorithm_id": algorithm_id,
             "algorithm_version_id": tool.active_version_id,
@@ -379,7 +427,16 @@ class AssistantToolCallService:
             "selection_reason": payload.selection_reason,
             "selection_confidence": payload.selection_confidence,
             "phase": "requested",
+            "continuation_state": None,
+            "continuation_run_id": None,
+            "continuation_error": None,
+            "continuation_attempts": 0,
+            "continuation_next_retry_at": None,
+            "continuation_dead_letter_reason": None,
+            "source_context": _redact(source_context),
             "field_schema": tool.input_schema.model_dump(mode="python"),
+            "input_json_schema": tool.input_json_schema,
+            "presentation": tool.presentation,
             "output_schema": tool.output_schema.model_dump(mode="python"),
             "attributions": [
                 item.model_dump(mode="python")
@@ -387,6 +444,14 @@ class AssistantToolCallService:
                 if item is not None
             ],
             "arguments": _redact(arguments),
+            "function_name": payload.function_name,
+            "provider_tool_call_index": payload.provider_tool_call_index,
+            "raw_arguments": _redact(payload.raw_arguments),
+            "arguments_parse_error": payload.arguments_parse_error,
+            "finish_reason": payload.finish_reason,
+            "proposal_route": payload.proposal_route,
+            "proposal_usage": payload.proposal_usage,
+            "schema_digest": payload.schema_digest or tool.schema_digest,
             "input_asset_refs": _redact(payload.input_asset_refs),
             "uploaded_assets": uploaded_assets,
             "missing_fields": missing_fields,
@@ -454,6 +519,24 @@ class AssistantToolCallService:
         cls._append_phase_event(document)
         if phase in TERMINAL_PHASES:
             cls._cleanup_uploads(document)
+        if phase in CONTINUATION_TERMINAL_PHASES:
+            cls._schedule_continuation(document)
+
+    @classmethod
+    def reconcile_orphans(cls) -> int:
+        """扫描 queued/running 工具调用并对账其 AlgorithmRun 状态。
+
+        Returns:
+            本轮对账的调用数量。
+        """
+        count = 0
+        for document in AssistantToolCallRepository.list_orphan_running():
+            run_id = document.get("run_id")
+            if not run_id:
+                continue
+            cls._sync_run_state(document, None)
+            count += 1
+        return count
 
     @classmethod
     def update_input(
@@ -497,12 +580,11 @@ class AssistantToolCallService:
         document = AssistantToolCallRepository.find_one({"call_id": call_id}) or {}
         if document.get("phase") not in CALLABLE_PHASES:
             raise HTTPException(status_code=409, detail="当前工具调用已结束，不能上传附件")
-        target_root = settings.runtime_root / "assistant-tool-calls" / call_id
-        target_root.mkdir(parents=True, exist_ok=True)
+        assistant_runtime_asset_service.cleanup_expired()
         uploaded = list(document.get("uploaded_assets") or [])
         tool = cls._tool(document["algorithm_id"], current_user)
         input_specs = {spec.key: spec for spec in tool.input_assets}
-        new_paths: list[Path] = []
+        new_asset_ids: list[str] = []
         for asset_key, upload in uploads.items():
             if asset_key not in input_specs:
                 raise HTTPException(status_code=422, detail=f"未声明的输入文件: {asset_key}")
@@ -516,20 +598,18 @@ class AssistantToolCallService:
                 content,
                 input_specs[asset_key],
             )
-            safe_key = re.sub(r"[^A-Za-z0-9_.-]", "_", asset_key)
-            target = target_root / f"{safe_key}-{uuid4().hex[:8]}{Path(filename).suffix}"
-            target.write_bytes(content)
-            new_paths.append(target)
-            uploaded = [item for item in uploaded if item.get("asset_key") != asset_key]
-            uploaded.append(
-                {
-                    "asset_key": asset_key,
-                    "filename": filename,
-                    "content_type": content_type,
-                    "size_bytes": len(content),
-                    "_path": str(target),
-                }
+            stored = assistant_runtime_asset_service.store(
+                call_id=call_id,
+                chat_id=document.get("chat_id"),
+                created_by=document.get("created_by"),
+                asset_key=asset_key,
+                filename=filename,
+                content_type=content_type,
+                content=content,
             )
+            new_asset_ids.append(stored["asset_id"])
+            uploaded = [item for item in uploaded if item.get("asset_key") != asset_key]
+            uploaded.append(assistant_runtime_asset_service.public_metadata(stored))
         missing_fields, _ = cls._validate_arguments(tool, document.get("arguments") or {})
         missing_assets = cls._missing_assets(tool, document.get("input_asset_refs") or {}, uploaded)
         phase = "awaiting_input" if missing_fields or missing_assets else "awaiting_confirmation"
@@ -542,8 +622,8 @@ class AssistantToolCallService:
                 required_assets=[item.model_dump(mode="python") for item in missing_assets],
             )
         except Exception:
-            for path in new_paths:
-                path.unlink(missing_ok=True)
+            for asset_id in new_asset_ids:
+                cls._release_asset_by_id(asset_id)
             raise
         cls._append_input_event(document, tool)
         return cls._public_document(document)
@@ -607,6 +687,15 @@ class AssistantToolCallService:
                 return cls._public_document(latest)
             raise HTTPException(status_code=409, detail="当前工具调用不能确认")
         document.update(running_fields)
+        AssistantToolCallRepository.append_event(
+            call_id,
+            {
+                "type": "tool.confirmed",
+                "call_id": call_id,
+                "arguments": _redact(arguments),
+                "confirmed_at": now,
+            },
+        )
         cls._audit(
             document,
             "assistant_tool_call_confirmed",
@@ -616,15 +705,7 @@ class AssistantToolCallService:
         legacy_sync = False
         try:
             try:
-                uploads = {
-                    item["asset_key"]: {
-                        "filename": item["filename"],
-                        "content_type": item.get("content_type"),
-                        "content": Path(item["_path"]).read_bytes(),
-                    }
-                    for item in document.get("uploaded_assets") or []
-                    if item.get("_path")
-                }
+                uploads = cls._uploads_from_document(document)
                 run_payload = AlgorithmRunCreate(
                     algorithm_id=document["algorithm_id"],
                     algorithm_version_id=document.get("algorithm_version_id"),
@@ -734,6 +815,26 @@ class AssistantToolCallService:
 
     @staticmethod
     def _cleanup_uploads(document: dict[str, Any]) -> None:
+        call_id = document["call_id"]
+        AssistantToolCallService._release_legacy_paths(document)
+        assistant_runtime_asset_service.release_call_assets(call_id)
+        public_assets = [
+            {
+                key: value
+                for key, value in item.items()
+                if key != "_path" and key != "status"
+            }
+            for item in (document.get("uploaded_assets") or [])
+        ]
+        document["uploaded_assets"] = public_assets
+        AssistantToolCallRepository.update_fields(
+            document["call_id"],
+            {"uploaded_assets": public_assets},
+        )
+
+    @staticmethod
+    def _release_legacy_paths(document: dict[str, Any]) -> None:
+        """兼容旧临时文件路径，迁移期间仍执行本地删除。"""
         root = (settings.runtime_root / "assistant-tool-calls" / document["call_id"]).resolve()
         for item in document.get("uploaded_assets") or []:
             raw_path = item.get("_path")
@@ -750,15 +851,41 @@ class AssistantToolCallService:
             root.rmdir()
         except OSError:
             pass
-        public_assets = [
-            {key: value for key, value in item.items() if key != "_path"}
-            for item in (document.get("uploaded_assets") or [])
-        ]
-        document["uploaded_assets"] = public_assets
-        AssistantToolCallRepository.update_fields(
-            document["call_id"],
-            {"uploaded_assets": public_assets},
-        )
+
+    @staticmethod
+    def _release_asset_by_id(asset_id: str) -> None:
+        """按资产 ID 释放单个受管附件，避免上传半途留下孤儿文件。"""
+        try:
+            assistant_runtime_asset_service.release_call_assets(
+                assistant_runtime_asset_service.get(asset_id).call_id
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _uploads_from_document(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """从工具调用文档构造 ResearchEngine 输入文件上传字典。"""
+        uploads: dict[str, dict[str, Any]] = {}
+        for item in document.get("uploaded_assets") or []:
+            asset_key = str(item.get("asset_key") or "")
+            if not asset_key:
+                continue
+            asset_id = item.get("asset_id")
+            if asset_id:
+                content = assistant_runtime_asset_service.read(
+                    call_id=document["call_id"],
+                    asset_id=str(asset_id),
+                )
+            elif item.get("_path"):
+                content = Path(item["_path"]).read_bytes()
+            else:
+                continue
+            uploads[asset_key] = {
+                "filename": item.get("filename") or asset_key,
+                "content_type": item.get("content_type"),
+                "content": content,
+            }
+        return uploads
 
     @staticmethod
     def _safe_error_message(exc: Exception) -> str:

@@ -6,7 +6,7 @@ Poly Agent 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec A
 
 当前仓库的定位是 **“计算智能 + ResearchEngine P0 双通道闭环”演示与迭代基线**：本地结构生成、xTB、受控 ORCA/ComputeEngine fixture、Alchemist 优化、WeKnora 知识库、算法包管理和报告链路已经可以组合使用；真实 ORCA/HPC/AiiDA、SpecLabOS 设备提交和生产级外部模型服务仍通过集成配置逐步接入。
 
-> 文档状态：2026-08-10。README 描述以当前代码和 `doc/` 进度文档为准；mock、fixture、demo store 和 fallback 只用于本地演示或验收，不代表生产模型或真实实验结果。
+> 文档状态：2026-08-15。README 描述以当前代码和 `doc/` 进度文档为准；mock、fixture、demo store 和 fallback 只用于本地演示或验收，不代表生产模型或真实实验结果。
 
 ## 先看这几张图
 
@@ -55,7 +55,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 - **垂类预测**：支持 `.zip/.tar.gz` 算法包注册、版本管理、在线测试、运行历史、结果查看和 handoff；算法通过契约声明输入、输出、来源和运行时边界。
 - **Knowledge Base**：KnowledgeService 统一转发 WeKnora 的知识库列表、问答流和无总结检索；前端展示证据卡片，后端可用 Neo4j 补充 Entity 关系，并过滤 API key、object key 和 embedding 等敏感元数据。
 - **Data Catalog**：面向材料数据资产提供目录、分类和筛选；业务运行态写入 `poly_agent`，材料资产使用 `poly_data` MongoDB 和 MinIO `datasets/` 路径。
-- **助手与报告**：助手基于项目实时事实返回入口、算法、计算和审批引导；`/dialogue` 支持按用户隔离的历史会话、已部署垂类算法工具选择、参数确认、AlgorithmRun 结果与 artifact 回链；报告链路支持 OpenAI/Ollama/Edison/Codex/自定义 HTTP provider，以及 HTML/LaTeX/Markdown/PDF renderer。
+- **助手与报告**：助手基于项目实时事实返回入口、算法、计算和审批引导；`/dialogue` 支持按用户隔离的历史会话、已部署垂类算法工具选择、参数确认、AlgorithmRun 结果与 artifact 回链；LUI Runtime 提供模型路由、上下文 manifest、统一事件、服务端续答、配置 schema 与调用质量指标；报告链路支持 OpenAI/Ollama/Edison/Codex/自定义 HTTP provider，以及 HTML/LaTeX/Markdown/PDF renderer。
 
 ## 当前项目状态
 
@@ -218,7 +218,14 @@ pm2 save
 | `make check-all` | 后端测试、前端构建和对话 LUI e2e 验收 |
 | `npm --prefix frontend run test:llm-models` | LLM 模型配置单测 |
 | `npm --prefix frontend run test:vertical-prediction` | 垂类预测与 artifact 下载单测 |
+| `python scripts/generate_llm_config_schema.py` | 从 Pydantic schema 生成 `docs/llm-provider-config-schema.md/json` |
 | `npm --prefix frontend run test:assistant-tool-calls` | 对话算法工具 SSE/reducer 单测 |
+| `npm --prefix frontend run test:assistant-events` | 对话事件回放、stale phase 与续答状态单测 |
+| `npm --prefix frontend run test:assistant-context` | 对话上下文摘要、模型路由与预算展示单测 |
+| `npm --prefix frontend run test:assistant-ui` | 对话模型 meta、能力来源、上下文折叠与 warning 展示单测 |
+| `npm --prefix frontend run test:assistant-tool-menu` | 对话工具菜单健康状态、确认、文件与成功率单测 |
+| `npm --prefix frontend run test:assistant-tool-auto-select` | 对话相关工具自动选择与显式选择优先级单测 |
+| `PYTHONPATH=backend python -m pytest backend/tests/test_assistant_runtime_assets.py -q` | 对话受管 runtime asset 上传、读取与释放单测 |
 | `npm --prefix frontend run test:tool-menu-categories` | 对话工具菜单分类与筛选单测 |
 | `make init-mongo-indexes` | 初始化生产查询索引 |
 | `python scripts/pack_algorithm.py --help` | 查看算法包打包参数 |
@@ -227,7 +234,7 @@ pm2 save
 
 E2E 默认使用后端 `5201`、前端 `5200` 和 PI Mock `8300`；临时环境可通过 `POLY_AGENT_BACKEND_URL`、`POLY_AGENT_FRONTEND_URL`、`POLY_AGENT_PI_MOCK_URL` 覆盖。
 
-当前 Playwright 覆盖 `/dialogue` 的算法工具完整交互和 320/768/1440px 响应式验收（见 [`e2e/README.md`](e2e/README.md)）；其他页面仍以后端回归、前端构建和关键页面手工验收为主。ResearchEngine 的历史测试记录与已知限制见 [`doc/research-engine-progress-and-plan.md`](doc/research-engine-progress-and-plan.md)。
+当前 Playwright 覆盖 `/dialogue` 的算法工具完整交互和 320/768/1440px 响应式验收（见 [`e2e/README.md`](e2e/README.md)）；其他页面仍以后端回归、前端构建和关键页面手工验收为主。ResearchEngine 的历史测试记录与已知限制见 [`doc/research-engine-progress-and-plan.md`](doc/research-engine-progress-and-plan.md)，Plan 08 LUI Runtime 回归命令与增量验证见 [`doc/research-engine-plan-08-regression-test-matrix.md`](doc/research-engine-plan-08-regression-test-matrix.md)。
 
 ## 配置边界与安全
 
@@ -243,6 +250,7 @@ E2E 默认使用后端 `5201`、前端 `5200` 和 PI Mock `8300`；临时环境�
 | 计算工具链 | `XTB_EXECUTABLE`、`CREST_EXECUTABLE`、`ORCA_EXECUTABLE`、`ORCA_EXECUTION_MODE` | 真实 xTB/CREST/ORCA 执行依赖本地命令和许可证 |
 | 算法运行时 | `ALGORITHM_RUNTIME_BACKEND`、`ALGORITHM_RUNTIME_MAX_CONCURRENCY`、`ALGORITHM_RUNTIME_MAX_OUTPUT_BYTES` | 上传算法使用受限子进程运行 |
 | LLM 与报告 | `LLM_*`、`REPORT_*` | 助手、Alchemist LLM 辅助和报告生成 |
+| LUI 运行时 | `ASSISTANT_MAX_PARALLEL_TOOL_CALLS`、`ASSISTANT_RUNTIME_ASSET_TTL_SECONDS`、`ASSISTANT_PROMPT_SNAPSHOT_TTL_SECONDS` | 对话并行工具上限、附件 TTL 与脱敏 prompt 快照 TTL |
 | 知识库 | `WEKNORA_*` | WeKnora API 和可选 Neo4j 图谱增强 |
 | 数据资产 | `DATA_ASSET_MONGODB_*`、`MINIO_*` | 生产读取 `poly_data` 数据库和 MinIO；开发使用本地 SQLite poly data 样本 |
 
@@ -258,7 +266,7 @@ E2E 默认使用后端 `5201`、前端 `5200` 和 PI Mock `8300`；临时环境�
 | 计算工作流 | [`doc/computation-workflows-user-guide.md`](doc/computation-workflows-user-guide.md)、[`doc/compute-engine-computation-progress-and-plan.md`](doc/compute-engine-computation-progress-and-plan.md) |
 | 实验设计与优化 | [`doc/optimization-workflow-user-guide.md`](doc/optimization-workflow-user-guide.md) |
 | ResearchEngine / AutoResearch | [`doc/autoresearch-user-guide.md`](doc/autoresearch-user-guide.md)、[`doc/research-engine-and-auto-research-design.md`](doc/research-engine-and-auto-research-design.md) |
-| ResearchEngine 路线与验收 | [`doc/research-engine-plan-00-roadmap.md`](doc/research-engine-plan-00-roadmap.md)、[`doc/research-engine-progress-and-plan.md`](doc/research-engine-progress-and-plan.md) |
+| ResearchEngine 路线与验收 | [`doc/research-engine-plan-00-roadmap.md`](doc/research-engine-plan-00-roadmap.md)、[`doc/research-engine-progress-and-plan.md`](doc/research-engine-progress-and-plan.md)、[`doc/research-engine-plan-08-regression-test-matrix.md`](doc/research-engine-plan-08-regression-test-matrix.md)、[`doc/research-engine-plan-08-wrapup.md`](doc/research-engine-plan-08-wrapup.md) |
 | 算法包上传与远程模型 | [`doc/algorithm-upload-user-guide.md`](doc/algorithm-upload-user-guide.md)、[`doc/vertical-model-interface-user-guide.md`](doc/vertical-model-interface-user-guide.md) |
 | 知识库 RAG + 图谱 | [`doc/knowledge-base-rag-kg-product-design.md`](doc/knowledge-base-rag-kg-product-design.md) |
 | 报告生成 | [`doc/research-report-generation-product-design.md`](doc/research-report-generation-product-design.md) |

@@ -122,6 +122,23 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertIn("reasoning", default_capabilities)
         self.assertIn("structured_json", default_capabilities)
 
+    def test_config_schema_endpoint_documents_provider_and_per_model_fields(self) -> None:
+        resp = self.client.get("/api/v1/llm/config-schema")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        data = resp.json()["data"]
+        provider_fields = {item["field_name"]: item for item in data["provider_fields"]}
+        per_model_fields = {item["field_name"]: item for item in data["per_model_fields"]}
+        self.assertIn("provider_id", provider_fields)
+        self.assertIn("models", provider_fields)
+        self.assertEqual(provider_fields["provider_id"]["description"], "唯一 provider ID")
+        self.assertEqual(provider_fields["provider_type"]["default_value"], "openai_compatible")
+        self.assertIn("LLM_PROVIDER_CONFIGS_FILE", provider_fields["provider_id"]["error_path"])
+        self.assertIn("model_id", per_model_fields)
+        self.assertIn("context_window", per_model_fields)
+        self.assertEqual(per_model_fields["supports_parallel_tool_calls"]["type"], "boolean")
+        self.assertIn("models[]", per_model_fields["model_id"]["error_path"])
+
     def test_deep_route_falls_back_to_fast_reasoning_default_model(self) -> None:
         settings.llm_provider_configs_file = str(self.provider_config_path)
 
@@ -153,6 +170,97 @@ class LLMModelManagementApiTest(ComputationTestCase):
         reasoning_provider = next(item for item in data["providers"] if item["provider_id"] == "qwen_reasoning_primary")
         self.assertEqual(reasoning_provider["status"], "available")
         self.assertEqual(reasoning_provider["models"][0]["model_id"], "Qwen3.6-35B-A3B")
+
+    def test_per_model_config_and_probe_inferred_capabilities(self) -> None:
+        """对象模型配置保留能力细节，探测新模型不再继承工具能力。"""
+        self.provider_config_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "provider_id": "default_openai",
+                        "display_name": "Default chat model",
+                        "provider_type": "openai_compatible",
+                        "base_url": "https://fast.example.test/v1",
+                        "api_key_env": "LLM_API_KEY",
+                        "models": [
+                            "legacy-chat-model",
+                            {
+                                "model_id": "deepseek-v4-flash",
+                                "display_name": "DeepSeek V4 Flash",
+                                "capabilities": ["chat", "structured_json", "tool_calling"],
+                                "recommended_for": ["qa", "deep"],
+                                "context_window": 131072,
+                                "max_output_tokens": 8192,
+                                "tool_protocol": "openai_chat_tools",
+                                "supports_parallel_tool_calls": True,
+                            },
+                        ],
+                    }
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+        def fake_get(url, **kwargs):  # noqa: ANN001
+            if url.endswith("/api/tags"):
+                return SimpleNamespace(
+                    raise_for_status=lambda: None,
+                    json=lambda: {"models": [{"name": "qwen2.5:3b"}]},
+                )
+            return SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"data": [{"id": "deepseek-v4-flash"}, {"id": "remote-only-model"}]},
+            )
+
+        with patch("app.services.llm_model_service.httpx.get", side_effect=fake_get):
+            resp = self.client.post("/api/v1/llm/models/check")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        providers = resp.json()["data"]["providers"]
+        provider = next(item for item in providers if item["provider_id"] == "default_openai")
+        models = {model["model_id"]: model for model in provider["models"]}
+        configured = models["deepseek-v4-flash"]
+        self.assertEqual(configured["display_name"], "DeepSeek V4 Flash")
+        self.assertIn("tool_calling", configured["capabilities"])
+        self.assertEqual(configured["capability_source"], "configured")
+        self.assertEqual(configured["context_window"], 131072)
+        self.assertEqual(configured["max_output_tokens"], 8192)
+        self.assertEqual(configured["tool_protocol"], "openai_chat_tools")
+        self.assertTrue(configured["supports_parallel_tool_calls"])
+
+        inferred = models["remote-only-model"]
+        self.assertEqual(inferred["capability_source"], "inferred")
+        self.assertIn("chat", inferred["capabilities"])
+        self.assertNotIn("tool_calling", inferred["capabilities"])
+        self.assertEqual(inferred["recommended_for"], [])
+
+    def test_assistant_route_reports_requested_and_resolved_model(self) -> None:
+        """用户显式选择的模型返回 user_selected 路由元数据。"""
+        def fake_chat(messages, **kwargs):  # noqa: ANN001
+            self.assertEqual(kwargs["provider_id"], "qwen_reasoning_primary")
+            self.assertEqual(kwargs["model"], "Qwen3.6-35B-A3B")
+            return "用户选择回答"
+
+        with patch("app.core.llm_client.chat", side_effect=fake_chat):
+            resp = self.client.post(
+                "/api/v1/assistant/chat",
+                json={
+                    "messages": [{"role": "user", "content": "解释模型路由"}],
+                    "context": {
+                        "mode": "qa",
+                        "model": {"providerId": "qwen_reasoning_primary", "modelId": "Qwen3.6-35B-A3B"},
+                    },
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        route = resp.json()["data"]["grounding_facts"]["llm_route"]
+        self.assertEqual(route["route_reason"], "user_selected")
+        self.assertEqual(route["requested_provider_id"], "qwen_reasoning_primary")
+        self.assertEqual(route["requested_model_id"], "Qwen3.6-35B-A3B")
+        self.assertEqual(route["provider_id"], "qwen_reasoning_primary")
+        self.assertEqual(route["model_id"], "Qwen3.6-35B-A3B")
+        self.assertEqual(route["capability_source"], "configured")
 
     def test_routing_can_restore_qa_and_deep_to_default_deepseek(self) -> None:
         qwen_payload = {

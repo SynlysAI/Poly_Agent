@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 try:
     from ._computation_test_utils import ComputationTestCase
 except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 from app.core.auth import get_current_user
+from app.core.time import utc_now
 from app.main import app
 from app.services.assistant_run_service import assistant_run_service
-from app.infra.research_engine_repositories import AssistantRunRepository
+from app.infra.research_engine_repositories import (
+    AssistantEventRepository,
+    AssistantRunRepository,
+    AssistantToolCallRepository,
+)
 
 
 class AssistantRunsApiTest(ComputationTestCase):
@@ -58,6 +65,8 @@ class AssistantRunsApiTest(ComputationTestCase):
         chat_id = self._chat("执行")
         created = self._run(chat_id)
         run_id = created.json()["data"]["run_id"]
+        restored = self.client.get(f"/api/v1/assistant/runs/{run_id}").json()["data"]
+        self.assertTrue(any(event["type"] == "route.requested" for event in restored["events"]))
         events = [
             {"type": "status", "stage": "generation", "message": "生成中"},
             {"type": "answer_delta", "delta": "持久化回答"},
@@ -67,6 +76,8 @@ class AssistantRunsApiTest(ComputationTestCase):
             self.assertEqual(assistant_run_service.execute_next("test-worker"), run_id)
         restored = self.client.get(f"/api/v1/assistant/runs/{run_id}").json()["data"]
         self.assertEqual(restored["status"], "completed")
+        unified_events = AssistantEventRepository.list_for_run(run_id)
+        self.assertTrue(any(event["type"] == "route.fallback" for event in unified_events))
         self.assertEqual(restored["partial_content"], "持久化回答")
         chat = self.client.get(f"/api/v1/assistant/chats/{chat_id}").json()["data"]
         self.assertEqual([item["role"] for item in chat["messages"]], ["user", "assistant"])
@@ -84,6 +95,85 @@ class AssistantRunsApiTest(ComputationTestCase):
         self.assertEqual(first.json()["data"]["status"], "canceled")
         self.assertEqual(second.json()["data"]["status"], "canceled")
         self.assertEqual(self._run(chat_id, "取消后重试").status_code, 200)
+
+    def test_worker_persists_resolved_route_and_message_model_meta(self) -> None:
+        """run 区分请求模型与实际解析模型，并把模型信息写入消息元数据。"""
+        chat_id = self._chat("模型路由")
+        created = self.client.post(
+            f"/api/v1/assistant/chats/{chat_id}/runs",
+            json={
+                "content": "路由问题",
+                "messages": [],
+                "context": {
+                    "mode": "qa",
+                    "model": {"providerId": "requested-provider", "modelId": "requested-model"},
+                },
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        run_id = created.json()["data"]["run_id"]
+        route = {
+            "purpose": "qa",
+            "route_reason": "user_selected",
+            "requested_provider_id": "requested-provider",
+            "requested_model_id": "requested-model",
+            "provider_id": "resolved-provider",
+            "model_id": "resolved-model",
+            "capabilities": ["chat"],
+        }
+        context_manifest = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "request_kind": "final_answer",
+            "route": route,
+            "context": {
+                "digest": "sha256:context-digest",
+                "sections": [
+                    {
+                        "name": "project_facts",
+                        "source": "ProjectGroundingService",
+                        "token_estimate": 8,
+                        "included": True,
+                        "omitted_reason": None,
+                    }
+                ],
+            },
+            "tools": [],
+        }
+        events = [
+            {"type": "route.resolved", "route": route},
+            {"type": "context.assembled", "manifest": context_manifest},
+            {"type": "answer_delta", "delta": "路由回答"},
+            {
+                "type": "final",
+                "data": {
+                    "content": "路由回答",
+                    "answer_mode": "fallback",
+                    "answer_scope": "unknown",
+                    "retrieval_status": "not_needed",
+                    "grounding_facts": {
+                        "llm_route": route,
+                        "context": {"digest": "sha256:context-digest"},
+                    },
+                },
+            },
+        ]
+        with patch("app.services.assistant_run_service.stream_chat_assistant", return_value=iter(events)):
+            self.assertEqual(assistant_run_service.execute_next("route-worker"), run_id)
+
+        restored = self.client.get(f"/api/v1/assistant/runs/{run_id}").json()["data"]
+        self.assertEqual(restored["provider_id"], "resolved-provider")
+        self.assertEqual(restored["model_id"], "resolved-model")
+        self.assertEqual(restored["route"]["route_reason"], "user_selected")
+        self.assertEqual(restored["route"]["requested_model_id"], "requested-model")
+        self.assertEqual(restored["request_manifests"]["final_answer"], context_manifest)
+        self.assertTrue(any(event["type"] == "route.resolved" for event in restored["events"]))
+        self.assertTrue(any(event["type"] == "context.assembled" for event in restored["events"]))
+
+        chat = self.client.get(f"/api/v1/assistant/chats/{chat_id}").json()["data"]
+        assistant_message = next(item for item in chat["messages"] if item["role"] == "assistant")
+        self.assertEqual(assistant_message["metadata"]["llm_route"]["model_id"], "resolved-model")
+        self.assertEqual(assistant_message["metadata"]["context_digest"], "sha256:context-digest")
 
     def test_run_access_is_owner_scoped(self) -> None:
         chat_id = self._chat("私有")
@@ -144,3 +234,30 @@ class AssistantRunsApiTest(ComputationTestCase):
         self.assertEqual(metrics["active"], 1)
         self.assertEqual(metrics["conflicts"], 1)
         self.assertIsNone(metrics["total_tokens"])
+
+    def test_continuation_conflict_uses_backoff_and_dead_letter(self) -> None:
+        now = utc_now()
+        call = {
+            "call_id": "atc_continuation_retry",
+            "chat_id": "chat_continuation_retry",
+            "created_by": self.user["user_id"],
+            "phase": "completed",
+            "continuation_state": "pending",
+            "continuation_attempts": 4,
+            "continuation_next_retry_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        AssistantToolCallRepository.save("call_id", call)
+
+        assistant_run_service._defer_continuation(
+            call,
+            HTTPException(status_code=409, detail="活动回答冲突"),
+        )
+
+        document = AssistantToolCallRepository.find_one({"call_id": "atc_continuation_retry"})
+        self.assertEqual(document["continuation_state"], "dead_letter")
+        self.assertEqual(document["continuation_attempts"], 5)
+        self.assertIsNone(document["continuation_next_retry_at"])
+        events = AssistantToolCallRepository.list_events("atc_continuation_retry")
+        self.assertTrue(any(event["type"] == "tool.continuation.dead_letter" for event in events))

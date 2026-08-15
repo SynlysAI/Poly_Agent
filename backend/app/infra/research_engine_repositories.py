@@ -9,10 +9,12 @@ from __future__ import annotations
 from datetime import datetime
 import re
 from typing import Any
+from uuid import uuid4
 
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
+from app.core.time import utc_now
 from app.infra.computation_repositories import (
     BaseRepository,
     _apply_update_fields,
@@ -31,8 +33,10 @@ from app.infra.mongo import (
     get_algorithm_runs_collection,
     get_algorithm_versions_collection,
     get_assistant_chats_collection,
+    get_assistant_events_collection,
     get_assistant_messages_collection,
     get_assistant_runs_collection,
+    get_assistant_runtime_assets_collection,
     get_assistant_tool_calls_collection,
     get_execution_decisions_collection,
     get_manual_algorithm_workflows_collection,
@@ -463,22 +467,61 @@ class AssistantToolCallRepository(BaseRepository):
 
     @classmethod
     def append_event(cls, call_id: str, event: dict[str, Any]) -> bool:
+        """双写旧工具调用 embedded event 与统一 append-only 事件。"""
         if cls._can_use_mongo():
             try:
-                result = cls._collection().update_one(
+                current = cls._collection().find_one_and_update(
                     {"call_id": call_id},
-                    {"$push": {"events": {"$each": [clone_document(event)], "$slice": -200}}},
+                    {"$inc": {"event_seq": 1}},
+                    projection={
+                        "_id": 0,
+                        "call_id": 1,
+                        "assistant_run_id": 1,
+                        "chat_id": 1,
+                        "created_by": 1,
+                        "event_seq": 1,
+                    },
+                    return_document=False,
                 )
-                return result.matched_count > 0
+                if not current:
+                    return False
+                seq = int(current.get("event_seq", 0)) + 1
+                payload = {"seq": seq, **clone_document(event)}
+                cls._collection().update_one(
+                    {"call_id": call_id},
+                    {"$push": {"events": {"$each": [payload], "$slice": -200}}},
+                )
+                AssistantEventRepository.append(
+                    {
+                        "run_id": current.get("assistant_run_id") or "",
+                        "chat_id": current.get("chat_id") or "",
+                        "created_by": current.get("created_by") or "",
+                    },
+                    payload,
+                )
+                return True
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
 
         def mutate(data):
             for item in data[cls.collection_name]:
                 if item.get("call_id") == call_id:
+                    seq = int(item.get("event_seq", 0)) + 1
+                    item["event_seq"] = seq
+                    payload = {"seq": seq, **clone_document(event)}
                     events = item.setdefault("events", [])
-                    events.append(clone_document(event))
+                    events.append(payload)
                     item["events"] = events[-200:]
+                    data[AssistantEventRepository.collection_name].append(
+                        AssistantEventRepository.build_document(
+                            {
+                                "run_id": item.get("assistant_run_id") or "",
+                                "chat_id": item.get("chat_id") or "",
+                                "created_by": item.get("created_by") or "",
+                            },
+                            payload,
+                        )
+                    )
                     return True
             return False
 
@@ -510,6 +553,69 @@ class AssistantToolCallRepository(BaseRepository):
             return False
 
         return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def list_continuation_pending(cls, *, limit: int = 20) -> list[dict[str, Any]]:
+        """读取待服务端自动续答的 completed/failed 工具调用。
+
+        Args:
+            limit: 单次扫描最多处理的调用数。
+
+        Returns:
+            按 updated_at 升序排列、已到重试时间的待续答调用文档列表。
+        """
+        filters = {
+            "continuation_state": "pending",
+            "phase": {"$in": ["completed", "failed"]},
+        }
+        items, _ = cls.list_all(
+            filters,
+            sort_field="updated_at",
+            reverse=False,
+            page=1,
+            page_size=limit,
+        )
+        now = utc_now()
+        return [
+            item
+            for item in items
+            if cls._continuation_retry_due(item, now)
+        ]
+
+    @staticmethod
+    def _continuation_retry_due(document: dict[str, Any], now: datetime) -> bool:
+        """判断 pending continuation 是否已到下一次重试时间。"""
+        retry_at = document.get("continuation_next_retry_at")
+        if not retry_at:
+            return True
+        if isinstance(retry_at, datetime):
+            return retry_at <= now
+        if isinstance(retry_at, str):
+            try:
+                return datetime.fromisoformat(retry_at) <= now
+            except ValueError:
+                return True
+        return True
+
+    @classmethod
+    def list_orphan_running(cls, *, limit: int = 200) -> list[dict[str, Any]]:
+        """读取可能需要与 AlgorithmRun 对账的 queued/running 工具调用。
+
+        Args:
+            limit: 单次扫描最多处理的调用数。
+
+        Returns:
+            待对账的调用文档列表。
+        """
+        filters = {"phase": {"$in": ["queued", "running"]}}
+        items, _ = cls.list_all(
+            filters,
+            sort_field="updated_at",
+            reverse=False,
+            page=1,
+            page_size=limit,
+        )
+        return items
 
     @classmethod
     def list_events(cls, call_id: str) -> list[dict[str, Any]]:
@@ -557,6 +663,81 @@ class AssistantToolCallRepository(BaseRepository):
             return before - len(data[cls.collection_name])
 
         return int(demo_store.mutate(mutate))
+
+
+class AssistantRuntimeAssetRepository(BaseRepository):
+    """受管 LUI 运行时附件仓储。"""
+
+    collection_name = "assistant_runtime_assets"
+
+    @classmethod
+    def _collection(cls):
+        return get_assistant_runtime_assets_collection()
+
+    @classmethod
+    def update_fields(cls, asset_id: str, fields: dict[str, Any]) -> bool:
+        """更新单个受管附件字段。"""
+        if cls._can_use_mongo():
+            try:
+                result = cls._collection().update_one(
+                    {"asset_id": asset_id},
+                    {"$set": fields},
+                )
+                return result.matched_count > 0
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            for item in data[cls.collection_name]:
+                if item.get("asset_id") == asset_id:
+                    _apply_update_fields(item, fields)
+                    return True
+            return False
+
+        return bool(demo_store.mutate(mutate))
+
+    @classmethod
+    def list_for_call(cls, call_id: str) -> list[dict[str, Any]]:
+        """按工具调用读取受管附件。"""
+        items, _ = cls.list_all(
+            {"call_id": call_id},
+            sort_field="created_at",
+            reverse=False,
+            page=1,
+            page_size=100,
+        )
+        return items
+
+    @classmethod
+    def list_expired(cls, *, limit: int = 200) -> list[dict[str, Any]]:
+        """读取已过期但仍处于 active 状态的受管附件。"""
+        items, _ = cls.list_all(
+            {"status": "active"},
+            sort_field="expires_at",
+            reverse=False,
+            page=1,
+            page_size=limit,
+        )
+        now = utc_now()
+        return [
+            item
+            for item in items
+            if cls._expired(item, now)
+        ]
+
+    @staticmethod
+    def _expired(document: dict[str, Any], now: datetime) -> bool:
+        expires_at = document.get("expires_at")
+        if not expires_at:
+            return False
+        if isinstance(expires_at, datetime):
+            return expires_at <= now
+        if isinstance(expires_at, str):
+            try:
+                return datetime.fromisoformat(expires_at) <= now
+            except ValueError:
+                return False
+        return False
 
 
 class AssistantChatRepository(BaseRepository):
@@ -752,6 +933,289 @@ class AssistantMessageRepository(BaseRepository):
         return int(demo_store.mutate(mutate))
 
 
+class AssistantEventRepository(BaseRepository):
+    """持久化 LUI append-only 事件流，并兼容旧 embedded events 回放。"""
+
+    collection_name = "assistant_events"
+    SCHEMA_VERSION = 1
+
+    @classmethod
+    def _collection(cls):
+        return get_assistant_events_collection()
+
+    @classmethod
+    def ensure_indexes(cls) -> None:
+        """创建 run/call/chat 维度的连续事件查询索引。"""
+        if not cls._can_use_mongo():
+            return
+        try:
+            collection = cls._collection()
+            collection.create_index("event_id", unique=True)
+            collection.create_index([("run_id", 1), ("seq", 1)])
+            collection.create_index([("chat_id", 1), ("created_by", 1), ("seq", 1)])
+            collection.create_index([("call_id", 1), ("seq", 1)])
+            collection.create_index([("type", 1), ("at", 1)])
+        except PyMongoError as exc:
+            cls._handle_mongo_error(exc)
+
+    @staticmethod
+    def canonical_type(event: dict[str, Any]) -> str:
+        """将旧流事件类型映射为 Plan08 统一事件类型。
+
+        Args:
+            event: 旧 embedded event 或等价事件 payload。
+
+        Returns:
+            统一事件类型字符串。
+        """
+        event_type = str(event.get("type") or "")
+        if event_type == "status" and event.get("stage") == "queued":
+            return "run.created"
+        if event_type == "run_status":
+            status = str(event.get("status") or "")
+            return {
+                "queued": "run.created",
+                "running": "run.started",
+                "completed": "run.completed",
+                "failed": "run.failed",
+                "canceled": "run.canceled",
+            }.get(status, event_type)
+        if event_type == "tool_call":
+            phase = str(event.get("phase") or "")
+            if event.get("arguments_parse_error") and phase in {"requested", "awaiting_input"}:
+                return "tool.arguments.invalid"
+            return {
+                "requested": "tool.proposed",
+                "awaiting_input": "tool.awaiting_input",
+                "awaiting_confirmation": "tool.awaiting_confirmation",
+                "queued": "tool.queued",
+                "running": "tool.started",
+                "completed": "tool.result",
+                "failed": "tool.failed",
+                "canceled": "tool.canceled",
+            }.get(phase, event_type)
+        if event_type == "tool_input_required":
+            return "tool.awaiting_input"
+        if event_type in {
+            "tool.continuation.scheduled",
+            "tool.continuation.run_created",
+            "tool.continuation.retry_scheduled",
+            "tool.continuation.dead_letter",
+            "tool.continuation.failed",
+            "tool.continuation.finished",
+        }:
+            return event_type
+        if event_type == "final":
+            return "assistant.finalized"
+        return event_type
+
+    @classmethod
+    def build_document(cls, run: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+        """构建 assistant_events 集合文档。
+
+        Args:
+            run: 事件所属 assistant run 文档。
+            event: 已包含 seq 与 at 的旧事件 payload。
+
+        Returns:
+            可直接插入的 append-only 事件文档。
+        """
+        payload = clone_document(event)
+        return {
+            "event_id": f"asevt_{uuid4().hex[:20]}",
+            "chat_id": run.get("chat_id") or "",
+            "run_id": run.get("run_id") or "",
+            "call_id": payload.get("call_id") or "",
+            "seq": int(payload.get("seq", 0)),
+            "type": cls.canonical_type(payload),
+            "schema_version": cls.SCHEMA_VERSION,
+            "created_by": run.get("created_by") or "",
+            "at": payload.get("at") or payload.get("created_at"),
+            "data": {
+                key: value
+                for key, value in payload.items()
+                if key not in {"seq", "at"}
+            },
+        }
+
+    @classmethod
+    def append(cls, run: dict[str, Any], event: dict[str, Any]) -> dict[str, Any] | None:
+        """追加一条统一事件。
+
+        Args:
+            run: 事件所属 assistant run 文档。
+            event: 已包含 seq 与 at 的旧事件 payload。
+
+        Returns:
+            插入成功时返回事件文档，否则返回 None。
+        """
+        document = cls.build_document(run, event)
+        if cls._can_use_mongo():
+            try:
+                cls.ensure_indexes()
+                cls._collection().insert_one(clone_document(document))
+                return document
+            except DuplicateKeyError:
+                return None
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            data[cls.collection_name].append(clone_document(document))
+            return clone_document(document)
+
+        return demo_store.mutate(mutate)
+
+    @classmethod
+    def list_for_run(cls, run_id: str) -> list[dict[str, Any]]:
+        """按 seq 顺序读取某个 run 的统一事件。
+
+        Args:
+            run_id: Assistant run ID。
+
+        Returns:
+            事件文档列表。
+        """
+        items, _ = cls.list_all(
+            {"run_id": run_id},
+            sort_field="seq",
+            reverse=False,
+            page=1,
+            page_size=10_000,
+        )
+        return items
+
+    @classmethod
+    def events_after(cls, run_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
+        """读取指定 seq 之后的统一事件。
+
+        Args:
+            run_id: Assistant run ID。
+            after_seq: 回放游标。
+
+        Returns:
+            事件文档列表。
+        """
+        return [event for event in cls.list_for_run(run_id) if int(event.get("seq", 0)) > after_seq]
+
+    @staticmethod
+    def to_legacy_event(document: dict[str, Any]) -> dict[str, Any]:
+        """将统一事件转换为旧 SSE reducer 兼容事件。
+
+        Args:
+            document: assistant_events 集合文档。
+
+        Returns:
+            带 type/seq/at 的旧事件 payload。
+        """
+        data = dict(document.get("data") or {})
+        return {"seq": int(document.get("seq", 0)), "at": document.get("at"), **data}
+
+    @classmethod
+    def backfill_run(cls, run_id: str) -> int:
+        """把旧 embedded events 回填到统一事件集合。
+
+        Args:
+            run_id: Assistant run ID。
+
+        Returns:
+            新回填的事件数量；重复调用不会重复插入。
+        """
+        run = AssistantRunRepository.find_one({"run_id": run_id}) or {}
+        if not run:
+            return 0
+        existing_seqs = {int(event.get("seq", 0)) for event in cls.list_for_run(run_id)}
+        count = 0
+        for event in sorted(run.get("events") or [], key=lambda item: int(item.get("seq", 0))):
+            seq = int(event.get("seq", 0))
+            if not seq or seq in existing_seqs:
+                continue
+            if cls.append(run, event):
+                count += 1
+        return count
+
+    @classmethod
+    def backfill_call(cls, call_id: str) -> int:
+        """把旧工具调用 embedded events 回填到统一事件集合。
+
+        Args:
+            call_id: Assistant tool call ID。
+
+        Returns:
+            新回填的事件数量；重复调用不会重复插入。
+        """
+        call = AssistantToolCallRepository.find_one({"call_id": call_id}) or {}
+        if not call:
+            return 0
+        existing_seqs = {int(event.get("seq", 0)) for event in cls.list_all({"call_id": call_id}, page=1, page_size=10000)[0]}
+        count = 0
+        for index, event in enumerate(call.get("events") or [], start=1):
+            seq = int(event.get("seq", 0)) or index
+            if seq in existing_seqs:
+                continue
+            payload = {"seq": seq, **clone_document(event)}
+            if cls.append(
+                {
+                    "run_id": call.get("assistant_run_id") or "",
+                    "chat_id": call.get("chat_id") or "",
+                    "created_by": call.get("created_by") or "",
+                },
+                payload,
+            ):
+                existing_seqs.add(seq)
+                count += 1
+        return count
+
+    @classmethod
+    def backfill_all(cls) -> dict[str, int]:
+        """批量回填旧 run 与工具调用事件，不修改旧文档语义。
+
+        Returns:
+            runs/calls 表示有新增事件的文档数，events 为新增事件总数。
+        """
+        run_count = 0
+        event_count = 0
+        runs, _ = AssistantRunRepository.list_all(page=1, page_size=10000)
+        for run in runs:
+            added = cls.backfill_run(str(run.get("run_id") or ""))
+            if added:
+                run_count += 1
+                event_count += added
+
+        call_count = 0
+        calls, _ = AssistantToolCallRepository.list_all(page=1, page_size=10000)
+        for call in calls:
+            added = cls.backfill_call(str(call.get("call_id") or ""))
+            if added:
+                call_count += 1
+                event_count += added
+
+        return {"runs": run_count, "calls": call_count, "events": event_count}
+
+    @classmethod
+    def clear_run(cls, run_id: str) -> int:
+        """清空指定 run 的统一事件，主要用于测试与修复。
+
+        Args:
+            run_id: Assistant run ID。
+
+        Returns:
+            删除的事件数量。
+        """
+        if cls._can_use_mongo():
+            try:
+                return int(cls._collection().delete_many({"run_id": run_id}).deleted_count)
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        def mutate(data):
+            before = len(data[cls.collection_name])
+            data[cls.collection_name] = [item for item in data[cls.collection_name] if item.get("run_id") != run_id]
+            return before - len(data[cls.collection_name])
+
+        return int(demo_store.mutate(mutate))
+
+
 class AssistantRunRepository(BaseRepository):
     """持久化 LUI assistant run 及其可回放事件。"""
 
@@ -815,6 +1279,18 @@ class AssistantRunRepository(BaseRepository):
     def find_active_for_chat(cls, chat_id: str, created_by: str) -> dict[str, Any] | None:
         filters = {"chat_id": chat_id, "created_by": created_by, "status": {"$in": ["queued", "running"]}}
         return cls.find_one(filters)
+
+    @classmethod
+    def find_by_continuation_key(cls, continuation_key: str) -> dict[str, Any] | None:
+        """按工具调用幂等键查找已创建的 continuation run。
+
+        Args:
+            continuation_key: 通常为 AssistantToolCall.call_id。
+
+        Returns:
+            匹配的 run 文档；未找到时返回 ``None``。
+        """
+        return cls.find_one({"request_snapshot.context.continuation_key": continuation_key})
 
     @classmethod
     def update_if_status(cls, run_id: str, statuses: list[str], fields: dict[str, Any]) -> bool:
@@ -925,12 +1401,13 @@ class AssistantRunRepository(BaseRepository):
 
     @classmethod
     def append_event(cls, run_id: str, event: dict[str, Any]) -> dict[str, Any] | None:
+        """双写旧 embedded event 与统一 append-only 事件。"""
         if cls._can_use_mongo():
             try:
                 current = cls._collection().find_one_and_update(
                     {"run_id": run_id},
                     {"$inc": {"event_seq": 1}},
-                    projection={"event_seq": 1},
+                    projection={"event_id": 0, "chat_id": 1, "run_id": 1, "created_by": 1, "event_seq": 1},
                     return_document=False,
                 )
                 if not current:
@@ -941,6 +1418,8 @@ class AssistantRunRepository(BaseRepository):
                     {"run_id": run_id},
                     {"$push": {"events": {"$each": [payload], "$slice": -500}}, "$set": {"updated_at": event.get("at")}},
                 )
+                if payload.get("type") not in {"tool_call", "tool_input_required"}:
+                    AssistantEventRepository.append(current, payload)
                 return payload
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
@@ -952,14 +1431,32 @@ class AssistantRunRepository(BaseRepository):
                     payload = {"seq": seq, **clone_document(event)}
                     item.setdefault("events", []).append(payload)
                     item["events"] = item["events"][-500:]
+                    if payload.get("type") not in {"tool_call", "tool_input_required"}:
+                        data[AssistantEventRepository.collection_name].append(
+                            AssistantEventRepository.build_document(item, payload)
+                        )
                     return payload
             return None
         return demo_store.mutate(mutate)
 
     @classmethod
     def events_after(cls, run_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
+        """优先从统一事件集合回放，缺失时回退旧 embedded events。"""
+        unified_events = [
+            event
+            for event in AssistantEventRepository.events_after(run_id, after_seq)
+            if not event.get("call_id")
+        ]
+        merged = {
+            int(event.get("seq", 0)): AssistantEventRepository.to_legacy_event(event)
+            for event in unified_events
+        }
         document = cls.find_one({"run_id": run_id}) or {}
-        return [clone_document(e) for e in document.get("events", []) if int(e.get("seq", 0)) > after_seq]
+        for event in document.get("events", []):
+            seq = int(event.get("seq", 0))
+            if seq > after_seq and seq not in merged:
+                merged[seq] = clone_document(event)
+        return [merged[seq] for seq in sorted(merged) if seq > after_seq]
 
     @classmethod
     def list_for_chat(cls, chat_id: str, created_by: str, page: int = 1, page_size: int = 20):

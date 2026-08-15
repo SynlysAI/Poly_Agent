@@ -55,6 +55,9 @@
 | [research-engine-plan-05-frontend-mvp.md](research-engine-plan-05-frontend-mvp.md) | ResearchEngine 前端 MVP 计划 |
 | [research-engine-plan-06-traceability-and-qa.md](research-engine-plan-06-traceability-and-qa.md) | 追溯闭环与验收计划 |
 | [research-engine-plan-07-lui-algorithm-tooling.md](research-engine-plan-07-lui-algorithm-tooling.md) | `/dialogue` LUI 升级：算法工具派生、调用状态机、历史对话、模型编排与界面均已落地，真实模型与 Playwright 响应式验收完成 |
+| [research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md](research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md) | LUI Runtime、模型路由识别、上下文注入、工具契约、持久化事件、服务端续答与配置/观测增强工作计划 |
+| [research-engine-plan-08-regression-test-matrix.md](research-engine-plan-08-regression-test-matrix.md) | Plan 08 LUI Runtime 回归测试矩阵与验证命令 |
+| [research-engine-plan-08-wrapup.md](research-engine-plan-08-wrapup.md) | Plan 08 剩余技术债 P08-F2–F8 的独立收尾计划，已完成并关闭 |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |
 
 ## 部署、工具链与治理

@@ -45,9 +45,11 @@ class AssistantRun(BaseModel):
     first_token_ms: int | None = None
     provider_id: str | None = None
     model_id: str | None = None
+    route: dict[str, Any] | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    request_manifests: dict[str, Any] = Field(default_factory=dict)
     http_status: int | None = None
     rate_limited: bool = False
     reconnect_count: int = 0
