@@ -11,6 +11,7 @@ import {
   Expand,
   Fold,
   FolderOpened,
+  MagicStick,
   Plus,
   Promotion,
   Reading,
@@ -64,6 +65,10 @@ import {
   assistantContextLabel,
   assistantContextTooltip,
 } from '../utils/assistantContext.js'
+import {
+  MAX_AUTO_SELECTED_TOOLS,
+  selectRelevantTools,
+} from '../utils/assistantToolAutoSelect.mjs'
 import { replayAssistantEvents } from '../utils/assistantEvents.js'
 import {
   capabilitySourceLabel,
@@ -111,9 +116,15 @@ const llmCatalog = ref({ providers: [], routing: {} })
 const knowledgeSystems = ref([])
 const agentTools = ref([])
 const agentToolsLoading = ref(false)
+const agentToolsLoaded = ref(false)
 const selectedModelKey = ref('')
 const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
 const selectedToolIds = ref([])
+const manualSelectedToolIds = ref([])
+const autoSelectedToolIds = ref([])
+const excludedAutoToolIds = ref([])
+const autoToolReasons = ref({})
+const autoSelectTools = ref(false)
 const useWebSearch = ref(loadWebSearchPreference())
 const chatId = ref(normalizeQueryString(route.params.chatId))
 const userMessageId = ref('')
@@ -205,6 +216,88 @@ function normalizeMode(value) {
   return ['qa', 'deep', 'model'].includes(mode) ? mode : 'qa'
 }
 
+function applyManualToolSelection(ids) {
+  manualSelectedToolIds.value = [...new Set(ids || [])]
+  syncAutoSelectedTools()
+}
+
+function syncAutoSelectedTools() {
+  const availableTools = agentTools.value || []
+  const validManualIds = agentToolsLoaded.value
+    ? manualSelectedToolIds.value.filter((toolId) =>
+        availableTools.some((tool) => tool.tool_id === toolId),
+      )
+    : [...manualSelectedToolIds.value]
+  manualSelectedToolIds.value = [...new Set(validManualIds)]
+
+  autoSelectedToolIds.value = []
+  autoToolReasons.value = {}
+
+  if (autoSelectTools.value && inputText.value.trim()) {
+    const remainingSlots = Math.max(0, MAX_AUTO_SELECTED_TOOLS - validManualIds.length)
+    const candidates = selectRelevantTools(availableTools, inputText.value, {
+      max: remainingSlots,
+    })
+    const additions = candidates
+      .filter((item) => (
+        !validManualIds.includes(item.tool_id)
+        && !excludedAutoToolIds.value.includes(item.tool_id)
+      ))
+      .slice(0, remainingSlots)
+    autoSelectedToolIds.value = additions.map((item) => item.tool_id)
+    for (const item of additions) {
+      autoToolReasons.value[item.tool_id] = item.reason
+    }
+  }
+
+  selectedToolIds.value = [...new Set([
+    ...validManualIds,
+    ...autoSelectedToolIds.value,
+  ])]
+}
+
+function handleToolSelectionChange(nextIds) {
+  const normalized = [...new Set(nextIds || [])]
+  if (!autoSelectTools.value) {
+    manualSelectedToolIds.value = normalized
+    selectedToolIds.value = normalized
+    return
+  }
+
+  const previousIds = selectedToolIds.value
+  const removedIds = previousIds.filter((toolId) => !normalized.includes(toolId))
+  const addedIds = normalized.filter((toolId) => !previousIds.includes(toolId))
+
+  for (const toolId of removedIds) {
+    if (autoSelectedToolIds.value.includes(toolId)) {
+      excludedAutoToolIds.value = [...new Set([...excludedAutoToolIds.value, toolId])]
+    } else {
+      manualSelectedToolIds.value = manualSelectedToolIds.value.filter((item) => item !== toolId)
+    }
+  }
+
+  for (const toolId of addedIds) {
+    excludedAutoToolIds.value = excludedAutoToolIds.value.filter((item) => item !== toolId)
+    if (!manualSelectedToolIds.value.includes(toolId)) {
+      manualSelectedToolIds.value = [...manualSelectedToolIds.value, toolId]
+    }
+  }
+
+  syncAutoSelectedTools()
+}
+
+function toggleAutoSelectTools() {
+  autoSelectTools.value = !autoSelectTools.value
+}
+
+function autoToolReason(toolId) {
+  return autoToolReasons.value[toolId] || ''
+}
+
+function isAutoSelectedTool(toolId) {
+  return autoSelectedToolIds.value.includes(toolId)
+}
+
 watch(useWebSearch, (value) => {
   saveWebSearchPreference(value)
 })
@@ -216,6 +309,18 @@ watch(
   },
   { flush: 'sync' },
 )
+
+watch(autoSelectTools, () => {
+  syncAutoSelectedTools()
+})
+
+watch(inputText, () => {
+  if (autoSelectTools.value) syncAutoSelectedTools()
+})
+
+watch(agentTools, () => {
+  if (autoSelectTools.value) syncAutoSelectedTools()
+})
 
 function cleanInitialQuery() {
   if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId && !route.query.toolIds && !route.query.history) return
@@ -294,20 +399,25 @@ async function loadAgentTools() {
   try {
     const data = await listAgentTools()
     agentTools.value = data?.items || []
-    if (selectedToolIds.value.length) {
-      const validIds = new Set(agentTools.value.map((tool) => tool.tool_id))
-      selectedToolIds.value = selectedToolIds.value.filter((toolId) => validIds.has(toolId))
+    if (manualSelectedToolIds.value.length || selectedToolIds.value.length) {
+      applyManualToolSelection(manualSelectedToolIds.value.length
+        ? manualSelectedToolIds.value
+        : selectedToolIds.value)
     }
   } catch (error) {
     agentTools.value = []
     ElMessage.warning(`算法工具加载失败：${getApiErrorMessage(error)}`)
   } finally {
+    agentToolsLoaded.value = true
     agentToolsLoading.value = false
+    syncAutoSelectedTools()
   }
 }
 
 function removeAgentTool(toolId) {
-  selectedToolIds.value = selectedToolIds.value.filter((item) => item !== toolId)
+  manualSelectedToolIds.value = manualSelectedToolIds.value.filter((item) => item !== toolId)
+  excludedAutoToolIds.value = [...new Set([...excludedAutoToolIds.value, toolId])]
+  syncAutoSelectedTools()
 }
 
 function chatOptionsPayload() {
@@ -444,7 +554,7 @@ async function loadChat(chatKey) {
     chatId.value = data.chat_id
     chatMode.value = normalizeMode(data.mode)
     selectedKnowledgeBaseIds.value = data.knowledge_base_ids || []
-    selectedToolIds.value = data.selected_tool_ids || []
+    applyManualToolSelection(data.selected_tool_ids || [])
     useWebSearch.value = Boolean(data.use_web_search)
     messages.value = data.messages?.length ? data.messages.map(restoreMessage) : defaultMessages()
     for (const message of messages.value) {
@@ -810,6 +920,8 @@ function buildAssistantContext(extra = {}) {
     chat_id: chatId.value,
     message_id: userMessageId.value,
     selected_tool_ids: selectedToolIds.value,
+    auto_selected_tool_ids: autoSelectedToolIds.value,
+    selected_tool_reasons: { ...autoToolReasons.value },
     ...extra,
   }
 }
@@ -1316,7 +1428,7 @@ onMounted(() => {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
-  selectedToolIds.value = initialToolIds
+  applyManualToolSelection(initialToolIds)
   chatMode.value = normalizeMode(route.query.mode)
   initialUrlModel.value = initialProviderId && initialModelId
     ? { providerId: initialProviderId, modelId: initialModelId }
@@ -1840,7 +1952,10 @@ watch(
           </span>
           <span v-for="tool in selectedToolSummary" :key="tool.tool_id" class="mention-chip mention-chip--tool">
             <el-icon><Tools /></el-icon>
-            <span class="mention-chip-name" :title="tool.name">{{ tool.name }}</span>
+            <span class="mention-chip-name" :title="autoToolReason(tool.tool_id) || tool.name">
+              {{ tool.name }}
+              <em v-if="isAutoSelectedTool(tool.tool_id)" class="mention-chip-auto">自动</em>
+            </span>
             <button type="button" aria-label="移除工具" @click="removeAgentTool(tool.tool_id)">×</button>
           </span>
         </div>
@@ -1929,11 +2044,24 @@ watch(
               </div>
             </el-popover>
             <ToolMenuPicker
-              v-model="selectedToolIds"
+              :model-value="selectedToolIds"
               :tools="agentTools"
               :loading="agentToolsLoading"
               aria-label="选择工具"
+              @update:model-value="handleToolSelectionChange"
             />
+            <button
+              type="button"
+              class="icon-tool-btn auto-tool-btn"
+              :class="{ active: autoSelectTools }"
+              :disabled="agentToolsLoading || !agentTools.length"
+              :aria-pressed="autoSelectTools"
+              aria-label="自动匹配工具"
+              @click="toggleAutoSelectTools"
+            >
+              <el-icon><MagicStick /></el-icon>
+              <span v-if="autoSelectTools" class="auto-tool-dot" />
+            </button>
           </div>
           <div class="composer-toolbar-right">
             <LlmModelSelect
@@ -2666,6 +2794,16 @@ h1 {
   opacity: 0.45;
 }
 
+.auto-tool-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--app-primary);
+}
+
 .tool-count {
   position: absolute;
   top: -5px;
@@ -2717,9 +2855,27 @@ h1 {
 .mention-chip-name {
   min-width: 0;
   max-width: 180px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mention-chip-auto {
+  min-width: 18px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 4px;
+  border-radius: var(--app-radius-pill);
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 16px;
 }
 
 .mention-chip button {

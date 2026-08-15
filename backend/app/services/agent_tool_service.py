@@ -12,6 +12,7 @@ from app.infra.computation_repositories import AuditEventRepository
 from app.infra.research_engine_repositories import (
     AgentToolPolicyRepository,
     AlgorithmRegistryRepository,
+    AlgorithmRunRepository,
     AlgorithmVersionRepository,
 )
 from app.schemas.agent_tools import (
@@ -41,6 +42,7 @@ UNAVAILABLE_DEPLOYMENT_STATUSES = {
     "frozen",
     "disabled",
 }
+RECENT_RUN_SAMPLE_SIZE = 20
 
 
 class AgentToolService:
@@ -100,6 +102,30 @@ class AgentToolService:
         if normalized in {"ready", "healthy", "verified", "ok", "active"}:
             return "healthy", None, {"status": normalized, "backend": deployment.get("backend")}
         return "unknown", None, {"status": normalized, "backend": deployment.get("backend")}
+
+    @staticmethod
+    def _recent_success_metrics(algorithm_id: str) -> tuple[float | None, int]:
+        """统计算法最近的 terminal run 成功率。
+
+        Args:
+            algorithm_id: 算法 ID。
+
+        Returns:
+            (成功率, 样本数) 元组；没有 terminal run 时成功率为 None。
+        """
+        runs, _ = AlgorithmRunRepository.list_runs(
+            algorithm_id=algorithm_id,
+            page=1,
+            page_size=RECENT_RUN_SAMPLE_SIZE,
+        )
+        terminal_runs = [
+            item for item in runs
+            if item.get("status") in {"completed", "failed", "cancelled"}
+        ]
+        if not terminal_runs:
+            return None, 0
+        success_count = len([item for item in terminal_runs if item.get("status") == "completed"])
+        return success_count / len(terminal_runs), len(terminal_runs)
 
     @classmethod
     def _derive_registry_item(cls, registry: dict[str, Any]) -> AgentToolRegistryItem:
@@ -180,12 +206,15 @@ class AgentToolService:
                 for item in tool.input_assets
             ],
         }
+        recent_success_rate, recent_run_count = cls._recent_success_metrics(algorithm_id)
         return tool.model_copy(
             update={
                 "function_name": safe_function_name(tool.tool_id),
                 "input_json_schema": build_json_schema(tool),
                 "schema_digest": schema_digest(tool),
                 "presentation": presentation,
+                "recent_success_rate": recent_success_rate,
+                "recent_run_count": recent_run_count,
             }
         )
 

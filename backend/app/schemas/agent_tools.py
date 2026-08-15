@@ -111,6 +111,8 @@ class AgentTool(BaseModel):
     phase: AgentToolPhase
     health_status: AgentToolHealthStatus
     unavailable_reason: str | None = None
+    recent_success_rate: float | None = Field(default=None, ge=0, le=1)
+    recent_run_count: int = Field(default=0, ge=0)
 
 
 class AgentToolRegistryItem(AgentTool):

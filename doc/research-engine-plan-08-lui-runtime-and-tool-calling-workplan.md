@@ -1,6 +1,6 @@
 # Plan 08：LUI Runtime、上下文注入与工具调用增强工作计划
 
-> **状态：进行中（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05、PR-06 已完成）**
+> **状态：进行中（PR-01、PR-02、PR-03、PR-04 阶段一、PR-05、PR-06、PR-07 已完成）**
 >
 > 日期：2026-08-15
 >
@@ -559,13 +559,13 @@ AssistantRunService
   - omitted reason
   - tool schema digest
   - evidence references
-- [ ] `ToolMenuPicker` 增加：
+- [x] `ToolMenuPicker` 增加：
   - 健康状态
   - 是否需要确认
   - 是否需要文件
   - 版本
   - 最近成功率
-- [ ] 增加保守的“自动选择相关工具”模式：
+- [x] 增加保守的“自动选择相关工具”模式：
   - 最多 5 个
   - 基于名称、描述、material scope、输入 schema 做轻量匹配
   - 记录选中原因
@@ -658,6 +658,8 @@ AssistantRunService
 - [x] stale phase 防降级。
 - [x] raw arguments 与 parse error 展示。
 - [x] 320 / 768 / 1440 布局不溢出。
+- [x] ToolMenuPicker 展示健康状态、确认、文件、版本和最近成功率。
+- [x] 自动选择相关工具最多 5 个，显式用户选择优先，并记录/展示选中原因。
 
 ### 7.3 E2E 场景
 
@@ -759,3 +761,4 @@ AssistantRunService
 - 2026-08-15：PR-04 阶段一已完成：`assistant_events` append-only 集合、run/call 双写与连续 seq、统一事件回放 fallback、旧数据幂等 backfill 脚本、route/request/tool catalog/schema/confirmed 等事件、run 与 call 关联以及前端 `assistantEvents` reducer 均已落地；相关后端 77 个 assistant 测试、前端 assistant 单测与构建通过。完整 LLM request 生命周期事件、admin trace 展示和 continuation scheduled 事件仍留在 PR-04 后续切片。
 - 2026-08-15：PR-05 已完成：assistant 消息 meta 展示 provider/model、路由原因、能力、usage 与 context digest；模型 meta 支持点击查看 capability source、context window、tool protocol 与 fallback reason；所选模型无 `tool_calling` 且已选工具时提供 warning 与一键切换工具模型入口；工具卡片补齐提议模型、provider call id、function name、schema digest、raw arguments、parse error、模型/用户参数 diff 和事件 timeline；新增“本轮上下文”折叠面板，展示 route、context sections、token estimate、omitted reason、工具 schema digest 与证据引用；相关前端 `assistantUi`、assistant 事件/工具调用单测和 `npm run build` 通过。ToolMenuPicker 健康/版本/确认/文件/成功率增强及自动选择相关工具仍留给 PR-07。
 - 2026-08-15：PR-06 已完成：`AssistantToolCall` 增加 `continuation_state`、`continuation_run_id`、`continuation_error` 与安全 `source_context`；工具提案持久化原用户消息、selected tools、mode、model request、context manifest digest 与 route snapshot；工具 completed/failed 后写入 `tool.continuation.scheduled` outbox 事件；assistant worker 扫描 pending continuation 调用并以 call id 幂等创建 continuation run；continuation 复用原用户消息和 source_context，最终 assistant 消息可追溯到 tool call；多工具结果与结构化失败信息已进入 `_continuation_messages()`，result summary/artifact refs 做字符预算截断；保留 daemon thread 兼容路径并新增 queued/running 孤儿对账。后端 assistant 相关 79 个测试、前端 assistant 单测及 `npm run build` 通过。
+- 2026-08-15：PR-07 已完成：`AgentTool` 目录新增 `recent_success_rate` 与 `recent_run_count`，由最近 20 条 terminal AlgorithmRun 动态计算；`ToolMenuPicker` 展示健康状态、是否需要确认、是否需要文件、版本与最近成功率；新增保守“自动选择相关工具”模式，最多 5 个，基于名称、描述、material scope 与输入 schema 做轻量匹配，显式用户选择优先，自动选择原因进入 `selected_tool_reasons` 并在选中 chips 可见；新增 `assistantToolMenu` 与 `assistantToolAutoSelect` 纯函数及单测。后端 agent-tools/assistant 相关 24 个测试、前端新增工具菜单单测与 `npm run build` 通过。
