@@ -61,6 +61,8 @@ class AssistantRunService:
         context = dict(payload.context)
         context["chat_id"] = chat_id
         model = context.get("model") or {}
+        requested_provider_id = model.get("providerId") or model.get("provider_id")
+        requested_model_id = model.get("modelId") or model.get("model_id")
         document = {
             "run_id": f"asrun_{uuid4().hex[:16]}",
             "chat_id": chat_id,
@@ -87,8 +89,12 @@ class AssistantRunService:
             "queue_wait_ms": None,
             "duration_ms": None,
             "first_token_ms": None,
-            "provider_id": model.get("providerId") or model.get("provider_id"),
-            "model_id": model.get("modelId") or model.get("model_id"),
+            "provider_id": requested_provider_id,
+            "model_id": requested_model_id,
+            "route": {
+                "requested_provider_id": requested_provider_id,
+                "requested_model_id": requested_model_id,
+            },
             "prompt_tokens": None,
             "completion_tokens": None,
             "total_tokens": None,
@@ -270,6 +276,13 @@ class AssistantRunService:
                 fields: dict[str, Any] = {"heartbeat_at": now, "updated_at": now}
                 if event.get("type") == "status":
                     fields["stage"] = event.get("stage") or "running"
+                elif event.get("type") == "route.resolved":
+                    route = dict(event.get("route") or {})
+                    fields["route"] = route
+                    if route.get("provider_id"):
+                        fields["provider_id"] = route.get("provider_id")
+                    if route.get("model_id"):
+                        fields["model_id"] = route.get("model_id")
                 elif event.get("type") == "answer_delta":
                     content += str(event.get("delta") or "")
                     fields["partial_content"] = content
@@ -319,7 +332,10 @@ class AssistantRunService:
                     answer_scope=data.get("answer_scope"),
                     retrieval_status=data.get("retrieval_status"),
                     tool_call_ids=[call.get("call_id") for call in data.get("tool_calls") or [] if call.get("call_id")],
-                    metadata={"run_id": run_id},
+                    metadata={
+                        "run_id": run_id,
+                        "llm_route": ((data.get("grounding_facts") or {}).get("llm_route")) or {},
+                    },
                 ),
                 {"user_id": document["created_by"], "role": document.get("actor_role") or "user"},
             )

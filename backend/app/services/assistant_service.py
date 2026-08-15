@@ -1453,6 +1453,13 @@ class AssistantService:
         tools, name_map = self._build_function_tools(selected_tool_ids, current_user)
         if not tools:
             return [], [], None, []
+        if "tool_calling" not in (llm_route.get("capabilities") or []):
+            logger.warning(
+                "assistant tool calling skipped: model lacks tool_calling capability provider=%s model=%s",
+                llm_route.get("provider_id"),
+                llm_route.get("model_id"),
+            )
+            return [], [], None, tools
         messages = self.answer_synthesizer.tool_call_messages(
             request=request,
             intent=intent,
@@ -1746,6 +1753,7 @@ class AssistantService:
                 llm_route.get("provider_id"),
                 llm_route.get("model_id"),
             )
+            yield {"type": "route.resolved", "route": self._safe_llm_route(llm_route)}
 
             if mode == "model":
                 response_facts = self._build_response_facts(
@@ -2064,11 +2072,21 @@ class AssistantService:
         return provider_id, model_id
 
     def _safe_llm_route(self, route: dict) -> dict:
+        """Build a serializable route snapshot without provider credentials."""
         return {
             "purpose": route.get("purpose"),
+            "route_reason": route.get("route_reason"),
+            "requested_provider_id": route.get("requested_provider_id"),
+            "requested_model_id": route.get("requested_model_id"),
             "provider_id": route.get("provider_id"),
+            "provider_type": route.get("provider_type"),
             "model_id": route.get("model_id"),
             "capabilities": list(route.get("capabilities") or []),
+            "capability_source": route.get("capability_source"),
+            "tool_protocol": route.get("tool_protocol"),
+            "supports_parallel_tool_calls": route.get("supports_parallel_tool_calls"),
+            "context_window": route.get("context_window"),
+            "max_output_tokens": route.get("max_output_tokens"),
             "reasoning_model_available": bool(route.get("reasoning_model_available")),
         }
 

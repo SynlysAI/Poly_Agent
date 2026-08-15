@@ -49,12 +49,16 @@ export function buildSelectableLlmModels(catalog, { dedupeByModelId = false, pre
         providerId: provider.provider_id,
         providerName: provider.display_name || provider.provider_id,
         modelId: model.model_id,
-        label: model.display_name || model.model_id,
-        capabilities: model.capabilities || [],
-        recommendedFor: model.recommended_for || [],
-        status: provider.status,
-      })
-    }
+      label: model.display_name || model.model_id,
+      capabilities: model.capabilities || [],
+      recommendedFor: model.recommended_for || [],
+      toolProtocol: model.tool_protocol || null,
+      supportsParallelToolCalls: model.supports_parallel_tool_calls,
+      contextWindow: model.context_window || null,
+      capabilitySource: model.capability_source || null,
+      status: provider.status,
+    })
+  }
   }
 
   if (!dedupeByModelId) return sortForPurpose(rows, catalog, preferredPurpose)
@@ -68,4 +72,41 @@ export function buildSelectableLlmModels(catalog, { dedupeByModelId = false, pre
     }
   }
   return sortForPurpose(Array.from(deduped.values()), catalog, preferredPurpose)
+}
+
+export function resolveDefaultModelSelection(
+  models,
+  { urlModel = null, chatModel = null, routing = {}, purpose = 'qa' } = {},
+) {
+  /**Resolve the default LLM selection by explicit user intent priority.
+
+  Args:
+    models: Selectable model rows built by buildSelectableLlmModels.
+    urlModel: Provider/model pair explicitly specified in the URL.
+    chatModel: Provider/model pair persisted with the restored chat.
+    routing: Catalog routing defaults keyed by purpose.
+    purpose: Current chat route purpose.
+
+  Returns:
+    An object containing the selected key and its selection origin.
+  */
+  function candidateKey(model) {
+    const providerId = model?.providerId || model?.provider_id
+    const modelId = model?.modelId || model?.model_id
+    return providerId && modelId ? modelKey(providerId, modelId) : ''
+  }
+  const candidates = [
+    { model: urlModel, origin: 'url' },
+    { model: chatModel, origin: 'chat' },
+    { model: routing?.[purpose], origin: 'route' },
+  ]
+  for (const candidate of candidates) {
+    const key = candidateKey(candidate.model)
+    if (key && models.some((item) => item.key === key)) {
+      return { key, origin: candidate.origin }
+    }
+  }
+  const recommended = models.find((item) => item.recommendedFor.includes(purpose))
+  if (recommended) return { key: recommended.key, origin: 'route' }
+  return { key: models[0]?.key || '', origin: 'fallback' }
 }

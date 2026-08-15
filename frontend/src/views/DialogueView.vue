@@ -70,7 +70,7 @@ import {
   saveKnowledgePreference,
   saveWebSearchPreference,
 } from '../utils/dialoguePreferences'
-import { buildSelectableLlmModels } from '../utils/llmModels'
+import { buildSelectableLlmModels, resolveDefaultModelSelection } from '../utils/llmModels'
 
 const route = useRoute()
 const router = useRouter()
@@ -82,6 +82,8 @@ const toolCallPollers = new Map()
 const continuedToolCalls = new Set()
 const confirmingCallId = ref('')
 const modelLoading = ref(false)
+const modelSelectionOrigin = ref('')
+const initialUrlModel = ref(null)
 const knowledgeLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
 const llmCatalog = ref({ providers: [], routing: {} })
@@ -131,6 +133,12 @@ const selectableModels = computed(() =>
 )
 
 const selectedModel = computed(() => selectableModels.value.find((item) => item.key === selectedModelKey.value) || null)
+const selectedModelLacksToolCalling = computed(() =>
+  Boolean(
+    selectedToolIds.value.length
+      && selectedModel.value
+      && !selectedModel.value.capabilities.includes('tool_calling'),
+  ))
 const selectedKnowledgeBases = computed(() =>
   selectedKnowledgeBaseIds.value
     .map((systemId) => knowledgeSystems.value.find((item) => item.system_id === systemId))
@@ -201,35 +209,31 @@ function routePurpose() {
   return chatMode.value === 'deep' ? 'deep' : 'qa'
 }
 
-function selectDefaultModelForMode(preferred = {}) {
-  if (selectedModelKey.value && selectableModels.value.some((item) => item.key === selectedModelKey.value)) {
-    return
-  }
-  const safeDefaultModel = selectableModels.value.find((item) => item.providerId === 'default_openai')
-  if (safeDefaultModel) {
-    selectedModelKey.value = safeDefaultModel.key
-    return
-  }
-  const preferredKey = preferred.providerId && preferred.modelId ? `${preferred.providerId}::${preferred.modelId}` : ''
-  if (preferredKey && selectableModels.value.some((item) => item.key === preferredKey)) {
-    selectedModelKey.value = preferredKey
-    return
-  }
-  const purpose = routePurpose()
-  const route = llmCatalog.value.routing?.[purpose]
-  const key = route?.provider_id && route?.model_id ? `${route.provider_id}::${route.model_id}` : ''
-  if (key && selectableModels.value.some((item) => item.key === key)) {
-    selectedModelKey.value = key
-    return
-  }
-  selectedModelKey.value = selectableModels.value[0]?.key || ''
+function selectedModelKeyExists(key) {
+  return Boolean(key) && selectableModels.value.some((item) => item.key === key)
 }
 
-async function loadLlmModels(preferred = {}) {
+function selectDefaultModelForMode(chatModel = null) {
+  if (['user', 'url'].includes(modelSelectionOrigin.value) && selectedModelKeyExists(selectedModelKey.value)) return
+  const selection = resolveDefaultModelSelection(selectableModels.value, {
+    urlModel: initialUrlModel.value,
+    chatModel,
+    routing: llmCatalog.value.routing || {},
+    purpose: routePurpose(),
+  })
+  selectedModelKey.value = selection.key
+  modelSelectionOrigin.value = selection.origin
+}
+
+function handleModelManualChange() {
+  if (selectedModelKey.value) modelSelectionOrigin.value = 'user'
+}
+
+async function loadLlmModels() {
   modelLoading.value = true
   try {
     llmCatalog.value = await getLlmModels()
-    selectDefaultModelForMode(preferred)
+    selectDefaultModelForMode()
   } catch (error) {
     ElMessage.warning(`模型列表加载失败：${getApiErrorMessage(error)}`)
   } finally {
@@ -312,6 +316,7 @@ function restoreMessage(item) {
     reasoning_summary: item.reasoning_summary || [],
     tool_calls: (item.tool_calls || []).map((call) => normalizeToolCall({ ...call, schema_fields: normalizeSchemaArguments(call) })),
     web_search_requested: item.web_search_requested,
+    llm_route: item.metadata?.llm_route || null,
     streaming: false,
     error: false,
   }
@@ -738,6 +743,7 @@ function applyAssistantStreamEvent(index, event) {
       answer_mode: data.answer_mode || '',
       answer_scope: data.answer_scope || '',
       retrieval_status: data.retrieval_status || target.retrieval_status || '',
+      llm_route: data.grounding_facts?.llm_route || target.llm_route || null,
       stream_status: '',
       stream_stage: '',
       streaming: false,
@@ -893,6 +899,13 @@ function webSearchRequestLabel(message) {
   if (message.web_search_requested === true) return '联网开启'
   if (message.web_search_requested === false) return '联网关闭'
   return ''
+}
+
+function assistantModelLabel(message) {
+  const routeInfo = message?.llm_route
+  if (!routeInfo?.model_id) return ''
+  const toolCapable = Array.isArray(routeInfo.capabilities) && routeInfo.capabilities.includes('tool_calling')
+  return toolCapable ? `${routeInfo.model_id} · 工具` : routeInfo.model_id
 }
 
 function webSearchRequestTagType(message) {
@@ -1098,12 +1111,15 @@ onMounted(() => {
     .filter(Boolean)
   selectedToolIds.value = initialToolIds
   chatMode.value = normalizeMode(route.query.mode)
+  initialUrlModel.value = initialProviderId && initialModelId
+    ? { providerId: initialProviderId, modelId: initialModelId }
+    : null
   if (route.query.history === 'open') {
     historyPanelVisible.value = true
   }
   cleanInitialQuery()
   Promise.all([
-    loadLlmModels({ providerId: initialProviderId, modelId: initialModelId }),
+    loadLlmModels(),
     loadKnowledgeBases(),
     loadAgentTools(),
   ]).then(async () => {
@@ -1224,9 +1240,12 @@ watch(
         >
           <div class="chat-bubble">
             <div class="chat-bubble-text">
-              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status || webSearchRequestLabel(msg)" class="chat-meta">
+              <div v-if="msg.answer_mode || msg.retrieval_status || msg.stream_status || webSearchRequestLabel(msg) || assistantModelLabel(msg)" class="chat-meta">
                 <el-tag v-if="webSearchRequestLabel(msg)" size="small" effect="plain" :type="webSearchRequestTagType(msg)">
                   {{ webSearchRequestLabel(msg) }}
+                </el-tag>
+                <el-tag v-if="assistantModelLabel(msg)" size="small" effect="plain" type="success">
+                  {{ assistantModelLabel(msg) }}
                 </el-tag>
                 <el-tag v-if="msg.answer_mode" size="small" effect="plain" type="info">
                   {{ answerModeLabelMap[msg.answer_mode] || msg.answer_mode }}
@@ -1591,7 +1610,15 @@ watch(
               class="composer-model-select"
               :models="selectableModels"
               :loading="modelLoading"
+              @change="handleModelManualChange"
             />
+            <span
+              v-if="selectedModelLacksToolCalling"
+              class="composer-model-warning"
+              role="status"
+            >
+              当前模型不支持工具调用
+            </span>
             <el-button
               v-if="currentRunActive"
               type="danger"
@@ -2216,6 +2243,18 @@ h1 {
 
 .composer-model-select {
   flex: 0 1 280px;
+}
+
+.composer-model-warning {
+  flex: 0 0 auto;
+  border: 1px solid #fde68a;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #92400e;
+  background: #fffbeb;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .kb-picker {

@@ -17,6 +17,7 @@ from openai import OpenAI
 from app.core.config import settings
 from app.infra.llm_repositories import LLMRoutingRepository
 from app.schemas.llm_models import LLMModelCatalogData
+from app.schemas.llm_models import LLMModelConfigInput
 from app.schemas.llm_models import LLMModelInfo
 from app.schemas.llm_models import LLMProviderConfigInput
 from app.schemas.llm_models import LLMProviderInfo
@@ -72,23 +73,44 @@ class LLMModelService:
         requested_model: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         providers = self._build_providers()
+        requested_provider_id = str(
+            (requested_model or {}).get("providerId") or (requested_model or {}).get("provider_id") or ""
+        ).strip()
+        requested_model_id = str(
+            (requested_model or {}).get("modelId") or (requested_model or {}).get("model_id") or ""
+        ).strip()
         if requested_model:
-            provider_id = str(requested_model.get("providerId") or requested_model.get("provider_id") or "").strip()
-            model_id = str(requested_model.get("modelId") or requested_model.get("model_id") or "").strip()
-            if provider_id and model_id:
-                provider = self._provider_by_id(providers, provider_id)
-                model = self._model_by_id(provider, model_id)
-                return self._route_payload(provider, model, purpose=purpose)
+            if requested_provider_id and requested_model_id:
+                provider = self._provider_by_id(providers, requested_provider_id)
+                model = self._model_by_id(provider, requested_model_id)
+                return self._route_payload(
+                    provider,
+                    model,
+                    purpose=purpose,
+                    route_reason="user_selected",
+                    requested_provider_id=requested_provider_id,
+                    requested_model_id=requested_model_id,
+                )
 
         routing = self.get_routing(providers=providers)
         selection = getattr(routing, purpose, None)
+        route_reason = "purpose_default"
         if not selection:
-            selection = getattr(self._default_routing(providers), purpose, None)
+            default_routing = self._default_routing(providers)
+            selection = getattr(default_routing, purpose, None)
+            route_reason = self._default_selection_reason(providers, selection, purpose)
         if not selection:
             raise HTTPException(status_code=503, detail="LLM 模型路由未配置")
         provider = self._provider_by_id(providers, selection.provider_id)
         model = self._model_by_id(provider, selection.model_id)
-        return self._route_payload(provider, model, purpose=purpose)
+        return self._route_payload(
+            provider,
+            model,
+            purpose=purpose,
+            route_reason=route_reason,
+            requested_provider_id=requested_provider_id or None,
+            requested_model_id=requested_model_id or None,
+        )
 
     def complete_text(
         self,
@@ -317,13 +339,12 @@ class LLMModelService:
         capabilities = list(dict.fromkeys(config.get("capabilities") or ["chat"]))
         recommended_for = list(dict.fromkeys(config.get("recommended_for") or []))
         models = [
-            LLMModelInfo(
-                model_id=model_id,
-                display_name=model_id,
-                capabilities=self._capabilities_for_model(model_id, capabilities),
-                recommended_for=recommended_for,
+            self._model_info_from_config(
+                model_config,
+                provider_capabilities=capabilities,
+                provider_recommended_for=recommended_for,
             )
-            for model_id in self._model_ids_from_config(config)
+            for model_config in self._model_configs_from_config(config)
         ]
         api_key_env = config.get("api_key_env")
         api_key_configured = bool(config.get("api_key_configured"))
@@ -341,12 +362,70 @@ class LLMModelService:
             models=models,
         )
 
-    def _model_ids_from_config(self, config: dict[str, Any]) -> list[str]:
-        values = [str(item).strip() for item in config.get("models") or [] if str(item).strip()]
+    def _model_configs_from_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
+        """Normalize provider model entries to per-model config objects.
+
+        Args:
+            config: Provider config whose models may be strings or objects.
+
+        Returns:
+            Deduplicated per-model config list preserving input order.
+        """
+        values: list[dict[str, Any]] = []
+        for item in config.get("models") or []:
+            if isinstance(item, str):
+                model_id = item.strip()
+                if model_id:
+                    values.append({"model_id": model_id})
+            elif isinstance(item, dict):
+                model_id = str(item.get("model_id") or "").strip()
+                if model_id:
+                    values.append({**item, "model_id": model_id})
+            elif isinstance(item, LLMModelConfigInput):
+                values.append(item.model_dump(mode="python"))
         model = str(config.get("model") or "").strip()
         if model:
-            values.insert(0, model)
-        return list(dict.fromkeys(values))
+            values.insert(0, {"model_id": model})
+        deduped: dict[str, dict[str, Any]] = {}
+        for item in values:
+            deduped.setdefault(item["model_id"], item)
+        return list(deduped.values())
+
+    def _model_info_from_config(
+        self,
+        model_config: dict[str, Any],
+        *,
+        provider_capabilities: list[str],
+        provider_recommended_for: list[str],
+    ) -> LLMModelInfo:
+        """Build sanitized model metadata from per-model config.
+
+        Args:
+            model_config: Normalized per-model config.
+            provider_capabilities: Provider-level capability fallback.
+            provider_recommended_for: Provider-level purpose fallback.
+
+        Returns:
+            Catalog-facing model info with configured capability source.
+        """
+        model_id = str(model_config["model_id"])
+        configured = model_config.get("capabilities")
+        capabilities = self._sorted_capabilities(
+            list(configured) if configured else self._capabilities_for_model(model_id, provider_capabilities)
+        )
+        return LLMModelInfo(
+            model_id=model_id,
+            display_name=str(model_config.get("display_name") or model_id),
+            capabilities=capabilities,  # type: ignore[arg-type]
+            recommended_for=list(
+                dict.fromkeys(model_config.get("recommended_for") or provider_recommended_for)
+            ),  # type: ignore[arg-type]
+            context_window=self._positive_int_or_none(model_config.get("context_window")),
+            max_output_tokens=self._positive_int_or_none(model_config.get("max_output_tokens")),
+            tool_protocol=str(model_config.get("tool_protocol") or "").strip() or None,
+            supports_parallel_tool_calls=model_config.get("supports_parallel_tool_calls"),
+            capability_source="configured",
+        )
 
     def _capabilities_for_model(self, model_id: str, configured: list[str]) -> list[str]:
         capabilities = [item for item in configured if item]
@@ -358,8 +437,26 @@ class LLMModelService:
         if any(token in normalized for token in ("long", "128k", "qwen3.6")):
             capabilities.append("long_context")
 
-        deduped = list(dict.fromkeys(capabilities))
-        return sorted(deduped, key=lambda item: CAPABILITY_ORDER.index(item) if item in CAPABILITY_ORDER else len(CAPABILITY_ORDER))
+        return self._sorted_capabilities(capabilities)
+
+    @staticmethod
+    def _sorted_capabilities(capabilities: list[str]) -> list[str]:
+        """Sort and deduplicate capability labels by the catalog order."""
+        return sorted(
+            dict.fromkeys(capabilities),
+            key=lambda item: CAPABILITY_ORDER.index(item) if item in CAPABILITY_ORDER else len(CAPABILITY_ORDER),
+        )
+
+    @staticmethod
+    def _positive_int_or_none(value: Any) -> int | None:
+        """Convert a positive integer config value, returning None when invalid."""
+        if value is None:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
 
     def _dedupe_providers(self, providers: list[LLMProviderInfo]) -> list[LLMProviderInfo]:
         deduped: dict[str, LLMProviderInfo] = {}
@@ -421,8 +518,9 @@ class LLMModelService:
             or LLMModelInfo(
                 model_id=model_id,
                 display_name=model_id,
-                capabilities=provider.models[0].capabilities if provider.models else ["chat"],
-                recommended_for=provider.models[0].recommended_for if provider.models else [],
+                capabilities=self._capabilities_for_model(model_id, ["chat"]),
+                recommended_for=[],
+                capability_source="inferred",
             )
             for model_id in model_ids or list(known)
         ]
@@ -483,6 +581,51 @@ class LLMModelService:
                 return LLMRouteSelection(provider_id=provider.provider_id, model_id=provider.models[0].model_id)
         return None
 
+    def _default_selection_reason(
+        self,
+        providers: list[LLMProviderInfo],
+        selection: LLMRouteSelection | None,
+        purpose: LLMRoutePurpose,
+    ) -> str:
+        """Explain why a default routing selection was chosen.
+
+        Args:
+            providers: Current sanitized provider catalog.
+            selection: Default route selection to classify.
+            purpose: Route purpose.
+
+        Returns:
+            ``purpose_default`` for env/recommended/capability matches, else ``fallback``.
+        """
+        if not selection:
+            return "fallback"
+        env_provider_id, env_model_id = self._purpose_env_selection(purpose)
+        if env_provider_id and env_model_id and selection.provider_id == env_provider_id and selection.model_id == env_model_id:
+            return "purpose_default"
+        try:
+            provider = self._provider_by_id(providers, selection.provider_id)
+            model = self._model_by_id(provider, selection.model_id)
+        except HTTPException:
+            return "fallback"
+        if purpose in model.recommended_for:
+            return "purpose_default"
+        required_capability = {"qa": "chat", "deep": "reasoning", "report": "structured_json"}[purpose]
+        return "purpose_default" if required_capability in model.capabilities else "fallback"
+
+    @staticmethod
+    def _purpose_env_selection(purpose: LLMRoutePurpose) -> tuple[str, str]:
+        """Return the configured env provider/model pair for a purpose."""
+        if purpose == "deep":
+            return settings.llm_reasoning_provider or "", settings.llm_reasoning_model or ""
+        if purpose == "report":
+            provider_id = (
+                settings.report_llm_provider
+                if settings.report_llm_provider != "openai_compatible"
+                else (settings.llm_default_provider or "default_openai")
+            )
+            return provider_id or "", settings.report_llm_model or settings.llm_model or ""
+        return settings.llm_default_provider or "default_openai", settings.llm_default_model or settings.llm_model or ""
+
     def _merge_routing(self, existing: LLMRoutingData, update: LLMRoutingUpdateRequest) -> LLMRoutingData:
         data = existing.model_dump(mode="python")
         for key in ("qa", "deep", "report"):
@@ -523,14 +666,31 @@ class LLMModelService:
             }
         return output
 
-    def _route_payload(self, provider: LLMProviderInfo, model: LLMModelInfo, *, purpose: str) -> dict[str, Any]:
+    def _route_payload(
+        self,
+        provider: LLMProviderInfo,
+        model: LLMModelInfo,
+        *,
+        purpose: str,
+        route_reason: str,
+        requested_provider_id: str | None = None,
+        requested_model_id: str | None = None,
+    ) -> dict[str, Any]:
         config = self._provider_runtime_config(provider.provider_id)
         return {
             "purpose": purpose,
+            "route_reason": route_reason,
+            "requested_provider_id": requested_provider_id,
+            "requested_model_id": requested_model_id,
             "provider_id": provider.provider_id,
             "provider_type": provider.provider_type,
             "model_id": model.model_id,
             "capabilities": model.capabilities,
+            "capability_source": model.capability_source,
+            "tool_protocol": model.tool_protocol,
+            "supports_parallel_tool_calls": model.supports_parallel_tool_calls,
+            "context_window": model.context_window,
+            "max_output_tokens": model.max_output_tokens,
             "reasoning_model_available": "reasoning" in model.capabilities,
             "provider_config": config,
         }

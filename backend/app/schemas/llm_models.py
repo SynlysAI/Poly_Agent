@@ -11,6 +11,7 @@ LLMProviderType = Literal["openai_compatible", "ollama", "custom_http"]
 LLMProviderStatus = Literal["available", "degraded", "down", "not_configured", "unknown"]
 LLMCapability = Literal["chat", "fast", "reasoning", "structured_json", "tool_calling", "long_context", "local"]
 LLMRoutePurpose = Literal["qa", "deep", "report"]
+LLMCapabilitySource = Literal["configured", "probed", "inferred"]
 
 
 class LLMModelInfo(BaseModel):
@@ -23,6 +24,26 @@ class LLMModelInfo(BaseModel):
     capabilities: list[LLMCapability] = Field(default_factory=lambda: ["chat"])
     recommended_for: list[LLMRoutePurpose] = Field(default_factory=list)
     is_default: bool = False
+    context_window: int | None = Field(default=None, ge=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    tool_protocol: str | None = Field(default=None, max_length=80)
+    supports_parallel_tool_calls: bool | None = None
+    capability_source: LLMCapabilitySource | None = None
+
+
+class LLMModelConfigInput(BaseModel):
+    """Per-model provider configuration entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = Field(min_length=1, max_length=200)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    capabilities: list[LLMCapability] | None = None
+    recommended_for: list[LLMRoutePurpose] | None = None
+    context_window: int | None = Field(default=None, ge=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    tool_protocol: str | None = Field(default=None, max_length=80)
+    supports_parallel_tool_calls: bool | None = None
 
 
 class LLMProviderInfo(BaseModel):
@@ -89,9 +110,30 @@ class LLMProviderConfigInput(BaseModel):
     base_url: str | None = Field(default=None, max_length=500)
     api_key_env: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=200)
-    models: list[str] = Field(default_factory=list)
+    models: list[str | LLMModelConfigInput] = Field(default_factory=list)
     capabilities: list[LLMCapability] = Field(default_factory=lambda: ["chat"])
     recommended_for: list[LLMRoutePurpose] = Field(default_factory=list)
+
+    @field_validator("models", mode="before")
+    @classmethod
+    def normalize_models(cls, value: list[str | dict[str, object]] | None) -> list[str | dict[str, object]]:
+        """Normalize legacy string model entries to per-model config objects.
+
+        Args:
+            value: Raw models list containing model id strings or config objects.
+
+        Returns:
+            Normalized list where each entry is an object config.
+        """
+        if value is None:
+            return []
+        normalized: list[str | dict[str, object]] = []
+        for item in value:
+            if isinstance(item, str):
+                normalized.append({"model_id": item})
+            else:
+                normalized.append(item)
+        return normalized
 
     @field_validator("api_key_env")
     @classmethod
