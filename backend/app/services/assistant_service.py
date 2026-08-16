@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html as html_module
+import hashlib
 import ipaddress
 import json
 import re
@@ -1512,6 +1513,7 @@ class AssistantService:
         context = request.context or {}
         requested_provider_id, requested_model_id = self._requested_model_identifiers(context.get("model"))
         return {
+            "trace_id": context.get("trace_id") or context.get("run_id"),
             "original_user_message_id": context.get("message_id"),
             "chat_id": context.get("chat_id"),
             "selected_tool_ids": list(selected_tool_ids or []),
@@ -1524,6 +1526,11 @@ class AssistantService:
             "route_snapshot": self._safe_llm_route(llm_route),
             "context_manifest_digest": assembly.digest,
         }
+
+    @staticmethod
+    def _short_digest(value: str) -> str:
+        """生成可用于事件关联且不保存原文的短摘要。"""
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
     @staticmethod
     def _truncate_result_summary(summary: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
@@ -1753,6 +1760,7 @@ class AssistantService:
                         chat_id=request.context.get("chat_id"),
                         message_id=request.context.get("message_id"),
                         assistant_run_id=request.context.get("run_id"),
+                        trace_id=request.context.get("trace_id") or request.context.get("run_id"),
                         arguments=provider_arguments.arguments,
                         function_name=function_name,
                         raw_arguments=provider_arguments.raw_arguments,
@@ -2092,17 +2100,31 @@ class AssistantService:
 
             web_outcome: SearchOutcome | None = None
             search_query_plan: SearchQueryPlan | None = None
+            if request.context.get("use_knowledge_base"):
+                yield {"type": "status", "stage": "knowledge", "message": "正在检索知识库..."}
+                yield {
+                    "type": "retrieval.started",
+                    "source": "knowledge",
+                    "query_digest": self._short_digest(user_text),
+                }
             knowledge_outcome = self._retrieve_knowledge(user_text, request)
             if knowledge_outcome:
                 yield {
                     "type": "evidence",
                     "status": knowledge_outcome.status,
                     "message": self._knowledge_evidence_message(knowledge_outcome),
+                    "source": "knowledge",
+                    "query_digest": self._short_digest(user_text),
                     "references": [],
                 }
             if intent.use_web:
                 yield {"type": "status", "stage": "search", "message": "正在检索外部证据..."}
                 search_query_plan = self.search_query_builder.build(user_text)
+                yield {
+                    "type": "retrieval.started",
+                    "source": "web",
+                    "query_digest": self._short_digest(search_query_plan.query),
+                }
                 web_outcome = self.web_service.search(search_query_plan.query, deep=intent.deep)
 
             web_refs = self._web_references(web_outcome)
@@ -2113,6 +2135,8 @@ class AssistantService:
                     "type": "evidence",
                     "status": web_outcome.status,
                     "message": self._evidence_message(web_outcome),
+                    "source": "web",
+                    "query_digest": self._short_digest(search_query_plan.query),
                     "references": [item.model_dump(mode="python") for item in web_refs],
                 }
 
@@ -2134,6 +2158,7 @@ class AssistantService:
                 tool_events, extra_messages = self._continuation_messages(continuation_ids, current_user)
                 for event in tool_events:
                     yield event
+                yield {"type": "context.assembly.started", "request_kind": "final_answer"}
                 final_assembly = self._assemble_context(
                     request_kind="final_answer",
                     request=request,
@@ -2156,6 +2181,7 @@ class AssistantService:
                 yield context_event
             elif selected_ids:
                 yield {"type": "status", "stage": "tools", "message": "正在分析算法工具调用..."}
+                yield {"type": "context.assembly.started", "request_kind": "tool_proposal"}
                 selected_tools = self._resolve_selected_tools(selected_ids, current_user)
                 if selected_tools:
                     yield {
@@ -2237,6 +2263,7 @@ class AssistantService:
             )
             if final_assembly is None:
                 selected_tools = self._resolve_selected_tools(selected_ids, current_user)
+                yield {"type": "context.assembly.started", "request_kind": "final_answer"}
                 final_assembly = self._assemble_context(
                     request_kind="final_answer",
                     request=request,

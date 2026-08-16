@@ -107,6 +107,108 @@ export function formatUsage(usage = {}) {
   return parts.join(' · ')
 }
 
+function usageNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : 0
+}
+
+/**
+ * 将会话级 usage 汇总归一化为可展示的非负数字。
+ *
+ * @param {object} summary 后端返回的 usage 汇总或局部 usage 数据。
+ * @returns {{prompt_tokens:number, completion_tokens:number, total_tokens:number, usage_events:number}} 归一化结果。
+ */
+export function normalizeUsageSummary(summary = {}) {
+  const promptTokens = usageNumber(summary?.prompt_tokens)
+  const completionTokens = usageNumber(summary?.completion_tokens)
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+    usage_events: usageNumber(summary?.usage_events),
+  }
+}
+
+/**
+ * 将一次新的 usage 累加到当前会话汇总中。
+ *
+ * @param {object} current 当前会话汇总。
+ * @param {object} incoming 单次 LLM usage 数据。
+ * @returns {object} 累加后的会话汇总。
+ */
+export function accumulateUsageSummary(current = {}, incoming = {}) {
+  const base = normalizeUsageSummary(current)
+  const addition = normalizeUsageSummary(incoming)
+  const hasTokenData = Boolean(
+    addition.prompt_tokens
+    || addition.completion_tokens
+    || addition.total_tokens,
+  )
+  return normalizeUsageSummary({
+    prompt_tokens: base.prompt_tokens + addition.prompt_tokens,
+    completion_tokens: base.completion_tokens + addition.completion_tokens,
+    usage_events: base.usage_events + (addition.usage_events || (hasTokenData ? 1 : 0)),
+  })
+}
+
+/**
+ * 生成输入窗口下方的紧凑 token 徽标文案。
+ *
+ * @param {object} summary 会话级 usage 汇总。
+ * @returns {string} 徽标文案；无 token 数据时返回空字符串。
+ */
+export function formatConversationUsageBadge(summary = {}) {
+  const usage = normalizeUsageSummary(summary)
+  if (!usage.total_tokens) return ''
+  return `本对话 tokens ${formatTokenCount(usage.total_tokens)}`
+}
+
+/**
+ * 生成会话 token 明细文案。
+ *
+ * @param {object} summary 会话级 usage 汇总。
+ * @returns {string} 输入、输出、总计明细；无 token 数据时返回空字符串。
+ */
+export function formatConversationUsageDetail(summary = {}) {
+  const usage = normalizeUsageSummary(summary)
+  if (!usage.total_tokens) return ''
+  return formatUsage(usage)
+}
+
+export const CONTEXT_RING_RADIUS = 6
+export const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
+export const DEFAULT_CONTEXT_WINDOW = 131072
+
+/**
+ * 计算 dsh 风格上下文占用圆环所需的展示数据。
+ *
+ * @param {number|string} contextEstimate 最新一次请求的上下文 token 估算。
+ * @param {number|string} contextWindow 当前模型上下文窗口。
+ * @returns {{visible:boolean, percent:number, dashArray:string, tone:string}} 圆环展示数据。
+ */
+export function contextUsageRing(contextEstimate, contextWindow) {
+  const estimate = usageNumber(contextEstimate)
+  const window = usageNumber(contextWindow)
+  if (!estimate || !window) {
+    return {
+      visible: false,
+      percent: 0,
+      dashArray: `0 ${CONTEXT_RING_CIRCUMFERENCE}`,
+      tone: 'safe',
+    }
+  }
+
+  const percent = Math.max(0, Math.min(100, Math.round((estimate / window) * 100)))
+  const tone = percent >= 90 ? 'danger' : (percent >= 70 ? 'warning' : 'safe')
+  const dashLength = (CONTEXT_RING_CIRCUMFERENCE * percent) / 100
+  return {
+    visible: true,
+    percent,
+    dashArray: `${dashLength} ${CONTEXT_RING_CIRCUMFERENCE}`,
+    tone,
+  }
+}
+
 export function modelMetaLabel(route) {
   const normalized = normalizeAssistantRoute(route)
   if (!normalized.model_id) return ''

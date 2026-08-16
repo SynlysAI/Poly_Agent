@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -43,6 +45,17 @@ UNAVAILABLE_DEPLOYMENT_STATUSES = {
     "disabled",
 }
 RECENT_RUN_SAMPLE_SIZE = 20
+AGENT_TOOL_CACHE_TTL_SECONDS = 10.0
+
+_agent_tool_cache: dict[str, Any] = {
+    "registries": (0.0, []),
+    "items": {},
+}
+
+
+def _cache_enabled() -> bool:
+    """测试进程内关闭目录缓存，避免测试直接修改仓储后读到旧快照。"""
+    return "pytest" not in sys.modules and "unittest" not in sys.modules
 
 
 class AgentToolService:
@@ -63,6 +76,48 @@ class AgentToolService:
         ResearchEngineService().seed_default_algorithms()
         items, _ = AlgorithmRegistryRepository.list_algorithms(page=1, page_size=10000)
         return items
+
+    @classmethod
+    def _cached_registries(cls) -> list[dict[str, Any]]:
+        """返回短 TTL 缓存的 registry 文档，避免每次工具目录查询都重新建索引。"""
+        if not _cache_enabled():
+            return cls._registries()
+        expires_at, items = _agent_tool_cache["registries"]
+        if items and time.monotonic() < expires_at:
+            return items
+        items = cls._registries()
+        _agent_tool_cache["registries"] = (time.monotonic() + AGENT_TOOL_CACHE_TTL_SECONDS, items)
+        return items
+
+    @classmethod
+    def _cached_registry_item(cls, registry: dict[str, Any]) -> AgentToolRegistryItem:
+        """按算法 ID 缓存派生后的工具目录条目。"""
+        if not _cache_enabled():
+            return cls._derive_registry_item(registry)
+        algorithm_id = str(registry.get("algorithm_id") or "")
+        cache = _agent_tool_cache["items"]
+        cached = cache.get(algorithm_id)
+        if cached and time.monotonic() < cached[0]:
+            return cached[1]
+        item = cls._derive_registry_item(registry)
+        cache[algorithm_id] = (time.monotonic() + AGENT_TOOL_CACHE_TTL_SECONDS, item)
+        return item
+
+    @classmethod
+    def _invalidate_derived(cls, algorithm_id: str | None = None) -> None:
+        """失效指定或全部工具目录缓存。"""
+        if algorithm_id:
+            _agent_tool_cache["items"].pop(algorithm_id, None)
+            return
+        _agent_tool_cache["registries"] = (0.0, [])
+        _agent_tool_cache["items"] = {}
+
+    @classmethod
+    def warm_cache(cls) -> None:
+        """预热工具目录缓存，避免首个 LUI 请求承担完整派生开销。"""
+        for registry in cls._cached_registries():
+            if cls._is_vertical_algorithm(registry):
+                cls._cached_registry_item(registry)
 
     @staticmethod
     def _actor_context(current_user: dict[str, str] | None) -> tuple[str, str, bool]:
@@ -246,12 +301,12 @@ class AgentToolService:
     def list_tools(cls, current_user: dict[str, str] | None) -> AgentToolListData:
         """返回当前用户可以调用的已部署垂类算法。"""
         user_id, role, is_admin = cls._actor_context(current_user)
-        registries = cls._registries()
+        registries = cls._cached_registries()
         items: list[AgentTool] = []
         for registry in registries:
             if not cls._is_vertical_algorithm(registry):
                 continue
-            item = cls._derive_registry_item(registry)
+            item = cls._cached_registry_item(registry)
             visibility = str(registry.get("visibility") or "private")
             is_owner = bool(item.owner and item.owner == user_id)
             if visibility == "private" and not (is_admin or is_owner):
@@ -277,7 +332,7 @@ class AgentToolService:
         registry = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
         if not registry or not cls._is_vertical_algorithm(registry):
             return None
-        item = cls._derive_registry_item(registry)
+        item = cls._cached_registry_item(registry)
         visibility = str(registry.get("visibility") or "private")
         is_owner = bool(item.owner and item.owner == user_id)
         if visibility == "private" and not (is_admin or is_owner):
@@ -292,8 +347,8 @@ class AgentToolService:
     @classmethod
     def list_registry(cls) -> AgentToolRegistryData:
         """返回管理员工具治理目录，包含不可用原因。"""
-        registries = cls._registries()
-        items = [cls._derive_registry_item(item) for item in registries if cls._is_vertical_algorithm(item)]
+        registries = cls._cached_registries()
+        items = [cls._cached_registry_item(item) for item in registries if cls._is_vertical_algorithm(item)]
         return AgentToolRegistryData(items=items, total=len(items))
 
     @classmethod
@@ -310,7 +365,8 @@ class AgentToolService:
             raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
         if not cls._is_vertical_algorithm(registry):
             raise HTTPException(status_code=409, detail="只有垂类算法可以注册为对话工具")
-        current_item = cls._derive_registry_item(registry)
+        cls._invalidate_derived(algorithm_id)
+        current_item = cls._cached_registry_item(registry)
         if payload.enabled is True and current_item.phase == "unavailable":
             raise HTTPException(
                 status_code=409,
@@ -337,12 +393,14 @@ class AgentToolService:
                 "created_at": utc_now(),
             }
         )
-        return cls._derive_registry_item(registry)
+        cls._invalidate_derived(algorithm_id)
+        return cls._cached_registry_item(registry)
 
     @classmethod
     def sync(cls) -> AgentToolSyncData:
         """检查目录与策略一致性；目录本身按查询动态派生。"""
-        registries = cls._registries()
+        cls._invalidate_derived()
+        registries = cls._cached_registries()
         checked = available = unavailable = disabled = policies_created = 0
         for registry in registries:
             if not cls._is_vertical_algorithm(registry):
@@ -350,13 +408,14 @@ class AgentToolService:
             checked += 1
             _, created = AgentToolPolicyRepository.ensure_default(str(registry.get("algorithm_id") or ""))
             policies_created += int(created)
-            item = cls._derive_registry_item(registry)
+            item = cls._cached_registry_item(registry)
             if item.phase == "available":
                 available += 1
             elif item.phase == "disabled":
                 disabled += 1
             else:
                 unavailable += 1
+        cls._invalidate_derived()
         return AgentToolSyncData(
             checked=checked,
             available=available,

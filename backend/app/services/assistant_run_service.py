@@ -15,13 +15,19 @@ from app.core.logging import get_logger
 from app.core.time import utc_now
 from app.core import llm_client
 from app.infra.research_engine_repositories import (
+    AssistantEventRepository,
     AssistantMessageRepository,
     AssistantRunRepository,
     AssistantToolCallRepository,
 )
 from app.schemas.assistant import AssistantChatRequest
 from app.schemas.assistant_chats import AssistantMessageCreate
-from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate, AssistantRunListData
+from app.schemas.assistant_runs import (
+    AssistantRun,
+    AssistantRunCreate,
+    AssistantRunListData,
+    AssistantUsageSummary,
+)
 from app.services.assistant_chat_service import actor_id, assistant_chat_service
 from app.services.assistant_service import stream_chat_assistant
 from app.services.assistant_tool_service import assistant_tool_call_service
@@ -34,12 +40,17 @@ CONTINUATION_BACKOFF_BASE_SECONDS = 2
 CONTINUATION_MAX_BACKOFF_SECONDS = 300
 RUNNING_EVENT_POLL_INTERVAL_SECONDS = 0.2
 QUEUED_EVENT_POLL_INTERVAL_SECONDS = 1.0
+ANSWER_DELTA_PERSIST_INTERVAL_SECONDS = 0.2
+ANSWER_DELTA_PERSIST_CHAR_THRESHOLD = 256
 
 
 class AssistantRunService:
     @staticmethod
-    def _public(document: dict[str, Any]) -> AssistantRun:
-        return AssistantRun.model_validate(document)
+    def _public(document: dict[str, Any], *, include_events: bool = True) -> AssistantRun:
+        payload = dict(document)
+        if not include_events:
+            payload["events"] = []
+        return AssistantRun.model_validate(payload)
 
     @staticmethod
     def _owned(run_id: str, current_user: dict[str, str] | None) -> dict[str, Any]:
@@ -71,6 +82,19 @@ class AssistantRunService:
         now = utc_now()
         run_id = f"asrun_{uuid4().hex[:16]}"
         context = dict(payload.context)
+        tool_call_ids = [str(item) for item in (context.get("tool_call_ids") or []) if str(item)]
+        is_continuation = bool(tool_call_ids)
+        trace_id = str(context.get("trace_id") or "") if is_continuation else run_id
+        if is_continuation and not trace_id:
+            first_call = AssistantToolCallRepository.find_one({"call_id": tool_call_ids[0]})
+            trace_id = str(
+                (first_call or {}).get("trace_id")
+                or (first_call or {}).get("assistant_run_id")
+                or ""
+            )
+        if not trace_id:
+            trace_id = run_id
+        context["trace_id"] = trace_id
         context["chat_id"] = chat_id
         context["run_id"] = run_id
         model = context.get("model") or {}
@@ -78,6 +102,7 @@ class AssistantRunService:
         requested_model_id = model.get("modelId") or model.get("model_id")
         document = {
             "run_id": run_id,
+            "trace_id": trace_id,
             "chat_id": chat_id,
             "created_by": owner_id,
             "user_message_id": payload.user_message_id or "",
@@ -206,17 +231,125 @@ class AssistantRunService:
             "total_tokens": token_total("total_tokens"),
         }
 
+    def usage_for_chat(
+        self,
+        chat_id: str,
+        current_user: dict[str, str] | None,
+    ) -> AssistantUsageSummary:
+        """汇总指定会话内所有真实 LLM 请求的 token 消耗。
+
+        Args:
+            chat_id: 会话 ID。
+            current_user: 当前用户上下文。
+
+        Returns:
+            该会话的 usage 汇总，包含输入、输出、总计和去重后的事件数。
+        """
+        owner_id = actor_id(current_user)
+        assistant_chat_service._owned_chat(chat_id, owner_id)
+        return self._usage_for_chat(chat_id, owner_id)
+
+    @staticmethod
+    def _usage_for_chat(chat_id: str, owner_id: str) -> AssistantUsageSummary:
+        """基于会话全部 runs 与 usage 事件汇总 token 消耗。"""
+        runs, _ = AssistantRunRepository.list_for_chat(
+            chat_id,
+            owner_id,
+            page=1,
+            page_size=10_000,
+        )
+        return AssistantRunService._summarize_usage(runs)
+
+    @staticmethod
+    def _usage_component(usage: Any, key: str) -> int:
+        """把 usage 字段安全转换为非负整数。"""
+        value = (usage or {}).get(key)
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _event_usage(event: dict[str, Any]) -> dict[str, Any] | None:
+        """从统一或旧版事件中提取 usage，仅处理 usage 事件。"""
+        if event.get("type") != "llm.usage.recorded":
+            return None
+        usage = event.get("usage") or (event.get("data") or {}).get("usage") or {}
+        return usage if isinstance(usage, dict) else {}
+
+    @classmethod
+    def _summarize_usage(cls, runs: list[dict[str, Any]]) -> AssistantUsageSummary:
+        """按事件去重累加 runs 的 usage，兼容历史 run 字段回退。"""
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+        usage_events = 0
+        seen: set[str] = set()
+
+        for run in runs:
+            run_id = str(run.get("run_id") or "")
+            events = AssistantEventRepository.list_for_run(run_id)
+            if not events:
+                events = run.get("events") or []
+
+            had_usage_event = False
+            for index, event in enumerate(events):
+                usage = cls._event_usage(event)
+                if usage is None:
+                    continue
+                event_id = event.get("event_id")
+                key = str(event_id or "")
+                if not key:
+                    key = f"{run_id}:{event.get('seq') or index}:{event.get('request_id') or ''}"
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                prompt = cls._usage_component(usage, "prompt_tokens")
+                completion = cls._usage_component(usage, "completion_tokens")
+                total = cls._usage_component(usage, "total_tokens")
+                prompt_tokens += prompt
+                completion_tokens += completion
+                total_tokens += total if total else prompt + completion
+                usage_events += 1
+                had_usage_event = True
+
+            if had_usage_event:
+                continue
+
+            prompt = cls._usage_component(run, "prompt_tokens")
+            completion = cls._usage_component(run, "completion_tokens")
+            total = cls._usage_component(run, "total_tokens")
+            if not prompt and not completion and not total:
+                continue
+            fallback_key = f"run-fields:{run_id}"
+            if fallback_key in seen:
+                continue
+            seen.add(fallback_key)
+            prompt_tokens += prompt
+            completion_tokens += completion
+            total_tokens += total if total else prompt + completion
+
+        return AssistantUsageSummary(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            usage_events=usage_events,
+        )
+
     def list_for_chat(
         self, chat_id: str, current_user: dict[str, str] | None, *, page: int = 1, page_size: int = 20
     ) -> AssistantRunListData:
         owner_id = actor_id(current_user)
         assistant_chat_service._owned_chat(chat_id, owner_id)
         items, total = AssistantRunRepository.list_for_chat(chat_id, owner_id, page, page_size)
+        usage = self._usage_for_chat(chat_id, owner_id)
         active = next((item for item in items if item.get("status") in {"queued", "running"}), None)
         return AssistantRunListData(
-            items=[self._public(item) for item in items],
-            active=self._public(active) if active else None,
+            items=[self._public(item, include_events=False) for item in items],
+            active=self._public(active, include_events=False) if active else None,
             total=total,
+            usage=usage,
         )
 
     def cancel(self, run_id: str, current_user: dict[str, str] | None) -> AssistantRun:
@@ -347,7 +480,14 @@ class AssistantRunService:
     ) -> dict[str, Any]:
         """构造 continuation run 的请求上下文。"""
         route_snapshot = source_context.get("route_snapshot") or call.get("proposal_route") or {}
+        trace_id = str(
+            call.get("trace_id")
+            or source_context.get("trace_id")
+            or call.get("assistant_run_id")
+            or ""
+        )
         return {
+            "trace_id": trace_id,
             "chat_id": call.get("chat_id"),
             "mode": source_context.get("mode") or "qa",
             "selected_tool_ids": list(source_context.get("selected_tool_ids") or [call.get("tool_id")]),
@@ -540,6 +680,8 @@ class AssistantRunService:
         failed_message = ""
         first_token_ms: int | None = None
         content = ""
+        pending_delta = ""
+        last_delta_flush = time.monotonic()
         try:
             record_llm_observation_scope({"run_id": run_id})
             llm_client.reset_stream_usage()
@@ -550,6 +692,44 @@ class AssistantRunService:
                 if current.get("status") != "running" or current.get("worker_id") != worker_id:
                     return
                 now = utc_now()
+                if event.get("type") == "answer_delta":
+                    delta = str(event.get("delta") or "")
+                    if first_token_ms is None:
+                        first_token_ms = int((time.monotonic() - started) * 1000)
+                    content += delta
+                    pending_delta += delta
+                    should_flush = (
+                        len(pending_delta) >= ANSWER_DELTA_PERSIST_CHAR_THRESHOLD
+                        or time.monotonic() - last_delta_flush >= ANSWER_DELTA_PERSIST_INTERVAL_SECONDS
+                    )
+                    if not should_flush:
+                        continue
+                    if not self._persist_answer_delta(
+                        run_id,
+                        worker_id,
+                        content,
+                        pending_delta,
+                        now,
+                        first_token_ms,
+                    ):
+                        return
+                    pending_delta = ""
+                    last_delta_flush = time.monotonic()
+                    continue
+
+                if pending_delta:
+                    if not self._persist_answer_delta(
+                        run_id,
+                        worker_id,
+                        content,
+                        pending_delta,
+                        now,
+                        first_token_ms,
+                    ):
+                        return
+                    pending_delta = ""
+                    last_delta_flush = time.monotonic()
+
                 fields: dict[str, Any] = {"heartbeat_at": now, "updated_at": now}
                 if event.get("type") == "status":
                     fields["stage"] = event.get("stage") or "running"
@@ -567,12 +747,6 @@ class AssistantRunService:
                         manifests = dict(current.get("request_manifests") or {})
                         manifests[request_kind] = manifest
                         fields["request_manifests"] = manifests
-                elif event.get("type") == "answer_delta":
-                    content += str(event.get("delta") or "")
-                    fields["partial_content"] = content
-                    if first_token_ms is None:
-                        first_token_ms = int((time.monotonic() - started) * 1000)
-                        fields["first_token_ms"] = first_token_ms
                 elif event.get("type") == "final":
                     final_data = dict(event.get("data") or {})
                     content = str(final_data.get("content") or content)
@@ -591,6 +765,16 @@ class AssistantRunService:
                         },
                     )
                 self._event(run_id, event)
+            if pending_delta:
+                if not self._persist_answer_delta(
+                    run_id,
+                    worker_id,
+                    content,
+                    pending_delta,
+                    utc_now(),
+                    first_token_ms,
+                ):
+                    return
             if failed_message or not final_data:
                 self._finish_failed(run_id, worker_id, failed_message or "回答未返回最终结果", started)
                 return
@@ -603,6 +787,42 @@ class AssistantRunService:
             self._finish_failed(run_id, worker_id, str(exc), started, http_status=getattr(exc, "status_code", None))
         finally:
             reset_llm_observation_scope()
+
+    @staticmethod
+    def _persist_answer_delta(
+        run_id: str,
+        worker_id: str,
+        content: str,
+        delta: str,
+        now: Any,
+        first_token_ms: int | None,
+    ) -> bool:
+        """合并写入回答增量与 heartbeat，避免逐 token 产生大量数据库事件。
+
+        Args:
+            run_id: 回答任务 ID。
+            worker_id: 当前 worker ID。
+            content: 当前累积的完整回答正文。
+            delta: 本次待持久化的增量文本。
+            now: 当前时间。
+            first_token_ms: 首个 token 耗时，若已写入可重复覆盖为相同值。
+
+        Returns:
+            更新认领是否成功。
+        """
+        if not delta:
+            return True
+        fields: dict[str, Any] = {
+            "partial_content": content,
+            "heartbeat_at": now,
+            "updated_at": now,
+        }
+        if first_token_ms is not None:
+            fields["first_token_ms"] = first_token_ms
+        if not AssistantRunRepository.update_claim(run_id, worker_id, fields):
+            return False
+        AssistantRunService._event(run_id, {"type": "answer_delta", "delta": delta})
+        return True
 
     def _finish_completed(self, document: dict[str, Any], data: dict[str, Any], content: str, started: float) -> None:
         run_id = document["run_id"]
@@ -642,6 +862,7 @@ class AssistantRunService:
                     tool_call_ids=tool_call_ids,
                     metadata={
                         "run_id": run_id,
+                        "trace_id": document.get("trace_id"),
                         "llm_route": ((data.get("grounding_facts") or {}).get("llm_route")) or {},
                         "context_digest": (
                             (data.get("grounding_facts") or {}).get("context", {}).get("digest")

@@ -425,10 +425,6 @@ function preloadDialogueRoute() {
       // 预加载失败不影响正常点击跳转，路由仍会在需要时再次加载。
     })
   }
-  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-    window.requestIdleCallback(preload, { timeout: 1200 })
-    return
-  }
   window.setTimeout(preload, 300)
 }
 
@@ -462,7 +458,7 @@ onMounted(() => {
         <p>{{ homeGreeting.subtitle }}</p>
       </div>
 
-      <div class="lui-composer">
+      <div class="lui-composer" @mouseenter="preloadDialogueRoute" @focusin="preloadDialogueRoute">
         <div v-if="selectedKnowledgeBases.length || selectedToolSummary.length" class="selected-tags-inline">
           <span v-for="system in selectedKnowledgeBases" :key="system.system_id" class="mention-chip mention-chip--kb">
             <el-icon><Reading /></el-icon>

@@ -180,6 +180,7 @@ class AssistantToolCallCreate(BaseModel):
     chat_id: str | None = Field(default=None, max_length=120)
     message_id: str | None = Field(default=None, max_length=120)
     assistant_run_id: str | None = Field(default=None, max_length=120)
+    trace_id: str | None = Field(default=None, max_length=120)
     arguments: dict[str, Any] = Field(default_factory=dict)
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
     function_name: str | None = Field(default=None, max_length=64)
@@ -264,6 +265,7 @@ class AssistantToolCall(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     call_id: str
+    trace_id: str | None = None
     provider_tool_call_id: str | None = None
     chat_id: str | None = None
     assistant_run_id: str | None = None

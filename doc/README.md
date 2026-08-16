@@ -58,6 +58,10 @@
 | [research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md](research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md) | LUI Runtime、模型路由识别、上下文注入、工具契约、持久化事件、服务端续答与配置/观测增强工作计划 |
 | [research-engine-plan-08-regression-test-matrix.md](research-engine-plan-08-regression-test-matrix.md) | Plan 08 LUI Runtime 回归测试矩阵与验证命令 |
 | [research-engine-plan-08-wrapup.md](research-engine-plan-08-wrapup.md) | Plan 08 剩余技术债 P08-F2–F8 的独立收尾计划，已完成并关闭 |
+| [research-engine-plan-09-lui-execution-trace.md](research-engine-plan-09-lui-execution-trace.md) | LUI Execution Trace 与可追溯执行增强计划 |
+| [research-engine-plan-10-slash-command-and-agent-control-workplan.md](research-engine-plan-10-slash-command-and-agent-control-workplan.md) | Slash Command、会话控制面与 Agent 控制体系工作计划 |
+| [research-engine-plan-11-lui-qa-deep-preset-positioning.md](research-engine-plan-11-lui-qa-deep-preset-positioning.md) | LUI 科研问答与深度思考 Preset 定位、差异与演进 |
+| [research-engine-plan-12-product-positioning-evolution.md](research-engine-plan-12-product-positioning-evolution.md) | PI Agent / DSH / Codex 时代的产品定位、生态位与演进路线 |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |
 
 ## 部署、工具链与治理

@@ -74,6 +74,59 @@ class AssistantRunsApiTest(ComputationTestCase):
         self.assertEqual(data["total"], 1)
         self.assertEqual(data["active"]["run_id"], created.json()["data"]["run_id"])
 
+    def test_chat_run_list_returns_deduplicated_usage_summary(self) -> None:
+        """会话级 usage 汇总应包含工具提案和最终回答且不重复计数。"""
+        chat_id = self._chat("用量汇总")
+        run_id = self._run(chat_id).json()["data"]["run_id"]
+        AssistantRunRepository.append_event(run_id, {
+            "type": "llm.usage.recorded",
+            "request_id": "request-tool",
+            "request_kind": "tool_proposal",
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+        })
+        AssistantRunRepository.append_event(run_id, {
+            "type": "llm.usage.recorded",
+            "request_id": "request-final",
+            "request_kind": "final_answer",
+            "usage": {"prompt_tokens": 200, "completion_tokens": 30, "total_tokens": 230},
+        })
+
+        restored = self.client.get(f"/api/v1/assistant/chats/{chat_id}/runs")
+
+        self.assertEqual(restored.status_code, 200, restored.text)
+        usage = restored.json()["data"]["usage"]
+        self.assertEqual(usage["prompt_tokens"], 300)
+        self.assertEqual(usage["completion_tokens"], 50)
+        self.assertEqual(usage["total_tokens"], 350)
+        self.assertEqual(usage["usage_events"], 2)
+
+    def test_chat_run_usage_falls_back_to_legacy_run_fields(self) -> None:
+        """无统一 usage 事件的历史 run 应按 run 字段回退汇总。"""
+        chat_id = self._chat("历史回退")
+        run_id = self._run(chat_id).json()["data"]["run_id"]
+        AssistantRunRepository.update_fields(
+            "run_id",
+            run_id,
+            {"prompt_tokens": 500, "completion_tokens": 80, "total_tokens": 580},
+        )
+
+        restored = self.client.get(f"/api/v1/assistant/chats/{chat_id}/runs")
+
+        self.assertEqual(restored.status_code, 200, restored.text)
+        usage = restored.json()["data"]["usage"]
+        self.assertEqual(usage["prompt_tokens"], 500)
+        self.assertEqual(usage["completion_tokens"], 80)
+        self.assertEqual(usage["total_tokens"], 580)
+        self.assertEqual(usage["usage_events"], 0)
+
+    def test_chat_run_usage_is_owner_scoped(self) -> None:
+        """其他用户不能读取会话级 usage 汇总。"""
+        chat_id = self._chat("私有用量")
+        self.assertEqual(self._run(chat_id).status_code, 200)
+        self.user = {"user_id": "run-user-2", "username": "other", "role": "user", "status": "active"}
+        restored = self.client.get(f"/api/v1/assistant/chats/{chat_id}/runs")
+        self.assertEqual(restored.status_code, 403, restored.text)
+
     def test_worker_persists_final_answer_and_replay_cursor(self) -> None:
         chat_id = self._chat("执行")
         created = self._run(chat_id)
@@ -274,3 +327,43 @@ class AssistantRunsApiTest(ComputationTestCase):
         self.assertIsNone(document["continuation_next_retry_at"])
         events = AssistantToolCallRepository.list_events("atc_continuation_retry")
         self.assertTrue(any(event["type"] == "tool.continuation.dead_letter" for event in events))
+
+    def test_run_list_returns_lightweight_items_without_events(self) -> None:
+        """LUI 恢复列表不应携带完整 events，详情接口仍保留审计事件。"""
+        chat_id = self._chat("轻量列表")
+        created = self._run(chat_id)
+        run_id = created.json()["data"]["run_id"]
+
+        listed = self.client.get(f"/api/v1/assistant/chats/{chat_id}/runs?page_size=200").json()["data"]
+        self.assertEqual(listed["items"][0]["events"], [])
+
+        detail = self.client.get(f"/api/v1/assistant/runs/{run_id}").json()["data"]
+        self.assertTrue(any(event["type"] == "route.requested" for event in detail["events"]))
+
+    def test_answer_delta_is_persisted_as_aggregated_event(self) -> None:
+        """连续小段 answer_delta 在 final 前应合并，重放拼接内容仍一致。"""
+        chat_id = self._chat("增量合并")
+        created = self._run(chat_id)
+        run_id = created.json()["data"]["run_id"]
+        events = [
+            {"type": "answer_delta", "delta": "第一"},
+            {"type": "answer_delta", "delta": "第二"},
+            {"type": "answer_delta", "delta": "第三"},
+            {
+                "type": "final",
+                "data": {
+                    "content": "第一第二第三",
+                    "answer_mode": "fallback",
+                    "answer_scope": "unknown",
+                    "retrieval_status": "not_needed",
+                },
+            },
+        ]
+        with patch("app.services.assistant_run_service.stream_chat_assistant", return_value=iter(events)):
+            self.assertEqual(assistant_run_service.execute_next("aggregate-worker"), run_id)
+
+        restored = self.client.get(f"/api/v1/assistant/runs/{run_id}").json()["data"]
+        delta_events = [event for event in restored["events"] if event["type"] == "answer_delta"]
+        self.assertEqual(len(delta_events), 1)
+        self.assertEqual(delta_events[0]["delta"], "第一第二第三")
+        self.assertEqual(restored["partial_content"], "第一第二第三")

@@ -27,6 +27,7 @@ class AssistantRunCreate(BaseModel):
 class AssistantRun(BaseModel):
     model_config = ConfigDict(extra="ignore")
     run_id: str
+    trace_id: str | None = None
     chat_id: str
     created_by: str
     user_message_id: str
@@ -56,7 +57,20 @@ class AssistantRun(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class AssistantUsageSummary(BaseModel):
+    """会话级 LLM usage 汇总。
+
+    统计当前会话内所有真实 LLM 请求，包括最终回答、工具提案和服务端续答。
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    usage_events: int = 0
+
+
 class AssistantRunListData(BaseModel):
     items: list[AssistantRun]
     active: AssistantRun | None = None
     total: int
+    usage: AssistantUsageSummary = Field(default_factory=AssistantUsageSummary)

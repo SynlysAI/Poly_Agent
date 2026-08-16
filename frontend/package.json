@@ -16,6 +16,7 @@
     "test:api-error-message": "node src/utils/apiErrorMessage.test.mjs",
     "test:auth-failure": "node src/utils/authFailure.test.mjs",
     "test:assistant-tool-calls": "node src/utils/assistantToolCalls.test.mjs",
+    "test:assistant-trace": "node src/utils/assistantTrace.test.mjs",
     "test:assistant-events": "node src/utils/assistantEvents.test.mjs",
     "test:assistant-context": "node src/utils/assistantContext.test.mjs",
     "test:assistant-ui": "node src/utils/assistantUi.test.mjs",

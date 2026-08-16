@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -11,7 +11,6 @@ import {
   Expand,
   Fold,
   FolderOpened,
-  MagicStick,
   Plus,
   Promotion,
   Reading,
@@ -32,6 +31,7 @@ import {
   downloadArtifact,
   getApiErrorMessage,
   getAssistantChat,
+  getAssistantTrace,
   getAssistantToolCall,
   getActiveAssistantRun,
   getAssistantRun,
@@ -41,15 +41,16 @@ import {
   listAssistantRuns,
   listKnowledgeSystems,
   streamAssistantRunEvents,
+  streamAssistantTraceEvents,
   updateAssistantChat,
   updateAssistantToolCallInput,
   uploadAssistantToolCallInput,
 } from '../api/polyAgentApi'
+import ExecutionTraceTimeline from '../components/assistant/ExecutionTraceTimeline.vue'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import ToolMenuPicker from '../components/ToolMenuPicker.vue'
 import { isUnauthorizedStatus } from '../utils/apiAuth.mjs'
-import { shouldAbortDialogueInitialization } from '../utils/dialogueInit.mjs'
 import {
   applyToolCallEvent,
   buildToolCallConfirmPayload,
@@ -73,11 +74,21 @@ import {
 } from '../utils/assistantToolAutoSelect.mjs'
 import { replayAssistantEvents } from '../utils/assistantEvents.js'
 import {
+  applyTraceEvent,
+  createTraceState,
+} from '../utils/assistantTrace.mjs'
+import {
+  accumulateUsageSummary,
   capabilitySourceLabel,
   contextSectionRows,
   contextToolRows,
+  contextUsageRing,
+  DEFAULT_CONTEXT_WINDOW,
   formatContextWindow,
+  formatConversationUsageDetail,
+  formatTokenCount,
   formatUsage,
+  normalizeUsageSummary,
   modelMetaLabel,
   normalizeAssistantRoute,
   routeCapabilityLabels,
@@ -87,7 +98,6 @@ import {
   toolProtocolLabel,
   toolTimelineRows,
 } from '../utils/assistantUi.mjs'
-import AlgorithmResultView from './vertical-prediction/AlgorithmResultView.vue'
 import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
 import {
   loadHistoryPanelPreference,
@@ -106,15 +116,19 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+const AlgorithmResultView = defineAsyncComponent(() => import('./vertical-prediction/AlgorithmResultView.vue'))
 const bodyRef = ref(null)
 const inputText = ref('')
 const runStates = ref(new Map())
 const runSubscriptions = new Map()
-const toolCallPollers = new Map()
+const traceStates = ref(new Map())
+const traceSubscriptions = new Map()
+const toolCallStreams = new Map()
 const continuedToolCalls = new Set()
 const pendingStreamDeltas = new Map()
 const markdownBlockCache = new WeakMap()
 const CHAT_OPTIONS_SYNC_DELAY_MS = 250
+const TOOL_CALL_STREAM_RETRY_DELAY_MS = 800
 let streamFlushFrameId = 0
 let historyRequestSeq = 0
 let chatOptionsSyncTimer = null
@@ -143,6 +157,8 @@ const useWebSearch = ref(loadWebSearchPreference())
 const chatId = ref(normalizeQueryString(route.params.chatId))
 const userMessageId = ref('')
 const chatHistory = ref([])
+const conversationUsage = ref(normalizeUsageSummary())
+const appliedUsageEventKeys = new Set()
 const historyQuery = ref('')
 const historyLoading = ref(false)
 const historyArchived = ref(false)
@@ -165,6 +181,23 @@ function defaultMessages() {
 }
 
 const messages = ref(defaultMessages())
+
+const traceCarrierIndexSet = computed(() => {
+  const carriers = new Map()
+  messages.value.forEach((message, index) => {
+    if (message.role !== 'assistant' || !message.trace_id) return
+    const traceId = message.trace_id
+    const continuationCount = Array.isArray(message.continuation_tool_call_ids)
+      ? message.continuation_tool_call_ids.length
+      : 0
+    const isRootRun = (message.run_id || message.metadata?.run_id) === traceId
+    const score = continuationCount > 0 ? 2 : (isRootRun ? 1 : 0)
+    if (score <= 0) return
+    const current = carriers.get(traceId)
+    if (!current || score > current.score) carriers.set(traceId, { index, score })
+  })
+  return new Set([...carriers.values()].map((item) => item.index))
+})
 
 const chatModeOptions = [
   { label: '科研问答', value: 'qa' },
@@ -194,6 +227,26 @@ const selectedToolSummary = computed(() =>
   (agentTools.value || []).filter((tool) => selectedToolIds.value.includes(tool.tool_id)),
 )
 const conversationStarted = computed(() => messages.value.some((item) => item.role === 'user'))
+const conversationUsageDetail = computed(() => formatConversationUsageDetail(conversationUsage.value))
+const latestContextManifest = computed(() => {
+  const latestAssistant = [...messages.value].reverse().find((item) => item.role === 'assistant')
+  return latestAssistant ? messageContextManifest(latestAssistant) : null
+})
+const latestContextEstimate = computed(() =>
+  Number(latestContextManifest.value?.context?.token_estimate || 0),
+)
+const selectedModelContextWindow = computed(() =>
+  Number(selectedModel.value?.contextWindow || DEFAULT_CONTEXT_WINDOW),
+)
+const contextRingState = computed(() =>
+  contextUsageRing(latestContextEstimate.value, selectedModelContextWindow.value),
+)
+const contextRingTooltip = computed(() => {
+  const contextLine = contextRingState.value.visible
+    ? `上下文已用 ${contextRingState.value.percent}% · ~${formatTokenCount(latestContextEstimate.value)} / ${formatTokenCount(selectedModelContextWindow.value)}`
+    : ''
+  return [contextLine, conversationUsageDetail.value].filter(Boolean).join('\n')
+})
 
 const currentSuggestions = computed(() => {
   const latestAssistant = [...messages.value].reverse().find((item) => item.role === 'assistant')
@@ -224,6 +277,31 @@ function normalizeQueryString(value) {
 function normalizeMode(value) {
   const mode = normalizeQueryString(value)
   return ['qa', 'deep', 'model'].includes(mode) ? mode : 'qa'
+}
+
+/** 重置当前会话的 token 汇总，并清空已应用的 usage 事件去重集合。 */
+function resetConversationUsage(summary) {
+  appliedUsageEventKeys.clear()
+  conversationUsage.value = normalizeUsageSummary(summary)
+}
+
+/** 生成 usage 事件的稳定去重键。 */
+function usageEventKey(run, event) {
+  return [
+    run?.run_id || run?.id || '',
+    event?.seq || '',
+    event?.request_id || '',
+    event?.event_id || '',
+  ].join(':')
+}
+
+/** 将单次 LLM usage 去重后累加到当前会话汇总。 */
+function applyConversationUsage(run, event) {
+  if (!event?.usage) return
+  const key = usageEventKey(run, event)
+  if (appliedUsageEventKeys.has(key)) return
+  appliedUsageEventKeys.add(key)
+  conversationUsage.value = accumulateUsageSummary(conversationUsage.value, event.usage)
 }
 
 function applyManualToolSelection(ids) {
@@ -490,6 +568,9 @@ function restoreMessage(item) {
     llm_route: item.metadata?.llm_route || null,
     context_digest: item.metadata?.context_digest || null,
     run_id: item.metadata?.run_id || null,
+    trace_id: item.metadata?.trace_id || item.metadata?.run_id || null,
+    continuation_tool_call_ids: item.metadata?.continuation_tool_call_ids || [],
+    execution_trace: null,
     context_manifest: item.metadata?.context_manifest || null,
     tool_schema: item.metadata?.tool_schema || [],
     tool_catalog: item.metadata?.tool_catalog || [],
@@ -537,29 +618,34 @@ function setToolArgument(call, field, value) {
   call.schema_fields = normalizeSchemaArguments(call)
 }
 
-function stopToolCallPolling(callId) {
-  const timer = toolCallPollers.get(callId)
-  if (timer) clearInterval(timer)
-  toolCallPollers.delete(callId)
+function stopToolCallStream(callId) {
+  const tracker = toolCallStreams.get(callId)
+  if (tracker?.timer) clearTimeout(tracker.timer)
+  toolCallStreams.delete(callId)
 }
 
-function startToolCallPolling(message, call) {
-  if (!call?.call_id || !['queued', 'running'].includes(call.phase) || toolCallPollers.has(call.call_id)) return
+function startToolCallStream(message, call) {
+  if (!call?.call_id || !['queued', 'running'].includes(call.phase) || toolCallStreams.has(call.call_id)) return
   const poll = async () => {
+    if (!toolCallStreams.has(call.call_id)) return
     try {
       const updated = await getAssistantToolCall(call.call_id)
       replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
       if (['completed', 'failed', 'canceled'].includes(updated.phase)) {
-        stopToolCallPolling(call.call_id)
+        stopToolCallStream(call.call_id)
         if (updated.phase === 'completed' && !continuedToolCalls.has(call.call_id)) {
           continuedToolCalls.add(call.call_id)
           await continueToolCall(updated.call_id)
         }
+        return
       }
-    } catch { /* keep the last durable state and retry on the next tick */ }
+    } catch {
+      // 保留当前持久化状态，等待下一轮快照。
+    }
+    const tracker = toolCallStreams.get(call.call_id)
+    if (tracker) tracker.timer = setTimeout(poll, TOOL_CALL_STREAM_RETRY_DELAY_MS)
   }
-  poll()
-  toolCallPollers.set(call.call_id, setInterval(poll, 2000))
+  toolCallStreams.set(call.call_id, { timer: setTimeout(poll, 0) })
 }
 
 function hasToolCallResultData(call) {
@@ -579,6 +665,7 @@ async function backfillCompletedToolCall(message, call) {
 
 async function loadChat(chatKey) {
   if (!chatKey) return
+  resetConversationUsage()
   chatOptionsSyncSuspended.value = true
   try {
     const data = await getAssistantChat(chatKey)
@@ -590,12 +677,12 @@ async function loadChat(chatKey) {
     messages.value = data.messages?.length ? data.messages.map(restoreMessage) : defaultMessages()
     for (const message of messages.value) {
       for (const call of message.tool_calls || []) {
-        if (call.phase === 'completed') await backfillCompletedToolCall(message, call)
-        startToolCallPolling(message, call)
+        startToolCallStream(message, call)
       }
     }
     selectDefaultModelForMode(data.model || {})
     await loadChatRun(chatKey)
+    await hydrateAssistantTraces()
     scrollToBottom()
   } catch (error) {
     ElMessage.warning(`会话恢复失败：${getApiErrorMessage(error)}`)
@@ -620,6 +707,7 @@ async function ensureChat() {
 async function createNewChat() {
   chatId.value = ''
   messages.value = defaultMessages()
+  resetConversationUsage()
   await router.push({ path: '/dialogue', query: { mode: chatMode.value } })
 }
 
@@ -695,6 +783,7 @@ async function sendPrompt(prompt) {
     inputText.value = ''
     registerRun(run)
     subscribeToRun(run)
+    if (run.trace_id) subscribeToTrace(run.trace_id)
     await loadChatHistory()
     scrollToBottom()
   } catch (error) {
@@ -708,7 +797,7 @@ async function sendPrompt(prompt) {
 }
 
 function runPlaceholder(run) {
-  const replay = replayAssistantEvents(run.events || [])
+  const replay = replayRunState(run)
   return {
     role: 'assistant', content: run.partial_content || '', reasoning_summary: [], actions: [], references: [],
     suggested_questions: [], answer_mode: '', answer_scope: '', retrieval_status: '',
@@ -721,6 +810,93 @@ function runPlaceholder(run) {
     tool_schema: replay.tool_schema,
     tool_catalog: replay.tool_catalog,
     tool_calls: [], pending_tool_call_ids: [], run_id: run.run_id,
+    trace_id: run.trace_id || '',
+    continuation_tool_call_ids: run.request_snapshot?.context?.tool_call_ids || [],
+    execution_trace: run.trace_id ? traceStates.value.get(run.trace_id) || createTraceState({
+      trace_id: run.trace_id,
+      root_run_id: run.trace_id,
+      status: run.status || 'planning',
+      steps: [],
+      summary: {},
+    }) : null,
+  }
+}
+
+function replayRunState(run) {
+  const manifests = run?.request_manifests || {}
+  const finalManifest = manifests.final_answer || manifests.tool_proposal || null
+  return {
+    route: run?.route || null,
+    context_digest: finalManifest?.context?.digest || '',
+    context_manifest: finalManifest || null,
+    tool_schema: Array.isArray(finalManifest?.tools) ? finalManifest.tools : [],
+    tool_catalog: Array.isArray(finalManifest?.tools) ? finalManifest.tools : [],
+  }
+}
+
+function registerTraceState(trace) {
+  if (!trace?.traceId) return
+  const next = new Map(traceStates.value)
+  next.set(trace.traceId, trace)
+  traceStates.value = next
+  for (const message of messages.value) {
+    if (message.trace_id === trace.traceId) message.execution_trace = trace
+  }
+}
+
+async function loadTraceSnapshot(traceId) {
+  if (!traceId) return null
+  try {
+    const trace = await getAssistantTrace(traceId)
+    const state = createTraceState(trace)
+    registerTraceState(state)
+    return state
+  } catch {
+    return traceStates.value.get(traceId) || null
+  }
+}
+
+function subscribeToTrace(traceId) {
+  if (!traceId || traceSubscriptions.has(traceId)) return
+  const controller = new AbortController()
+  traceSubscriptions.set(traceId, controller)
+  const run = async () => {
+    let retries = 0
+    let current = traceStates.value.get(traceId) || await loadTraceSnapshot(traceId)
+    while (!controller.signal.aborted && current && current.streaming) {
+      try {
+        await streamAssistantTraceEvents(
+          traceId,
+          current.cursor,
+          (event) => {
+            current = applyTraceEvent(current, event)
+            registerTraceState(current)
+          },
+          controller.signal,
+        )
+        retries = 0
+      } catch (error) {
+        if (controller.signal.aborted) break
+        retries += 1
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * (2 ** (retries - 1)), 8000)))
+        current = await loadTraceSnapshot(traceId) || current
+      }
+    }
+  }
+  run().finally(() => traceSubscriptions.delete(traceId))
+}
+
+async function hydrateAssistantTraces() {
+  const traceIds = new Set()
+  for (const message of messages.value) {
+    if (message.role !== 'assistant' || !message.trace_id) continue
+    traceIds.add(message.trace_id)
+  }
+  const traces = await Promise.all([...traceIds].map((traceId) => loadTraceSnapshot(traceId)))
+  for (const trace of traces) {
+    if (!trace?.traceId) continue
+    const traceId = trace.traceId
+    if (trace?.streaming) subscribeToTrace(traceId)
   }
 }
 
@@ -830,6 +1006,7 @@ function hydrateMessagesWithRunContexts() {
 async function loadChatRun(chatKey) {
   try {
     const data = await listAssistantRuns(chatKey, { page_size: 200 })
+    resetConversationUsage(data?.usage)
     const runs = data?.items || []
     for (const item of runs) registerRunContext(item)
     const run = data?.active || runs.find((item) => activeRunStatuses.has(item.status)) || runs[0]
@@ -850,6 +1027,13 @@ async function refreshActiveRun() {
     const run = await getActiveAssistantRun()
     if (!run) return
     registerRun(run)
+    if (
+      chatId.value === run.chat_id
+      && activeRunStatuses.has(run.status)
+      && runMessageIndex(run.run_id) < 0
+    ) {
+      messages.value.push(runPlaceholder(run))
+    }
     subscribeToRun(run)
   } catch {
     // The chat-level restore path will retry when the user opens the conversation.
@@ -894,6 +1078,9 @@ function applyRunEvent(run, event) {
     current.status = 'queued'
     current.stage = 'queued'
     current.partial_content = ''
+  }
+  if (event.type === 'llm.usage.recorded') {
+    applyConversationUsage(run, event)
   }
   const next = new Map(runStates.value)
   next.set(run.chat_id, current)
@@ -995,19 +1182,38 @@ function buildAssistantContext(extra = {}) {
 
 async function continueToolCall(callId) {
   if (composerBusy.value) return
+  let call = findToolCall(callId)
+  try {
+    call = await getAssistantToolCall(callId)
+  } catch {
+    // 保留本地工具调用状态，继续用其 trace_id 尝试创建续答。
+  }
+  if (!call?.call_id) return
+  if (
+    call.continuation_run_id
+    || ['pending', 'scheduled', 'completed'].includes(call.continuation_state)
+  ) {
+    return
+  }
+  const traceId = call.trace_id || call.assistant_run_id || ''
   const targetChatId = chatId.value
   try {
     const run = await createAssistantRun(targetChatId, {
       content: '',
       user_message_id: userMessageId.value,
       messages: buildRequestMessages(),
-      context: buildAssistantContext({ tool_call_ids: [callId] }),
+      context: buildAssistantContext({ tool_call_ids: [callId], trace_id: traceId }),
     })
     messages.value.push(runPlaceholder(run))
     registerRun(run)
     subscribeToRun(run)
     scrollToBottom()
   } catch (error) {
+    // 409 表示服务端自动续答已抢先创建活动回答，属预期竞态，静默恢复即可。
+    if (error.status === 409 && error.detail?.run_id) {
+      await refreshActiveRun()
+      return
+    }
     ElMessage.error(`继续生成失败：${getApiErrorMessage(error)}`)
   }
 }
@@ -1144,6 +1350,11 @@ function findToolCallMessage(callId) {
   return null
 }
 
+function findToolCall(callId) {
+  const message = findToolCallMessage(callId)
+  return message?.tool_calls?.find((call) => call.call_id === callId) || null
+}
+
 async function updateToolCallArguments(message, call) {
   const result = parseToolArguments(call.arguments_text)
   if (!result.ok) {
@@ -1186,7 +1397,7 @@ async function confirmToolCall(message, call) {
     const updated = await confirmAssistantToolCall(call.call_id, payload.payload)
     replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     if (['queued', 'running'].includes(updated.phase)) {
-      startToolCallPolling(message, updated)
+      startToolCallStream(message, updated)
       ElMessage.info(updated.phase === 'queued' ? '算法已提交，正在排队' : '算法运行中')
     } else if (updated.phase === 'completed') {
       ElMessage.success('算法运行完成')
@@ -1513,17 +1724,14 @@ onMounted(() => {
     historyPanelVisible.value = true
   }
   cleanInitialQuery()
-  Promise.allSettled([
-    loadLlmModels(),
-    loadKnowledgeBases(),
-    loadAgentTools(),
-  ]).then(async (initializationResults) => {
-    if (shouldAbortDialogueInitialization(initializationResults)) return
+  void loadChatHistory()
+  void loadKnowledgeBases().catch(() => {})
+  void loadAgentTools().catch(() => {})
+  void loadLlmModels().then(async () => {
     await refreshActiveRun()
     if (chatId.value) await loadChat(chatId.value)
-    await loadChatHistory()
     if (initialPrompt) await sendPrompt(initialPrompt)
-  })
+  }).catch(() => {})
 })
 
 function scheduleChatOptionsSync() {
@@ -1553,7 +1761,9 @@ watch(
 onUnmounted(() => {
   for (const controller of runSubscriptions.values()) controller.abort()
   runSubscriptions.clear()
-  for (const callId of toolCallPollers.keys()) stopToolCallPolling(callId)
+  for (const controller of traceSubscriptions.values()) controller.abort()
+  traceSubscriptions.clear()
+  for (const callId of toolCallStreams.keys()) stopToolCallStream(callId)
   continuedToolCalls.clear()
   if (chatOptionsSyncTimer) window.clearTimeout(chatOptionsSyncTimer)
   chatOptionsSyncTimer = null
@@ -1705,6 +1915,10 @@ watch(
                   {{ msg.stream_status }}
                 </el-tag>
               </div>
+              <ExecutionTraceTimeline
+                v-if="traceCarrierIndexSet.has(idx) && msg.execution_trace"
+                :trace="msg.execution_trace"
+              />
               <details v-if="messageContextSections(msg).length || messageContextTools(msg).length || assistantModelDetailRows(msg).length" class="assistant-context-panel">
                 <summary>本轮上下文</summary>
                 <div class="assistant-context-panel-body">
@@ -1761,52 +1975,55 @@ watch(
                   </li>
                 </ol>
               </details>
-              <template v-for="(block, blockIdx) in cachedMarkdownBlocks(msg)" :key="blockIdx">
-                <h2 v-if="block.type === 'heading'" class="markdown-heading">
-                  <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
-                    <strong v-if="seg.strong">{{ seg.text }}</strong>
-                    <span v-else>{{ seg.text }}</span>
-                  </template>
-                </h2>
-                <component :is="block.ordered ? 'ol' : 'ul'" v-else-if="block.type === 'list'" class="markdown-list">
-                  <li v-for="(item, itemIdx) in block.items" :key="itemIdx">
-                    <template v-for="(seg, segIdx) in inlineSegments(item)" :key="segIdx">
+              <pre v-if="msg.streaming" class="streaming-plaintext">{{ msg.content }}</pre>
+              <template v-else>
+                <template v-for="(block, blockIdx) in cachedMarkdownBlocks(msg)" :key="blockIdx">
+                  <h2 v-if="block.type === 'heading'" class="markdown-heading">
+                    <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
                       <strong v-if="seg.strong">{{ seg.text }}</strong>
                       <span v-else>{{ seg.text }}</span>
                     </template>
-                  </li>
-                </component>
-                <div v-else-if="block.type === 'table'" class="markdown-table-wrap">
-                  <table class="markdown-table">
-                    <tbody>
-                      <tr v-for="(row, rowIdx) in block.rows" :key="rowIdx">
-                        <template v-if="rowIdx === 0">
-                          <th v-for="(cell, cellIdx) in row" :key="cellIdx" scope="col">
-                            <template v-for="(seg, segIdx) in inlineSegments(cell)" :key="segIdx">
-                              <strong v-if="seg.strong">{{ seg.text }}</strong>
-                              <span v-else>{{ seg.text }}</span>
-                            </template>
-                          </th>
-                        </template>
-                        <template v-else>
-                          <td v-for="(cell, cellIdx) in row" :key="cellIdx">
-                            <template v-for="(seg, segIdx) in inlineSegments(cell)" :key="segIdx">
-                              <strong v-if="seg.strong">{{ seg.text }}</strong>
-                              <span v-else>{{ seg.text }}</span>
-                            </template>
-                          </td>
-                        </template>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <pre v-else-if="block.type === 'code'" class="markdown-code"><code>{{ block.text }}</code></pre>
-                <p v-else class="markdown-paragraph">
-                  <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
-                    <strong v-if="seg.strong">{{ seg.text }}</strong>
-                    <span v-else>{{ seg.text }}</span>
-                  </template>
-                </p>
+                  </h2>
+                  <component :is="block.ordered ? 'ol' : 'ul'" v-else-if="block.type === 'list'" class="markdown-list">
+                    <li v-for="(item, itemIdx) in block.items" :key="itemIdx">
+                      <template v-for="(seg, segIdx) in inlineSegments(item)" :key="segIdx">
+                        <strong v-if="seg.strong">{{ seg.text }}</strong>
+                        <span v-else>{{ seg.text }}</span>
+                      </template>
+                    </li>
+                  </component>
+                  <div v-else-if="block.type === 'table'" class="markdown-table-wrap">
+                    <table class="markdown-table">
+                      <tbody>
+                        <tr v-for="(row, rowIdx) in block.rows" :key="rowIdx">
+                          <template v-if="rowIdx === 0">
+                            <th v-for="(cell, cellIdx) in row" :key="cellIdx" scope="col">
+                              <template v-for="(seg, segIdx) in inlineSegments(cell)" :key="segIdx">
+                                <strong v-if="seg.strong">{{ seg.text }}</strong>
+                                <span v-else>{{ seg.text }}</span>
+                              </template>
+                            </th>
+                          </template>
+                          <template v-else>
+                            <td v-for="(cell, cellIdx) in row" :key="cellIdx">
+                              <template v-for="(seg, segIdx) in inlineSegments(cell)" :key="segIdx">
+                                <strong v-if="seg.strong">{{ seg.text }}</strong>
+                                <span v-else>{{ seg.text }}</span>
+                              </template>
+                            </td>
+                          </template>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <pre v-else-if="block.type === 'code'" class="markdown-code"><code>{{ block.text }}</code></pre>
+                  <p v-else class="markdown-paragraph">
+                    <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
+                      <strong v-if="seg.strong">{{ seg.text }}</strong>
+                      <span v-else>{{ seg.text }}</span>
+                    </template>
+                  </p>
+                </template>
               </template>
             </div>
             <div v-if="msg.actions?.length" class="chat-actions">
@@ -2148,18 +2365,6 @@ watch(
               aria-label="选择工具"
               @update:model-value="handleToolSelectionChange"
             />
-            <button
-              type="button"
-              class="icon-tool-btn auto-tool-btn"
-              :class="{ active: autoSelectTools }"
-              :disabled="agentToolsLoading || !agentTools.length"
-              :aria-pressed="autoSelectTools"
-              aria-label="自动匹配工具"
-              @click="toggleAutoSelectTools"
-            >
-              <el-icon><MagicStick /></el-icon>
-              <span v-if="autoSelectTools" class="auto-tool-dot" />
-            </button>
           </div>
           <div class="composer-toolbar-right">
             <LlmModelSelect
@@ -2193,6 +2398,31 @@ watch(
             >
               取消回答
             </el-button>
+            <el-tooltip
+              placement="top"
+              :disabled="!contextRingState.visible"
+              :content="contextRingTooltip"
+            >
+              <button
+                v-if="contextRingState.visible"
+                type="button"
+                class="context-ring-trigger"
+                :aria-label="`上下文已使用 ${contextRingState.percent}%`"
+              >
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                  <circle class="context-ring-track" cx="8" cy="8" r="6" />
+                  <circle
+                    class="context-ring-fill"
+                    :class="`context-ring-fill--${contextRingState.tone}`"
+                    cx="8"
+                    cy="8"
+                    r="6"
+                    :stroke-dasharray="contextRingState.dashArray"
+                    transform="rotate(-90 8 8)"
+                  />
+                </svg>
+              </button>
+            </el-tooltip>
             <el-button
               type="primary"
               circle
@@ -2455,8 +2685,19 @@ h1 {
   box-shadow: 0 6px 16px rgba(22, 59, 110, 0.04);
 }
 
+.chat-message-assistant .chat-bubble {
+  width: 100%;
+  max-width: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .chat-message-user .chat-bubble {
-  max-width: min(620px, 72%);
+  width: fit-content;
+  max-width: min(720px, 88%);
   background: var(--app-primary);
   color: #ffffff;
   border-color: var(--app-primary);
@@ -2652,6 +2893,16 @@ h1 {
   line-height: 1.7;
 }
 
+.streaming-plaintext {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--app-ink-body);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
 .markdown-heading,
 .markdown-paragraph {
   margin: 0 0 8px;
@@ -2790,6 +3041,45 @@ h1 {
   align-items: start;
 }
 
+.context-ring-trigger {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--app-ink-muted);
+  cursor: default;
+}
+
+.context-ring-track {
+  fill: none;
+  stroke: var(--app-border-soft);
+  stroke-width: 2;
+}
+
+.context-ring-fill {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: stroke 0.15s ease, stroke-dasharray 0.15s ease;
+}
+
+.context-ring-fill--safe {
+  stroke: var(--app-primary-active);
+}
+
+.context-ring-fill--warning {
+  stroke: #d97706;
+}
+
+.context-ring-fill--danger {
+  stroke: #dc2626;
+}
+
 .composer-mark {
   align-self: start;
   margin-top: 8px;
@@ -2890,16 +3180,6 @@ h1 {
 .icon-tool-btn:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.auto-tool-dot {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--app-primary);
 }
 
 .tool-count {
