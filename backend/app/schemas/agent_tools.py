@@ -203,6 +203,14 @@ class AssistantToolCallInputUpdate(BaseModel):
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
 
 
+class AssistantToolCallRawArgumentsUpdate(BaseModel):
+    """仅修正 pending 调用的模型原始提案文本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    raw_arguments: str = Field(min_length=1, max_length=100000)
+
+
 class AssistantToolCallConfirm(BaseModel):
     """确认时可原子地提交最后一版参数。"""
 

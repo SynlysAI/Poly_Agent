@@ -65,6 +65,22 @@ export function parseToolArguments(text) {
 }
 
 /**
+ * 构建仅更新模型原始提案的请求体，避免把实际执行参数一并提交。
+ */
+export function buildToolCallRawArgumentsPayload(call) {
+  const raw = call?.raw_arguments_text
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return { ok: false, error: '模型原始提案不能为空' }
+  }
+  const parsed = parseToolArguments(raw)
+  if (!parsed.ok) return parsed
+  return {
+    ok: true,
+    payload: { raw_arguments: raw },
+  }
+}
+
+/**
  * 构建确认执行请求体：优先提交用户当前编辑的 arguments_text，
  * 避免必须先点“更新参数”保存后才能确认运行。
  */

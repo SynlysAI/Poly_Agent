@@ -1301,6 +1301,12 @@ export function updateAssistantToolCallInput(callId, payload) {
   return apiClient.patch(`/assistant/tool-calls/${encodeURIComponent(callId)}/input`, payload).then(unwrapResponse)
 }
 
+export function updateAssistantToolCallRawArguments(callId, payload) {
+  return apiClient
+    .patch(`/assistant/tool-calls/${encodeURIComponent(callId)}/raw-arguments`, payload)
+    .then(unwrapResponse)
+}
+
 export function uploadAssistantToolCallInput(callId, formData) {
   return apiClient
     .post(`/assistant/tool-calls/${encodeURIComponent(callId)}/input:multipart`, formData)
