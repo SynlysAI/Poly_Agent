@@ -433,6 +433,8 @@ class AssistantApiTest(ComputationTestCase):
 
         event_types = [event["type"] for event in events]
         self.assertIn("status", event_types)
+        self.assertIn("context.assembly.started", event_types)
+        self.assertIn("retrieval.started", event_types)
         self.assertIn("evidence", event_types)
         self.assertTrue(any(event.get("stage") == "search" for event in events))
         final = events[-1]["data"]

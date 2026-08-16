@@ -477,6 +477,7 @@ class AssistantToolCallRepository(BaseRepository):
                         "_id": 0,
                         "call_id": 1,
                         "assistant_run_id": 1,
+                        "trace_id": 1,
                         "chat_id": 1,
                         "created_by": 1,
                         "event_seq": 1,
@@ -494,6 +495,7 @@ class AssistantToolCallRepository(BaseRepository):
                 AssistantEventRepository.append(
                     {
                         "run_id": current.get("assistant_run_id") or "",
+                        "trace_id": current.get("trace_id") or current.get("assistant_run_id") or "",
                         "chat_id": current.get("chat_id") or "",
                         "created_by": current.get("created_by") or "",
                     },
@@ -516,6 +518,7 @@ class AssistantToolCallRepository(BaseRepository):
                         AssistantEventRepository.build_document(
                             {
                                 "run_id": item.get("assistant_run_id") or "",
+                                "trace_id": item.get("trace_id") or item.get("assistant_run_id") or "",
                                 "chat_id": item.get("chat_id") or "",
                                 "created_by": item.get("created_by") or "",
                             },
@@ -978,6 +981,7 @@ class AssistantEventRepository(BaseRepository):
             collection.create_index([("run_id", 1), ("seq", 1)])
             collection.create_index([("chat_id", 1), ("created_by", 1), ("seq", 1)])
             collection.create_index([("call_id", 1), ("seq", 1)])
+            collection.create_index([("trace_id", 1), ("at", 1), ("event_id", 1)])
             collection.create_index([("type", 1), ("at", 1)])
         except PyMongoError as exc:
             cls._handle_mongo_error(exc)
@@ -1045,11 +1049,18 @@ class AssistantEventRepository(BaseRepository):
             可直接插入的 append-only 事件文档。
         """
         payload = clone_document(event)
+        trace_id = (
+            payload.get("trace_id")
+            or run.get("trace_id")
+            or run.get("run_id")
+            or ""
+        )
         return {
             "event_id": f"asevt_{uuid4().hex[:20]}",
             "chat_id": run.get("chat_id") or "",
             "run_id": run.get("run_id") or "",
             "call_id": payload.get("call_id") or "",
+            "trace_id": trace_id,
             "seq": int(payload.get("seq", 0)),
             "type": cls.canonical_type(payload),
             "schema_version": cls.SCHEMA_VERSION,
@@ -1108,6 +1119,25 @@ class AssistantEventRepository(BaseRepository):
             page_size=10_000,
         )
         return items
+
+    @classmethod
+    def list_for_trace(cls, trace_id: str) -> list[dict[str, Any]]:
+        """按 Trace ID 读取统一事件，并按时间与事件 ID 稳定排序。
+
+        Args:
+            trace_id: 初始 AssistantRun ID。
+
+        Returns:
+            属于该 Trace 的统一事件文档列表。
+        """
+        items, _ = cls.list_all(
+            {"trace_id": trace_id},
+            sort_field="at",
+            reverse=False,
+            page=1,
+            page_size=10_000,
+        )
+        return sorted(items, key=lambda item: (str(item.get("at") or ""), str(item.get("event_id") or "")))
 
     @classmethod
     def events_after(cls, run_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
@@ -1431,7 +1461,13 @@ class AssistantRunRepository(BaseRepository):
                 current = cls._collection().find_one_and_update(
                     {"run_id": run_id},
                     {"$inc": {"event_seq": 1}},
-                    projection={"chat_id": 1, "run_id": 1, "created_by": 1, "event_seq": 1},
+                    projection={
+                        "chat_id": 1,
+                        "run_id": 1,
+                        "trace_id": 1,
+                        "created_by": 1,
+                        "event_seq": 1,
+                    },
                     return_document=False,
                 )
                 if not current:

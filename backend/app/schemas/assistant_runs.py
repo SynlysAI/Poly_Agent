@@ -27,6 +27,7 @@ class AssistantRunCreate(BaseModel):
 class AssistantRun(BaseModel):
     model_config = ConfigDict(extra="ignore")
     run_id: str
+    trace_id: str | None = None
     chat_id: str
     created_by: str
     user_message_id: str

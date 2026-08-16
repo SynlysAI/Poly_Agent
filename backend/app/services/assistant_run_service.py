@@ -71,6 +71,19 @@ class AssistantRunService:
         now = utc_now()
         run_id = f"asrun_{uuid4().hex[:16]}"
         context = dict(payload.context)
+        tool_call_ids = [str(item) for item in (context.get("tool_call_ids") or []) if str(item)]
+        is_continuation = bool(tool_call_ids)
+        trace_id = str(context.get("trace_id") or "") if is_continuation else run_id
+        if is_continuation and not trace_id:
+            first_call = AssistantToolCallRepository.find_one({"call_id": tool_call_ids[0]})
+            trace_id = str(
+                (first_call or {}).get("trace_id")
+                or (first_call or {}).get("assistant_run_id")
+                or ""
+            )
+        if not trace_id:
+            trace_id = run_id
+        context["trace_id"] = trace_id
         context["chat_id"] = chat_id
         context["run_id"] = run_id
         model = context.get("model") or {}
@@ -78,6 +91,7 @@ class AssistantRunService:
         requested_model_id = model.get("modelId") or model.get("model_id")
         document = {
             "run_id": run_id,
+            "trace_id": trace_id,
             "chat_id": chat_id,
             "created_by": owner_id,
             "user_message_id": payload.user_message_id or "",
@@ -347,7 +361,14 @@ class AssistantRunService:
     ) -> dict[str, Any]:
         """构造 continuation run 的请求上下文。"""
         route_snapshot = source_context.get("route_snapshot") or call.get("proposal_route") or {}
+        trace_id = str(
+            call.get("trace_id")
+            or source_context.get("trace_id")
+            or call.get("assistant_run_id")
+            or ""
+        )
         return {
+            "trace_id": trace_id,
             "chat_id": call.get("chat_id"),
             "mode": source_context.get("mode") or "qa",
             "selected_tool_ids": list(source_context.get("selected_tool_ids") or [call.get("tool_id")]),
@@ -642,6 +663,7 @@ class AssistantRunService:
                     tool_call_ids=tool_call_ids,
                     metadata={
                         "run_id": run_id,
+                        "trace_id": document.get("trace_id"),
                         "llm_route": ((data.get("grounding_facts") or {}).get("llm_route")) or {},
                         "context_digest": (
                             (data.get("grounding_facts") or {}).get("context", {}).get("digest")

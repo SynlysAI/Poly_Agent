@@ -407,6 +407,8 @@ class AssistantToolCallService:
         next_phase = "awaiting_input" if missing_fields or missing_assets else "awaiting_confirmation"
         now = utc_now()
         source_context = dict(payload.source_context or {})
+        trace_id = str(payload.trace_id or source_context.get("trace_id") or payload.assistant_run_id or "")
+        source_context["trace_id"] = trace_id
         source_context.setdefault("original_user_message_id", payload.message_id)
         source_context.setdefault("chat_id", payload.chat_id)
         source_context.setdefault("selected_tool_ids", [payload.tool_id])
@@ -415,6 +417,7 @@ class AssistantToolCallService:
         source_context.setdefault("context_manifest_digest", payload.schema_digest)
         document = {
             "call_id": f"atc_{uuid4().hex[:16]}",
+            "trace_id": trace_id,
             "provider_tool_call_id": payload.provider_tool_call_id,
             "chat_id": payload.chat_id,
             "message_id": payload.message_id,
@@ -626,6 +629,19 @@ class AssistantToolCallService:
                 cls._release_asset_by_id(asset_id)
             raise
         cls._append_input_event(document, tool)
+        for asset in uploaded:
+            AssistantToolCallRepository.append_event(
+                document["call_id"],
+                {
+                    "type": "asset.uploaded",
+                    "call_id": document["call_id"],
+                    "asset_id": asset.get("asset_id"),
+                    "asset_key": asset.get("asset_key"),
+                    "filename": asset.get("filename"),
+                    "size_bytes": asset.get("size_bytes"),
+                    "created_at": utc_now(),
+                },
+            )
         return cls._public_document(document)
 
     @classmethod

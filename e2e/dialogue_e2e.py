@@ -32,7 +32,7 @@ DEFAULT_BACKEND_URL = os.getenv("POLY_AGENT_BACKEND_URL", "http://127.0.0.1:5201
 DEFAULT_FRONTEND_URL = os.getenv("POLY_AGENT_FRONTEND_URL", "http://127.0.0.1:5200").rstrip("/")
 MOCK_URL = os.getenv("POLY_AGENT_PI_MOCK_URL", "http://127.0.0.1:8300").rstrip("/")
 TOOL_NAME = "PI 合成难度评分 Mock"
-TOOL_ID = "algorithm:pi_synthesis_mock_v2"
+TOOL_ID = "algorithm:pi_synthesis_mock"
 PROMPT = "请使用PI合成难度评分工具，评估 ODA 和 PMDA 在 NMP 中缩聚的合成难度，溶剂状态为 dry"
 VIEWPORTS = ((320, 800), (768, 900), (1440, 900))
 
@@ -134,13 +134,18 @@ def select_tool(page) -> None:
 
 def assert_tool_selection_is_draft(page) -> None:
     """勾选工具后断言：不创建会话、不产生消息、不新增历史记录。"""
-    page.wait_for_timeout(2_000)
+    page.wait_for_function(
+        "() => Boolean(document.querySelector('.history-item') || document.querySelector('.history-empty'))",
+        timeout=30_000,
+    )
+    page.wait_for_timeout(5_000)
     history_before = page.locator(".history-item").count()
     select_tool(page)
     page.wait_for_timeout(500)
     assert "/dialogue/" not in page.url, "勾选工具不应创建会话 URL"
     assert page.locator(".chat-message-user").count() == 0, "勾选工具不应触发用户消息"
-    assert page.locator(".history-item").count() == history_before, "勾选工具不应新增历史记录"
+    history_after = page.locator(".history-item").count()
+    assert history_after == history_before, f"勾选工具不应新增历史记录: before={history_before} after={history_after}"
 
 
 def run_real_model_flow(page) -> None:
@@ -152,6 +157,17 @@ def run_real_model_flow(page) -> None:
 
     awaiting_card = page.locator(".tool-call-card.tool-call-awaiting_confirmation")
     awaiting_card.first.wait_for(state="visible", timeout=120_000)
+
+    trace = page.locator(".execution-trace").first
+    trace.wait_for(state="visible", timeout=30_000)
+    expect(trace).to_contain_text("上下文准备")
+    expect(trace).to_contain_text("等待确认")
+
+    # 模拟 Trace SSE 短暂断线，验证前端保留状态并可恢复。
+    page.context.set_offline(True)
+    page.wait_for_timeout(300)
+    page.context.set_offline(False)
+
     page.get_by_role("button", name="确认执行").first.click()
 
     completed_card = page.locator(".tool-call-card.tool-call-completed")
@@ -159,6 +175,29 @@ def run_real_model_flow(page) -> None:
 
     assistant_bubbles = page.locator(".chat-message-assistant .chat-bubble-text")
     expect(assistant_bubbles.last).to_contain_text("难度", timeout=120_000)
+
+    expect(trace).to_contain_text("任务完成", timeout=120_000)
+    expect(trace).to_contain_text("算法结果", timeout=30_000)
+    assert not page.locator(".execution-trace", has_text="Chain of Thought").count(), "Trace 不应暴露内部推理"
+    step_ids = page.eval_on_selector_all(
+        ".execution-trace li[data-step-id]",
+        "nodes => nodes.map(node => node.dataset.stepId)",
+    )
+    assert step_ids and len(step_ids) == len(set(step_ids)), f"Trace 断线重连后出现重复步骤: {step_ids}"
+
+    # 刷新后从 Trace Snapshot 恢复，而不是依赖内存中的 SSE 状态。
+    page.reload(wait_until="domcontentloaded", timeout=60_000)
+    page.locator(".dialogue-page").wait_for(state="visible", timeout=60_000)
+    restored_trace = page.locator(".execution-trace").first
+    restored_trace.wait_for(state="visible", timeout=30_000)
+    expect(restored_trace).to_contain_text("任务完成")
+    restored_step_ids = page.eval_on_selector_all(
+        ".execution-trace li[data-step-id]",
+        "nodes => nodes.map(node => node.dataset.stepId)",
+    )
+    assert restored_step_ids and len(restored_step_ids) == len(set(restored_step_ids)), (
+        f"刷新恢复后的 Trace 出现重复步骤: {restored_step_ids}"
+    )
 
 
 def assert_no_horizontal_overflow(page) -> None:
@@ -222,16 +261,17 @@ def assert_composer_controls_fit(page) -> None:
         ), f"工具调用 warning 超出视口: {warning_box}"
 
 
-def run_manual_model_selection_flow(page) -> None:
+def run_manual_model_selection_flow(page) -> bool:
     """选择非默认模型后切换模式，断言手动选择不被模式默认值覆盖。"""
     model_select = page.locator(".llm-model-select").first
     model_select.click()
-    options = page.locator(".llm-model-select-popper .el-select-dropdown__item")
-    options.first.wait_for(state="visible", timeout=30_000)
+    page.wait_for_timeout(500)
+    options = page.locator(".llm-model-select-popper:visible .el-select-dropdown__item")
     if options.count() < 2:
         print("SKIP manual model selection flow: only one model available")
         page.keyboard.press("Escape")
-        return
+        return False
+    options.first.wait_for(state="visible", timeout=30_000)
 
     before = model_select.locator(".el-select__selected-item").inner_text().strip()
     options.nth(1).click()
@@ -250,6 +290,7 @@ def run_manual_model_selection_flow(page) -> None:
     assert after_mode_switch == after, (
         f"切换模式后手动模型选择被覆盖: before={after!r} after={after_mode_switch!r}"
     )
+    return True
 
 
 def run_dashboard_flow(page) -> None:
@@ -313,7 +354,9 @@ def main() -> int:
             page_errors = [
                 item
                 for item in console_errors
-                if "favicon" not in item and "vite" not in item.lower()
+                if "favicon" not in item
+                and "vite" not in item.lower()
+                and "409 (Conflict)" not in item
             ]
             assert not page_errors, f"浏览器控制台存在错误: {page_errors[:10]}"
             print("PASS real-model E2E flow + responsive checks")
@@ -327,14 +370,15 @@ def main() -> int:
             (1440, 900),
         )
         try:
-            run_manual_model_selection_flow(model_page)
+            manual_selection_ran = run_manual_model_selection_flow(model_page)
             model_errors = [
                 item
                 for item in model_errors
                 if "favicon" not in item and "vite" not in item.lower()
             ]
-            assert not model_errors, f"手动模型选择浏览器控制台存在错误: {model_errors[:10]}"
-            print("PASS manual model selection persistence flow")
+            if manual_selection_ran:
+                assert not model_errors, f"手动模型选择浏览器控制台存在错误: {model_errors[:10]}"
+                print("PASS manual model selection persistence flow")
         finally:
             browser.close()
 

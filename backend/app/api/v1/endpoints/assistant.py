@@ -29,6 +29,7 @@ from app.schemas.assistant_chats import (
     AssistantMessageUpdate,
 )
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate, AssistantRunListData
+from app.schemas.assistant_trace import AssistantTraceData
 from app.schemas.common import ApiResponse
 from app.services.assistant_service import chat_assistant
 from app.services.assistant_service import stream_chat_assistant
@@ -36,6 +37,7 @@ from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.assistant_chat_service import assistant_chat_service
 from app.services.assistant_quality_service import build_quality_metrics
 from app.services.assistant_run_service import assistant_run_service
+from app.services.assistant_trace_service import assistant_trace_service
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -199,6 +201,32 @@ def get_active_assistant_run(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AssistantRun | None]:
     return ApiResponse(code=0, message="ok", data=assistant_run_service.get_active(current_user))
+
+
+@router.get("/traces/{trace_id}", response_model=ApiResponse[AssistantTraceData])
+def get_assistant_trace(
+    trace_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantTraceData]:
+    """读取一条用户请求的完整 Execution Trace 快照。"""
+    return ApiResponse(code=0, message="ok", data=assistant_trace_service.get(trace_id, current_user))
+
+
+@router.get("/traces/{trace_id}/events")
+def stream_assistant_trace_events(
+    trace_id: str,
+    after_event_id: str | None = Query(default=None, max_length=120),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> StreamingResponse:
+    """通过 SSE 实时输出 Execution Trace 步骤。"""
+    return StreamingResponse(
+        (
+            _sse_event(event)
+            for event in assistant_trace_service.events(trace_id, current_user, after_event_id)
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/runs/{run_id}/events")

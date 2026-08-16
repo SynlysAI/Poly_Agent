@@ -32,6 +32,7 @@ import {
   downloadArtifact,
   getApiErrorMessage,
   getAssistantChat,
+  getAssistantTrace,
   getAssistantToolCall,
   getActiveAssistantRun,
   getAssistantRun,
@@ -41,10 +42,12 @@ import {
   listAssistantRuns,
   listKnowledgeSystems,
   streamAssistantRunEvents,
+  streamAssistantTraceEvents,
   updateAssistantChat,
   updateAssistantToolCallInput,
   uploadAssistantToolCallInput,
 } from '../api/polyAgentApi'
+import ExecutionTraceTimeline from '../components/assistant/ExecutionTraceTimeline.vue'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import ToolMenuPicker from '../components/ToolMenuPicker.vue'
@@ -72,6 +75,10 @@ import {
   selectRelevantTools,
 } from '../utils/assistantToolAutoSelect.mjs'
 import { replayAssistantEvents } from '../utils/assistantEvents.js'
+import {
+  applyTraceEvent,
+  createTraceState,
+} from '../utils/assistantTrace.mjs'
 import {
   capabilitySourceLabel,
   contextSectionRows,
@@ -110,6 +117,8 @@ const bodyRef = ref(null)
 const inputText = ref('')
 const runStates = ref(new Map())
 const runSubscriptions = new Map()
+const traceStates = ref(new Map())
+const traceSubscriptions = new Map()
 const toolCallPollers = new Map()
 const continuedToolCalls = new Set()
 const pendingStreamDeltas = new Map()
@@ -165,6 +174,23 @@ function defaultMessages() {
 }
 
 const messages = ref(defaultMessages())
+
+const traceCarrierIndexSet = computed(() => {
+  const carriers = new Map()
+  messages.value.forEach((message, index) => {
+    if (message.role !== 'assistant' || !message.trace_id) return
+    const traceId = message.trace_id
+    const continuationCount = Array.isArray(message.continuation_tool_call_ids)
+      ? message.continuation_tool_call_ids.length
+      : 0
+    const isRootRun = (message.run_id || message.metadata?.run_id) === traceId
+    const score = continuationCount > 0 ? 2 : (isRootRun ? 1 : 0)
+    if (score <= 0) return
+    const current = carriers.get(traceId)
+    if (!current || score > current.score) carriers.set(traceId, { index, score })
+  })
+  return new Set([...carriers.values()].map((item) => item.index))
+})
 
 const chatModeOptions = [
   { label: '科研问答', value: 'qa' },
@@ -490,6 +516,9 @@ function restoreMessage(item) {
     llm_route: item.metadata?.llm_route || null,
     context_digest: item.metadata?.context_digest || null,
     run_id: item.metadata?.run_id || null,
+    trace_id: item.metadata?.trace_id || item.metadata?.run_id || null,
+    continuation_tool_call_ids: item.metadata?.continuation_tool_call_ids || [],
+    execution_trace: null,
     context_manifest: item.metadata?.context_manifest || null,
     tool_schema: item.metadata?.tool_schema || [],
     tool_catalog: item.metadata?.tool_catalog || [],
@@ -596,6 +625,7 @@ async function loadChat(chatKey) {
     }
     selectDefaultModelForMode(data.model || {})
     await loadChatRun(chatKey)
+    await hydrateAssistantTraces()
     scrollToBottom()
   } catch (error) {
     ElMessage.warning(`会话恢复失败：${getApiErrorMessage(error)}`)
@@ -695,6 +725,7 @@ async function sendPrompt(prompt) {
     inputText.value = ''
     registerRun(run)
     subscribeToRun(run)
+    if (run.trace_id) subscribeToTrace(run.trace_id)
     await loadChatHistory()
     scrollToBottom()
   } catch (error) {
@@ -721,6 +752,79 @@ function runPlaceholder(run) {
     tool_schema: replay.tool_schema,
     tool_catalog: replay.tool_catalog,
     tool_calls: [], pending_tool_call_ids: [], run_id: run.run_id,
+    trace_id: run.trace_id || '',
+    continuation_tool_call_ids: run.request_snapshot?.context?.tool_call_ids || [],
+    execution_trace: run.trace_id ? traceStates.value.get(run.trace_id) || createTraceState({
+      trace_id: run.trace_id,
+      root_run_id: run.trace_id,
+      status: run.status || 'planning',
+      steps: [],
+      summary: {},
+    }) : null,
+  }
+}
+
+function registerTraceState(trace) {
+  if (!trace?.traceId) return
+  const next = new Map(traceStates.value)
+  next.set(trace.traceId, trace)
+  traceStates.value = next
+  for (const message of messages.value) {
+    if (message.trace_id === trace.traceId) message.execution_trace = trace
+  }
+}
+
+async function loadTraceSnapshot(traceId) {
+  if (!traceId) return null
+  try {
+    const trace = await getAssistantTrace(traceId)
+    const state = createTraceState(trace)
+    registerTraceState(state)
+    return state
+  } catch {
+    return traceStates.value.get(traceId) || null
+  }
+}
+
+function subscribeToTrace(traceId) {
+  if (!traceId || traceSubscriptions.has(traceId)) return
+  const controller = new AbortController()
+  traceSubscriptions.set(traceId, controller)
+  const run = async () => {
+    let retries = 0
+    let current = traceStates.value.get(traceId) || await loadTraceSnapshot(traceId)
+    while (!controller.signal.aborted && current && current.streaming) {
+      try {
+        await streamAssistantTraceEvents(
+          traceId,
+          current.cursor,
+          (event) => {
+            current = applyTraceEvent(current, event)
+            registerTraceState(current)
+          },
+          controller.signal,
+        )
+        retries = 0
+      } catch (error) {
+        if (controller.signal.aborted) break
+        retries += 1
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * (2 ** (retries - 1)), 8000)))
+        current = await loadTraceSnapshot(traceId) || current
+      }
+    }
+  }
+  run().finally(() => traceSubscriptions.delete(traceId))
+}
+
+async function hydrateAssistantTraces() {
+  const traceIds = new Set()
+  for (const message of messages.value) {
+    if (message.role !== 'assistant' || !message.trace_id) continue
+    traceIds.add(message.trace_id)
+  }
+  for (const traceId of traceIds) {
+    const trace = await loadTraceSnapshot(traceId)
+    if (trace?.streaming) subscribeToTrace(traceId)
   }
 }
 
@@ -1002,13 +1106,27 @@ function buildAssistantContext(extra = {}) {
 
 async function continueToolCall(callId) {
   if (composerBusy.value) return
+  let call = findToolCall(callId)
+  try {
+    call = await getAssistantToolCall(callId)
+  } catch {
+    // 保留本地工具调用状态，继续用其 trace_id 尝试创建续答。
+  }
+  if (!call?.call_id) return
+  if (
+    call.continuation_run_id
+    || ['pending', 'scheduled', 'completed'].includes(call.continuation_state)
+  ) {
+    return
+  }
+  const traceId = call.trace_id || call.assistant_run_id || ''
   const targetChatId = chatId.value
   try {
     const run = await createAssistantRun(targetChatId, {
       content: '',
       user_message_id: userMessageId.value,
       messages: buildRequestMessages(),
-      context: buildAssistantContext({ tool_call_ids: [callId] }),
+      context: buildAssistantContext({ tool_call_ids: [callId], trace_id: traceId }),
     })
     messages.value.push(runPlaceholder(run))
     registerRun(run)
@@ -1154,6 +1272,11 @@ function findToolCallMessage(callId) {
     if ((message.tool_calls || []).some((call) => call.call_id === callId)) return message
   }
   return null
+}
+
+function findToolCall(callId) {
+  const message = findToolCallMessage(callId)
+  return message?.tool_calls?.find((call) => call.call_id === callId) || null
 }
 
 async function updateToolCallArguments(message, call) {
@@ -1565,6 +1688,8 @@ watch(
 onUnmounted(() => {
   for (const controller of runSubscriptions.values()) controller.abort()
   runSubscriptions.clear()
+  for (const controller of traceSubscriptions.values()) controller.abort()
+  traceSubscriptions.clear()
   for (const callId of toolCallPollers.keys()) stopToolCallPolling(callId)
   continuedToolCalls.clear()
   if (chatOptionsSyncTimer) window.clearTimeout(chatOptionsSyncTimer)
@@ -1717,6 +1842,10 @@ watch(
                   {{ msg.stream_status }}
                 </el-tag>
               </div>
+              <ExecutionTraceTimeline
+                v-if="traceCarrierIndexSet.has(idx) && msg.execution_trace"
+                :trace="msg.execution_trace"
+              />
               <details v-if="messageContextSections(msg).length || messageContextTools(msg).length || assistantModelDetailRows(msg).length" class="assistant-context-panel">
                 <summary>本轮上下文</summary>
                 <div class="assistant-context-panel-body">

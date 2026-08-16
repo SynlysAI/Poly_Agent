@@ -1223,6 +1223,10 @@ export function getActiveAssistantRun() {
   return apiClient.get('/assistant/runs-active/current').then(unwrapResponse)
 }
 
+export function getAssistantTrace(traceId) {
+  return apiClient.get(`/assistant/traces/${encodeURIComponent(traceId)}`).then(unwrapResponse)
+}
+
 export function cancelAssistantRun(runId) {
   return apiClient.post(`/assistant/runs/${encodeURIComponent(runId)}/cancel`).then(unwrapResponse)
 }
@@ -1237,6 +1241,40 @@ export async function streamAssistantRunEvents(runId, afterSeq, onEvent, signal)
     headers,
     signal,
   })
+  if (!response.ok) {
+    throw await createFetchApiError(response)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const events = buffer.split('\n\n')
+    buffer = events.pop() || ''
+    for (const rawEvent of events) {
+      const dataLines = rawEvent.split('\n').filter((line) => line.startsWith('data: ')).map((line) => line.slice(6))
+      if (dataLines.length) onEvent(JSON.parse(dataLines.join('\n')))
+    }
+    if (done) break
+  }
+  if (buffer.trim()) {
+    const dataLines = buffer.split('\n').filter((line) => line.startsWith('data: ')).map((line) => line.slice(6))
+    if (dataLines.length) onEvent(JSON.parse(dataLines.join('\n')))
+  }
+}
+
+export async function streamAssistantTraceEvents(traceId, afterEventId, onEvent, signal) {
+  const headers = { 'X-Request-Id': generateRequestId() }
+  const authHeader = getAuthorizationHeader()
+  if (authHeader) headers.Authorization = authHeader
+  const params = new URLSearchParams()
+  if (afterEventId) params.set('after_event_id', afterEventId)
+  const query = params.toString()
+  const response = await fetch(
+    `${resolvedBaseUrl}/assistant/traces/${encodeURIComponent(traceId)}/events${query ? `?${query}` : ''}`,
+    { method: 'GET', headers, signal },
+  )
   if (!response.ok) {
     throw await createFetchApiError(response)
   }
