@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import {
   applyToolCallEvent,
   buildToolCallConfirmPayload,
-  buildToolCallRawArgumentsPayload,
   canEditToolCall,
   isStaleToolCallPhase,
   mergeToolCalls,
@@ -76,17 +75,6 @@ assert.deepEqual(normalizeToolCall(null), { arguments_text: '{}', raw_arguments_
 assert.deepEqual(parseToolArguments('{"smiles": "CCO"}'), { ok: true, arguments: { smiles: 'CCO' } })
 assert.equal(parseToolArguments('not json').ok, false)
 assert.equal(parseToolArguments('"str"').ok, false)
-
-const rawProposalPayload = buildToolCallRawArgumentsPayload({
-  raw_arguments_text: '{"smiles": "CCC"}',
-  arguments: { smiles: 'CCO' },
-})
-assert.deepEqual(rawProposalPayload, {
-  ok: true,
-  payload: { raw_arguments: '{"smiles": "CCC"}' },
-})
-assert.equal(buildToolCallRawArgumentsPayload({ raw_arguments_text: '  ' }).ok, false)
-assert.equal(buildToolCallRawArgumentsPayload({ raw_arguments_text: 'not json' }).ok, false)
 
 const confirmPayload = buildToolCallConfirmPayload({
   arguments_text: '{"smiles": "CCO", "temperature": 300}',

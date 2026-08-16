@@ -129,6 +129,21 @@ class AgentToolsApiTest(ComputationTestCase):
         self.assertIsNone(demo["recent_success_rate"])
         self.assertEqual(demo["recent_run_count"], 0)
 
+    def test_agent_tool_derives_model_proposal_from_active_version(self) -> None:
+        AlgorithmVersionRepository.update_fields(
+            "ver-v1",
+            {
+                "model_proposal": {"smiles": "CCC"},
+                "contract": {"sample_input": {"smiles": "CCO"}},
+            },
+        )
+        response = self.client.get(self.base_url)
+        demo = next(
+            item for item in response.json()["data"]["items"]
+            if item["algorithm_id"] == "vertical-demo"
+        )
+        self.assertEqual(demo["model_proposal"], {"smiles": "CCC"})
+
     def test_recent_success_rate_is_derived_from_terminal_algorithm_runs(self) -> None:
         """工具目录应只统计最近的 completed/failed/cancelled 运行。"""
         now = utc_now()

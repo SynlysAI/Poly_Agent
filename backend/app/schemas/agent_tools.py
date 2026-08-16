@@ -98,6 +98,7 @@ class AgentTool(BaseModel):
     version: str | None = None
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
+    model_proposal: dict[str, Any] | None = None
     function_name: str = ""
     input_json_schema: dict[str, Any] = Field(default_factory=dict)
     schema_digest: str = ""
@@ -201,14 +202,6 @@ class AssistantToolCallInputUpdate(BaseModel):
 
     arguments: dict[str, Any] = Field(default_factory=dict)
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
-
-
-class AssistantToolCallRawArgumentsUpdate(BaseModel):
-    """仅修正 pending 调用的模型原始提案文本。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    raw_arguments: str = Field(min_length=1, max_length=100000)
 
 
 class AssistantToolCallConfirm(BaseModel):

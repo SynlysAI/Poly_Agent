@@ -175,6 +175,11 @@ class AgentToolService:
             version=(version or {}).get("version") or registry.get("version"),
             input_schema=AlgorithmIOSchema.model_validate(schema_source.get("input_schema") or {}),
             output_schema=AlgorithmIOSchema.model_validate(schema_source.get("output_schema") or {}),
+            model_proposal=(
+                schema_source.get("model_proposal")
+                or (schema_source.get("contract") or {}).get("model_proposal")
+                or (schema_source.get("contract") or {}).get("sample_input")
+            ),
             input_assets=[AlgorithmAssetSpec.model_validate(item) for item in (schema_source.get("input_assets") or [])],
             output_assets=[AlgorithmAssetSpec.model_validate(item) for item in (schema_source.get("output_assets") or [])],
             developer_attribution=registry.get("developer_attribution"),

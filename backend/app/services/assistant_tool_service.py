@@ -27,12 +27,11 @@ from app.schemas.agent_tools import (
     AssistantToolCallCreate,
     AssistantToolCallEvent,
     AssistantToolCallInputUpdate,
-    AssistantToolCallRawArgumentsUpdate,
     AssistantToolInputRequiredEvent,
 )
 from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmRunCreate
 from app.services.agent_tool_service import agent_tool_service
-from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID, TOOL_PROPOSAL_INVALID
+from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID
 from app.services.assistant_runtime_asset_service import assistant_runtime_asset_service
 from app.services.assistant_tool_contract import SENSITIVE_KEYS, missing_inputs, validate_arguments
 from app.services.research_engine_service import ResearchEngineService
@@ -568,69 +567,6 @@ class AssistantToolCallService:
             required_assets=[item.model_dump(mode="python") for item in missing_assets],
         )
         cls._append_input_event(document, tool)
-        return cls._public_document(document)
-
-    @classmethod
-    def update_raw_arguments(
-        cls,
-        call_id: str,
-        payload: AssistantToolCallRawArgumentsUpdate,
-        current_user: dict[str, str] | None,
-    ) -> AssistantToolCall:
-        """更新 pending 调用的模型原始提案，不修改实际执行参数。"""
-        cls.get(call_id, current_user)
-        document = AssistantToolCallRepository.find_one({"call_id": call_id}) or {}
-        if document.get("phase") not in CALLABLE_PHASES:
-            raise HTTPException(status_code=409, detail="当前工具调用已结束，不能修改模型原始提案")
-        raw_arguments = str(payload.raw_arguments or "").strip()
-        try:
-            parsed = json.loads(raw_arguments)
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "code": TOOL_PROPOSAL_INVALID,
-                    "message": "模型原始提案必须是合法 JSON 对象",
-                    "details": {"raw_arguments": str(exc)},
-                },
-            ) from exc
-        if not isinstance(parsed, dict):
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "code": TOOL_PROPOSAL_INVALID,
-                    "message": "模型原始提案必须是 JSON 对象",
-                },
-            )
-        now = utc_now()
-        fields = {
-            "raw_arguments": _redact(raw_arguments),
-            "arguments_parse_error": None,
-            "updated_at": now,
-        }
-        updated = AssistantToolCallRepository.update_fields(call_id, fields)
-        if not updated:
-            raise HTTPException(status_code=404, detail=f"工具调用 '{call_id}' 不存在")
-        document.update(fields)
-        if document.get("chat_id"):
-            AssistantChatRepository.update_owned(
-                document["chat_id"],
-                document.get("created_by", ""),
-                {"updated_at": now},
-            )
-        AssistantToolCallRepository.append_event(
-            call_id,
-            {
-                "type": "tool.proposal.updated",
-                "call_id": call_id,
-                "message": "模型原始提案已更新",
-            },
-        )
-        cls._audit(
-            document,
-            "assistant_tool_call_proposal_updated",
-            {"status": document.get("phase")},
-        )
         return cls._public_document(document)
 
     @classmethod

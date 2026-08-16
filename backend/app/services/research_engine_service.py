@@ -41,6 +41,7 @@ from app.schemas.research_engine import (
     AlgorithmCreditSummary,
     AlgorithmCreditUpdateRequest,
     AlgorithmMetadataUpdateRequest,
+    AlgorithmVersionProposalUpdate,
     AlgorithmRegistryEntry,
     AlgorithmRegistryListData,
     AlgorithmRun,
@@ -1249,6 +1250,74 @@ class ResearchEngineService:
             request_id=request_id,
         )
         return self.get_algorithm(algorithm_id)
+
+    def update_algorithm_version_model_proposal(
+        self,
+        algorithm_id: str,
+        version_id: str,
+        payload: AlgorithmVersionProposalUpdate,
+        *,
+        actor_user_id: str,
+        is_admin: bool = False,
+        request_id: str | None = None,
+    ) -> AlgorithmVersion:
+        """更新指定算法版本的模型提案。"""
+        algorithm_doc = AlgorithmRegistryRepository.find_one({"algorithm_id": algorithm_id})
+        if not algorithm_doc:
+            raise HTTPException(status_code=404, detail=f"算法 '{algorithm_id}' 不存在")
+        self._ensure_algorithm_metadata_access(
+            algorithm_doc,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
+        version_doc = AlgorithmVersionRepository.find_one({"version_id": version_id})
+        if not version_doc:
+            raise HTTPException(status_code=404, detail=f"算法版本 '{version_id}' 不存在")
+        if version_doc.get("algorithm_id") != algorithm_id:
+            raise HTTPException(status_code=409, detail="算法 ID 与版本不匹配")
+
+        model_proposal = payload.model_proposal
+        if not isinstance(model_proposal, dict):
+            raise HTTPException(status_code=422, detail="模型提案必须是 JSON object")
+        input_schema = version_doc.get("input_schema") or {}
+        fields = input_schema.get("fields") or {}
+        unknown_fields = sorted(set(model_proposal) - set(fields))
+        if unknown_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"模型提案包含未知字段: {', '.join(unknown_fields)}",
+            )
+        required_fields = input_schema.get("required") or []
+        missing_fields = [
+            field
+            for field in required_fields
+            if model_proposal.get(field) is None or model_proposal.get(field) == ""
+        ]
+        if missing_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"模型提案缺少必填字段: {', '.join(missing_fields)}",
+            )
+
+        fields_update = {
+            "model_proposal": model_proposal,
+            "updated_at": utc_now(),
+        }
+        updated = AlgorithmVersionRepository.update_fields(version_id, fields_update)
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"算法版本 '{version_id}' 不存在")
+        version_doc.update(fields_update)
+        self._write_audit_event(
+            actor_user_id=actor_user_id,
+            entity_type="algorithm_version",
+            entity_id=version_id,
+            event_type="algorithm_version_model_proposal_updated",
+            reason="在线维护算法版本模型提案",
+            before={"model_proposal": None},
+            after={"model_proposal": model_proposal},
+            request_id=request_id,
+        )
+        return AlgorithmVersion.model_validate(version_doc)
 
     def list_algorithms(
         self,

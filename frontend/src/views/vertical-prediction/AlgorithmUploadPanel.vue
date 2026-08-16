@@ -233,6 +233,7 @@ watch(
     form.name = props.targetAlgorithm.name || contract.name || props.targetAlgorithm.algorithm_id
     form.version = suggestNextPatch(props.targetVersions)
     form.visibility = props.targetVersion?.visibility || props.targetAlgorithm?.visibility || 'private'
+    form.sample_input = JSON.stringify(contract.sample_input || {}, null, 2)
     if (currentStep.value === 0) currentStep.value = 1
   },
   { immediate: true, deep: true },
@@ -627,6 +628,7 @@ async function submit() {
       const data = new FormData()
       data.append('target_algorithm_id', props.targetAlgorithm.algorithm_id)
       data.append('version', form.version.trim())
+      data.append('sample_input', form.sample_input)
       sourceFiles.value.forEach((file) => data.append('files', file.raw))
       if (requirementsFiles.value[0]?.raw) data.append('requirements', requirementsFiles.value[0].raw)
       pkg = await packAlgorithmVersionPackage(data)
@@ -792,6 +794,12 @@ function viewModelDetail() {
               </el-form-item>
             </div>
           </el-form>
+          <section class="proposal-upload-section">
+            <h3>模型提案 / 样例输入</h3>
+            <p>新版本会使用该 JSON 作为 LUI 工具提案和样例输入。</p>
+            <el-input v-model="form.sample_input" type="textarea" :rows="8" class="code-input" />
+            <el-alert v-if="sampleJsonError" :title="sampleJsonError" type="error" :closable="false" show-icon />
+          </section>
           <div class="source-grid new-version-source">
             <section>
               <h3>新版本文件</h3>
@@ -1266,6 +1274,7 @@ h3 { font-size: 15px; }
 .wizard-head p:last-child, .section-heading p, .submit-row p { margin: 4px 0 0; color: var(--app-ink-muted); font-size: 13px; line-height: 1.55; }
 .wizard-shell :deep(.el-steps) { margin-top: 16px; }
 .metadata-form { margin-top: 12px; }
+.proposal-upload-section { display: grid; gap: 8px; margin-top: 12px; }
 .new-version-mode-switch { margin: 4px 0 16px; }
 .visibility-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .simple-form-grid { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr) 140px; gap: 0 14px; }

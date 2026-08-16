@@ -14,7 +14,6 @@ from app.schemas.agent_tools import (
     AssistantToolCallConfirm,
     AssistantToolCallCreate,
     AssistantToolCallInputUpdate,
-    AssistantToolCallRawArgumentsUpdate,
 )
 from app.schemas.assistant import AssistantChatRequest
 from app.schemas.assistant import AssistantChatResponse
@@ -301,17 +300,6 @@ def update_assistant_tool_call_input(
 ) -> ApiResponse[AssistantToolCall]:
     """补充算法必填参数或已有 artifact 引用。"""
     data = assistant_tool_call_service.update_input(call_id, payload, current_user)
-    return ApiResponse(code=0, message="ok", data=data)
-
-
-@router.patch("/tool-calls/{call_id}/raw-arguments", response_model=ApiResponse[AssistantToolCall])
-def update_assistant_tool_call_raw_arguments(
-    call_id: str,
-    payload: AssistantToolCallRawArgumentsUpdate,
-    current_user: dict[str, str] | None = Depends(get_current_user),
-) -> ApiResponse[AssistantToolCall]:
-    """仅更新 pending 工具调用的模型原始提案，不改变执行参数。"""
-    data = assistant_tool_call_service.update_raw_arguments(call_id, payload, current_user)
     return ApiResponse(code=0, message="ok", data=data)
 
 

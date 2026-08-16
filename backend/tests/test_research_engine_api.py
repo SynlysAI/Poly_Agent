@@ -1000,6 +1000,54 @@ sample_input:
         )
         self.assertEqual(builtin_resp.status_code, 409, builtin_resp.text)
 
+    def test_update_algorithm_version_model_proposal(self) -> None:
+        """版本级模型提案可由上传者维护，并校验 JSON 字段。"""
+        self._login_as("proposal-owner")
+        version_id = self._pack_activate_simple_algorithm("proposal_demo")
+
+        valid_resp = self.client.patch(
+            f"{self.base_url}/algorithms/proposal_demo/versions/{version_id}/proposal",
+            json={"model_proposal": {"smiles": "CCC"}},
+        )
+        self.assertEqual(valid_resp.status_code, 200, valid_resp.text)
+        self.assertEqual(valid_resp.json()["data"]["model_proposal"], {"smiles": "CCC"})
+
+        missing_resp = self.client.patch(
+            f"{self.base_url}/algorithms/proposal_demo/versions/{version_id}/proposal",
+            json={"model_proposal": {}},
+        )
+        self.assertEqual(missing_resp.status_code, 422, missing_resp.text)
+
+        unknown_resp = self.client.patch(
+            f"{self.base_url}/algorithms/proposal_demo/versions/{version_id}/proposal",
+            json={"model_proposal": {"bogus": 1}},
+        )
+        self.assertEqual(unknown_resp.status_code, 422, unknown_resp.text)
+
+        self._login_as("other-user")
+        forbidden_resp = self.client.patch(
+            f"{self.base_url}/algorithms/proposal_demo/versions/{version_id}/proposal",
+            json={"model_proposal": {"smiles": "CCC"}},
+        )
+        self.assertEqual(forbidden_resp.status_code, 403, forbidden_resp.text)
+
+        self._login_as("proposal-owner")
+        AlgorithmRegistryRepository.save(
+            "algorithm_id",
+            {
+                "algorithm_id": "proposal_other",
+                "name": "Proposal Other",
+                "source": "uploaded_package",
+                "owner": "proposal-owner",
+                "status": "active",
+            },
+        )
+        mismatch_resp = self.client.patch(
+            f"{self.base_url}/algorithms/proposal_other/versions/{version_id}/proposal",
+            json={"model_proposal": {"smiles": "CCC"}},
+        )
+        self.assertEqual(mismatch_resp.status_code, 409, mismatch_resp.text)
+
     def test_pack_algorithm_package_persists_developer_attribution(self) -> None:
         """网页打包入口会把开发者来源写入 AlgorithmVersion。"""
         handler_source = b"""
