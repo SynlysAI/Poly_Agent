@@ -850,6 +850,13 @@ async function refreshActiveRun() {
     const run = await getActiveAssistantRun()
     if (!run) return
     registerRun(run)
+    if (
+      chatId.value === run.chat_id
+      && activeRunStatuses.has(run.status)
+      && runMessageIndex(run.run_id) < 0
+    ) {
+      messages.value.push(runPlaceholder(run))
+    }
     subscribeToRun(run)
   } catch {
     // The chat-level restore path will retry when the user opens the conversation.
@@ -1008,6 +1015,11 @@ async function continueToolCall(callId) {
     subscribeToRun(run)
     scrollToBottom()
   } catch (error) {
+    // 409 表示服务端自动续答已抢先创建活动回答，属预期竞态，静默恢复即可。
+    if (error.status === 409 && error.detail?.run_id) {
+      await refreshActiveRun()
+      return
+    }
     ElMessage.error(`继续生成失败：${getApiErrorMessage(error)}`)
   }
 }
