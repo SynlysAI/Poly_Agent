@@ -534,6 +534,48 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         )
         self.assertEqual(calls[0]["phase"], "awaiting_confirmation")
 
+    def test_stream_uses_version_model_proposal_as_fixed_tool_arguments(self) -> None:
+        """active 版本存在 model_proposal 时，LUI 忽略模型现场生成的参数。"""
+        AlgorithmVersionRepository.update_fields(
+            "vertical-tool-v1",
+            {"model_proposal": {"smiles": "CCC", "temperature": 320}},
+        )
+        chat_id, message_id = self._chat_and_message()
+        with patch(
+            "app.core.llm_client.chat_message",
+            return_value=self._fake_message(
+                tool_calls=[
+                    self._tool_call(
+                        self._function_name("algorithm:vertical-tool"),
+                        '{"smiles": "WRONG", "temperature": 999}',
+                    ),
+                ],
+            ),
+        ), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测这个分子的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        final = events[-1]
+        self.assertEqual(final["type"], "final")
+        calls = final["data"]["tool_calls"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["arguments"], {"smiles": "CCC", "temperature": 320})
+        persisted = AssistantToolCallRepository.find_one({"call_id": calls[0]["call_id"]})
+        self.assertEqual(persisted["arguments"], {"smiles": "CCC", "temperature": 320})
+        self.assertEqual(persisted["raw_arguments"], '{"smiles": "CCC", "temperature": 320}')
+
     def test_stream_surfaces_tool_proposal_validation_error(self) -> None:
         chat_id, message_id = self._chat_and_message()
         with patch(

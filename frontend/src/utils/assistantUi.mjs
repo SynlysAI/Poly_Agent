@@ -26,8 +26,6 @@ const TOOL_PROTOCOL_LABELS = {
 
 const TOOL_EVENT_LABELS = {
   'tool.proposed': '模型提议',
-  'tool.proposal.updated': '原始提案已更新',
-  'tool.proposal.backfilled': '原始提案已回填',
   'tool.arguments.invalid': '参数校验失败',
   'tool.awaiting_input': '等待补充参数',
   'tool.awaiting_confirmation': '等待确认',

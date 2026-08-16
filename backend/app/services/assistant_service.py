@@ -1738,7 +1738,11 @@ class AssistantService:
             if tool is None:
                 logger.warning("assistant tool proposal references unknown function: %s", function_name)
                 continue
-            provider_arguments = normalize_provider_arguments(getattr(function, "arguments", None))
+            provider_arguments = normalize_provider_arguments(
+                tool.model_proposal
+                if tool.model_proposal
+                else getattr(function, "arguments", None)
+            )
             proposal_usage = message_metadata.get("usage")
             try:
                 created = assistant_tool_call_service.create(

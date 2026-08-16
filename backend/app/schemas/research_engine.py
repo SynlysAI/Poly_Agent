@@ -330,6 +330,7 @@ class AlgorithmInterfaceCreate(BaseModel):
     output_assets: list["AlgorithmAssetSpec"] = Field(default_factory=list)
     interface_config: RemoteInterfaceConfig
     sample_input: dict = Field(default_factory=dict)
+    model_proposal: dict | None = None
     description: str | None = Field(default=None, max_length=1000)
     developer: str | None = Field(default=None, max_length=160)
     developer_organization: str | None = Field(default=None, max_length=160)
@@ -364,6 +365,7 @@ class AlgorithmInterfaceVersionCreate(BaseModel):
     output_assets: list["AlgorithmAssetSpec"] = Field(default_factory=list)
     interface_config: RemoteInterfaceConfig
     sample_input: dict = Field(default_factory=dict)
+    model_proposal: dict | None = None
     description: str | None = Field(default=None, max_length=1000)
     visibility: AlgorithmVisibility | None = None
 
@@ -388,6 +390,7 @@ class AlgorithmInterfaceVersionUpdate(BaseModel):
     output_assets: list["AlgorithmAssetSpec"] | None = None
     interface_config: RemoteInterfaceConfig | None = None
     sample_input: dict | None = None
+    model_proposal: dict | None = None
     description: str | None = Field(default=None, max_length=1000)
     visibility: AlgorithmVisibility | None = None
 
@@ -522,6 +525,14 @@ class AlgorithmMetadataUpdateRequest(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+
+class AlgorithmVersionProposalUpdate(BaseModel):
+    """更新算法版本的模型提案。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_proposal: dict
 
 AlgorithmPackageStatus = Literal[
     "uploaded",
@@ -1117,6 +1128,7 @@ class AlgorithmRegistryEntry(BaseModel):
     trigger_modes: list[TriggerSource] = Field(default_factory=lambda: ["human_workflow"])
     runtime_dependency: str | None = Field(default=None, max_length=200)
     version: str = Field(default="1.0.0", max_length=40)
+    model_proposal: dict | None = None
     validation_metric: dict = Field(default_factory=dict)
     owner: str | None = Field(default=None, max_length=80)
     status: AlgorithmStatus = "active"
@@ -1189,6 +1201,7 @@ class AlgorithmPackageCreate(BaseModel):
     result_envelope: str | None = Field(default=None, max_length=120)
     runtime: dict = Field(default_factory=dict)
     sample_input: dict = Field(default_factory=dict)
+    model_proposal: dict | None = None
     description: str | None = Field(default=None, max_length=1000)
     developer: str | None = Field(default=None, max_length=160)
     developer_organization: str | None = Field(default=None, max_length=160)
@@ -1273,6 +1286,7 @@ class AlgorithmVersion(UtcDatetimeJsonModel):
     environment_digest: str | None = None
     runtime_digest: str | None = None
     status: AlgorithmPackageStatus = "validated"
+    model_proposal: dict | None = None
     runtime: dict = Field(default_factory=dict)
     input_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     output_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)

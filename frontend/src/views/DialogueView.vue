@@ -43,7 +43,6 @@ import {
   streamAssistantRunEvents,
   updateAssistantChat,
   updateAssistantToolCallInput,
-  updateAssistantToolCallRawArguments,
   uploadAssistantToolCallInput,
 } from '../api/polyAgentApi'
 import GlobeIcon from '../components/GlobeIcon.vue'
@@ -54,7 +53,6 @@ import { shouldAbortDialogueInitialization } from '../utils/dialogueInit.mjs'
 import {
   applyToolCallEvent,
   buildToolCallConfirmPayload,
-  buildToolCallRawArgumentsPayload,
   canEditToolCall,
   mergeToolCalls,
   normalizeToolCall,
@@ -1161,21 +1159,6 @@ async function updateToolCallArguments(message, call) {
   }
 }
 
-async function updateToolCallRawArguments(message, call) {
-  const result = buildToolCallRawArgumentsPayload(call)
-  if (!result.ok) {
-    ElMessage.error(result.error)
-    return
-  }
-  try {
-    const updated = await updateAssistantToolCallRawArguments(call.call_id, result.payload)
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
-    ElMessage.success('模型原始提案已更新')
-  } catch (error) {
-    ElMessage.error(`原始提案更新失败：${getApiErrorMessage(error)}`)
-  }
-}
-
 async function uploadToolCallAsset(message, call, assetKey, event) {
   const file = event.target.files?.[0]
   if (!file) return
@@ -1905,20 +1888,7 @@ watch(
                 </details>
                 <details v-if="call.raw_arguments" class="tool-call-details tool-proposal-details">
                   <summary>模型原始提案</summary>
-                  <template v-if="canEditToolCall(call)">
-                    <el-input
-                      v-model="call.raw_arguments_text"
-                      type="textarea"
-                      :rows="8"
-                      class="tool-args-editor tool-proposal-editor"
-                      resize="vertical"
-                    />
-                    <div class="tool-call-actions">
-                      <el-button size="small" @click="updateToolCallRawArguments(msg, call)">保存原始提案</el-button>
-                      <el-button size="small" @click="call.raw_arguments_text = call.raw_arguments">重置</el-button>
-                    </div>
-                  </template>
-                  <pre v-else class="tool-proposal-raw">{{ call.raw_arguments_text || call.raw_arguments }}</pre>
+                  <pre class="tool-proposal-raw">{{ call.raw_arguments_text || call.raw_arguments }}</pre>
                   <p v-if="call.arguments_parse_error" class="tool-proposal-error">
                     参数解析失败：{{ call.arguments_parse_error }}
                   </p>
@@ -3312,10 +3282,6 @@ h1 {
 .tool-args-editor :deep(textarea) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-}
-
-.tool-proposal-editor {
-  width: 100%;
 }
 
 .tool-proposal-details {

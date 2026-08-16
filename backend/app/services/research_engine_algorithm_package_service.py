@@ -166,6 +166,8 @@ class AlgorithmPackageService:
         *,
         source_files: dict[str, bytes],
         requirements: bytes | None = None,
+        sample_input: dict | None = None,
+        model_proposal: dict | None = None,
     ) -> bytes:
         """Clone the active package and replace only selected source files."""
         if not source_files or not any(path.endswith(".py") for path in source_files):
@@ -203,6 +205,12 @@ class AlgorithmPackageService:
             if contract.get("algorithm_id") != target_algorithm_id:
                 raise HTTPException(status_code=409, detail="当前版本契约与目标算法 ID 不一致")
             contract["version"] = version.strip()
+            if sample_input is not None:
+                contract["sample_input"] = sample_input
+            if model_proposal is not None:
+                contract["model_proposal"] = model_proposal
+            elif sample_input is not None:
+                contract["model_proposal"] = sample_input
             self._validate_contract(contract)
             with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
                 for member in source_zip.infolist():
@@ -215,10 +223,20 @@ class AlgorithmPackageService:
                         )
                     elif member.filename == "requirements.txt" and requirements is not None:
                         target_zip.writestr(member, requirements)
+                    elif member.filename == "tests/sample_input.json" and sample_input is not None:
+                        target_zip.writestr(
+                            member.filename,
+                            json.dumps(sample_input, ensure_ascii=False, indent=2),
+                        )
                     else:
                         target_zip.writestr(member, source_zip.read(member.filename))
                 if requirements is not None and "requirements.txt" not in source_zip.namelist():
                     target_zip.writestr("requirements.txt", requirements)
+                if sample_input is not None and "tests/sample_input.json" not in source_zip.namelist():
+                    target_zip.writestr(
+                        "tests/sample_input.json",
+                        json.dumps(sample_input, ensure_ascii=False, indent=2),
+                    )
                 for path, content in replacements.items():
                     self._validate_archive_member(path, len(content))
                     target_zip.writestr(path, content)
@@ -468,6 +486,7 @@ class AlgorithmPackageService:
                 "environment_digest": None,
                 "runtime_digest": None,
                 "status": "validated",
+                "model_proposal": contract.get("model_proposal") or sample_input or {},
                 "runtime": contract.get("runtime") or {},
                 "input_schema": contract.get("input_schema") or {},
                 "output_schema": contract.get("output_schema") or {},
@@ -744,6 +763,7 @@ class AlgorithmPackageService:
             "trigger_modes": contract.get("trigger_modes") or ["human_workflow"],
             "runtime_dependency": "uploaded_python_package",
             "version": contract.get("version", version.version),
+            "model_proposal": version.model_proposal or contract.get("model_proposal") or contract.get("sample_input") or {},
             "validation_metric": {},
             "owner": (registry_entry or {}).get("owner") or version.created_by,
             "status": "active",
@@ -1491,6 +1511,7 @@ class AlgorithmPackageService:
             "resource_assets": [item.model_dump(mode="python") for item in payload.resource_assets],
             "result_envelope": payload.result_envelope,
             "sample_input_path": "tests/sample_input.json",
+            "model_proposal": payload.model_proposal or payload.sample_input,
             "description": payload.description,
             "developer": payload.developer,
             "developer_organization": payload.developer_organization,
@@ -1521,6 +1542,7 @@ class AlgorithmPackageService:
             "contributors",
             "logo_asset",
             "logo_url",
+            "model_proposal",
             "implementation_notes",
         ):
             if contract.get(key) in (None, ""):

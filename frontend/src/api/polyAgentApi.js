@@ -898,6 +898,12 @@ export function activateAlgorithmVersion(algorithmId, versionId) {
   return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:activate`).then(unwrapResponse)
 }
 
+export function updateAlgorithmVersionModelProposal(algorithmId, versionId, payload) {
+  return apiClient
+    .patch(`/research-engine/algorithms/${encodeURIComponent(algorithmId)}/versions/${encodeURIComponent(versionId)}/proposal`, payload)
+    .then(unwrapResponse)
+}
+
 export function rollbackAlgorithmVersion(algorithmId, versionId) {
   return apiClient.post(`/research-engine/algorithms/${algorithmId}/versions/${versionId}:rollback`).then(unwrapResponse)
 }
@@ -1299,12 +1305,6 @@ export function getAssistantToolCall(callId) {
 
 export function updateAssistantToolCallInput(callId, payload) {
   return apiClient.patch(`/assistant/tool-calls/${encodeURIComponent(callId)}/input`, payload).then(unwrapResponse)
-}
-
-export function updateAssistantToolCallRawArguments(callId, payload) {
-  return apiClient
-    .patch(`/assistant/tool-calls/${encodeURIComponent(callId)}/raw-arguments`, payload)
-    .then(unwrapResponse)
 }
 
 export function uploadAssistantToolCallInput(callId, formData) {

@@ -48,6 +48,7 @@ from app.schemas.research_engine import (
     AlgorithmResourceBinding,
     AlgorithmRunTraceability,
     AlgorithmVersion,
+    AlgorithmVersionProposalUpdate,
     AlgorithmVersionListData,
     ArchiveRequest,
     EntityAuditListData,
@@ -712,6 +713,8 @@ async def inspect_algorithm_package(
 async def pack_algorithm_package_version(
     target_algorithm_id: str = Form(...),
     version: str = Form(...),
+    sample_input: str | None = Form(default=None),
+    model_proposal: str | None = Form(default=None),
     files: list[UploadFile] = File(default=[]),
     requirements: UploadFile | None = File(default=None),
     current_user: dict[str, str] | None = Depends(get_current_user),
@@ -731,6 +734,8 @@ async def pack_algorithm_package_version(
         version,
         source_files=source_files,
         requirements=requirements_bytes,
+        sample_input=_json_form_object(sample_input, {}) if sample_input is not None else None,
+        model_proposal=_json_form_object(model_proposal, {}) if model_proposal is not None else None,
     )
     package = package_service.upload_package(
         filename=f"{target_algorithm_id}-{version}.zip",
@@ -849,6 +854,29 @@ def list_algorithm_versions(
             page_size=data.page_size,
             total=len(visible_items),
         )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.patch(
+    "/algorithms/{algorithm_id}/versions/{version_id}/proposal",
+    response_model=ApiResponse[AlgorithmVersion],
+)
+def update_algorithm_version_model_proposal(
+    algorithm_id: str,
+    version_id: str,
+    payload: AlgorithmVersionProposalUpdate,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AlgorithmVersion]:
+    """更新指定算法版本的模型提案。"""
+    data = service.update_algorithm_version_model_proposal(
+        algorithm_id,
+        version_id,
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+        request_id=_request_id(request),
+    )
     return ApiResponse(code=0, message="ok", data=data)
 
 

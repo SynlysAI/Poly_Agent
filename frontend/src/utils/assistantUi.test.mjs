@@ -75,17 +75,12 @@ assert.equal(invalidDiff.error, '原始参数 JSON 解析失败')
 const timeline = toolTimelineRows({
   events: [
     { seq: 1, at: '2026-08-15T10:00:00Z', type: 'tool.proposed', phase: 'requested' },
-    { seq: 2, at: '2026-08-15T10:01:00Z', type: 'tool.proposal.updated', message: '模型原始提案已更新' },
-    { seq: 3, at: '2026-08-15T10:02:00Z', type: 'tool.proposal.backfilled', message: '历史原始提案已按最终参数回填' },
-    { seq: 4, at: '2026-08-15T10:03:00Z', type: 'tool.awaiting_confirmation', phase: 'awaiting_confirmation' },
+    { seq: 2, at: '2026-08-15T10:03:00Z', type: 'tool.awaiting_confirmation', phase: 'awaiting_confirmation' },
   ],
 })
-assert.equal(timeline.length, 4)
+assert.equal(timeline.length, 2)
 assert.equal(timeline[0].label, '模型提议')
-assert.equal(timeline[1].label, '原始提案已更新')
-assert.equal(timeline[1].detail, '模型原始提案已更新')
-assert.equal(timeline[2].label, '原始提案已回填')
-assert.equal(timeline[3].label, '等待确认')
+assert.equal(timeline[1].label, '等待确认')
 
 const fallbackTimeline = toolTimelineRows({
   created_at: '2026-08-15T10:00:00Z',
