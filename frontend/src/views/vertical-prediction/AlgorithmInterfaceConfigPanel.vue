@@ -475,9 +475,10 @@ async function testConfig() {
   testing.value = true
   try {
     const sample = JSON.parse(form.sample_input)
+    const requestOptions = { timeoutSeconds: form.timeout_seconds }
     testResult.value = inputAssets.value.length
-      ? await testAlgorithmInterfaceMultipart(form.algorithm_id, savedVersion.value.version_id, sample, sampleFiles.value)
-      : await testAlgorithmInterface(form.algorithm_id, savedVersion.value.version_id, sample)
+      ? await testAlgorithmInterfaceMultipart(form.algorithm_id, savedVersion.value.version_id, sample, sampleFiles.value, requestOptions)
+      : await testAlgorithmInterface(form.algorithm_id, savedVersion.value.version_id, sample, requestOptions)
     if (testResult.value.ok) ElMessage.success('接口样例测试通过')
   } catch (error) {
     testResult.value = null
