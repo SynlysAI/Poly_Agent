@@ -17,6 +17,7 @@ from app.infra.research_engine_repositories import (  # noqa: E402
     AlgorithmRegistryRepository,
     AlgorithmVersionRepository,
 )
+from app.services.algorithm_model_proposal import resolve_model_proposal  # noqa: E402
 
 
 PAGE_SIZE = 1000
@@ -62,12 +63,13 @@ def main() -> None:
             if not version_doc:
                 continue
             scanned += 1
-            if "model_proposal" in version_doc and isinstance(version_doc.get("model_proposal"), dict):
+            current_proposal = version_doc.get("model_proposal")
+            if isinstance(current_proposal, dict) and current_proposal:
                 continue
             missing += 1
-            proposal = (version_doc.get("contract") or {}).get("sample_input") or {}
+            proposal, source = resolve_model_proposal(version_doc)
             if len(samples) < 5:
-                samples.append(f"{algorithm_id}/{version_id}: {str(proposal)[:120]}")
+                samples.append(f"{algorithm_id}/{version_id}: source={source} proposal={str(proposal)[:120]}")
             if apply_changes:
                 fields = {
                     "model_proposal": proposal,
