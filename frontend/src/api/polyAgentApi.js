@@ -19,6 +19,42 @@ const apiClient = axios.create({
   timeout: 60000,
 })
 
+const SHARED_READ_CACHE_TTL_MS = 30_000
+const sharedReadCache = new Map()
+
+/**
+ * 缓存短时间内不会频繁变化的只读接口，避免首页与问答页重复请求。
+ *
+ * Args:
+ *   cacheKey: 缓存键。
+ *   loader: 未命中缓存或缓存过期时执行的数据加载函数。
+ *
+ * Returns:
+ *   缓存结果或新加载结果的 Promise。
+ */
+function cachedReadRequest(cacheKey, loader) {
+  const cached = sharedReadCache.get(cacheKey)
+  const now = Date.now()
+  if (cached && now - cached.createdAt < SHARED_READ_CACHE_TTL_MS) {
+    return Promise.resolve(cached.value)
+  }
+  if (cached?.promise) {
+    return cached.promise
+  }
+  const promise = Promise.resolve()
+    .then(loader)
+    .then((value) => {
+      sharedReadCache.set(cacheKey, { createdAt: Date.now(), value })
+      return value
+    })
+    .catch((error) => {
+      sharedReadCache.delete(cacheKey)
+      throw error
+    })
+  sharedReadCache.set(cacheKey, { createdAt: now, promise })
+  return promise
+}
+
 export function getResolvedApiBaseUrl() {
   return resolvedBaseUrl
 }
@@ -436,7 +472,9 @@ export function checkIntegrationConfig(serviceKey) {
 // ── Knowledge Base API ──
 
 export function listKnowledgeSystems() {
-  return apiClient.get('/knowledge-bases/systems').then(unwrapResponse).then(filterVisibleKnowledgeSystems)
+  return cachedReadRequest('knowledge-systems', () =>
+    apiClient.get('/knowledge-bases/systems').then(unwrapResponse).then(filterVisibleKnowledgeSystems),
+  )
 }
 
 export function getKnowledgeHealth() {
@@ -548,7 +586,7 @@ export function suggestExperiments(payload) {
 
 /** 可选 LLM 模型目录 */
 export function getLlmModels() {
-  return apiClient.get('/llm/models').then(unwrapResponse)
+  return cachedReadRequest('llm-models', () => apiClient.get('/llm/models').then(unwrapResponse))
 }
 
 /** 刷新 LLM 模型健康状态 */
@@ -1105,6 +1143,10 @@ export function listAssistantChats(params = {}) {
   return apiClient.get('/assistant/chats', { params }).then(unwrapResponse)
 }
 
+export function listAssistantChatSummaries(params = {}) {
+  return apiClient.get('/assistant/chat-summaries', { params }).then(unwrapResponse)
+}
+
 export function createAssistantChat(payload = {}) {
   return apiClient.post('/assistant/chats', payload).then(unwrapResponse)
 }
@@ -1202,7 +1244,7 @@ export function chatWithAssistant(payload) {
 // ── 算法工具目录与调用 API ──
 
 export function listAgentTools() {
-  return apiClient.get('/agent-tools').then(unwrapResponse)
+  return cachedReadRequest('agent-tools', () => apiClient.get('/agent-tools').then(unwrapResponse))
 }
 
 export function listAgentToolRegistry() {

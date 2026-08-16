@@ -91,6 +91,27 @@ class AssistantChatsApiTest(ComputationTestCase):
         self.assertEqual(deleted.status_code, 200, deleted.text)
         self.assertEqual(self.client.get(f"/api/v1/assistant/chats/{chat['chat_id']}").status_code, 404)
 
+    def test_chat_summary_endpoint_returns_message_count_without_full_payload(self) -> None:
+        created = self.client.post("/api/v1/assistant/chats", json={"title": "摘要会话"})
+        self.assertEqual(created.status_code, 200, created.text)
+        chat_id = created.json()["data"]["chat_id"]
+        for content in ("问题一", "回答一", "问题二"):
+            response = self.client.post(
+                f"/api/v1/assistant/chats/{chat_id}/messages",
+                json={"role": "user" if content.startswith("问题") else "assistant", "content": content},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+
+        summary = self.client.get("/api/v1/assistant/chat-summaries")
+        self.assertEqual(summary.status_code, 200, summary.text)
+        item = next(
+            candidate for candidate in summary.json()["data"]["items"]
+            if candidate["chat_id"] == chat_id
+        )
+        self.assertEqual(item["message_count"], 3)
+        self.assertNotIn("messages", item)
+        self.assertNotIn("tool_calls", item)
+
     def test_chat_and_messages_are_isolated_by_owner(self) -> None:
         created = self.client.post("/api/v1/assistant/chats", json={"title": "私有会话"})
         chat_id = created.json()["data"]["chat_id"]

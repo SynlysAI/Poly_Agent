@@ -419,11 +419,25 @@ function openHistory() {
   router.push({ path: '/dialogue', query: { history: 'open' } })
 }
 
+function preloadDialogueRoute() {
+  const preload = () => {
+    import('../views/DialogueView.vue').catch(() => {
+      // 预加载失败不影响正常点击跳转，路由仍会在需要时再次加载。
+    })
+  }
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(preload, { timeout: 1200 })
+    return
+  }
+  window.setTimeout(preload, 300)
+}
+
 onMounted(() => {
   loadDashboardData()
   loadLlmCatalog()
   loadKnowledgeBases()
   loadAgentTools()
+  preloadDialogueRoute()
 })
 </script>
 

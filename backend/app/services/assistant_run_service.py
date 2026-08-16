@@ -32,6 +32,8 @@ TERMINAL_STATUSES = {"completed", "failed", "canceled"}
 MAX_CONTINUATION_ATTEMPTS = 5
 CONTINUATION_BACKOFF_BASE_SECONDS = 2
 CONTINUATION_MAX_BACKOFF_SECONDS = 300
+RUNNING_EVENT_POLL_INTERVAL_SECONDS = 0.2
+QUEUED_EVENT_POLL_INTERVAL_SECONDS = 1.0
 
 
 class AssistantRunService:
@@ -245,9 +247,14 @@ class AssistantRunService:
             if document.get("status") in TERMINAL_STATUSES and not AssistantRunRepository.events_after(run_id, cursor):
                 return
             idle_polls += 1
-            if idle_polls % 15 == 0:
+            if idle_polls % 60 == 0:
                 yield {"type": "heartbeat", "seq": cursor, "status": document.get("status")}
-            time.sleep(1)
+            poll_interval = (
+                RUNNING_EVENT_POLL_INTERVAL_SECONDS
+                if document.get("status") == "running"
+                else QUEUED_EVENT_POLL_INTERVAL_SECONDS
+            )
+            time.sleep(poll_interval)
 
     def process_continuations(self, worker_id: str) -> int:
         """扫描 terminal 工具调用并创建服务端续答 run。
