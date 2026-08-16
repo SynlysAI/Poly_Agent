@@ -382,10 +382,11 @@ def cancel_assistant_tool_call(
 @router.get("/tool-calls/{call_id}/events")
 def stream_assistant_tool_call_events(
     call_id: str,
+    after_seq: int = Query(default=0, ge=0),
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> StreamingResponse:
     """通过 SSE 重放调用状态，便于页面断线后恢复状态。"""
-    events = list(assistant_tool_call_service.stream_events(call_id, current_user))
+    events = list(assistant_tool_call_service.stream_events(call_id, current_user, after_seq))
     return StreamingResponse(
         (_sse_event(event) for event in events),
         media_type="text/event-stream",

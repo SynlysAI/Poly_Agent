@@ -189,35 +189,12 @@ class AssistantTraceProjectionService:
     @staticmethod
     def _runs_for_trace(trace_id: str) -> list[dict[str, Any]]:
         """查找 Trace 直接或历史关联的所有 AssistantRun。"""
-        runs, _ = AssistantRunRepository.list_all(
-            {},
-            sort_field="created_at",
-            reverse=False,
-            page=1,
-            page_size=10_000,
-        )
-        matched: dict[str, dict[str, Any]] = {}
-        for run in runs:
-            context = ((run.get("request_snapshot") or {}).get("context") or {})
-            if run.get("trace_id") == trace_id or run.get("run_id") == trace_id or context.get("trace_id") == trace_id:
-                matched[str(run.get("run_id") or "")] = run
-        return list(matched.values())
+        return AssistantRunRepository.list_for_trace(trace_id)
 
     @staticmethod
     def _calls_for_trace(trace_id: str, run_ids: set[str]) -> list[dict[str, Any]]:
         """查找 Trace 直接或历史关联的所有算法工具调用。"""
-        calls, _ = AssistantToolCallRepository.list_all(
-            {},
-            sort_field="created_at",
-            reverse=False,
-            page=1,
-            page_size=10_000,
-        )
-        matched: dict[str, dict[str, Any]] = {}
-        for call in calls:
-            if call.get("trace_id") == trace_id or call.get("assistant_run_id") in run_ids:
-                matched[str(call.get("call_id") or "")] = call
-        return list(matched.values())
+        return AssistantToolCallRepository.list_for_trace(trace_id, run_ids)
 
     def _events_for_trace(
         self,

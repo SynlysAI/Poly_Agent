@@ -131,6 +131,14 @@ async def app_lifespan(app: FastAPI):
     except Exception:
         app_logger.exception("默认管理员账号引导失败")
 
+    try:
+        from app.services.agent_tool_service import agent_tool_service
+
+        agent_tool_service.warm_cache()
+        app_logger.info("LUI 算法工具目录缓存预热完成")
+    except Exception:
+        app_logger.exception("LUI 算法工具目录缓存预热失败")
+
     async def stale_reaper_loop() -> None:
         logger_reaper.info(
             "stale-run reaper started (interval=%ds, heartbeat_threshold=%ds, wallclock_factor=%.1f)",

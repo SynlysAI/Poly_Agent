@@ -46,6 +46,9 @@ from app.infra.mongo import (
 )
 
 
+_assistant_event_indexes_ensured = False
+
+
 class ResearchProblemSpecRepository(BaseRepository):
     """ProblemSpec 仓储。
 
@@ -626,12 +629,51 @@ class AssistantToolCallRepository(BaseRepository):
         return list(document.get("events") or []) if document else []
 
     @classmethod
+    def events_after(cls, call_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
+        """读取工具调用游标之后的 embedded 事件。"""
+        document = cls.find_one({"call_id": call_id})
+        if not document:
+            return []
+        events = [
+            clone_document(event)
+            for event in document.get("events") or []
+            if int(event.get("seq", 0)) > int(after_seq)
+        ]
+        return sorted(events, key=lambda item: int(item.get("seq", 0)))
+
+    @classmethod
     def list_for_chat(cls, chat_id: str, *, created_by: str | None = None) -> list[dict[str, Any]]:
         filters: dict[str, Any] = {"chat_id": chat_id}
         if created_by is not None:
             filters["created_by"] = created_by
         items, _ = cls.list_all(filters, sort_field="created_at", reverse=False, page=1, page_size=10000)
         return items
+
+    @classmethod
+    def list_for_trace(cls, trace_id: str, run_ids: set[str]) -> list[dict[str, Any]]:
+        """按 trace_id 或关联 run 查询工具调用，避免扫描全部调用。"""
+        if cls._can_use_mongo():
+            filters: dict[str, Any] = {
+                "$or": [
+                    {"trace_id": trace_id},
+                    {"assistant_run_id": {"$in": sorted(run_ids)}},
+                ]
+            }
+            items, _ = cls.list_all(
+                filters,
+                sort_field="created_at",
+                reverse=False,
+                page=1,
+                page_size=10_000,
+            )
+            return items
+
+        data = demo_store.load()
+        rows = []
+        for item in data[cls.collection_name]:
+            if item.get("trace_id") == trace_id or item.get("assistant_run_id") in run_ids:
+                rows.append(clone_document(item))
+        return _sort_documents(rows, "created_at", reverse=False)
 
     @classmethod
     def delete_for_chat(cls, chat_id: str, *, created_by: str | None = None) -> int:
@@ -967,6 +1009,15 @@ class AssistantEventRepository(BaseRepository):
     SCHEMA_VERSION = 1
 
     @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保事件索引只在当前进程内创建一次。"""
+        global _assistant_event_indexes_ensured
+        if _assistant_event_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _assistant_event_indexes_ensured = True
+
+    @classmethod
     def _collection(cls):
         return get_assistant_events_collection()
 
@@ -1087,7 +1138,7 @@ class AssistantEventRepository(BaseRepository):
         document = cls.build_document(run, event)
         if cls._can_use_mongo():
             try:
-                cls.ensure_indexes()
+                cls._ensure_indexes_once()
                 cls._collection().insert_one(clone_document(document))
                 return document
             except DuplicateKeyError:
@@ -1140,17 +1191,55 @@ class AssistantEventRepository(BaseRepository):
         return sorted(items, key=lambda item: (str(item.get("at") or ""), str(item.get("event_id") or "")))
 
     @classmethod
-    def events_after(cls, run_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
-        """读取指定 seq 之后的统一事件。
+    def events_after(
+        cls,
+        run_id: str,
+        after_seq: int = 0,
+        *,
+        limit: int = 500,
+        exclude_call_scoped: bool = False,
+    ) -> list[dict[str, Any]]:
+        """按 run_id + seq 增量读取统一事件，避免全量扫描。
 
         Args:
             run_id: Assistant run ID。
             after_seq: 回放游标。
+            limit: 单次最多读取的事件数。
+            exclude_call_scoped: 是否排除工具调用维度事件。
 
         Returns:
-            事件文档列表。
+            游标之后按 seq 升序排列的事件文档列表。
         """
-        return [event for event in cls.list_for_run(run_id) if int(event.get("seq", 0)) > after_seq]
+        filters: dict[str, Any] = {
+            "run_id": run_id,
+            "seq": {"$gt": int(after_seq)},
+        }
+        if exclude_call_scoped:
+            filters["call_id"] = ""
+        if cls._can_use_mongo():
+            try:
+                collection = cls._collection()
+                cursor = (
+                    collection.find(filters, {"_id": 0})
+                    .sort([("seq", 1)])
+                    .limit(max(1, int(limit)))
+                )
+                return [dict(item) for item in cursor]
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        data = demo_store.load()
+        rows = []
+        for item in data[cls.collection_name]:
+            if item.get("run_id") != run_id:
+                continue
+            if int(item.get("seq", 0)) <= int(after_seq):
+                continue
+            if exclude_call_scoped and item.get("call_id"):
+                continue
+            rows.append(clone_document(item))
+        rows.sort(key=lambda item: int(item.get("seq", 0)))
+        return rows[: max(1, int(limit))]
 
     @staticmethod
     def to_legacy_event(document: dict[str, Any]) -> dict[str, Any]:
@@ -1502,11 +1591,12 @@ class AssistantRunRepository(BaseRepository):
     @classmethod
     def events_after(cls, run_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
         """优先从统一事件集合回放，缺失时回退旧 embedded events。"""
-        unified_events = [
-            event
-            for event in AssistantEventRepository.events_after(run_id, after_seq)
-            if not event.get("call_id")
-        ]
+        unified_events = AssistantEventRepository.events_after(
+            run_id,
+            after_seq,
+            limit=500,
+            exclude_call_scoped=True,
+        )
         merged = {
             int(event.get("seq", 0)): AssistantEventRepository.to_legacy_event(event)
             for event in unified_events
@@ -1521,6 +1611,34 @@ class AssistantRunRepository(BaseRepository):
     @classmethod
     def list_for_chat(cls, chat_id: str, created_by: str, page: int = 1, page_size: int = 20):
         return cls.list_all({"chat_id": chat_id, "created_by": created_by}, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+    @classmethod
+    def list_for_trace(cls, trace_id: str) -> list[dict[str, Any]]:
+        """按 trace_id 或历史关联字段查询 run，避免扫描全部 run。"""
+        if cls._can_use_mongo():
+            filters = {
+                "$or": [
+                    {"trace_id": trace_id},
+                    {"run_id": trace_id},
+                    {"request_snapshot.context.trace_id": trace_id},
+                ]
+            }
+            items, _ = cls.list_all(
+                filters,
+                sort_field="created_at",
+                reverse=False,
+                page=1,
+                page_size=10_000,
+            )
+            return items
+
+        data = demo_store.load()
+        rows = []
+        for item in data[cls.collection_name]:
+            context = ((item.get("request_snapshot") or {}).get("context") or {})
+            if item.get("trace_id") == trace_id or item.get("run_id") == trace_id or context.get("trace_id") == trace_id:
+                rows.append(clone_document(item))
+        return _sort_documents(rows, "created_at", reverse=False)
 
 
 class AlgorithmManagedResourceRepository(BaseRepository):

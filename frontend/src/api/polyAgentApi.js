@@ -1359,14 +1359,15 @@ export function cancelAssistantToolCall(callId) {
   return apiClient.post(`/assistant/tool-calls/${encodeURIComponent(callId)}/cancel`).then(unwrapResponse)
 }
 
-export async function streamAssistantToolCallEvents(callId, onEvent) {
+export async function streamAssistantToolCallEvents(callId, afterSeq = 0, onEvent, signal) {
   const headers = { 'X-Request-Id': generateRequestId() }
   const authHeader = getAuthorizationHeader()
   if (authHeader) headers.Authorization = authHeader
-  const response = await fetch(`${resolvedBaseUrl}/assistant/tool-calls/${encodeURIComponent(callId)}/events`, {
-    method: 'GET',
-    headers,
-  })
+  const params = new URLSearchParams({ after_seq: String(Math.max(0, afterSeq || 0)) })
+  const response = await fetch(
+    `${resolvedBaseUrl}/assistant/tool-calls/${encodeURIComponent(callId)}/events?${params}`,
+    { method: 'GET', headers, signal },
+  )
   if (!response.ok) {
     throw await createFetchApiError(response)
   }

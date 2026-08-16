@@ -222,3 +222,29 @@ class AssistantEventLogTest(ComputationTestCase):
         replay = AssistantRunRepository.events_after(run["run_id"])
 
         self.assertEqual([event["type"] for event in replay], ["route.resolved", "run_status"])
+
+    def test_incremental_event_query_supports_limit_and_call_scope_filter(self) -> None:
+        """增量事件查询应只返回游标后的事件，并能排除工具调用事件。"""
+        run = self._run("asrun_incremental_query")
+        self.assertTrue(AssistantRunRepository.create_active(run)[0])
+        AssistantRunRepository.append_event(
+            run["run_id"],
+            {"type": "status", "stage": "running", "at": utc_now()},
+        )
+        AssistantRunRepository.append_event(
+            run["run_id"],
+            {"type": "route.resolved", "route": {"model_id": "m1"}, "at": utc_now()},
+        )
+        AssistantRunRepository.append_event(
+            run["run_id"],
+            {"type": "tool_call", "call_id": "atc_query", "phase": "requested", "at": utc_now()},
+        )
+
+        incremental = AssistantEventRepository.events_after(
+            run["run_id"],
+            after_seq=1,
+            limit=10,
+            exclude_call_scoped=True,
+        )
+
+        self.assertEqual([event["type"] for event in incremental], ["route.resolved"])

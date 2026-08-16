@@ -953,9 +953,14 @@ class AssistantToolCallService:
         })
 
     @classmethod
-    def stream_events(cls, call_id: str, current_user: dict[str, str] | None) -> Iterator[dict[str, Any]]:
+    def stream_events(
+        cls,
+        call_id: str,
+        current_user: dict[str, str] | None,
+        after_seq: int = 0,
+    ) -> Iterator[dict[str, Any]]:
         cls.get(call_id, current_user)
-        yield from AssistantToolCallRepository.list_events(call_id)
+        yield from AssistantToolCallRepository.events_after(call_id, after_seq)
 
 
 assistant_tool_call_service = AssistantToolCallService()

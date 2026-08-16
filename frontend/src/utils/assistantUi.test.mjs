@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict'
 
 import {
+  accumulateUsageSummary,
   capabilitySourceLabel,
+  CONTEXT_RING_CIRCUMFERENCE,
   contextDigest,
   contextSectionRows,
   contextToolRows,
+  contextUsageRing,
   formatContextWindow,
+  formatConversationUsageBadge,
+  formatConversationUsageDetail,
   formatUsage,
   modelMetaLabel,
   normalizeAssistantRoute,
+  normalizeUsageSummary,
   routeCapabilityLabels,
   routeReasonLabel,
   toolArgumentDiff,
@@ -37,6 +43,41 @@ assert.equal(modelMetaLabel(route), 'deepseek_primary / deepseek-v4-flash')
 assert.deepEqual(routeCapabilityLabels(route), ['工具调用'])
 assert.equal(formatUsage({ prompt_tokens: 1200, completion_tokens: 300, total_tokens: 1500 }), '输入 1.2k · 输出 300 · 总计 1.5k')
 assert.equal(formatUsage({}), '')
+assert.deepEqual(normalizeUsageSummary({ prompt_tokens: 8100, completion_tokens: 4200, total_tokens: 12300 }), {
+  prompt_tokens: 8100,
+  completion_tokens: 4200,
+  total_tokens: 12300,
+  usage_events: 0,
+})
+assert.deepEqual(
+  accumulateUsageSummary(
+    { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200 },
+    { prompt_tokens: 250, completion_tokens: 50, total_tokens: 300 },
+  ),
+  { prompt_tokens: 1250, completion_tokens: 250, total_tokens: 1500, usage_events: 1 },
+)
+assert.equal(formatConversationUsageBadge({ prompt_tokens: 8100, completion_tokens: 4200 }), '本对话 tokens 12.3k')
+assert.equal(
+  formatConversationUsageDetail({ prompt_tokens: 8100, completion_tokens: 4200 }),
+  '输入 8.1k · 输出 4.2k · 总计 12.3k',
+)
+assert.equal(formatConversationUsageBadge({}), '')
+assert.equal(formatConversationUsageDetail({}), '')
+assert.deepEqual(contextUsageRing(0, 128000), {
+  visible: false,
+  percent: 0,
+  dashArray: `0 ${CONTEXT_RING_CIRCUMFERENCE}`,
+  tone: 'safe',
+})
+const halfRing = contextUsageRing(64000, 128000)
+assert.equal(halfRing.visible, true)
+assert.equal(halfRing.percent, 50)
+assert.equal(halfRing.tone, 'safe')
+assert.equal(halfRing.dashArray, `${CONTEXT_RING_CIRCUMFERENCE / 2} ${CONTEXT_RING_CIRCUMFERENCE}`)
+assert.equal(contextUsageRing(115200, 128000).percent, 90)
+assert.equal(contextUsageRing(115200, 128000).tone, 'danger')
+assert.equal(contextUsageRing(90000, 128000).tone, 'warning')
+assert.equal(contextUsageRing(200000, 128000).percent, 100)
 
 const manifest = {
   context: {
