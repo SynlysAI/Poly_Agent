@@ -92,10 +92,37 @@ class AssistantChat(AssistantChatCreate):
     tool_calls: list[AssistantToolCall] = Field(default_factory=list)
 
 
+class AssistantChatSummary(BaseModel):
+    """历史会话列表摘要，仅返回侧栏渲染所需字段。
+
+    列表接口不加载完整消息和工具调用，避免每个会话逐条拉取
+    messages/tool_calls 造成历史栏刷新卡顿。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    chat_id: str
+    title: str
+    created_by: str
+    archived: bool = False
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = 0
+
+
 class AssistantChatListData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[AssistantChat]
+    total: int
+    page: int
+    page_size: int
+
+
+class AssistantChatSummaryListData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[AssistantChatSummary]
     total: int
     page: int
     page_size: int

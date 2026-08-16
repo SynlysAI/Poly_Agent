@@ -37,7 +37,7 @@ import {
   getAssistantRun,
   getLlmModels,
   listAgentTools,
-  listAssistantChats,
+  listAssistantChatSummaries,
   listAssistantRuns,
   listKnowledgeSystems,
   streamAssistantRunEvents,
@@ -112,11 +112,18 @@ const runStates = ref(new Map())
 const runSubscriptions = new Map()
 const toolCallPollers = new Map()
 const continuedToolCalls = new Set()
+const pendingStreamDeltas = new Map()
+const markdownBlockCache = new WeakMap()
+const CHAT_OPTIONS_SYNC_DELAY_MS = 250
+let streamFlushFrameId = 0
+let historyRequestSeq = 0
+let chatOptionsSyncTimer = null
 const confirmingCallId = ref('')
 const modelLoading = ref(false)
 const modelSelectionOrigin = ref('')
 const initialUrlModel = ref(null)
 const runContexts = ref(new Map())
+const chatOptionsSyncSuspended = ref(false)
 const knowledgeLoading = ref(false)
 const chatMode = ref(normalizeMode(route.query.mode))
 const llmCatalog = ref({ providers: [], routing: {} })
@@ -434,14 +441,35 @@ function chatOptionsPayload() {
 }
 
 async function loadChatHistory() {
+  const requestId = ++historyRequestSeq
   historyLoading.value = true
   try {
-    const data = await listAssistantChats({ query: historyQuery.value || undefined, archived: historyArchived.value })
-    chatHistory.value = data?.items || []
+    const data = await listAssistantChatSummaries({ query: historyQuery.value || undefined, archived: historyArchived.value })
+    if (requestId !== historyRequestSeq) return
+    chatHistory.value = (data?.items || []).map((item) => ({
+      ...item,
+      messages: [],
+    }))
   } catch (error) {
+    if (requestId !== historyRequestSeq) return
     ElMessage.warning(`历史会话加载失败：${getApiErrorMessage(error)}`)
   } finally {
-    historyLoading.value = false
+    if (requestId === historyRequestSeq) historyLoading.value = false
+  }
+}
+
+function upsertHistoryItem(updated) {
+  if (!updated?.chat_id) return
+  const index = chatHistory.value.findIndex((item) => item.chat_id === updated.chat_id)
+  const item = {
+    ...(chatHistory.value[index] || {}),
+    ...updated,
+    messages: [],
+  }
+  if (index >= 0) {
+    chatHistory.value.splice(index, 1, item)
+  } else {
+    chatHistory.value.unshift(item)
   }
 }
 
@@ -551,6 +579,7 @@ async function backfillCompletedToolCall(message, call) {
 
 async function loadChat(chatKey) {
   if (!chatKey) return
+  chatOptionsSyncSuspended.value = true
   try {
     const data = await getAssistantChat(chatKey)
     chatId.value = data.chat_id
@@ -567,11 +596,13 @@ async function loadChat(chatKey) {
     }
     selectDefaultModelForMode(data.model || {})
     await loadChatRun(chatKey)
-    await loadChatHistory()
     scrollToBottom()
   } catch (error) {
     ElMessage.warning(`会话恢复失败：${getApiErrorMessage(error)}`)
     await router.replace({ path: '/dialogue', query: route.query })
+  } finally {
+    await nextTick()
+    chatOptionsSyncSuspended.value = false
   }
 }
 
@@ -583,7 +614,6 @@ async function ensureChat() {
   const data = await createAssistantChat(chatOptionsPayload())
   chatId.value = data.chat_id
   await router.replace({ path: `/dialogue/${encodeURIComponent(chatId.value)}`, query: route.query })
-  await loadChatHistory()
   return chatId.value
 }
 
@@ -596,7 +626,6 @@ async function createNewChat() {
 async function selectHistoryChat(item) {
   if (!item?.chat_id) return
   await router.push({ path: `/dialogue/${encodeURIComponent(item.chat_id)}` })
-  await loadChat(item.chat_id)
 }
 
 async function renameHistoryChat(item) {
@@ -827,6 +856,29 @@ async function refreshActiveRun() {
   }
 }
 
+function flushPendingStreamDeltas() {
+  if (!pendingStreamDeltas.size) return
+  for (const [index, delta] of pendingStreamDeltas) {
+    const target = messages.value[index]
+    if (target) target.content += delta
+  }
+  pendingStreamDeltas.clear()
+}
+
+function scheduleStreamFlush() {
+  if (typeof window === 'undefined') return
+  if (streamFlushFrameId) return
+  const flush = () => {
+    streamFlushFrameId = 0
+    flushPendingStreamDeltas()
+  }
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    streamFlushFrameId = window.requestAnimationFrame(flush)
+    return
+  }
+  streamFlushFrameId = window.setTimeout(flush, 16)
+}
+
 function applyRunEvent(run, event) {
   const current = runStates.value.get(run.chat_id) || run
   current.lastSeq = Math.max(current.lastSeq || 0, event.seq || 0)
@@ -850,13 +902,23 @@ function applyRunEvent(run, event) {
   if (chatId.value !== run.chat_id) return
   const index = runMessageIndex(run.run_id)
   if (index >= 0 && event.type === 'reset') {
+    flushPendingStreamDeltas()
     Object.assign(messages.value[index], {
       content: '', streaming: true, error: false, stream_stage: 'queued',
       stream_status: event.message || '正在重新生成回答',
     })
   }
-  if (index >= 0 && !['run_status', 'heartbeat'].includes(event.type)) applyAssistantStreamEvent(index, event)
+  if (index >= 0 && event.type === 'answer_delta') {
+    pendingStreamDeltas.set(index, `${pendingStreamDeltas.get(index) || ''}${event.delta || ''}`)
+    scheduleStreamFlush()
+    return
+  }
+  if (index >= 0 && !['run_status', 'heartbeat'].includes(event.type)) {
+    flushPendingStreamDeltas()
+    applyAssistantStreamEvent(index, event)
+  }
   if (index >= 0 && event.type === 'run_status') {
+    flushPendingStreamDeltas()
     const target = messages.value[index]
     target.streaming = activeRunStatuses.has(event.status)
     target.stream_stage = event.stage || event.status
@@ -892,7 +954,10 @@ async function subscribeToRun(run) {
     runSubscriptions.delete(run.run_id)
     const latest = await getAssistantRun(run.run_id).catch(() => null)
     if (latest) registerRun(latest)
-    if (latest?.status === 'completed' && chatId.value === run.chat_id) await loadChat(run.chat_id)
+    if (latest?.status === 'completed' && chatId.value === run.chat_id) {
+      await loadChat(run.chat_id)
+      await loadChatHistory()
+    }
   }
 }
 
@@ -1399,6 +1464,15 @@ function markdownBlocks(text) {
   return blocks
 }
 
+function cachedMarkdownBlocks(message) {
+  const content = String(message?.content || '')
+  const cached = markdownBlockCache.get(message)
+  if (cached?.content === content) return cached.blocks
+  const blocks = markdownBlocks(content)
+  markdownBlockCache.set(message, { content, blocks })
+  return blocks
+}
+
 function parseMarkdownTableRow(line) {
   const trimmed = String(line || '').trim()
   if (!trimmed.includes('|')) return null
@@ -1452,16 +1526,26 @@ onMounted(() => {
   })
 })
 
-watch(
-  [chatMode, selectedModelKey, selectedKnowledgeBaseIds, useWebSearch],
-  async () => {
-    if (!chatId.value || currentRunActive.value) return
+function scheduleChatOptionsSync() {
+  if (!chatId.value || chatOptionsSyncSuspended.value || currentRunActive.value) return
+  if (chatOptionsSyncTimer) window.clearTimeout(chatOptionsSyncTimer)
+  chatOptionsSyncTimer = window.setTimeout(async () => {
+    chatOptionsSyncTimer = null
+    const targetChatId = chatId.value
+    if (!targetChatId || chatOptionsSyncSuspended.value || currentRunActive.value) return
     try {
-      await updateAssistantChat(chatId.value, chatOptionsPayload())
-      await loadChatHistory()
+      const updated = await updateAssistantChat(targetChatId, chatOptionsPayload())
+      if (chatId.value === targetChatId) upsertHistoryItem(updated)
     } catch {
       // The next message save retries the session options if this background update fails.
     }
+  }, CHAT_OPTIONS_SYNC_DELAY_MS)
+}
+
+watch(
+  [chatMode, selectedModelKey, selectedKnowledgeBaseIds, useWebSearch],
+  () => {
+    scheduleChatOptionsSync()
   },
   { deep: true },
 )
@@ -1471,13 +1555,24 @@ onUnmounted(() => {
   runSubscriptions.clear()
   for (const callId of toolCallPollers.keys()) stopToolCallPolling(callId)
   continuedToolCalls.clear()
+  if (chatOptionsSyncTimer) window.clearTimeout(chatOptionsSyncTimer)
+  chatOptionsSyncTimer = null
+  if (streamFlushFrameId) {
+    window.cancelAnimationFrame(streamFlushFrameId)
+    window.clearTimeout(streamFlushFrameId)
+  }
+  streamFlushFrameId = 0
+  pendingStreamDeltas.clear()
 })
 
 watch(
   () => route.params.chatId,
   async (value) => {
     const nextChatId = normalizeQueryString(value)
-    if (nextChatId && nextChatId !== chatId.value) await loadChat(nextChatId)
+    if (nextChatId && nextChatId !== chatId.value) {
+      await loadChat(nextChatId)
+      await loadChatHistory()
+    }
     if (!nextChatId && chatId.value) {
       chatId.value = ''
       messages.value = defaultMessages()
@@ -1524,7 +1619,7 @@ watch(
           >
             <button type="button" class="history-item-main" @click="selectHistoryChat(item)">
               <span class="history-item-title">{{ item.title }}</span>
-              <small>{{ item.messages?.length || 0 }} 条消息</small>
+              <small>{{ item.message_count || item.messages?.length || 0 }} 条消息</small>
             </button>
             <el-dropdown trigger="click" @command="(command) => command === 'rename' ? renameHistoryChat(item) : command === 'archive' ? archiveHistoryChat(item) : deleteHistoryChat(item)">
               <el-button text circle :icon="FolderOpened" aria-label="会话操作" />
@@ -1666,7 +1761,7 @@ watch(
                   </li>
                 </ol>
               </details>
-              <template v-for="(block, blockIdx) in markdownBlocks(msg.content)" :key="blockIdx">
+              <template v-for="(block, blockIdx) in cachedMarkdownBlocks(msg)" :key="blockIdx">
                 <h2 v-if="block.type === 'heading'" class="markdown-heading">
                   <template v-for="(seg, segIdx) in inlineSegments(block.text)" :key="segIdx">
                     <strong v-if="seg.strong">{{ seg.text }}</strong>

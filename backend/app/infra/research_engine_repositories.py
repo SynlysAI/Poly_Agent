@@ -861,6 +861,30 @@ class AssistantMessageRepository(BaseRepository):
         )
 
     @classmethod
+    def count_for_chat(cls, chat_id: str, created_by: str) -> int:
+        """返回会话消息数量，避免列表摘要加载完整消息文档。
+
+        Args:
+            chat_id: 会话 ID。
+            created_by: 会话所有者 ID。
+
+        Returns:
+            该会话下的消息总数。
+        """
+        filters = {"chat_id": chat_id, "created_by": created_by}
+        if cls._can_use_mongo():
+            try:
+                return int(cls._collection().count_documents(filters))
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        data = demo_store.load()
+        return sum(
+            item.get("chat_id") == chat_id and item.get("created_by") == created_by
+            for item in data[cls.collection_name]
+        )
+
+    @classmethod
     def update_owned(cls, message_id: str, chat_id: str, created_by: str, fields: dict[str, Any]) -> bool:
         if cls._can_use_mongo():
             try:

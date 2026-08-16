@@ -21,6 +21,7 @@ from app.schemas.assistant_chats import (
     AssistantChat,
     AssistantChatCreate,
     AssistantChatListData,
+    AssistantChatSummaryListData,
     AssistantChatUpdate,
     AssistantMessage,
     AssistantMessageCreate,
@@ -48,6 +49,24 @@ def list_assistant_chats(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AssistantChatListData]:
     data = assistant_chat_service.list(
+        query=query,
+        archived=archived,
+        page=page,
+        page_size=page_size,
+        current_user=current_user,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get("/chat-summaries", response_model=ApiResponse[AssistantChatSummaryListData])
+def list_assistant_chat_summaries(
+    query: str | None = Query(default=None, max_length=200),
+    archived: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantChatSummaryListData]:
+    data = assistant_chat_service.list_summaries(
         query=query,
         archived=archived,
         page=page,

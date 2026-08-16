@@ -19,6 +19,8 @@ from app.schemas.assistant_chats import (
     AssistantChat,
     AssistantChatCreate,
     AssistantChatListData,
+    AssistantChatSummary,
+    AssistantChatSummaryListData,
     AssistantChatUpdate,
     AssistantMessage,
     AssistantMessageCreate,
@@ -171,6 +173,41 @@ class AssistantChatService:
         )
         return AssistantChatListData(
             items=[cls._chat(item, owner_id) for item in items],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+
+    @classmethod
+    def _summary(cls, document: dict[str, Any], owner_id: str) -> AssistantChatSummary:
+        """将会话文档转换为历史栏摘要。"""
+        chat_id = document["chat_id"]
+        return AssistantChatSummary.model_validate({
+            **document,
+            "message_count": AssistantMessageRepository.count_for_chat(chat_id, owner_id),
+        })
+
+    @classmethod
+    def list_summaries(
+        cls,
+        *,
+        query: str | None,
+        archived: bool,
+        page: int,
+        page_size: int,
+        current_user: dict[str, str] | None,
+    ) -> AssistantChatSummaryListData:
+        """返回轻量历史会话摘要，避免列表接口加载完整消息与工具调用。"""
+        owner_id = actor_id(current_user)
+        items, total = AssistantChatRepository.list_chats(
+            created_by=owner_id,
+            query=query,
+            archived=archived,
+            page=page,
+            page_size=page_size,
+        )
+        return AssistantChatSummaryListData(
+            items=[cls._summary(item, owner_id) for item in items],
             total=total,
             page=page,
             page_size=page_size,
