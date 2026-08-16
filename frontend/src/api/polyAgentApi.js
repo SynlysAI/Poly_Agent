@@ -5,6 +5,7 @@ import {
   handleUnauthorizedResponse,
   emitAuthExpired,
 } from '../utils/apiAuth.mjs'
+import { resolveAlgorithmRunTimeoutMs } from '../utils/apiTimeout.mjs'
 
 const resolvedBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 const HIDDEN_KNOWLEDGE_SYSTEM_IDS = new Set([
@@ -101,6 +102,19 @@ function createApiError(kind, message) {
   error.kind = kind
   error.isApiError = true
   return error
+}
+
+/**
+ * 生成算法运行 / 接口测试请求的 axios 配置。
+ *
+ * Args:
+ *   timeoutSeconds: 算法契约中的 runtime.timeout_seconds。
+ *
+ * Returns:
+ *   包含动态 timeout 的 axios 请求配置。
+ */
+function algorithmRunRequestConfig(timeoutSeconds) {
+  return { timeout: resolveAlgorithmRunTimeoutMs(timeoutSeconds) }
 }
 
 /**
@@ -682,18 +696,30 @@ export function getAlgorithmInterface(algorithmId) {
   return apiClient.get(`/research-engine/algorithm-interfaces/${algorithmId}`).then(unwrapResponse)
 }
 
-export function testAlgorithmInterface(algorithmId, versionId, inputSnapshot = null) {
+export function testAlgorithmInterface(algorithmId, versionId, inputSnapshot = null, options = {}) {
   const payload = inputSnapshot ? { input_snapshot: inputSnapshot } : undefined
-  return apiClient.post(`/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:test`, payload).then(unwrapResponse)
+  return apiClient
+    .post(
+      `/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:test`,
+      payload,
+      algorithmRunRequestConfig(options.timeoutSeconds),
+    )
+    .then(unwrapResponse)
 }
 
-export function testAlgorithmInterfaceMultipart(algorithmId, versionId, inputSnapshot = {}, files = {}) {
+export function testAlgorithmInterfaceMultipart(algorithmId, versionId, inputSnapshot = {}, files = {}, options = {}) {
   const formData = new FormData()
   formData.append('input_snapshot', JSON.stringify(inputSnapshot || {}))
   Object.entries(files || {}).forEach(([key, file]) => {
     if (file) formData.append(key, file)
   })
-  return apiClient.post(`/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:test-multipart`, formData).then(unwrapResponse)
+  return apiClient
+    .post(
+      `/research-engine/algorithm-interfaces/${algorithmId}/versions/${versionId}:test-multipart`,
+      formData,
+      algorithmRunRequestConfig(options.timeoutSeconds),
+    )
+    .then(unwrapResponse)
 }
 
 export function getAlgorithmIdAvailability(algorithmId) {
@@ -900,17 +926,21 @@ export function instantiateResearchEngineExample(exampleId) {
 
 // ── AlgorithmRun ──
 
-export function createAlgorithmRun(payload) {
-  return apiClient.post('/research-engine/algorithm-runs', payload).then(unwrapResponse)
+export function createAlgorithmRun(payload, options = {}) {
+  return apiClient
+    .post('/research-engine/algorithm-runs', payload, algorithmRunRequestConfig(options.timeoutSeconds))
+    .then(unwrapResponse)
 }
 
-export function createAlgorithmRunMultipart(payload, files = {}) {
+export function createAlgorithmRunMultipart(payload, files = {}, options = {}) {
   const formData = new FormData()
   formData.append('payload', JSON.stringify(payload))
   Object.entries(files).forEach(([key, file]) => {
     if (file) formData.append(key, file)
   })
-  return apiClient.post('/research-engine/algorithm-runs:multipart', formData).then(unwrapResponse)
+  return apiClient
+    .post('/research-engine/algorithm-runs:multipart', formData, algorithmRunRequestConfig(options.timeoutSeconds))
+    .then(unwrapResponse)
 }
 
 export function listAlgorithmRuns(params = {}) {
@@ -1269,6 +1299,12 @@ export function getAssistantToolCall(callId) {
 
 export function updateAssistantToolCallInput(callId, payload) {
   return apiClient.patch(`/assistant/tool-calls/${encodeURIComponent(callId)}/input`, payload).then(unwrapResponse)
+}
+
+export function updateAssistantToolCallRawArguments(callId, payload) {
+  return apiClient
+    .patch(`/assistant/tool-calls/${encodeURIComponent(callId)}/raw-arguments`, payload)
+    .then(unwrapResponse)
 }
 
 export function uploadAssistantToolCallInput(callId, formData) {

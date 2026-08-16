@@ -174,6 +174,78 @@ class AssistantToolCallApiTest(ComputationTestCase):
         self.assertEqual(response.status_code, 422, response.text)
         self.assertEqual(response.json()["data"]["detail"]["code"], "TOOL_ARGUMENTS_INVALID")
 
+    def test_update_raw_arguments_only_for_pending_call(self) -> None:
+        response = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={"tool_id": "algorithm:vertical-tool", "arguments": {"smiles": "CCO"}},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        call = response.json()["data"]
+        patched = self.client.patch(
+            f"/api/v1/assistant/tool-calls/{call['call_id']}/raw-arguments",
+            json={"raw_arguments": '{"smiles":"CCC"}'},
+        )
+        self.assertEqual(patched.status_code, 200, patched.text)
+        data = patched.json()["data"]
+        self.assertEqual(data["raw_arguments"], '{"smiles":"CCC"}')
+        self.assertEqual(data["arguments"], {"smiles": "CCO"})
+        self.assertEqual(data["phase"], "awaiting_confirmation")
+        persisted = AssistantToolCallRepository.find_one({"call_id": call["call_id"]})
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted["raw_arguments"], '{"smiles":"CCC"}')
+        self.assertEqual(persisted["arguments"], {"smiles": "CCO"})
+        self.assertIn(
+            "tool.proposal.updated",
+            [event["type"] for event in AssistantToolCallRepository.list_events(call["call_id"])],
+        )
+
+    def test_update_raw_arguments_rejects_invalid_json(self) -> None:
+        response = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={"tool_id": "algorithm:vertical-tool", "arguments": {"smiles": "CCO"}},
+        )
+        call_id = response.json()["data"]["call_id"]
+        patched = self.client.patch(
+            f"/api/v1/assistant/tool-calls/{call_id}/raw-arguments",
+            json={"raw_arguments": '{"smiles":'},
+        )
+        self.assertEqual(patched.status_code, 422, patched.text)
+        self.assertEqual(patched.json()["data"]["detail"]["code"], "TOOL_PROPOSAL_INVALID")
+        persisted = AssistantToolCallRepository.find_one({"call_id": call_id})
+        self.assertIsNone(persisted["raw_arguments"])
+
+    def test_update_raw_arguments_rejects_terminal_call(self) -> None:
+        response = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={"tool_id": "algorithm:vertical-tool", "arguments": {"smiles": "CCO"}},
+        )
+        call_id = response.json()["data"]["call_id"]
+        canceled = self.client.post(f"/api/v1/assistant/tool-calls/{call_id}/cancel")
+        self.assertEqual(canceled.status_code, 200, canceled.text)
+        patched = self.client.patch(
+            f"/api/v1/assistant/tool-calls/{call_id}/raw-arguments",
+            json={"raw_arguments": '{"smiles":"CCC"}'},
+        )
+        self.assertEqual(patched.status_code, 409, patched.text)
+
+    def test_update_raw_arguments_rejects_another_users_call(self) -> None:
+        response = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={"tool_id": "algorithm:vertical-tool", "arguments": {"smiles": "CCO"}},
+        )
+        call_id = response.json()["data"]["call_id"]
+        self.user = {
+            "user_id": "user-2",
+            "username": "other",
+            "role": "user",
+            "status": "active",
+        }
+        patched = self.client.patch(
+            f"/api/v1/assistant/tool-calls/{call_id}/raw-arguments",
+            json={"raw_arguments": '{"smiles":"CCC"}'},
+        )
+        self.assertEqual(patched.status_code, 403, patched.text)
+
     def test_cancel_is_terminal_and_confirm_cannot_execute(self) -> None:
         response = self.client.post(
             "/api/v1/assistant/tool-calls",

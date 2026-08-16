@@ -51,6 +51,7 @@ const activeRegistryVersion = computed(() => {
     version: algorithm.version,
     status: algorithm.status === 'active' ? 'active' : algorithm.status,
     source_kind: algorithm.source_kind || algorithm.source,
+    runtime: algorithm.runtime || {},
     interface_config: algorithm.interface_config || null,
     input_schema: algorithm.input_schema || {},
     output_schema: algorithm.output_schema || {},
@@ -673,9 +674,12 @@ async function runPrediction() {
       reason: '垂类预测模型工作台测试调用',
     }
     if (explicitVersionId) payload.algorithm_version_id = explicitVersionId
+    const requestOptions = {
+      timeoutSeconds: selectedVersion.value?.runtime?.timeout_seconds,
+    }
     lastRun.value = inputAssets.value.length
-      ? await createAlgorithmRunMultipart(payload, inputFiles.value)
-      : await createAlgorithmRun(payload)
+      ? await createAlgorithmRunMultipart(payload, inputFiles.value, requestOptions)
+      : await createAlgorithmRun(payload, requestOptions)
     await loadRunArtifacts(lastRun.value)
     emit('run-created', lastRun.value)
     ElMessage.success('预测运行已完成')
