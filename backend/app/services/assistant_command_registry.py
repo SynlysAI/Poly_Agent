@@ -21,8 +21,8 @@ CommandHandler = Callable[..., Any]
 class CommandProvider(Protocol):
     """动态命令提供方协议，为未来算法工具和自定义命令预留。"""
 
-    def descriptors(self) -> list[CommandDescriptor]:
-        """返回当前进程可提供的 handler-free descriptor 列表。"""
+    def descriptors(self, current_user: dict[str, str] | None = None) -> list[CommandDescriptor]:
+        """返回当前用户可发现的 handler-free descriptor 列表。"""
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class AssistantCommandRegistry:
 
     def __init__(self) -> None:
         self._commands: dict[str, RegisteredCommand] = {}
-        self._providers: list[CommandProvider] = []
+        self._providers: list[tuple[CommandProvider, CommandHandler | None]] = []
         self._register_builtins()
 
     def register(
@@ -93,43 +93,100 @@ class AssistantCommandRegistry:
         insert(descriptor)
         return descriptor
 
-    def register_provider(self, provider: CommandProvider) -> None:
+    def register_provider(
+        self,
+        provider: CommandProvider,
+        handler: CommandHandler | None = None,
+    ) -> None:
         """注册动态 descriptor provider。
 
         Args:
             provider: 实现 descriptors() 的提供方。
+            handler: 该 provider 所有动态命令共用的内部处理器。
         """
-        self._providers.append(provider)
+        self._providers.append((provider, handler))
 
-    def refresh_dynamic_commands(self) -> None:
-        """刷新动态命令目录，不移除内置保留命令。"""
-        dynamic_names = {
-            name
-            for name, command in self._commands.items()
-            if not command.reserved
-        }
-        for name in dynamic_names:
-            self._commands.pop(name, None)
-        for provider in self._providers:
-            for descriptor in provider.descriptors():
-                self.register(descriptor)
+    def dynamic_commands(
+        self,
+        current_user: dict[str, str] | None = None,
+    ) -> list[RegisteredCommand]:
+        """构建当前用户的动态命令快照。
 
-    def resolve(self, name: str) -> RegisteredCommand | None:
+        Args:
+            current_user: 当前登录用户；动态工具目录按该用户过滤。
+
+        Returns:
+            已处理名称冲突的动态命令注册项列表。
+        """
+        commands: list[RegisteredCommand] = []
+        used_names = set(self._commands)
+        for provider, handler in self._providers:
+            for descriptor in provider.descriptors(current_user):
+                name = descriptor.name
+                if name in used_names:
+                    suffix = hashlib.sha256(descriptor.source.encode()).hexdigest()[:6]
+                    name = f"{name}-{suffix}"
+                    collision_count = 2
+                    while name in used_names:
+                        name = f"{descriptor.name}-{suffix}-{collision_count}"
+                        collision_count += 1
+                    descriptor = descriptor.model_copy(update={"name": name})
+                used_names.add(name)
+                commands.append(
+                    RegisteredCommand(
+                        descriptor=descriptor,
+                        handler=handler,
+                        reserved=False,
+                    )
+                )
+        return commands
+
+    def resolve(
+        self,
+        name: str,
+        current_user: dict[str, str] | None = None,
+    ) -> RegisteredCommand | None:
         """按规范化命令名解析注册项。
 
         Args:
             name: 小写命令名。
+            current_user: 当前登录用户。
 
         Returns:
             注册项；未知命令返回 None。
         """
-        self.refresh_dynamic_commands()
-        return self._commands.get(name)
+        builtin = self._commands.get(name)
+        if builtin is not None:
+            return builtin
+        return next(
+            (
+                command
+                for command in self.dynamic_commands(current_user)
+                if command.descriptor.name == name
+            ),
+            None,
+        )
 
-    def descriptors(self) -> list[CommandDescriptor]:
-        """返回排序后的 handler-free 命令目录。"""
-        self.refresh_dynamic_commands()
-        return [command.descriptor for command in self._commands.values()]
+    def descriptors(
+        self,
+        current_user: dict[str, str] | None = None,
+    ) -> list[CommandDescriptor]:
+        """返回排序后的 handler-free 命令目录。
+
+        Args:
+            current_user: 当前登录用户。
+
+        Returns:
+            内置命令与当前用户动态命令的 descriptor 列表。
+        """
+        commands = [
+            *self._commands.values(),
+            *self.dynamic_commands(current_user),
+        ]
+        return sorted(
+            (command.descriptor for command in commands),
+            key=lambda item: (item.category, item.name),
+        )
 
     def _register_builtins(self) -> None:
         """注册 PR-01 的内置控制命令。"""

@@ -14,6 +14,7 @@ import {
   toolPhaseTagType,
   schemaFieldType,
   normalizeSchemaArguments,
+  shouldContinueToolCall,
 } from './assistantToolCalls.mjs'
 
 assert.equal(toolPhaseLabel('awaiting_confirmation'), '等待确认')
@@ -37,21 +38,44 @@ const schemaDrivenFields = normalizeSchemaArguments({
     properties: {
       temperature: { type: 'number', description: '温度', minimum: 0, maximum: 500, default: 298 },
       mode: { type: 'string', enum: ['fast', 'accurate'] },
+      verbose: { type: 'boolean', description: '输出调试信息' },
+      tags: { type: 'array', description: '标签' },
+      constraints: { type: 'object', description: '约束' },
     },
-    required: ['temperature'],
+    required: ['temperature', 'tags', 'constraints'],
   },
   arguments: { temperature: 300 },
 })
-assert.equal(schemaDrivenFields.length, 2)
+assert.equal(schemaDrivenFields.length, 5)
 assert.equal(schemaDrivenFields[0].type, 'number')
 assert.equal(schemaDrivenFields[0].required, true)
 assert.deepEqual(schemaDrivenFields[0].options, [])
 assert.deepEqual(schemaDrivenFields[1].options, ['fast', 'accurate'])
+assert.equal(schemaDrivenFields[2].type, 'boolean')
+assert.equal(schemaDrivenFields[3].type, 'array')
+assert.equal(schemaDrivenFields[3].required, true)
+assert.equal(schemaDrivenFields[4].type, 'object')
+assert.equal(schemaDrivenFields[4].required, true)
 
 assert.equal(canEditToolCall({ phase: 'awaiting_input' }), true)
 assert.equal(canEditToolCall({ phase: 'awaiting_confirmation' }), true)
 assert.equal(canEditToolCall({ phase: 'running' }), false)
 assert.equal(canEditToolCall(null), false)
+assert.equal(shouldContinueToolCall({ call_id: 'atc-legacy' }), true)
+assert.equal(shouldContinueToolCall({ call_id: 'atc-skip', continuation_state: 'skipped' }), false)
+assert.equal(shouldContinueToolCall({ call_id: 'atc-pending', continuation_state: 'pending' }), false)
+assert.equal(shouldContinueToolCall({
+  call_id: 'atc-command',
+  source_context: { origin: 'slash_command', command_id: 'cmd-1' },
+}), false)
+assert.equal(shouldContinueToolCall({
+  call_id: 'atc-command-task',
+  source_context: { origin: 'slash_command', command_id: 'cmd-1', task_content: '请解释结果' },
+}), true)
+assert.equal(
+  shouldContinueToolCall({ call_id: 'atc-run', continuation_state: null, continuation_run_id: 'asrun-1' }),
+  false,
+)
 
 assert.equal(isStaleToolCallPhase('queued', 'awaiting_confirmation'), true)
 assert.equal(isStaleToolCallPhase('running', 'requested'), true)

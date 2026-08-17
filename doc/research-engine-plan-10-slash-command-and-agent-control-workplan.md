@@ -1,6 +1,6 @@
 # Plan 10：Slash Command、会话控制面与 Agent 控制体系工作计划
 
-> **状态：PR-02 已完成，PR-03 待启动**
+> **状态：PR-03 已完成，PR-04 待启动**
 >
 > 日期：2026-08-16
 >
@@ -508,29 +508,29 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2–3 天
 
-- [ ] 从 `AgentToolService.list_tools()` 派生动态 command descriptor。
-- [ ] 按 `algorithm_family` / `tool_type` / `capability_group` 映射 `tool` 或 `skill` 分类。
-- [ ] 实现 `algorithm_id → command slug` 稳定规范化：
+- [x] 从 `AgentToolService.list_tools()` 派生动态 command descriptor。
+- [x] 按 `algorithm_family` / `tool_type` / `capability_group` 映射 `tool` 或 `skill` 分类。
+- [x] 实现 `algorithm_id → command slug` 稳定规范化：
   - 小写
   - 非法字符转 `-`
   - 收缩连续分隔符
   - 内置名冲突追加短 hash
-- [ ] descriptor 携带 `tool_id`、`input_mode=tool_schema`、确认要求和算法 attribution 摘要。
-- [ ] 选择动态命令后，前端打开基于 `input_json_schema` 的参数表单。
-- [ ] 表单支持字符串、数字、布尔、枚举、数组、对象和必填标识。
-- [ ] 文件输入复用 AssistantToolCall 附件上传。
-- [ ] 后端命令 handler 创建 `AssistantToolCall`，并写入 `command_id` 关联。
-- [ ] `AssistantToolCall` schema 与集合新增 `command_id`。
-- [ ] 命令 owned message 增加：
+- [x] descriptor 携带 `tool_id`、`input_mode=tool_schema`、确认要求和算法 attribution 摘要。
+- [x] 选择动态命令后，前端打开基于 `input_json_schema` 的参数表单。
+- [x] 表单支持字符串、数字、布尔、枚举、数组、对象和必填标识。
+- [x] 文件输入复用 AssistantToolCall 附件上传。
+- [x] 后端命令 handler 创建 `AssistantToolCall`，并写入 `command_id` 关联。
+- [x] `AssistantToolCall` schema 与集合新增 `command_id`。
+- [x] 命令 owned message 增加：
   - `metadata.origin=slash_command`
   - `metadata.model_visible=false`
   - `metadata.command_id`
   - 可选 `metadata.task_content`
-- [ ] 模型历史构建过滤 `metadata.model_visible=false`。
-- [ ] 工具完成后的续答优先使用 `metadata.task_content`，没有任务说明则只展示结果，不自动编造续答目标。
-- [ ] 动态命令执行前后保留算法 developer / framework / method attribution。
-- [ ] 工具不可用、权限不足、schema 缺失、参数缺失和执行失败均返回可展示状态。
-- [ ] 补充动态命令目录与执行测试。
+- [x] 模型历史构建过滤 `metadata.model_visible=false`。
+- [x] 工具完成后的续答优先使用 `metadata.task_content`，没有任务说明则只展示结果，不自动编造续答目标。
+- [x] 动态命令执行前后保留算法 developer / framework / method attribution。
+- [x] 工具不可用、权限不足、schema 缺失、参数缺失和执行失败均返回可展示状态。
+- [x] 补充动态命令目录与执行测试。
 
 **验收标准**
 
@@ -1015,3 +1015,5 @@ python e2e/dialogue_e2e.py
 - 2026-08-17：PR-01 完成：新增命令 schema、解析器、注册表、执行服务、Mongo/SQLite 双模命令仓储、会话控制状态、命令生命周期事件镜像与命令 API；落地 `/plan`、`/goal`、`/permission`、`/model`、`/status`，接入上下文 session state / plan policy，并在工具确认阶段阻断 read-only 与 Plan Mode。PR-01 相关回归 59 项通过，assistant 后端全量回归 122 项通过。
 
 - 2026-08-17：PR-02 完成：新增 slash 纯函数、命令目录缓存与 `CommandPalette`，接入命令目录 / 执行 API、IME 与键盘交互、URL / 路径 carve-out、未知命令直接失败闭环、命令结果行、Plan / Permission / Goal / Model 控制状态标签和会话恢复；命令结果不进入模型请求历史。后端指定回归 36 项通过，前端 assistant events / tool calls / slash commands / command catalog 测试与 `npm run build` 通过；真实浏览器冒烟覆盖 `/` 面板、`/pl` 过滤、URL 不触发、键盘选择、`/plan off`、未知命令且 0 次 run 请求。
+
+- 2026-08-17：PR-03 完成：新增用户态动态算法命令 provider，目录从 `AgentToolService.list_tools()` 实时派生并携带 JSON schema、确认策略与算法 attribution；保留 `capability_group` 并实现稳定 slug 与内置名冲突 hash；动态命令直接创建复用既有输入 / 附件 / 确认 / 执行状态机的 `AssistantToolCall`，贯通 `command_id → call_id → AlgorithmRun/continuation run → trace_id`；命令 owned message 标记 `model_visible=false`，无 `task_content` 时前后端均阻止自动续答，工具结果继续展示算法来源。后端 Assistant + AgentTool 回归 136 项通过，`py_compile` 通过；前端 assistant tool calls / trace / events / context / ui / tool menu / auto select / slash commands / command catalog 测试与 `npm run build` 通过；真实浏览器专项冒烟覆盖动态 Tools 命令选择、JSON 参数直接创建、确认执行、结果来源标注和 0 次模型 run 请求。既有完整 `dialogue_e2e.py` 中外部模型续答超时，未作为 PR-03 通过依据。

@@ -64,6 +64,7 @@ import {
   parseToolArguments,
   replaceToolCall,
   normalizeSchemaArguments,
+  shouldContinueToolCall,
   toolCallRunDetailRoute,
   toolPhaseLabel,
   toolPhaseTagType,
@@ -833,7 +834,7 @@ function startToolCallStream(message, call) {
       replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
       if (['completed', 'failed', 'canceled'].includes(updated.phase)) {
         stopToolCallStream(call.call_id)
-        if (updated.phase === 'completed' && !continuedToolCalls.has(call.call_id)) {
+        if (updated.phase === 'completed' && shouldContinueToolCall(updated) && !continuedToolCalls.has(call.call_id)) {
           continuedToolCalls.add(call.call_id)
           await continueToolCall(updated.call_id)
         }
@@ -1565,10 +1566,7 @@ async function continueToolCall(callId) {
     // 保留本地工具调用状态，继续用其 trace_id 尝试创建续答。
   }
   if (!call?.call_id) return
-  if (
-    call.continuation_run_id
-    || ['pending', 'scheduled', 'completed'].includes(call.continuation_state)
-  ) {
+  if (!shouldContinueToolCall(call)) {
     return
   }
   const traceId = call.trace_id || call.assistant_run_id || ''

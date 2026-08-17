@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.attribution import AttributionItem
 from app.schemas.agent_tools import AssistantToolCall
 from app.schemas.assistant_runs import AssistantRun
 
@@ -59,6 +60,9 @@ class CommandDescriptor(BaseModel):
     variants: list[CommandVariant] = Field(default_factory=list)
     choices: list[CommandChoice] = Field(default_factory=list)
     tool_id: str | None = Field(default=None, max_length=200)
+    algorithm_id: str | None = Field(default=None, max_length=200)
+    tool_json_schema: dict[str, Any] = Field(default_factory=dict)
+    attributions: list[AttributionItem] = Field(default_factory=list)
     requires_confirmation: bool = False
     risk_level: Literal["low", "medium", "high"] = "low"
 

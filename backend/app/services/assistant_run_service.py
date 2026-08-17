@@ -61,6 +61,40 @@ class AssistantRunService:
             raise HTTPException(status_code=403, detail="无权限访问该回答任务")
         return document
 
+    @staticmethod
+    def model_visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """过滤不进入模型请求历史的消息。
+
+        Args:
+            messages: 请求快照中的历史消息。
+
+        Returns:
+            metadata.model_visible 不为 false 的消息列表。
+        """
+        return [
+            dict(item)
+            for item in (messages or [])
+            if (item.get("metadata") or {}).get("model_visible") is not False
+        ]
+
+    @staticmethod
+    def continuation_user_content(
+        message: dict[str, Any],
+        source_context: dict[str, Any],
+    ) -> str:
+        """解析工具续答应使用的用户任务说明。
+
+        Args:
+            message: 工具调用关联的原始用户消息。
+            source_context: 工具调用保存的来源上下文。
+
+        Returns:
+            优先返回 metadata.task_content，其次返回消息内容。
+        """
+        metadata_task = str((message.get("metadata") or {}).get("task_content") or "").strip()
+        context_task = str((source_context or {}).get("task_content") or "").strip()
+        return context_task or metadata_task or str(message.get("content") or "").strip()
+
     def create(
         self,
         chat_id: str,
@@ -111,7 +145,7 @@ class AssistantRunService:
             "stage": "queued",
             "request_snapshot": {
                 "content": payload.content.strip(),
-                "messages": payload.messages,
+                "messages": self.model_visible_messages(payload.messages),
                 "context": context,
             },
             "partial_content": "",
@@ -455,7 +489,27 @@ class AssistantRunService:
         if not user_message:
             raise HTTPException(status_code=422, detail="原用户消息不存在，无法自动续答")
 
-        user_content = str(user_message.get("content") or "")
+        command_owned = bool(
+            call.get("command_id")
+            or source_context.get("command_id")
+            or source_context.get("origin") == "slash_command"
+        )
+        if command_owned:
+            user_content = str(
+                source_context.get("task_content")
+                or (user_message.get("metadata") or {}).get("task_content")
+                or ""
+            ).strip()
+            if not user_content:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "MISSING_TASK_CONTENT",
+                        "message": "未提供任务说明，不自动生成续答",
+                    },
+                )
+        else:
+            user_content = self.continuation_user_content(user_message, source_context)
         request_messages = [{"role": "user", "content": user_content}] if user_content.strip() else []
         context = self._continuation_context(call, source_context, message_id)
         actor = {"user_id": owner_id, "role": call.get("_actor_role") or "user"}
@@ -493,6 +547,7 @@ class AssistantRunService:
             "selected_tool_ids": list(source_context.get("selected_tool_ids") or [call.get("tool_id")]),
             "model": source_context.get("model_request") or {},
             "tool_call_ids": [call.get("call_id")],
+            "command_id": call.get("command_id") or source_context.get("command_id"),
             "continuation_key": call.get("call_id"),
             "continuation_source": {
                 "call_id": call.get("call_id"),
@@ -672,7 +727,7 @@ class AssistantRunService:
         worker_id = document["worker_id"]
         started = time.monotonic()
         snapshot = document.get("request_snapshot") or {}
-        request_messages = list(snapshot.get("messages") or [])
+        request_messages = self.model_visible_messages(snapshot.get("messages") or [])
         if snapshot.get("content"):
             request_messages.append({"role": "user", "content": snapshot["content"]})
         request = AssistantChatRequest(messages=request_messages, context=snapshot.get("context") or {})

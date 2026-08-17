@@ -475,8 +475,13 @@ function stringifyJson(value) {
       :title="error.message || error.error || '算法运行失败'"
       type="error"
       show-icon
-      :closable="false"
-    />
+    :closable="false"
+  />
+
+    <section v-if="attributions.length" class="result-attribution" aria-label="算法来源">
+      <span>算法来源</span>
+      <AttributionBadges :attributions="attributions" :limit="3" />
+    </section>
 
     <template v-if="status !== 'failed' && hasOutput">
       <el-alert

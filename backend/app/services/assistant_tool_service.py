@@ -256,8 +256,10 @@ class AssistantToolCallService:
 
     @staticmethod
     def _event(document: dict[str, Any]) -> dict[str, Any]:
+        """把工具调用文档转换为前端可回放的状态事件。"""
         return AssistantToolCallEvent(
             call_id=document["call_id"],
+            command_id=document.get("command_id"),
             provider_tool_call_id=document.get("provider_tool_call_id"),
             tool_id=document["tool_id"],
             algorithm_id=document["algorithm_id"],
@@ -296,6 +298,7 @@ class AssistantToolCallService:
             return
         event = AssistantToolInputRequiredEvent(
             call_id=document["call_id"],
+            command_id=document.get("command_id"),
             missing_fields=missing_fields,
             field_schema=tool.input_schema,
             input_json_schema=tool.input_json_schema,
@@ -333,6 +336,24 @@ class AssistantToolCallService:
         if document.get("continuation_state") in {"scheduled", "completed"} and document.get("continuation_run_id"):
             return
         source_context = document.get("source_context") or cls._fallback_source_context(document)
+        command_owned = bool(
+            source_context.get("command_id")
+            or source_context.get("origin") == "slash_command"
+            or document.get("command_id")
+        )
+        task_content = str(source_context.get("task_content") or "").strip()
+        if command_owned and not task_content:
+            skip_update = {
+                "continuation_state": "skipped",
+                "continuation_error": {
+                    "error_type": "MISSING_TASK_CONTENT",
+                    "message": "未提供任务说明，仅展示工具结果，不自动生成续答",
+                },
+                "updated_at": utc_now(),
+            }
+            AssistantToolCallRepository.update_fields(document["call_id"], skip_update)
+            document.update(skip_update)
+            return
         if not source_context.get("original_user_message_id") and not document.get("message_id"):
             AssistantToolCallRepository.update_fields(
                 document["call_id"],
@@ -441,6 +462,7 @@ class AssistantToolCallService:
         trace_id = str(payload.trace_id or source_context.get("trace_id") or payload.assistant_run_id or "")
         source_context["argument_sources"] = _redact(argument_sources)
         source_context["trace_id"] = trace_id
+        source_context["command_id"] = payload.command_id
         source_context.setdefault("original_user_message_id", payload.message_id)
         source_context.setdefault("chat_id", payload.chat_id)
         source_context.setdefault("selected_tool_ids", [payload.tool_id])
@@ -450,6 +472,7 @@ class AssistantToolCallService:
         document = {
             "call_id": f"atc_{uuid4().hex[:16]}",
             "trace_id": trace_id,
+            "command_id": payload.command_id,
             "provider_tool_call_id": payload.provider_tool_call_id,
             "chat_id": payload.chat_id,
             "message_id": payload.message_id,

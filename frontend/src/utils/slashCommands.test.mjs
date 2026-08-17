@@ -46,7 +46,12 @@ const commands = [
     usage: '/run-experiment',
     category: 'tool',
     source: 'Uploaded algorithm',
+    source_kind: 'uploaded_package',
+    input_mode: 'tool_schema',
+    algorithm_id: 'vertical_predictor',
     tool_id: 'tool-1',
+    tool_json_schema: { properties: { smiles: { type: 'string' } } },
+    attributions: [{ name: 'Example Lab', organization: 'Example Lab' }],
     available: false,
     unavailable_reason: '当前权限为只读',
     risk_level: 'high',
@@ -98,6 +103,8 @@ const unavailable = allGroups
 assert.equal(unavailable.available, false)
 assert.equal(unavailable.unavailableReason, '当前权限为只读')
 assert.equal(unavailable.riskLevel, 'high')
+assert.equal(unavailable.inputMode, 'tool_schema')
+assert.equal(unavailable.toolId, 'tool-1')
 
 const fuzzy = filterCommandPalette(commands, 'exper')
 assert.deepEqual(

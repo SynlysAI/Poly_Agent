@@ -89,6 +89,7 @@ class AgentTool(BaseModel):
     name: str
     description: str | None = None
     algorithm_family: str
+    capability_group: str | None = None
     material_scope: list[str] = Field(default_factory=list)
     tool_type: str
     source: str
@@ -181,6 +182,7 @@ class AssistantToolCallCreate(BaseModel):
     message_id: str | None = Field(default=None, max_length=120)
     assistant_run_id: str | None = Field(default=None, max_length=120)
     trace_id: str | None = Field(default=None, max_length=120)
+    command_id: str | None = Field(default=None, max_length=120)
     arguments: dict[str, Any] = Field(default_factory=dict)
     input_asset_refs: dict[str, Any] = Field(default_factory=dict)
     function_name: str | None = Field(default=None, max_length=64)
@@ -221,6 +223,7 @@ class AssistantToolCallEvent(BaseModel):
 
     type: Literal["tool_call"] = "tool_call"
     call_id: str
+    command_id: str | None = None
     provider_tool_call_id: str | None = None
     tool_id: str
     algorithm_id: str
@@ -249,6 +252,7 @@ class AssistantToolInputRequiredEvent(BaseModel):
 
     type: Literal["tool_input_required"] = "tool_input_required"
     call_id: str
+    command_id: str | None = None
     missing_fields: list[str] = Field(default_factory=list)
     field_schema: AlgorithmIOSchema = Field(default_factory=AlgorithmIOSchema)
     input_json_schema: dict[str, Any] = Field(default_factory=dict)
@@ -266,6 +270,7 @@ class AssistantToolCall(BaseModel):
 
     call_id: str
     trace_id: str | None = None
+    command_id: str | None = None
     provider_tool_call_id: str | None = None
     chat_id: str | None = None
     assistant_run_id: str | None = None

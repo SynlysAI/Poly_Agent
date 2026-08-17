@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import json
 from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
@@ -17,6 +18,7 @@ from app.infra.research_engine_repositories import (
     AssistantRunRepository,
     AssistantToolCallRepository,
 )
+from app.schemas.agent_tools import AssistantToolCall, AssistantToolCallCreate
 from app.schemas.assistant_commands import (
     CommandCatalogData,
     CommandChoice,
@@ -25,8 +27,9 @@ from app.schemas.assistant_commands import (
     CommandInteraction,
     SessionControlState,
 )
+from app.schemas.assistant_chats import AssistantMessageCreate
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate
-from app.services.assistant_chat_service import actor_id
+from app.services.assistant_chat_service import actor_id, assistant_chat_service
 from app.services.assistant_command_parser import CommandParseError, parse_command
 from app.services.assistant_command_registry import AssistantCommandRegistry
 from app.services.assistant_run_service import AssistantRunService
@@ -36,6 +39,8 @@ from app.services.assistant_session_control import (
     control_state,
     tool_execution_block_reason,
 )
+from app.services.assistant_tool_service import assistant_tool_call_service
+from app.services.assistant_tool_command_provider import AssistantToolCommandProvider
 from app.services.llm_model_service import LLMModelService
 
 
@@ -52,6 +57,7 @@ class CommandHandlerResult:
     message: str
     interaction: CommandInteraction | None = None
     run: AssistantRun | None = None
+    tool_call: AssistantToolCall | None = None
     source_event: str | None = None
 
 
@@ -62,6 +68,10 @@ class AssistantCommandService:
         self.registry = AssistantCommandRegistry()
         self.run_service = AssistantRunService()
         self.llm_model_service = LLMModelService()
+        self.registry.register_provider(
+            AssistantToolCommandProvider(),
+            self._handle_tool_command,
+        )
         self._install_handlers()
 
     @staticmethod
@@ -137,6 +147,40 @@ class AssistantCommandService:
                 )
         return choices
 
+    @staticmethod
+    def _tool_command_inputs(
+        raw_args: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], str]:
+        """解析动态工具命令的预填参数和可选续答任务说明。
+
+        Args:
+            raw_args: 命令名后的原样参数文本。
+            payload: 命令请求附带的结构化 payload。
+
+        Returns:
+            (预填参数, 附件引用, 任务说明) 元组；自然语言 raw_args 只作为任务说明。
+        """
+        arguments: dict[str, Any] = {}
+        raw_value = str(raw_args or "").strip()
+        payload_arguments = payload.get("arguments")
+        if isinstance(payload_arguments, dict):
+            arguments.update(payload_arguments)
+        elif not arguments and raw_value.startswith("{"):
+            try:
+                parsed = json.loads(raw_value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                arguments.update(parsed)
+
+        task_content = str(payload.get("task_content") or "").strip()
+        if not task_content and not arguments:
+            task_content = raw_value
+        payload_asset_refs = payload.get("input_asset_refs")
+        input_asset_refs = payload_asset_refs if isinstance(payload_asset_refs, dict) else {}
+        return arguments, input_asset_refs, task_content
+
     @classmethod
     def _latest_chat(cls, chat_id: str, owner_id: str) -> dict[str, Any]:
         """读取最新会话文档；并发删除时返回空文档以闭合命令结果。
@@ -182,7 +226,7 @@ class AssistantCommandService:
             命令目录、控制状态与目录版本。
         """
         chat = self._owned_chat(chat_id, current_user)
-        items = self.registry.descriptors()
+        items = self.registry.descriptors(current_user)
         return CommandCatalogData(
             items=items,
             total=len(items),
@@ -231,7 +275,7 @@ class AssistantCommandService:
             parsed_name = "unknown"
             raw_args = payload.line
 
-        registered = self.registry.resolve(parsed_name) if parsed else None
+        registered = self.registry.resolve(parsed_name, current_user) if parsed else None
         descriptor = registered.descriptor if registered else None
         name = descriptor.name if descriptor else parsed_name
         source = descriptor.source if descriptor else "unknown"
@@ -278,26 +322,45 @@ class AssistantCommandService:
                 suggestions = difflib.get_close_matches(parsed_name, self.registry._commands.keys(), n=3)
                 suffix = f"；可尝试: {', '.join('/' + item for item in suggestions)}" if suggestions else ""
                 raise ValueError(f"未知命令 /{parsed_name}{suffix}")
-            if descriptor.category == "tool":
+            if descriptor.tool_id:
                 reason = tool_execution_block_reason(chat)
                 if reason:
+                    AssistantCommandRunRepository.append_chat_event(
+                        chat,
+                        {
+                            "type": "permission.decision",
+                            "command_id": command_id,
+                            "trace_id": command_id,
+                            "tool_id": descriptor.tool_id,
+                            "decision": "denied",
+                            "reason": reason,
+                            "mode": str(chat.get("permission_mode") or "workspace_write"),
+                            "plan_mode": bool(chat.get("plan_mode", False)),
+                        },
+                    )
                     raise HTTPException(
                         status_code=403,
-                        detail={"code": reason, "message": "当前会话权限不允许执行工具命令"},
+                        detail={
+                            "code": reason,
+                            "message": (
+                                "Plan Mode 已阻断工具命令创建"
+                                if reason == "plan_mode_blocked"
+                                else "只读模式已阻断工具命令创建"
+                            ),
+                        },
                     )
             if registered.handler is None:
                 raise ValueError(f"命令 /{name} 尚未注册处理器")
-            result = registered.handler(
-                chat,
-                parsed.raw_args,
-                payload.payload,
-                current_user,
-                command_id,
-            )
+            handler_args = [chat, parsed.raw_args, payload.payload, current_user, command_id]
+            if descriptor.tool_id:
+                result = registered.handler(*handler_args, descriptor=descriptor)
+            else:
+                result = registered.handler(*handler_args)
             final_status = result.status
             message = result.message
             interaction = result.interaction
             run = result.run
+            tool_call = result.tool_call
             source_event = result.source_event
             error = None
         except Exception as exc:
@@ -312,6 +375,7 @@ class AssistantCommandService:
                 message = str(exc) or exc.__class__.__name__
             interaction = None
             run = None
+            tool_call = None
             source_event = (run_event or {}).get("event_id")
             error = {"error_type": exc.__class__.__name__, "message": message}
 
@@ -325,7 +389,7 @@ class AssistantCommandService:
             "state_after": state.model_dump(mode="python"),
             "interaction": interaction.model_dump(mode="python") if interaction else None,
             "run_id": getattr(run, "run_id", None),
-            "call_id": None,
+            "call_id": getattr(tool_call, "call_id", None),
             "download_url": None,
             "source_event": source_event,
             "error": error,
@@ -341,6 +405,7 @@ class AssistantCommandService:
                 "name": name,
                 "status": final_status,
                 "message": message,
+                "call_id": getattr(tool_call, "call_id", None),
                 "source_event": source_event,
                 "chat_id": payload.chat_id,
             },
@@ -351,6 +416,7 @@ class AssistantCommandService:
                 "state_after": state,
                 "interaction": interaction,
                 "run": run,
+                "tool_call": tool_call,
             }
         )
 
@@ -375,7 +441,7 @@ class AssistantCommandService:
             chat_id,
             str(chat.get("created_by") or ""),
             after_seq,
-            event_types={"command.run", "command.done"},
+            event_types={"command.run", "command.done", "permission.decision"},
         )
         next_seq = max([int(item.get("seq", 0)) for item in events], default=int(after_seq))
         return events, next_seq
@@ -405,6 +471,94 @@ class AssistantCommandService:
         return AssistantCommandRunRepository.append_chat_event(
             {**chat, **fields},
             {"chat_id": chat["chat_id"], **event},
+        )
+
+    def _handle_tool_command(
+        self,
+        chat: dict[str, Any],
+        raw_args: str,
+        payload: dict[str, Any],
+        current_user: dict[str, str] | None,
+        command_id: str,
+        *,
+        descriptor: CommandDescriptor,
+    ) -> CommandHandlerResult:
+        """为动态算法命令创建同一条 AssistantToolCall 状态机记录。
+
+        Args:
+            chat: 当前会话文档。
+            raw_args: 命令名后的原样参数。
+            payload: 结构化命令 payload。
+            current_user: 当前登录用户。
+            command_id: 命令生命周期 ID。
+            descriptor: 被选中的动态工具命令描述符。
+
+        Returns:
+            附带工具调用卡片的命令处理结果。
+        """
+        if not descriptor.tool_id or not descriptor.algorithm_id:
+            raise ValueError("动态工具命令缺少 tool_id 或 algorithm_id")
+        if not descriptor.tool_json_schema:
+            raise ValueError("算法工具缺少输入 schema，无法打开参数表单")
+
+        arguments, input_asset_refs, task_content = self._tool_command_inputs(raw_args, payload)
+        command_line = f"/{descriptor.name}{raw_args}"
+        message = assistant_chat_service.create_message(
+            str(chat["chat_id"]),
+            AssistantMessageCreate(
+                role="user",
+                content=task_content or command_line,
+                metadata={
+                    "origin": "slash_command",
+                    "model_visible": False,
+                    "command_id": command_id,
+                    "command_name": descriptor.name,
+                    "command_line": command_line,
+                    "task_content": task_content,
+                    "tool_id": descriptor.tool_id,
+                    "algorithm_id": descriptor.algorithm_id,
+                },
+            ),
+            current_user,
+        )
+        model_request = dict(chat.get("model") or {})
+        call = assistant_tool_call_service.create(
+            AssistantToolCallCreate(
+                tool_id=descriptor.tool_id,
+                chat_id=str(chat["chat_id"]),
+                message_id=message.message_id,
+                trace_id=command_id,
+                command_id=command_id,
+                arguments=arguments,
+                input_asset_refs=input_asset_refs,
+                selection_reason="slash_command_direct_execution",
+                proposal_route=model_request,
+                source_context={
+                    "origin": "slash_command",
+                    "command_id": command_id,
+                    "task_content": task_content,
+                    "selected_tool_ids": [descriptor.tool_id],
+                    "mode": "qa",
+                    "model_request": model_request,
+                    "route_snapshot": model_request,
+                },
+            ),
+            current_user,
+        )
+        if call.phase in {"awaiting_input", "awaiting_confirmation"}:
+            status = "interaction"
+            result_message = "已创建算法工具调用，请在参数表单中确认。"
+        elif call.phase == "failed":
+            status = "failed"
+            result_message = (call.error or {}).get("message") or "算法工具调用创建失败"
+        else:
+            status = "success"
+            result_message = "算法工具命令已提交执行。"
+        return CommandHandlerResult(
+            status=status,
+            message=result_message,
+            tool_call=call,
+            source_event=command_id,
         )
 
     def _handle_plan(
