@@ -189,7 +189,7 @@ class AssistantCommandRegistry:
         )
 
     def _register_builtins(self) -> None:
-        """注册 PR-01 的内置控制命令。"""
+        """注册当前后端命令平面已实现的内置控制命令。"""
         self.register(
             CommandDescriptor(
                 name="plan",
@@ -272,6 +272,21 @@ class AssistantCommandRegistry:
                 source="PolyAgent Assistant Command Plane",
                 source_kind="builtin",
                 input_mode="none",
+            ),
+            self._placeholder_handler,
+            reserved=True,
+        )
+        self.register(
+            CommandDescriptor(
+                name="compact",
+                title="Context Compaction",
+                description="压缩已完成会话历史，保留目标、任务、权限、结论和活跃工具结果。",
+                usage="/compact",
+                category="system",
+                source="PolyAgent Assistant Command Plane",
+                source_kind="builtin",
+                input_mode="none",
+                risk_level="medium",
             ),
             self._placeholder_handler,
             reserved=True,

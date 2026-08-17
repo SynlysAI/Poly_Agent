@@ -18,6 +18,7 @@ CommandStatus = Literal["running", "success", "interaction", "failed"]
 PermissionMode = Literal["read_only", "workspace_write", "full_access"]
 SessionGoalStatus = Literal["active", "completed"]
 SessionTodoStatus = Literal["pending", "in_progress", "completed"]
+CompactionSummaryMethod = Literal["llm", "deterministic_fallback"]
 
 
 class CommandVariant(BaseModel):
@@ -100,9 +101,16 @@ class CompactionSnapshot(BaseModel):
     snapshot_id: str = Field(min_length=1, max_length=80)
     cutoff_message_id: str | None = Field(default=None, max_length=80)
     summary: str = Field(default="", max_length=20_000)
+    retained_message_ids: list[str] = Field(default_factory=list, max_length=200)
+    active_tool_call_ids: list[str] = Field(default_factory=list, max_length=100)
     summary_digest: str = Field(default="", max_length=120)
+    digest: str = Field(default="", max_length=120)
+    summary_method: CompactionSummaryMethod = "llm"
     token_estimate: int = Field(default=0, ge=0)
     original_token_estimate: int = Field(default=0, ge=0)
+    route: dict[str, Any] = Field(default_factory=dict)
+    usage: dict[str, int] = Field(default_factory=dict)
+    created_by: str = Field(default="", max_length=120)
     created_at: datetime
 
 

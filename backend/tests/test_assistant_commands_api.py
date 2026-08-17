@@ -73,10 +73,10 @@ class AssistantCommandsApiTest(ComputationTestCase):
             )
             self.assertEqual(catalog.status_code, 200, catalog.text)
             data = catalog.json()["data"]
-            self.assertEqual(data["total"], 5)
+            self.assertEqual(data["total"], 6)
             self.assertEqual(
                 {item["name"] for item in data["items"]},
-                {"plan", "goal", "permission", "model", "status"},
+                {"plan", "goal", "permission", "model", "status", "compact"},
             )
             self.assertEqual(data["session_state"]["permission_mode"], "workspace_write")
 

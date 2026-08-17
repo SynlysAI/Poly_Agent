@@ -29,6 +29,7 @@ from app.schemas.assistant_commands import (
 )
 from app.schemas.assistant_chats import AssistantMessageCreate
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate
+from app.services.assistant_compaction_service import assistant_compaction_service
 from app.services.assistant_chat_service import actor_id, assistant_chat_service
 from app.services.assistant_command_parser import CommandParseError, parse_command
 from app.services.assistant_command_registry import AssistantCommandRegistry
@@ -44,7 +45,7 @@ from app.services.assistant_tool_command_provider import AssistantToolCommandPro
 from app.services.llm_model_service import LLMModelService
 
 
-CATALOG_VERSION = "assistant-command-catalog-v1"
+CATALOG_VERSION = "assistant-command-catalog-v2"
 ACTIVE_RUN_STATUSES = {"queued", "running"}
 ACTIVE_TOOL_PHASES = {"requested", "awaiting_input", "awaiting_confirmation", "queued", "running"}
 
@@ -205,6 +206,7 @@ class AssistantCommandService:
             "permission": self._handle_permission,
             "model": self._handle_model,
             "status": self._handle_status,
+            "compact": self._handle_compact,
         }
         for name, handler in handlers.items():
             registered = self.registry._commands.get(name)
@@ -790,6 +792,39 @@ class AssistantCommandService:
             {"model": next_model, "updated_at": utc_now()},
         )
         return CommandHandlerResult(status="success", message=f"模型已切换为 {provider_id}::{model_id}")
+
+    def _handle_compact(
+        self,
+        chat: dict[str, Any],
+        raw_args: str,
+        _payload: dict[str, Any],
+        current_user: dict[str, str] | None,
+        command_id: str,
+    ) -> CommandHandlerResult:
+        """处理 /compact 命令。
+
+        Args:
+            chat: 会话文档。
+            raw_args: 原样参数；compact 不接受额外参数。
+            _payload: 前端交互 payload，当前命令不使用。
+            current_user: 当前登录用户。
+            command_id: 命令执行 ID。
+
+        Returns:
+            上下文压缩结果。
+        """
+        if raw_args.strip():
+            raise ValueError("/compact 不支持额外参数")
+        snapshot = assistant_compaction_service.compact(chat, current_user, command_id)
+        reduction = max(0, snapshot.original_token_estimate - snapshot.token_estimate)
+        method = "辅助模型" if snapshot.summary_method == "llm" else "确定性兜底"
+        return CommandHandlerResult(
+            status="success",
+            message=(
+                f"上下文已压缩（{method}）：{snapshot.original_token_estimate} → "
+                f"{snapshot.token_estimate} tokens，节省 {reduction} tokens"
+            ),
+        )
 
     def _handle_status(
         self,

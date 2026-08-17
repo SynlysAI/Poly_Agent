@@ -28,6 +28,7 @@ from app.schemas.assistant_runs import (
     AssistantRunListData,
     AssistantUsageSummary,
 )
+from app.services.assistant_compaction_service import assistant_compaction_service
 from app.services.assistant_chat_service import actor_id, assistant_chat_service
 from app.services.assistant_service import stream_chat_assistant
 from app.services.assistant_tool_service import assistant_tool_call_service
@@ -102,7 +103,7 @@ class AssistantRunService:
         current_user: dict[str, str] | None,
     ) -> AssistantRun:
         owner_id = actor_id(current_user)
-        assistant_chat_service._owned_chat(chat_id, owner_id)
+        chat = assistant_chat_service._owned_chat(chat_id, owner_id)
         existing_user_message = None
         if payload.user_message_id:
             existing_user_message = AssistantMessageRepository.find_one({
@@ -128,6 +129,14 @@ class AssistantRunService:
             )
         if not trace_id:
             trace_id = run_id
+        effective_messages = self.model_visible_messages(payload.messages)
+        compacted_history = assistant_compaction_service.effective_history(
+            chat_id,
+            owner_id,
+            payload.messages,
+        )
+        if compacted_history is not None:
+            effective_messages = compacted_history
         context["trace_id"] = trace_id
         context["chat_id"] = chat_id
         context["run_id"] = run_id
@@ -145,7 +154,7 @@ class AssistantRunService:
             "stage": "queued",
             "request_snapshot": {
                 "content": payload.content.strip(),
-                "messages": self.model_visible_messages(payload.messages),
+                "messages": effective_messages,
                 "context": context,
             },
             "partial_content": "",

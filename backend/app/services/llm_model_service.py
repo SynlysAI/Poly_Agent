@@ -140,7 +140,7 @@ class LLMModelService:
         """优先返回原路由；若其缺少工具能力，则改选可调用工具的模型。
 
         Args:
-            purpose: 当前助手用途（qa / deep / report）。
+            purpose: 当前助手用途（qa / deep / report / compact）。
             requested_model: 用户显式选择的 provider/model。
 
         Returns:
@@ -1018,7 +1018,14 @@ class LLMModelService:
             capability="structured_json",
             preferred_for="report",
         )
-        return LLMRoutingData(qa=qa, deep=deep or qa, report=report or qa)
+        compact = self._selection_from_env_or_first(
+            providers,
+            provider_id=settings.llm_default_provider or "default_openai",
+            model_id=settings.llm_default_model or settings.llm_model,
+            capability="fast",
+            preferred_for="compact",
+        )
+        return LLMRoutingData(qa=qa, deep=deep or qa, report=report or qa, compact=compact or qa)
 
     def _selection_from_env_or_first(
         self,
@@ -1075,7 +1082,12 @@ class LLMModelService:
             return "fallback"
         if purpose in model.recommended_for:
             return "purpose_default"
-        required_capability = {"qa": "chat", "deep": "reasoning", "report": "structured_json"}[purpose]
+        required_capability = {
+            "qa": "chat",
+            "deep": "reasoning",
+            "report": "structured_json",
+            "compact": "chat",
+        }[purpose]
         return "purpose_default" if required_capability in model.capabilities else "fallback"
 
     @staticmethod
@@ -1094,14 +1106,14 @@ class LLMModelService:
 
     def _merge_routing(self, existing: LLMRoutingData, update: LLMRoutingUpdateRequest) -> LLMRoutingData:
         data = existing.model_dump(mode="python")
-        for key in ("qa", "deep", "report"):
+        for key in ("qa", "deep", "report", "compact"):
             value = getattr(update, key)
             if value is not None:
                 data[key] = value.model_dump(mode="python")
         return LLMRoutingData.model_validate(data)
 
     def _validate_routing(self, routing: LLMRoutingData, providers: list[LLMProviderInfo]) -> None:
-        for purpose in ("qa", "deep", "report"):
+        for purpose in ("qa", "deep", "report", "compact"):
             selection = getattr(routing, purpose)
             if not selection:
                 continue
@@ -1114,7 +1126,7 @@ class LLMModelService:
         providers: list[LLMProviderInfo],
     ) -> dict[LLMRoutePurpose, dict[str, str | bool | None]]:
         output: dict[LLMRoutePurpose, dict[str, str | bool | None]] = {}
-        for purpose in ("qa", "deep", "report"):
+        for purpose in ("qa", "deep", "report", "compact"):
             selection = getattr(routing, purpose)
             if not selection:
                 continue

@@ -1,6 +1,6 @@
 # Plan 10：Slash Command、会话控制面与 Agent 控制体系工作计划
 
-> **状态：PR-03 已完成，PR-04 待启动**
+> **状态：PR-04 已完成，PR-05 待启动**
 >
 > 日期：2026-08-16
 >
@@ -547,7 +547,7 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2 天
 
-- [ ] 定义 `CompactionSnapshot`：
+- [x] 定义 `CompactionSnapshot`：
   - snapshot id
   - summary
   - cutoff message id
@@ -557,10 +557,10 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - usage
   - created at / created by
   - digest
-- [ ] `/compact` 仅在无 active run 时允许执行；有 active run 返回 busy。
-- [ ] 使用辅助 LLM 请求生成摘要，purpose 使用独立 compact route。
-- [ ] LLM 不可用或返回无效摘要时，使用确定性摘要兜底。
-- [ ] 摘要必须保留：
+- [x] `/compact` 仅在无 active run 时允许执行；有 active run 返回 busy。
+- [x] 使用辅助 LLM 请求生成摘要，purpose 使用独立 compact route。
+- [x] LLM 不可用或返回无效摘要时，使用确定性摘要兜底。
+- [x] 摘要必须保留：
   - 用户目标
   - active Goal
   - Todo 状态
@@ -572,21 +572,21 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - 关键配置
   - 未完成任务
   - 活跃工具结果
-- [ ] 摘要必须压缩：
+- [x] 摘要必须压缩：
   - 重复对话
   - 已解决的问题
   - 无关过程信息
   - 冗长工具返回
-- [ ] 原始消息不删除、不改写。
-- [ ] 后续 assistant run 由服务端按 snapshot 构建有效历史：
+- [x] 原始消息不删除、不改写。
+- [x] 后续 assistant run 由服务端按 snapshot 构建有效历史：
   - compaction summary
   - retained messages
   - cutoff 后消息
   - 活跃 tool result
-- [ ] 前端请求消息只作为兼容输入，服务端以持久化消息和 snapshot 为准。
-- [ ] 写入 `context.compacted` 事件并记录 token 收益。
-- [ ] 压缩失败时不改变有效历史，并返回稳定错误。
-- [ ] 补充压缩服务、run 请求构建和事件测试。
+- [x] 前端请求消息只作为兼容输入，服务端以持久化消息和 snapshot 为准。
+- [x] 写入 `context.compacted` 事件并记录 token 收益。
+- [x] 压缩失败时不改变有效历史，并返回稳定错误。
+- [x] 补充压缩服务、run 请求构建和事件测试。
 
 **验收标准**
 
@@ -1017,3 +1017,5 @@ python e2e/dialogue_e2e.py
 - 2026-08-17：PR-02 完成：新增 slash 纯函数、命令目录缓存与 `CommandPalette`，接入命令目录 / 执行 API、IME 与键盘交互、URL / 路径 carve-out、未知命令直接失败闭环、命令结果行、Plan / Permission / Goal / Model 控制状态标签和会话恢复；命令结果不进入模型请求历史。后端指定回归 36 项通过，前端 assistant events / tool calls / slash commands / command catalog 测试与 `npm run build` 通过；真实浏览器冒烟覆盖 `/` 面板、`/pl` 过滤、URL 不触发、键盘选择、`/plan off`、未知命令且 0 次 run 请求。
 
 - 2026-08-17：PR-03 完成：新增用户态动态算法命令 provider，目录从 `AgentToolService.list_tools()` 实时派生并携带 JSON schema、确认策略与算法 attribution；保留 `capability_group` 并实现稳定 slug 与内置名冲突 hash；动态命令直接创建复用既有输入 / 附件 / 确认 / 执行状态机的 `AssistantToolCall`，贯通 `command_id → call_id → AlgorithmRun/continuation run → trace_id`；命令 owned message 标记 `model_visible=false`，无 `task_content` 时前后端均阻止自动续答，工具结果继续展示算法来源。后端 Assistant + AgentTool 回归 136 项通过，`py_compile` 通过；前端 assistant tool calls / trace / events / context / ui / tool menu / auto select / slash commands / command catalog 测试与 `npm run build` 通过；真实浏览器专项冒烟覆盖动态 Tools 命令选择、JSON 参数直接创建、确认执行、结果来源标注和 0 次模型 run 请求。既有完整 `dialogue_e2e.py` 中外部模型续答超时，未作为 PR-03 通过依据。
+
+- 2026-08-17：PR-04 完成：新增 `AssistantCompactionService` 与完整 `CompactionSnapshot` 契约，落地 snapshot id、摘要、cutoff / retained message、active tool call、token 前后估算、安全 route、usage、创建者与摘要 / 快照 digest；新增独立 `compact` LLM route purpose，辅助模型失败或输出无效时使用保留目标、Todo、权限、结论、配置和活跃工具结果的确定性摘要；`/compact` 在 active run 期间返回 busy，事件写入失败会回滚快照并返回稳定错误；原始消息保持不变，后续 run 由服务端基于持久化消息与 snapshot 重建摘要 + retained + cutoff 后有效历史，客户端历史仅作兼容输入不再可信；写入带 token reduction 的 `context.compacted` 事件。后端 Assistant + LLM 回归 143 项通过，相关 `py_compile` 通过；前端 slash commands / command catalog 测试与 `npm run build` 通过。全量后端混合探索为 804 通过、20 失败，失败集中在 Data Catalog / Report / Knowledge / WeKnora 的认证或外部依赖问题，与 PR04 直接回归面无交集，未作为 PR-04 通过依据。
