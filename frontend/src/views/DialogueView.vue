@@ -65,6 +65,7 @@ import {
   replaceToolCall,
   normalizeSchemaArguments,
   shouldContinueToolCall,
+  toolArgumentSourceText,
   toolCallRunDetailRoute,
   toolPhaseLabel,
   toolPhaseTagType,
@@ -775,18 +776,6 @@ function toolCallFields(call) {
 function toolProposalModelLabel(call) {
   const route = normalizeAssistantRoute(call?.proposal_route)
   return route.model_id ? modelMetaLabel(route) : ''
-}
-
-function toolArgumentSourceText(call) {
-  const labels = {
-    provider: '模型',
-    schema_default: '契约默认',
-    user_edit: '用户修正',
-  }
-  const sources = call?.source_context?.argument_sources || {}
-  return Object.entries(sources)
-    .map(([field, source]) => `${field}: ${labels[source] || source}`)
-    .join('；')
 }
 
 function toolArgumentDiffResult(call) {

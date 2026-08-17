@@ -534,8 +534,8 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         )
         self.assertEqual(calls[0]["phase"], "awaiting_confirmation")
 
-    def test_stream_prefers_provider_arguments_over_version_model_proposal(self) -> None:
-        """active 版本模型模板不能覆盖 provider 根据用户上下文生成的参数。"""
+    def test_stream_prefers_version_model_proposal_over_provider_arguments(self) -> None:
+        """active 版本显式模型模板应覆盖 provider 根据用户上下文生成的参数。"""
         AlgorithmVersionRepository.update_fields(
             "vertical-tool-v1",
             {"model_proposal": {"smiles": "C=C(F)F", "temperature": 320}},
@@ -571,26 +571,85 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         self.assertEqual(final["type"], "final")
         calls = final["data"]["tool_calls"]
         self.assertEqual(len(calls), 1)
-        self.assertEqual(
-            calls[0]["arguments"],
-            {"smiles": "O=C1OC(=O)c2cc3C(=O)OC(=O)c3cc12", "temperature": 298},
-        )
+        self.assertEqual(calls[0]["arguments"], {"smiles": "C=C(F)F", "temperature": 320})
         persisted = AssistantToolCallRepository.find_one({"call_id": calls[0]["call_id"]})
+        self.assertEqual(persisted["arguments"], {"smiles": "C=C(F)F", "temperature": 320})
         self.assertEqual(
-            persisted["arguments"],
-            {"smiles": "O=C1OC(=O)c2cc3C(=O)OC(=O)c3cc12", "temperature": 298},
-        )
-        self.assertEqual(
-            persisted["raw_arguments"],
-            '{"smiles": "O=C1OC(=O)c2cc3C(=O)OC(=O)c3cc12", "temperature": 298}',
+            json.loads(persisted["raw_arguments"]),
+            {"smiles": "C=C(F)F", "temperature": 320},
         )
         self.assertEqual(
             persisted["source_context"]["argument_sources"],
-            {"smiles": "provider", "temperature": "provider"},
+            {"smiles": "version_model_proposal", "temperature": "version_model_proposal"},
         )
 
-    def test_stream_keeps_wrong_provider_arguments_without_version_template_fallback(self) -> None:
-        """即使是明显异常的 provider 值，也不能被版本示例静默覆盖。"""
+    def test_stream_uses_explicit_version_model_proposal_for_reactivity_rows(self) -> None:
+        """active 版本显式模板应覆盖 provider 自由生成的英文行契约。"""
+        schema = {
+            "fields": {"data_rows": "list", "conversion_error_pct": "number"},
+            "required": ["data_rows"],
+            "field_defaults": {"conversion_error_pct": 1},
+            "ui_hints": {
+                "data_rows": {"label": "实验数据", "columns": ["比例", "转化率1", "转化率2"]},
+            },
+        }
+        proposal = {
+            "data_rows": [
+                {"比例": 0.2, "转化率1": 0.0035, "转化率2": 0.0177},
+                {"比例": 0.3, "转化率1": 0.0045, "转化率2": 0.0338},
+            ],
+            "conversion_error_pct": 0.05,
+        }
+        AlgorithmRegistryRepository.update_fields("vertical-tool", {"input_schema": schema})
+        AlgorithmVersionRepository.update_fields(
+            "vertical-tool-v1",
+            {"input_schema": schema, "model_proposal": proposal},
+        )
+        chat_id, message_id = self._chat_and_message()
+        provider_arguments = {
+            "data_rows": [
+                {"ratio": 0.2, "conversion1": 0.0177, "conversion2": 0.0035},
+                {"ratio": 0.3, "conversion1": 0.0338, "conversion2": 0.0045},
+            ]
+        }
+        with patch(
+            "app.core.llm_client.chat_message",
+            return_value=self._fake_message(
+                tool_calls=[
+                    self._tool_call(
+                        self._function_name("algorithm:vertical-tool"),
+                        json.dumps(provider_arguments, ensure_ascii=False),
+                    ),
+                ],
+            ),
+        ), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "算算这个比例转化率1转化率2"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        calls = events[-1]["data"]["tool_calls"]
+        self.assertEqual(calls[0]["arguments"], proposal)
+        persisted = AssistantToolCallRepository.find_one({"call_id": calls[0]["call_id"]})
+        self.assertEqual(persisted["arguments"], proposal)
+        self.assertEqual(json.loads(persisted["raw_arguments"]), proposal)
+        self.assertEqual(
+            persisted["source_context"]["argument_sources"],
+            {"data_rows": "version_model_proposal", "conversion_error_pct": "version_model_proposal"},
+        )
+
+    def test_stream_overrides_wrong_provider_arguments_with_version_model_proposal(self) -> None:
+        """显式版本模板应覆盖明显异常的 provider 值。"""
         AlgorithmVersionRepository.update_fields(
             "vertical-tool-v1",
             {"model_proposal": {"smiles": "C=C(F)F", "temperature": 320}},
@@ -623,10 +682,10 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             )
 
         calls = events[-1]["data"]["tool_calls"]
-        self.assertEqual(calls[0]["arguments"], {"smiles": "WRONG"})
+        self.assertEqual(calls[0]["arguments"], {"smiles": "C=C(F)F", "temperature": 320})
 
-    def test_stream_requires_missing_input_without_version_template_fallback(self) -> None:
-        """provider 缺少必填字段时进入待补充输入，不能回退 sample_input。"""
+    def test_stream_completes_missing_provider_input_from_version_model_proposal(self) -> None:
+        """显式版本模板应补足 provider 缺失的必填字段。"""
         AlgorithmVersionRepository.update_fields(
             "vertical-tool-v1",
             {"model_proposal": {"smiles": "C=C(F)F", "temperature": 320}},
@@ -659,12 +718,12 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             )
 
         calls = events[-1]["data"]["tool_calls"]
-        self.assertEqual(calls[0]["phase"], "awaiting_input")
-        self.assertEqual(calls[0]["missing_fields"], ["smiles"])
-        self.assertEqual(calls[0]["arguments"], {"temperature": 298})
+        self.assertEqual(calls[0]["phase"], "awaiting_confirmation")
+        self.assertEqual(calls[0]["missing_fields"], [])
+        self.assertEqual(calls[0]["arguments"], {"smiles": "C=C(F)F", "temperature": 320})
 
-    def test_stream_keeps_malformed_arguments_without_version_template_fallback(self) -> None:
-        """provider JSON 解析失败时保留原始错误，不能用版本模板补值。"""
+    def test_stream_recovers_malformed_provider_arguments_with_version_model_proposal(self) -> None:
+        """显式版本模板应恢复 provider malformed JSON 导致的缺失参数。"""
         AlgorithmVersionRepository.update_fields(
             "vertical-tool-v1",
             {"model_proposal": {"smiles": "C=C(F)F", "temperature": 320}},
@@ -697,10 +756,13 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
             )
 
         calls = events[-1]["data"]["tool_calls"]
-        self.assertEqual(calls[0]["phase"], "awaiting_input")
-        self.assertEqual(calls[0]["missing_fields"], ["smiles"])
-        self.assertEqual(calls[0]["arguments"], {})
-        self.assertEqual(calls[0]["raw_arguments"], '{"smiles": "CCO", "temperature":')
+        self.assertEqual(calls[0]["phase"], "awaiting_confirmation")
+        self.assertEqual(calls[0]["missing_fields"], [])
+        self.assertEqual(calls[0]["arguments"], {"smiles": "C=C(F)F", "temperature": 320})
+        self.assertEqual(
+            json.loads(calls[0]["raw_arguments"]),
+            {"smiles": "C=C(F)F", "temperature": 320},
+        )
 
     def test_stream_surfaces_tool_proposal_validation_error(self) -> None:
         chat_id, message_id = self._chat_and_message()

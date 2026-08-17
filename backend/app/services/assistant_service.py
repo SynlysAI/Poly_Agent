@@ -1755,11 +1755,21 @@ class AssistantService:
             if tool is None:
                 logger.warning("assistant tool proposal references unknown function: %s", function_name)
                 continue
-            # 版本模板只是管理端示例；当前对话生成的 provider 参数始终优先，
-            # 避免样例输入伪装成用户分子。
+            # 显式版本模板是管理端固定的调用载荷；仅未配置模板时才信任
+            # provider 根据当前对话自由生成的参数。
             provider_arguments = normalize_provider_arguments(
-                getattr(function, "arguments", None)
+                tool.model_proposal
+                if tool.model_proposal
+                else getattr(function, "arguments", None)
             )
+            call_source_context = {
+                **(tool_source_context or {}),
+                "argument_origin": (
+                    "version_model_proposal"
+                    if tool.model_proposal
+                    else "provider"
+                ),
+            }
             proposal_usage = message_metadata.get("usage")
             try:
                 created = assistant_tool_call_service.create(
@@ -1781,7 +1791,7 @@ class AssistantService:
                         schema_digest=tool.schema_digest,
                         selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool.tool_id}",
                         selection_confidence=0.5,
-                        source_context=tool_source_context,
+                        source_context=call_source_context,
                     ),
                     current_user,
                 )

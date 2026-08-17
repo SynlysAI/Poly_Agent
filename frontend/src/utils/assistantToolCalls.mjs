@@ -25,6 +25,28 @@ export function toolPhaseTagType(phase) {
   return 'primary'
 }
 
+/**
+ * 格式化工具调用参数来源说明。
+ *
+ * Args:
+ *   call: 工具调用快照。
+ *
+ * Returns:
+ *   以中文分号连接的字段来源说明。
+ */
+export function toolArgumentSourceText(call) {
+  const labels = {
+    provider: '模型',
+    version_model_proposal: '版本模板',
+    schema_default: '契约默认',
+    user_edit: '用户修正',
+  }
+  const sources = call?.source_context?.argument_sources || {}
+  return Object.entries(sources)
+    .map(([field, source]) => `${field}: ${labels[source] || source}`)
+    .join('；')
+}
+
 const EARLY_PHASES = new Set(['requested', 'awaiting_input', 'awaiting_confirmation'])
 const TERMINAL_PHASES = new Set(['completed', 'failed', 'canceled'])
 

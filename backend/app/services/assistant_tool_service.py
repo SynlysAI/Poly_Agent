@@ -154,17 +154,19 @@ class AssistantToolCallService:
     def _initial_argument_sources(
         provider_arguments: dict[str, Any],
         field_defaults: dict[str, Any],
+        initial_source: str = "provider",
     ) -> dict[str, str]:
-        """记录初始参数来源，区分 provider 提案与输入契约默认值。
+        """记录初始参数来源，区分版本模板、provider 提案与输入契约默认值。
 
         Args:
-            provider_arguments: provider 或受信任编排器提交的参数。
+            provider_arguments: 版本模板、provider 或受信任编排器提交的参数。
             field_defaults: 输入契约声明的字段默认值。
+            initial_source: 显式模板覆盖时使用 version_model_proposal，否则 provider。
 
         Returns:
-            字段到 provider / schema_default 来源的映射。
+            字段到版本模板 / provider / schema_default 来源的映射。
         """
-        sources = {field: "provider" for field in provider_arguments}
+        sources = {field: initial_source for field in provider_arguments}
         sources.update({
             field: "schema_default"
             for field in field_defaults
@@ -447,9 +449,19 @@ class AssistantToolCallService:
         cls._ensure_chat_link(payload.chat_id, payload.message_id, user_id)
         tool = cls._tool(algorithm_id, current_user)
         field_defaults = dict(tool.input_schema.field_defaults or {})
+        source_context = dict(payload.source_context or {})
+        initial_source = (
+            "version_model_proposal"
+            if source_context.get("argument_origin") == "version_model_proposal"
+            else "provider"
+        )
         arguments = dict(field_defaults)
         arguments.update(payload.arguments)
-        argument_sources = cls._initial_argument_sources(payload.arguments, field_defaults)
+        argument_sources = cls._initial_argument_sources(
+            payload.arguments,
+            field_defaults,
+            initial_source,
+        )
         arguments = cls._coerce_arguments(tool, arguments)
         missing_fields, _ = cls._validate_arguments(tool, arguments)
         cls._validate_asset_refs(tool, payload.input_asset_refs)
@@ -458,7 +470,6 @@ class AssistantToolCallService:
         missing_assets = missing_result["assets"]
         next_phase = "awaiting_input" if missing_fields or missing_assets else "awaiting_confirmation"
         now = utc_now()
-        source_context = dict(payload.source_context or {})
         trace_id = str(payload.trace_id or source_context.get("trace_id") or payload.assistant_run_id or "")
         source_context["argument_sources"] = _redact(argument_sources)
         source_context["trace_id"] = trace_id

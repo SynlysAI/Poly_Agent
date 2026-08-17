@@ -10,6 +10,7 @@ import {
   parseToolArguments,
   replaceToolCall,
   toolCallRunDetailRoute,
+  toolArgumentSourceText,
   toolPhaseLabel,
   toolPhaseTagType,
   schemaFieldType,
@@ -26,6 +27,17 @@ assert.equal(toolPhaseTagType('failed'), 'danger')
 assert.equal(toolPhaseTagType('canceled'), 'info')
 assert.equal(toolPhaseTagType('awaiting_input'), 'primary')
 assert.equal(toolPhaseLabel('queued'), '排队中')
+assert.equal(
+  toolArgumentSourceText({
+    source_context: {
+      argument_sources: {
+        data_rows: 'version_model_proposal',
+        conversion_error_pct: 'schema_default',
+      },
+    },
+  }),
+  'data_rows: 版本模板；conversion_error_pct: 契约默认',
+)
 assert.equal(schemaFieldType('number - 温度'), 'number')
 assert.equal(schemaFieldType('list[string]'), 'array')
 assert.equal(schemaFieldType('list'), 'array')
