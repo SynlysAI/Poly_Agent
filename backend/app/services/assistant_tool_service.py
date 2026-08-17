@@ -33,6 +33,7 @@ from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmRunCreate
 from app.services.agent_tool_service import agent_tool_service
 from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID
 from app.services.assistant_runtime_asset_service import assistant_runtime_asset_service
+from app.services.assistant_session_control import ensure_tool_confirmation_allowed
 from app.services.assistant_tool_contract import SENSITIVE_KEYS, missing_inputs, validate_arguments
 from app.services.research_engine_service import ResearchEngineService
 
@@ -234,6 +235,12 @@ class AssistantToolCallService:
                     "knowledge_base_names": [],
                     "use_web_search": False,
                     "selected_tool_ids": [],
+                    "plan_mode": False,
+                    "permission_mode": "workspace_write",
+                    "goal": None,
+                    "todos": [],
+                    "compaction": None,
+                    "command_event_seq": 0,
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -682,6 +689,7 @@ class AssistantToolCallService:
         current_user: dict[str, str] | None,
     ) -> AssistantToolCall:
         cls.get(call_id, current_user)
+        user_id, _role, _is_admin = _actor_context(current_user)
         document = AssistantToolCallRepository.find_one({"call_id": call_id}) or {}
         phase = document.get("phase")
         if phase == "completed":
@@ -690,6 +698,7 @@ class AssistantToolCallService:
             raise HTTPException(status_code=409, detail="当前工具调用已结束，不能确认")
         if phase in {"queued", "running"}:
             return cls._public_document(document)
+        ensure_tool_confirmation_allowed(document, user_id)
         tool = cls._tool(document["algorithm_id"], current_user)
         arguments = dict(document.get("arguments") or {})
         if payload.arguments is not None:
@@ -752,7 +761,7 @@ class AssistantToolCallService:
             "assistant_tool_call_confirmed",
             {"status": "queued", "algorithm_version_id": tool.active_version_id},
         )
-        user_id, _role, is_admin = _actor_context(current_user)
+        is_admin = _is_admin
         legacy_sync = False
         try:
             try:

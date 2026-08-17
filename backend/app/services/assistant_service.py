@@ -22,7 +22,10 @@ from app.core import llm_client
 from app.core.config import settings
 from app.core.llm_context import get_message_metadata
 from app.core.logging import get_logger
-from app.infra.research_engine_repositories import AssistantToolCallRepository
+from app.infra.research_engine_repositories import (
+    AssistantChatRepository,
+    AssistantToolCallRepository,
+)
 from app.schemas.assistant import AssistantAction
 from app.schemas.assistant import AssistantAnswerMode
 from app.schemas.assistant import AssistantAnswerScope
@@ -44,6 +47,7 @@ from app.services.assistant_tool_contract import (
     safe_function_name,
 )
 from app.services.assistant_tool_service import assistant_tool_call_service
+from app.services.assistant_session_control import control_state
 from app.services.integration_status_service import IntegrationStatusService
 from app.services.knowledge_service import KnowledgeService
 from app.services.llm_model_service import LLMModelService
@@ -1429,6 +1433,11 @@ class AssistantService:
         native_tool_schema_tokens = 0
         if request_kind == "tool_proposal" and selected_tools:
             native_tool_schema_tokens = estimate_native_tool_schema_tokens(selected_tools)
+        session_state = request.context.get("session_state")
+        chat_id = str(request.context.get("chat_id") or "")
+        if session_state is None and chat_id:
+            chat = AssistantChatRepository.find_one({"chat_id": chat_id})
+            session_state = control_state(chat or {}).model_dump(mode="python") if chat else None
         return self.context_assembler.assemble(
             request_kind=request_kind,
             intent_scope=intent.scope,
@@ -1442,6 +1451,7 @@ class AssistantService:
             native_tool_schema_tokens=native_tool_schema_tokens,
             chars_per_token=float(safe_route.get("token_estimate_chars_per_token") or 4),
             allow_section_truncation=True,
+            session_state=session_state,
         )
 
     def _context_event(

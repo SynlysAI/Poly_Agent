@@ -144,6 +144,12 @@ class AssistantChatService:
             "knowledge_base_names": payload.knowledge_base_names,
             "use_web_search": payload.use_web_search,
             "selected_tool_ids": payload.selected_tool_ids,
+            "plan_mode": False,
+            "permission_mode": "workspace_write",
+            "goal": None,
+            "todos": [],
+            "compaction": None,
+            "command_event_seq": 0,
             "created_at": now,
             "updated_at": now,
         }

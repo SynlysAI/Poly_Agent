@@ -28,11 +28,19 @@ from app.schemas.assistant_chats import (
     AssistantMessageListData,
     AssistantMessageUpdate,
 )
+from app.schemas.assistant_commands import (
+    CommandCatalogData,
+    CommandEventListData,
+    CommandExecuteRequest,
+    CommandExecution,
+    SessionControlState,
+)
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate, AssistantRunListData
 from app.schemas.assistant_trace import AssistantTraceData
 from app.schemas.common import ApiResponse
 from app.services.assistant_service import chat_assistant
 from app.services.assistant_service import stream_chat_assistant
+from app.services.assistant_command_service import assistant_command_service
 from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.assistant_chat_service import assistant_chat_service
 from app.services.assistant_quality_service import build_quality_metrics
@@ -40,6 +48,32 @@ from app.services.assistant_run_service import assistant_run_service
 from app.services.assistant_trace_service import assistant_trace_service
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
+
+
+@router.get("/commands", response_model=ApiResponse[CommandCatalogData])
+def list_assistant_commands(
+    chat_id: str = Query(min_length=1, max_length=80),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[CommandCatalogData]:
+    """返回当前会话可发现的 Slash Command 目录。"""
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=assistant_command_service.catalog(chat_id, current_user),
+    )
+
+
+@router.post("/commands/execute", response_model=ApiResponse[CommandExecution])
+def execute_assistant_command(
+    payload: CommandExecuteRequest,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[CommandExecution]:
+    """在命令平面执行一行 Slash Command。"""
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=assistant_command_service.execute(payload, current_user),
+    )
 
 
 @router.get("/chats", response_model=ApiResponse[AssistantChatListData])
@@ -110,6 +144,38 @@ def delete_assistant_chat(
 ) -> ApiResponse[None]:
     assistant_chat_service.delete(chat_id, current_user)
     return ApiResponse(code=0, message="deleted", data=None)
+
+
+@router.get("/chats/{chat_id}/session-state", response_model=ApiResponse[SessionControlState])
+def get_assistant_session_state(
+    chat_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[SessionControlState]:
+    """读取带旧数据默认值的会话控制状态。"""
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=assistant_command_service.session_state(chat_id, current_user),
+    )
+
+
+@router.get("/chats/{chat_id}/command-events", response_model=ApiResponse[CommandEventListData])
+def list_assistant_command_events(
+    chat_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[CommandEventListData]:
+    """按会话事件序号回放命令生命周期事件。"""
+    items, next_after_seq = assistant_command_service.command_events(
+        chat_id,
+        current_user,
+        after_seq,
+    )
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=CommandEventListData(items=items, total=len(items), next_after_seq=next_after_seq),
+    )
 
 
 @router.get("/chats/{chat_id}/messages", response_model=ApiResponse[AssistantMessageListData])

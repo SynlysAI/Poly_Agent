@@ -1,16 +1,16 @@
 # Plan 10：Slash Command、会话控制面与 Agent 控制体系工作计划
 
-> **状态：待 Plan 09 完成**
+> **状态：PR-01 已完成，PR-02 待启动**
 >
 > 日期：2026-08-16
 >
-> 基线：Plan 09 完成后的 `develop` 提交（待回填）
+> 基线：Plan 09 完成后的 `develop` 提交 `21d407`
 >
 > 前置计划：[research-engine-plan-09-lui-execution-trace.md](research-engine-plan-09-lui-execution-trace.md)
 >
 > 启动条件：Plan 09 必须先完成实现、测试、E2E、文档复选框与状态记录更新；本计划不得与 Plan 09 并行实施。
 >
-> 评审结论：待 Plan 09 完成后评审。
+> 评审结论：2026-08-17 确认 Plan 09 已完成并启动 PR-01。
 
 ## 1. 背景与目标
 
@@ -413,7 +413,7 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2–3 天
 
-- [ ] 新增 `assistant_commands` schema：
+- [x] 新增 `assistant_commands` schema：
   - `CommandDescriptor`
   - `CommandCatalogData`
   - `CommandExecuteRequest`
@@ -421,31 +421,31 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - `SessionGoal`
   - `SessionTodo`
   - `CompactionSnapshot`
-- [ ] 实现命令名解析、大小写规范化、raw input 保留和未知命令错误。
-- [ ] 新增 `AssistantCommandRegistry`，注册内置命令并保留动态 provider seam。
-- [ ] 新增 `AssistantCommandService`，统一执行解析、目录、权限、handler 和事件。
-- [ ] 新增 `AssistantCommandRunRepository`，支持 Mongo 与 SQLite 双模。
-- [ ] 为 `AssistantChat` 增加控制状态字段，读取旧数据时补默认值。
-- [ ] 实现会话级 `command_event_seq` 原子递增。
-- [ ] 实现 `command.run` / `command.done` 生命周期事件与 `assistant_events` 镜像。
-- [ ] 实现 `/plan`：
+- [x] 实现命令名解析、大小写规范化、raw input 保留和未知命令错误。
+- [x] 新增 `AssistantCommandRegistry`，注册内置命令并保留动态 provider seam。
+- [x] 新增 `AssistantCommandService`，统一执行解析、目录、权限、handler 和事件。
+- [x] 新增 `AssistantCommandRunRepository`，支持 Mongo 与 SQLite 双模。
+- [x] 为 `AssistantChat` 增加控制状态字段，读取旧数据时补默认值。
+- [x] 实现会话级 `command_event_seq` 原子递增。
+- [x] 实现 `command.run` / `command.done` 生命周期事件与 `assistant_events` 镜像。
+- [x] 实现 `/plan`：
   - 裸 `/plan` 启用 Plan Mode
   - `/plan off` 退出
   - `/plan <message>` 启用后创建受计划政策约束的 run
-- [ ] 实现 `/goal`：
+- [x] 实现 `/goal`：
   - 裸命令查看当前目标
   - `/goal <objective>` 设置目标
   - `/goal clear` 清除 active goal
-- [ ] 实现 `/permission`：
+- [x] 实现 `/permission`：
   - 裸命令返回选项交互
   - `/permission read-only|workspace-write|full-access` 切换
-- [ ] 实现 `/model`：
+- [x] 实现 `/model`：
   - 裸命令返回当前模型与可用选项
   - `/model <provider_id>::<model_id>` 切换并保留控制状态
-- [ ] 实现 `/status`，汇总模型、模式、目标、Todo、权限、active run、active tool call 和 trace 摘要。
-- [ ] 在 `AssistantContextAssembler` 中加入 session state 与 plan policy。
-- [ ] 在 `AssistantToolCallService.confirm()` 中接入 permission / plan gate。
-- [ ] 补充后端单元与 API 测试。
+- [x] 实现 `/status`，汇总模型、模式、目标、Todo、权限、active run、active tool call 和 trace 摘要。
+- [x] 在 `AssistantContextAssembler` 中加入 session state 与 plan policy。
+- [x] 在 `AssistantToolCallService.confirm()` 中接入 permission / plan gate。
+- [x] 补充后端单元与 API 测试。
 
 **验收标准**
 
@@ -1011,3 +1011,5 @@ python e2e/dialogue_e2e.py
 ## 13. 状态记录
 
 - 2026-08-16：文档创建，并按项目排期调整为 Plan 10；待 Plan 09 完成后启动评审与实施。
+- 2026-08-17：确认 Plan 09 已完成，回填基线提交 `21d407`，启动 PR-01 后端命令平面实施。
+- 2026-08-17：PR-01 完成：新增命令 schema、解析器、注册表、执行服务、Mongo/SQLite 双模命令仓储、会话控制状态、命令生命周期事件镜像与命令 API；落地 `/plan`、`/goal`、`/permission`、`/model`、`/status`，接入上下文 session state / plan policy，并在工具确认阶段阻断 read-only 与 Plan Mode。PR-01 相关回归 59 项通过，assistant 后端全量回归 122 项通过。
