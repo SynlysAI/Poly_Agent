@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -29,8 +29,11 @@ import {
   createAssistantToolCall,
   deleteAssistantChat,
   downloadArtifact,
+  executeAssistantCommand,
   getApiErrorMessage,
   getAssistantChat,
+  getAssistantCommandCatalog,
+  getAssistantSessionState,
   getAssistantTrace,
   getAssistantToolCall,
   getActiveAssistantRun,
@@ -47,6 +50,7 @@ import {
   uploadAssistantToolCallInput,
 } from '../api/polyAgentApi'
 import ExecutionTraceTimeline from '../components/assistant/ExecutionTraceTimeline.vue'
+import CommandPalette from '../components/assistant/CommandPalette.vue'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import ToolMenuPicker from '../components/ToolMenuPicker.vue'
@@ -99,6 +103,7 @@ import {
   toolTimelineRows,
 } from '../utils/assistantUi.mjs'
 import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
+import { createCommandCatalogCache } from '../utils/commandCatalog.mjs'
 import {
   loadHistoryPanelPreference,
   loadKnowledgePreference,
@@ -113,12 +118,28 @@ import {
   resolveDefaultModelSelection,
   shouldKeepManualModelSelection,
 } from '../utils/llmModels'
+import {
+  filterCommandPalette,
+  getSlashContext,
+  movePaletteHighlight,
+  paletteKeyAction,
+  resolveCaretPosition,
+  resolveCommandSubmission,
+} from '../utils/slashCommands.mjs'
 
 const route = useRoute()
 const router = useRouter()
 const AlgorithmResultView = defineAsyncComponent(() => import('./vertical-prediction/AlgorithmResultView.vue'))
 const bodyRef = ref(null)
 const inputText = ref('')
+const composerInputRef = ref(null)
+const composerCaretPosition = ref(0)
+const composerComposing = ref(false)
+const commandPaletteActive = ref(false)
+const commandPaletteHighlightedIndex = ref(0)
+const commandPaletteQuery = ref('')
+const commandPaletteDismissed = ref(false)
+const commandExecuting = ref(false)
 const runStates = ref(new Map())
 const runSubscriptions = new Map()
 const traceStates = ref(new Map())
@@ -163,12 +184,68 @@ const historyQuery = ref('')
 const historyLoading = ref(false)
 const historyArchived = ref(false)
 const historyPanelVisible = ref(loadHistoryPanelPreference())
+const DEFAULT_SESSION_CONTROL_STATE = Object.freeze({
+  chat_id: '',
+  plan_mode: false,
+  permission_mode: 'workspace_write',
+  goal: null,
+  todos: [],
+  compaction: null,
+  command_event_seq: 0,
+  model: {},
+})
+const sessionControlState = ref(DEFAULT_SESSION_CONTROL_STATE)
+const commandCatalogCache = createCommandCatalogCache(async (targetChatId) =>
+  getAssistantCommandCatalog(targetChatId))
+const commandCatalogState = reactive({
+  loading: false,
+  error: '',
+  items: [],
+  sessionState: null,
+  catalogVersion: '',
+})
 const activeRunStatuses = new Set(['queued', 'running'])
 const currentRun = computed(() => runStates.value.get(chatId.value) || null)
 const activeUserRun = computed(() => [...runStates.value.values()].find((run) => activeRunStatuses.has(run.status)) || null)
 const currentRunActive = computed(() => activeRunStatuses.has(currentRun.value?.status))
 const userHasActiveRun = computed(() => Boolean(activeUserRun.value))
 const composerBusy = computed(() => userHasActiveRun.value)
+const commandCatalogItems = computed(() => commandCatalogState.items || [])
+const commandPaletteGroups = computed(() =>
+  filterCommandPalette(commandCatalogItems.value, commandPaletteQuery.value))
+const commandPaletteOptions = computed(() =>
+  commandPaletteGroups.value.flatMap((group) => group.items))
+const commandPaletteVisible = computed(() => commandPaletteActive.value && (
+  commandCatalogState.loading
+  || Boolean(commandCatalogState.error)
+  || commandPaletteGroups.value.length > 0
+))
+const composerCommandBusy = computed(() => composerBusy.value || commandExecuting.value)
+const controlStatusTags = computed(() => {
+  const state = sessionControlState.value || {}
+  return [
+    {
+      key: 'plan',
+      label: state.plan_mode ? 'Plan 开启' : 'Plan 关闭',
+      type: state.plan_mode ? 'warning' : 'info',
+    },
+    {
+      key: 'permission',
+      label: `权限：${permissionModeLabel(state.permission_mode)}`,
+      type: state.permission_mode === 'read_only' ? 'info' : (state.permission_mode === 'full_access' ? 'danger' : 'success'),
+    },
+    {
+      key: 'goal',
+      label: state.goal?.objective ? `目标：${state.goal.objective}` : '目标：未设置',
+      type: state.goal?.objective ? 'primary' : 'info',
+    },
+    {
+      key: 'model',
+      label: `模型：${sessionModelLabel(state.model)}`,
+      type: 'success',
+    },
+  ]
+})
 
 function defaultMessages() {
   return [{
@@ -403,12 +480,17 @@ watch(autoSelectTools, () => {
 })
 
 watch(inputText, () => {
+  refreshCommandPalette()
   if (autoSelectTools.value) syncAutoSelectedTools()
 })
 
 watch(agentTools, () => {
   if (autoSelectTools.value) syncAutoSelectedTools()
 })
+
+watch([agentTools, llmCatalog], () => {
+  if (chatId.value) requestCommandCatalog({ force: true })
+}, { deep: true })
 
 function cleanInitialQuery() {
   if (!route.query.prompt && !route.query.mode && !route.query.providerId && !route.query.modelId && !route.query.toolIds && !route.query.history) return
@@ -499,6 +581,112 @@ async function loadAgentTools() {
     agentToolsLoading.value = false
     syncAutoSelectedTools()
   }
+}
+
+/**
+ * 转换权限模式为用户可读标签。
+ *
+ * Args:
+ *   mode: 后端权限模式枚举值。
+ *
+ * Returns:
+ *   中文权限标签；未知值原样展示。
+ */
+function permissionModeLabel(mode) {
+  const labels = {
+    read_only: '只读',
+    workspace_write: '工作区写入',
+    full_access: '完全访问',
+  }
+  return labels[mode] || mode || '工作区写入'
+}
+
+/**
+ * 生成控制状态中的模型短标签。
+ *
+ * Args:
+ *   model: 后端持久化的模型选择对象。
+ *
+ * Returns:
+ *   provider::model 或未选择提示。
+ */
+function sessionModelLabel(model = {}) {
+  if (!model?.providerId && !model?.modelId) return '未记录'
+  return `${model.providerId || 'unknown'}::${model.modelId || 'unknown'}`
+}
+
+/**
+ * 应用后端返回的会话控制状态。
+ *
+ * Args:
+ *   state: SessionControlState 响应对象。
+ */
+function applySessionControlState(state) {
+  sessionControlState.value = { ...DEFAULT_SESSION_CONTROL_STATE, ...(state || {}) }
+  commandCatalogState.sessionState = sessionControlState.value
+  const model = sessionControlState.value.model || {}
+  if (model.providerId && model.modelId) {
+    const modelKey = `${model.providerId}::${model.modelId}`
+    if (selectableModels.value.some((item) => item.key === modelKey)) {
+      selectedModelKey.value = modelKey
+      modelSelectionOrigin.value = 'chat'
+    }
+  }
+}
+
+/**
+ * 加载或刷新命令目录，并把错误保留在缓存状态中供面板重试。
+ *
+ * Args:
+ *   options.force: 是否绕过当前缓存强制刷新。
+ *
+ * Returns:
+ *   成功时返回目录数据；失败时返回 null。
+ */
+async function loadCommandCatalog(options = {}) {
+  commandCatalogState.loading = true
+  commandCatalogState.error = ''
+  try {
+    if (!chatId.value) await ensureChat()
+    const data = await commandCatalogCache.load(chatId.value, options)
+    Object.assign(commandCatalogState, {
+      loading: commandCatalogCache.state.loading,
+      error: commandCatalogCache.state.error,
+      items: data.items,
+      sessionState: data.sessionState,
+      catalogVersion: data.catalogVersion,
+    })
+    applySessionControlState(data.sessionState)
+    return data
+  } catch (error) {
+    commandCatalogState.loading = false
+    commandCatalogState.error = commandCatalogCache.state.error || error?.message || String(error)
+    return null
+  }
+}
+
+/**
+ * 清空命令目录缓存和当前组件内的响应式镜像。
+ */
+function clearCommandCatalog() {
+  commandCatalogCache.invalidate()
+  Object.assign(commandCatalogState, {
+    loading: false,
+    error: '',
+    items: [],
+    sessionState: null,
+    catalogVersion: '',
+  })
+}
+
+/**
+ * 请求命令目录刷新，不阻塞 composer 输入。
+ *
+ * Args:
+ *   options.force: 是否强制刷新。
+ */
+function requestCommandCatalog(options = {}) {
+  void loadCommandCatalog(options)
 }
 
 function removeAgentTool(toolId) {
@@ -693,6 +881,9 @@ async function loadChat(chatKey) {
       }
     }
     selectDefaultModelForMode(data.model || {})
+    const controlState = await getAssistantSessionState(chatKey)
+    applySessionControlState(controlState)
+    await loadCommandCatalog()
     await loadChatRun(chatKey)
     await hydrateAssistantTraces()
     scrollToBottom()
@@ -719,6 +910,10 @@ async function ensureChat() {
 async function createNewChat() {
   chatId.value = ''
   messages.value = defaultMessages()
+  sessionControlState.value = DEFAULT_SESSION_CONTROL_STATE
+  clearCommandCatalog()
+  commandPaletteActive.value = false
+  commandPaletteQuery.value = ''
   resetConversationUsage()
   await router.push({ path: '/dialogue', query: { mode: chatMode.value } })
 }
@@ -763,13 +958,182 @@ async function deleteHistoryChat(item) {
   }
 }
 
+/**
+ * 转换命令状态为标签类型。
+ *
+ * Args:
+ *   status: 命令执行状态。
+ *
+ * Returns:
+ *   Element Plus 标签类型。
+ */
+function commandStatusTagType(status) {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'interaction') return 'warning'
+  return 'info'
+}
+
+/**
+ * 转换命令状态为中文标签。
+ *
+ * Args:
+ *   status: 命令执行状态。
+ *
+ * Returns:
+ *   中文状态标签。
+ */
+function commandStatusText(status) {
+  const labels = {
+    running: '执行中',
+    success: '成功',
+    interaction: '需要交互',
+    failed: '失败',
+  }
+  return labels[status] || status || '未知'
+}
+
+/**
+ * 构造不进入模型历史的命令结果消息。
+ *
+ * Args:
+ *   line: 用户提交的原始命令行。
+ *   result: 命令平面返回的执行结果。
+ *
+ * Returns:
+ *   可被消息流渲染的 command result 对象。
+ */
+function createCommandResultMessage(line, result) {
+  return {
+    role: 'assistant',
+    content: '',
+    command_result: true,
+    command_id: result.command_id || '',
+    command_name: result.name || resolveCommandSubmission(line).name || 'unknown',
+    command_line: line,
+    command_status: result.status || 'failed',
+    command_message: result.message || '命令执行失败',
+    interaction: result.interaction || null,
+    actions: [],
+    references: [],
+    suggested_questions: [],
+    tool_calls: [],
+    streaming: false,
+    error: result.status === 'failed',
+  }
+}
+
+/**
+ * 把命令返回的 run 或 tool call 接入既有执行展示。
+ *
+ * Args:
+ *   commandMessage: 当前命令结果消息。
+ *   result: 命令执行结果。
+ */
+function attachCommandExecution(commandMessage, result) {
+  if (result?.run) {
+    const parsed = resolveCommandSubmission(commandMessage.command_line)
+    messages.value.push({
+      role: 'user',
+      content: parsed.rawArgs.trim(),
+      message_id: result.run.user_message_id || '',
+      tool_calls: [],
+    })
+    messages.value.push(runPlaceholder(result.run))
+    registerRun(result.run)
+    subscribeToRun(result.run)
+    if (result.run.trace_id) subscribeToTrace(result.run.trace_id)
+  }
+  if (result?.tool_call) {
+    const normalized = normalizeToolCall({
+      ...result.tool_call,
+      schema_fields: normalizeSchemaArguments(result.tool_call),
+    })
+    commandMessage.tool_calls = [normalized]
+    startToolCallStream(commandMessage, normalized)
+  }
+  if (result?.download_url) window.open(result.download_url, '_blank', 'noopener,noreferrer')
+}
+
+/**
+ * 准备提交文本的命令判定，必要时先加载命令目录。
+ *
+ * Args:
+ *   text: 用户提交文本。
+ *
+ * Returns:
+ *   slash 命令判定结果。
+ */
+async function prepareCommandSubmission(text) {
+  const submission = resolveCommandSubmission(text, commandCatalogItems.value)
+  if (!submission.isCommand) return submission
+  if (!commandCatalogItems.value.length) {
+    const catalog = await loadCommandCatalog()
+    if (!catalog) throw new Error(commandCatalogState.error || '命令目录暂不可用')
+  }
+  return resolveCommandSubmission(text, commandCatalogItems.value)
+}
+
+/**
+ * 执行 slash 命令并渲染直接结果。
+ *
+ * Args:
+ *   line: 用户提交的原始命令行。
+ *   submission: 本地解析结果。
+ */
+async function executeSlashCommand(line, submission) {
+  commandExecuting.value = true
+  let result = null
+  try {
+    await ensureChat()
+    result = await executeAssistantCommand({ chat_id: chatId.value, line })
+  } catch (error) {
+    result = {
+      command_id: '',
+      name: submission.name,
+      status: 'failed',
+      message: getApiErrorMessage(error),
+    }
+  } finally {
+    commandExecuting.value = false
+  }
+
+  const commandMessage = createCommandResultMessage(line, result)
+  messages.value.push(commandMessage)
+  if (result.state_after) applySessionControlState(result.state_after)
+  attachCommandExecution(commandMessage, result)
+  inputText.value = ''
+  commandPaletteActive.value = false
+  commandPaletteQuery.value = ''
+  await loadChatHistory()
+  scrollToBottom()
+}
+
 async function sendMessage() {
   await sendPrompt(inputText.value)
 }
 
 async function sendPrompt(prompt) {
   const text = String(prompt || '').trim()
-  if (!text || userHasActiveRun.value) return
+  if (!text || composerCommandBusy.value) return
+  let submission = null
+  try {
+    submission = await prepareCommandSubmission(text)
+  } catch (error) {
+    if (isUnauthorizedStatus(error?.status)) throw error
+    messages.value.push(createCommandResultMessage(text, {
+      name: resolveCommandSubmission(text).name,
+      status: 'failed',
+      message: getApiErrorMessage(error),
+    }))
+    inputText.value = ''
+    commandPaletteActive.value = false
+    return
+  }
+  if (submission.isCommand) {
+    await executeSlashCommand(text, submission)
+    return
+  }
   try {
     await ensureChat()
   } catch (error) {
@@ -1235,6 +1599,7 @@ function buildRequestMessages() {
     .filter((message) => {
       const content = String(message.content || '').trim()
       if (!content) return false
+      if (message.command_result) return false
       if (!['assistant', 'user'].includes(message.role)) return false
       if (message.streaming) return false
       if (isAssistantErrorMessage(message)) return false
@@ -1587,7 +1952,160 @@ function openAssistantReference(ref) {
   ElMessage.info(`来源：${ref.target}`)
 }
 
+/**
+ * 根据当前光标位置刷新 slash 命令面板状态。
+ *
+ * Args:
+ *   caretPosition: textarea 光标位置。
+ */
+function refreshCommandPalette(caretPosition = composerCaretPosition.value) {
+  const context = getSlashContext(inputText.value, caretPosition)
+  if (context.active && commandPaletteDismissed.value && context.query.length > 1) {
+    commandPaletteActive.value = false
+    return
+  }
+  commandPaletteDismissed.value = false
+  commandPaletteActive.value = context.active
+  commandPaletteQuery.value = context.query
+  if (!context.active) {
+    commandPaletteHighlightedIndex.value = 0
+    return
+  }
+  if (!commandCatalogItems.value.length
+    && !commandCatalogState.loading
+    && !commandCatalogState.error) {
+    requestCommandCatalog()
+  }
+  const optionCount = commandPaletteOptions.value.length
+  if (commandPaletteHighlightedIndex.value >= optionCount) commandPaletteHighlightedIndex.value = 0
+}
+
+/**
+ * 同步 composer 光标并刷新 slash 面板。
+ *
+ * Args:
+ *   event: textarea 输入或键盘事件。
+ */
+function syncComposerCaret(event) {
+  const nativeSelectionStart = composerInputRef.value?.textarea?.selectionStart
+  composerCaretPosition.value = resolveCaretPosition(
+    event,
+    inputText.value.length,
+    typeof nativeSelectionStart === 'number' ? nativeSelectionStart : null,
+  )
+  refreshCommandPalette()
+}
+
+/**
+ * 处理输入法组合开始。
+ */
+function handleCompositionStart() {
+  composerComposing.value = true
+}
+
+/**
+ * 处理输入法组合结束并刷新面板过滤词。
+ *
+ * Args:
+ *   event: composition 事件。
+ */
+function handleCompositionEnd(event) {
+  composerComposing.value = false
+  syncComposerCaret(event)
+}
+
+/**
+ * 生成选项被选中后的可执行命令行。
+ *
+ * Args:
+ *   option: 面板中的命令选项。
+ *
+ * Returns:
+ *   可提交的 slash 命令行；带参数占位的 variant 只填入命令名和空格。
+ */
+function commandLineForOption(option) {
+  if (option.usage.includes('<')) return `/${option.commandName} `
+  if (option.key === option.commandName) {
+    return option.inputMode === 'none' ? `/${option.commandName}` : `/${option.commandName} `
+  }
+  return option.usage
+}
+
+/**
+ * 选中命令选项并保持输入框焦点。
+ *
+ * Args:
+ *   option: 面板中选中的命令选项。
+ */
+function selectCommandOption(option) {
+  const line = commandLineForOption(option)
+  inputText.value = line
+  composerCaretPosition.value = line.length
+  commandPaletteQuery.value = getSlashContext(line, line.length).query
+  commandPaletteHighlightedIndex.value = 0
+  commandPaletteActive.value = false
+  commandPaletteDismissed.value = true
+  nextTick(() => composerInputRef.value?.focus?.())
+}
+
+/**
+ * 根据交互选项生成下一条命令。
+ *
+ * Args:
+ *   commandName: 当前命令名。
+ *   choice: 后端返回的单选选项。
+ *
+ * Returns:
+ *   可提交的命令行。
+ */
+function commandLineForChoice(commandName, choice) {
+  const value = String(choice?.value || '').replace(/_/g, '-')
+  return `/${commandName} ${value}`.trim()
+}
+
+/**
+ * 将交互选项填入 composer。
+ *
+ * Args:
+ *   commandName: 当前命令名。
+ *   choice: 用户点击的选项。
+ */
+function fillCommandChoice(commandName, choice) {
+  inputText.value = commandLineForChoice(commandName, choice)
+  composerCaretPosition.value = inputText.value.length
+  refreshCommandPalette()
+  nextTick(() => composerInputRef.value?.focus?.())
+}
+
 function handleComposerKeydown(event) {
+  if (commandPaletteVisible.value) {
+    const action = paletteKeyAction({
+      key: event.key,
+      keyCode: event.keyCode,
+      isComposing: composerComposing.value || event.isComposing,
+    })
+    if (action.action === 'close') {
+      event.preventDefault()
+      commandPaletteActive.value = false
+      commandPaletteDismissed.value = true
+      return
+    }
+    if (action.action === 'move') {
+      event.preventDefault()
+      commandPaletteHighlightedIndex.value = movePaletteHighlight(
+        commandPaletteHighlightedIndex.value,
+        action.direction,
+        commandPaletteOptions.value.length,
+      )
+      return
+    }
+    if (action.action === 'select') {
+      event.preventDefault()
+      const option = commandPaletteOptions.value[commandPaletteHighlightedIndex.value]
+      if (option) selectCommandOption(option)
+      return
+    }
+  }
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     sendMessage()
@@ -1798,6 +2316,9 @@ watch(
     if (!nextChatId && chatId.value) {
       chatId.value = ''
       messages.value = defaultMessages()
+      sessionControlState.value = DEFAULT_SESSION_CONTROL_STATE
+      clearCommandCatalog()
+      commandPaletteActive.value = false
     }
   },
 )
@@ -1987,7 +2508,36 @@ watch(
                   </li>
                 </ol>
               </details>
-              <pre v-if="msg.streaming" class="streaming-plaintext">{{ msg.content }}</pre>
+              <div
+                v-if="msg.command_result"
+                class="command-result-card"
+                :class="`command-result-${msg.command_status}`"
+              >
+                <header>
+                  <strong>{{ msg.command_line }}</strong>
+                  <el-tag size="small" effect="plain" :type="commandStatusTagType(msg.command_status)">
+                    {{ commandStatusText(msg.command_status) }}
+                  </el-tag>
+                </header>
+                <p>{{ msg.command_message }}</p>
+                <div v-if="msg.interaction?.choices?.length" class="command-interaction">
+                  <button
+                    v-for="choice in msg.interaction.choices"
+                    :key="choice.value"
+                    type="button"
+                    :class="{ selected: choice.selected }"
+                    @click="fillCommandChoice(msg.command_name, choice)"
+                  >
+                    <strong>{{ choice.label }}</strong>
+                    <small v-if="choice.description">{{ choice.description }}</small>
+                  </button>
+                </div>
+                <footer>
+                  <span>命令 ID：{{ msg.command_id || '未返回' }}</span>
+                  <span>该结果不进入模型历史</span>
+                </footer>
+              </div>
+              <pre v-else-if="msg.streaming" class="streaming-plaintext">{{ msg.content }}</pre>
               <template v-else>
                 <template v-for="(block, blockIdx) in cachedMarkdownBlocks(msg)" :key="blockIdx">
                   <h2 v-if="block.type === 'heading'" class="markdown-heading">
@@ -2267,11 +2817,34 @@ watch(
 
     <footer class="dialogue-composer">
       <div class="suggestion-row" aria-label="推荐问题">
-        <button v-for="question in currentSuggestions" :key="question" type="button" :disabled="composerBusy" @click="sendPrompt(question)">
+        <button v-for="question in currentSuggestions" :key="question" type="button" :disabled="composerCommandBusy" @click="sendPrompt(question)">
           {{ question }}
         </button>
       </div>
       <div class="composer-box">
+        <CommandPalette
+          :visible="commandPaletteVisible"
+          :groups="commandPaletteGroups"
+          :highlighted-index="commandPaletteHighlightedIndex"
+          :loading="commandCatalogState.loading"
+          :error="commandCatalogState.error"
+          @select="selectCommandOption"
+          @highlight="commandPaletteHighlightedIndex = $event"
+          @close="commandPaletteActive = false"
+          @retry="requestCommandCatalog({ force: true })"
+        />
+        <div class="control-status-row" aria-label="会话控制状态">
+          <el-tag
+            v-for="tag in controlStatusTags"
+            :key="tag.key"
+            size="small"
+            effect="plain"
+            :type="tag.type"
+            :title="tag.label"
+          >
+            {{ tag.label }}
+          </el-tag>
+        </div>
         <div v-if="selectedKnowledgeBases.length || selectedToolSummary.length" class="selected-tags-inline">
           <span v-for="system in selectedKnowledgeBases" :key="system.system_id" class="mention-chip mention-chip--kb">
             <el-icon><Reading /></el-icon>
@@ -2290,12 +2863,19 @@ watch(
         <div class="composer-input-row">
           <el-icon class="composer-mark"><ChatLineRound /></el-icon>
           <el-input
+            ref="composerInputRef"
             v-model="inputText"
             type="textarea"
             :rows="2"
             placeholder="继续研究..."
             resize="none"
-            :disabled="composerBusy"
+            :disabled="composerCommandBusy"
+            @input="syncComposerCaret"
+            @click="syncComposerCaret"
+            @keyup="syncComposerCaret"
+            @select="syncComposerCaret"
+            @compositionstart="handleCompositionStart"
+            @compositionend="handleCompositionEnd"
             @keydown="handleComposerKeydown"
           />
         </div>
@@ -2440,8 +3020,8 @@ watch(
               type="primary"
               circle
               :icon="Promotion"
-              :disabled="!inputText.trim() || composerBusy"
-              :loading="composerBusy"
+              :disabled="!inputText.trim() || composerCommandBusy"
+              :loading="composerCommandBusy"
               aria-label="发送"
               @click="sendMessage"
             />
@@ -2906,6 +3486,80 @@ h1 {
   line-height: 1.7;
 }
 
+.command-result-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(35, 92, 178, 0.18);
+  border-radius: var(--app-radius-md);
+  background: rgba(244, 249, 255, 0.82);
+}
+
+.command-result-card.command-result-failed {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(255, 244, 244, 0.9);
+}
+
+.command-result-card.command-result-interaction {
+  border-color: rgba(217, 119, 6, 0.24);
+  background: rgba(255, 251, 235, 0.94);
+}
+
+.command-result-card header,
+.command-result-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.command-result-card header strong {
+  color: var(--app-primary-active);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.command-result-card p {
+  margin: 0;
+  color: var(--app-ink-body);
+  font-size: 13px;
+}
+
+.command-result-card footer {
+  color: var(--app-ink-muted);
+  font-size: 11px;
+}
+
+.command-interaction {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.command-interaction button {
+  display: grid;
+  gap: 3px;
+  padding: 8px 11px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+  color: var(--app-ink-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-interaction button:hover,
+.command-interaction button.selected {
+  border-color: var(--app-primary-active);
+  background: var(--app-primary-light);
+}
+
+.command-interaction small {
+  color: var(--app-ink-muted);
+}
+
 .streaming-plaintext {
   margin: 0;
   white-space: pre-wrap;
@@ -3037,6 +3691,7 @@ h1 {
 }
 
 .composer-box {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
@@ -3045,6 +3700,14 @@ h1 {
   border-radius: var(--app-radius-lg);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 12px 28px rgba(22, 59, 110, 0.08);
+}
+
+.control-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-height: 24px;
 }
 
 .composer-input-row {

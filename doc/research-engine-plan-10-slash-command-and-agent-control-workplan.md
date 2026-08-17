@@ -1,6 +1,6 @@
 # Plan 10：Slash Command、会话控制面与 Agent 控制体系工作计划
 
-> **状态：PR-01 已完成，PR-02 待启动**
+> **状态：PR-02 已完成，PR-03 待启动**
 >
 > 日期：2026-08-16
 >
@@ -462,7 +462,7 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2–3 天
 
-- [ ] 新增 `frontend/src/utils/slashCommands.mjs` 纯函数模块：
+- [x] 新增 `frontend/src/utils/slashCommands.mjs` 纯函数模块：
   - 行首 slash 检测
   - 当前 token 提取
   - URL / 路径 carve-out
@@ -470,12 +470,12 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - category 排序
   - variant 展开与合并
   - keyboard highlight 状态计算
-- [ ] 新增 `slashCommands.test.mjs` 覆盖纯函数。
-- [ ] 新增 `CommandPalette.vue`，挂载在 composer 输入框上方。
-- [ ] 支持 `/` 打开、输入实时过滤、空结果自动关闭。
-- [ ] 支持鼠标点击、`↑` / `↓` 循环高亮、`Enter` 选择、`Esc` 关闭。
-- [ ] 支持 IME composition 期间不触发 Enter 选择。
-- [ ] 支持展示：
+- [x] 新增 `slashCommands.test.mjs` 覆盖纯函数。
+- [x] 新增 `CommandPalette.vue`，挂载在 composer 输入框上方。
+- [x] 支持 `/` 打开、输入实时过滤、空结果自动关闭。
+- [x] 支持鼠标点击、`↑` / `↓` 循环高亮、`Enter` 选择、`Esc` 关闭。
+- [x] 支持 IME composition 期间不触发 Enter 选择。
+- [x] 支持展示：
   - 命令名
   - 参数提示
   - 描述
@@ -484,14 +484,14 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - 可用状态
   - 不可用原因
   - 风险标识
-- [ ] 支持 `/plan` 与 `/plan off` variant 提示。
-- [ ] 命令目录加载、缓存、失败重试和 catalog version 失效刷新。
-- [ ] `DialogueView` 接入 `GET /assistant/commands` 与 `POST /assistant/commands/execute`。
-- [ ] 普通文本提交前先识别 slash；未知命令显示直接错误，不调用 run API。
-- [ ] 渲染命令结果行，支持成功、失败、交互、run 创建和 tool call 创建状态。
-- [ ] composer 顶部增加 Plan / Permission / Goal / Model 状态标签。
-- [ ] 会话加载时恢复控制状态并同步命令目录。
-- [ ] 补充前端单测与构建验证。
+- [x] 支持 `/plan` 与 `/plan off` variant 提示。
+- [x] 命令目录加载、缓存、失败重试和 catalog version 失效刷新。
+- [x] `DialogueView` 接入 `GET /assistant/commands` 与 `POST /assistant/commands/execute`。
+- [x] 普通文本提交前先识别 slash；未知命令显示直接错误，不调用 run API。
+- [x] 渲染命令结果行，支持成功、失败、交互、run 创建和 tool call 创建状态。
+- [x] composer 顶部增加 Plan / Permission / Goal / Model 状态标签。
+- [x] 会话加载时恢复控制状态并同步命令目录。
+- [x] 补充前端单测与构建验证。
 
 **验收标准**
 
@@ -1013,3 +1013,5 @@ python e2e/dialogue_e2e.py
 - 2026-08-16：文档创建，并按项目排期调整为 Plan 10；待 Plan 09 完成后启动评审与实施。
 - 2026-08-17：确认 Plan 09 已完成，回填基线提交 `21d407`，启动 PR-01 后端命令平面实施。
 - 2026-08-17：PR-01 完成：新增命令 schema、解析器、注册表、执行服务、Mongo/SQLite 双模命令仓储、会话控制状态、命令生命周期事件镜像与命令 API；落地 `/plan`、`/goal`、`/permission`、`/model`、`/status`，接入上下文 session state / plan policy，并在工具确认阶段阻断 read-only 与 Plan Mode。PR-01 相关回归 59 项通过，assistant 后端全量回归 122 项通过。
+
+- 2026-08-17：PR-02 完成：新增 slash 纯函数、命令目录缓存与 `CommandPalette`，接入命令目录 / 执行 API、IME 与键盘交互、URL / 路径 carve-out、未知命令直接失败闭环、命令结果行、Plan / Permission / Goal / Model 控制状态标签和会话恢复；命令结果不进入模型请求历史。后端指定回归 36 项通过，前端 assistant events / tool calls / slash commands / command catalog 测试与 `npm run build` 通过；真实浏览器冒烟覆盖 `/` 面板、`/pl` 过滤、URL 不触发、键盘选择、`/plan off`、未知命令且 0 次 run 请求。

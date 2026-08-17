@@ -1191,6 +1191,49 @@ export function getAssistantChat(chatId) {
   return apiClient.get(`/assistant/chats/${encodeURIComponent(chatId)}`).then(unwrapResponse)
 }
 
+/**
+ * 获取当前会话的 Slash Command 目录。
+ *
+ * Args:
+ *   chatId: 会话 ID。
+ *
+ * Returns:
+ *   命令 descriptor、会话控制状态与目录版本。
+ */
+export function getAssistantCommandCatalog(chatId) {
+  return apiClient
+    .get('/assistant/commands', { params: { chat_id: chatId } })
+    .then(unwrapResponse)
+}
+
+/**
+ * 执行一行 Slash Command。
+ *
+ * Args:
+ *   payload: 包含 chat_id、line 与交互 payload 的请求对象。
+ *
+ * Returns:
+ *   不进入模型历史的直接命令执行结果。
+ */
+export function executeAssistantCommand(payload) {
+  return apiClient.post('/assistant/commands/execute', payload).then(unwrapResponse)
+}
+
+/**
+ * 读取会话控制状态。
+ *
+ * Args:
+ *   chatId: 会话 ID。
+ *
+ * Returns:
+ *   Plan、Permission、Goal、Todo、Compaction 与模型控制状态。
+ */
+export function getAssistantSessionState(chatId) {
+  return apiClient
+    .get(`/assistant/chats/${encodeURIComponent(chatId)}/session-state`)
+    .then(unwrapResponse)
+}
+
 export function updateAssistantChat(chatId, payload) {
   return apiClient.patch(`/assistant/chats/${encodeURIComponent(chatId)}`, payload).then(unwrapResponse)
 }
