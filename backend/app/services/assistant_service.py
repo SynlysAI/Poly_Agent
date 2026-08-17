@@ -1745,10 +1745,10 @@ class AssistantService:
             if tool is None:
                 logger.warning("assistant tool proposal references unknown function: %s", function_name)
                 continue
+            # 版本模板只是管理端示例；当前对话生成的 provider 参数始终优先，
+            # 避免样例输入伪装成用户分子。
             provider_arguments = normalize_provider_arguments(
-                tool.model_proposal
-                if tool.model_proposal
-                else getattr(function, "arguments", None)
+                getattr(function, "arguments", None)
             )
             proposal_usage = message_metadata.get("usage")
             try:

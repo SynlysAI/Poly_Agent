@@ -144,6 +144,19 @@ class AgentToolsApiTest(ComputationTestCase):
         )
         self.assertEqual(demo["model_proposal"], {"smiles": "CCC"})
 
+    def test_agent_tool_does_not_derive_model_proposal_from_sample_input(self) -> None:
+        """工具目录只暴露显式参数模板，不能把 sample_input 当作模板。"""
+        AlgorithmVersionRepository.update_fields(
+            "ver-v1",
+            {"contract": {"sample_input": {"smiles": "CCO"}}},
+        )
+        response = self.client.get(self.base_url)
+        demo = next(
+            item for item in response.json()["data"]["items"]
+            if item["algorithm_id"] == "vertical-demo"
+        )
+        self.assertIsNone(demo["model_proposal"])
+
     def test_recent_success_rate_is_derived_from_terminal_algorithm_runs(self) -> None:
         """工具目录应只统计最近的 completed/failed/cancelled 运行。"""
         now = utc_now()

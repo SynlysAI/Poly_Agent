@@ -155,11 +155,7 @@ function openInterfaceConfig(version) {
 
 function openProposalEditor(version) {
   proposalVersion.value = version
-  proposalText.value = JSON.stringify(
-    version.model_proposal || version.contract?.sample_input || {},
-    null,
-    2,
-  )
+  proposalText.value = JSON.stringify(version.model_proposal || {}, null, 2)
   proposalError.value = ''
   proposalVisible.value = true
 }
@@ -174,7 +170,7 @@ async function saveProposal() {
     return
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    proposalError.value = '模型提案必须是 JSON object'
+    proposalError.value = '参数模板必须是 JSON object'
     return
   }
   if (!proposalVersion.value) return
@@ -185,7 +181,7 @@ async function saveProposal() {
       proposalVersion.value.version_id,
       { model_proposal: parsed },
     )
-    ElMessage.success('模型提案已更新')
+    ElMessage.success('参数模板已更新')
     proposalVisible.value = false
     await loadVersions()
     emit('changed', {
@@ -272,7 +268,7 @@ onMounted(loadAlgorithms)
 
     <el-alert v-if="selectedAlgorithm" :closable="false" type="info" show-icon>
       <template #title>
-        当前 active：{{ selectedAlgorithm.active_version_id || '无' }} · 注册表状态：{{ statusLabel(selectedAlgorithm.status) }} · 提案：{{ activeVersionRecord?.model_proposal ? '已配置' : '未配置' }}
+        当前 active：{{ selectedAlgorithm.active_version_id || '无' }} · 注册表状态：{{ statusLabel(selectedAlgorithm.status) }} · 参数模板：{{ activeVersionRecord?.model_proposal ? '已配置' : '未配置' }}
       </template>
     </el-alert>
     <el-alert v-if="selectedAlgorithm && !canManage" :closable="false" type="warning" show-icon title="当前账号仅可访问和调用该模型，不能修改版本或发布状态。" />
@@ -352,7 +348,7 @@ onMounted(loadAlgorithms)
             <el-button v-if="['active','deployed_staging'].includes(row.status)" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, freezeAlgorithmVersion, `冻结版本 ${row.version} 后，新任务将不能选择它。`)">冻结</el-button>
             <el-button v-if="row.status !== 'decommissioned'" type="danger" plain size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, decommissionAlgorithmVersion, `下线版本 ${row.version}？历史记录仍会保留。`)">下线</el-button>
             <el-button v-else type="danger" size="small" :loading="actionVersionId === row.version_id" @click="runAction(row, deleteAlgorithmVersion, `确认删除已下线版本 ${row.version}？上传包和版本记录会删除，历史运行记录仍会保留。`)">删除</el-button>
-            <el-button size="small" :icon="Edit" @click="openProposalEditor(row)">提案</el-button>
+            <el-button size="small" :icon="Edit" @click="openProposalEditor(row)">模板</el-button>
           </template>
           <el-button size="small" :loading="actionVersionId === row.version_id" @click="openLogs(row)">日志</el-button>
         </template>
@@ -392,7 +388,7 @@ onMounted(loadAlgorithms)
     </el-drawer>
     <el-drawer
       v-model="proposalVisible"
-      title="编辑模型提案"
+      title="编辑参数模板"
       size="min(720px, 94vw)"
       :close-on-click-modal="!proposalSaving"
     >
@@ -401,7 +397,7 @@ onMounted(loadAlgorithms)
           type="info"
           :closable="false"
           show-icon
-          title="模型提案会作为 LUI 算法工具调用的固定参数。保存前请确认字段与当前版本输入契约一致。"
+          title="参数模板仅作为管理端示例，不会覆盖 LUI 从当前对话生成的参数。保存前请确认字段与输入契约一致。"
         />
         <div v-if="proposalVersion" class="proposal-version-line">
           当前版本：<code>{{ proposalVersion.version }} · {{ proposalVersion.version_id }}</code>

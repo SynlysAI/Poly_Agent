@@ -68,7 +68,7 @@ class RemoteInterfaceService:
             output_assets=[item.model_dump(mode="python") for item in payload.output_assets],
             interface_config=payload.interface_config,
             sample_input=payload.sample_input,
-            model_proposal=payload.model_proposal or payload.sample_input,
+            model_proposal=payload.model_proposal,
             description=payload.description,
             visibility=payload.visibility,
             created_by=actor_user_id,
@@ -121,7 +121,7 @@ class RemoteInterfaceService:
             output_assets=[item.model_dump(mode="python") for item in payload.output_assets],
             interface_config=payload.interface_config,
             sample_input=payload.sample_input,
-            model_proposal=payload.model_proposal or payload.sample_input,
+            model_proposal=payload.model_proposal,
             description=payload.description if payload.description is not None else registry.get("description"),
             visibility=payload.visibility or registry.get("visibility") or "private",
             created_by=actor_user_id,
@@ -170,7 +170,7 @@ class RemoteInterfaceService:
         if interface_config is None:
             raise HTTPException(status_code=409, detail="接口版本缺少接口配置")
         sample_input = requested.get("sample_input", version.contract.get("sample_input", {}))
-        model_proposal = requested.get("model_proposal", version.model_proposal or sample_input)
+        model_proposal = requested.get("model_proposal", version.model_proposal)
         description = requested["description"] if "description" in requested else version.contract.get("description")
         visibility = requested.get("visibility", version.visibility)
 
@@ -187,6 +187,12 @@ class RemoteInterfaceService:
             *list(version.runtime_logs or [])[-49:],
             {"event": "interface_config_updated", "updated_at": now},
         ]
+        contract = {
+            "sample_input": sample_input or {},
+            "description": description,
+        }
+        if model_proposal is not None:
+            contract["model_proposal"] = model_proposal
         AlgorithmVersionRepository.update_fields(
             version_id,
             {
@@ -195,12 +201,8 @@ class RemoteInterfaceService:
                 "input_assets": [item.model_dump(mode="python") for item in input_assets],
                 "output_assets": [item.model_dump(mode="python") for item in output_assets],
                 "interface_config": interface_config.model_dump(mode="python"),
-                "contract": {
-                    "sample_input": sample_input or {},
-                    "model_proposal": model_proposal or sample_input or {},
-                    "description": description,
-                },
-                "model_proposal": model_proposal or sample_input or {},
+                "contract": contract,
+                "model_proposal": model_proposal,
                 "visibility": visibility,
                 "status": "validated",
                 "deployment": {},
@@ -650,6 +652,13 @@ class RemoteInterfaceService:
         created_by_name: str | None,
         now,
     ) -> dict[str, Any]:
+        """构建远程接口版本文档，仅显式提案会写入参数模板。"""
+        contract = {
+            "sample_input": sample_input,
+            "description": description,
+        }
+        if model_proposal is not None:
+            contract["model_proposal"] = model_proposal
         return {
             "version_id": version_id,
             "package_id": None,
@@ -677,12 +686,8 @@ class RemoteInterfaceService:
             "interface_config": interface_config.model_dump(mode="python"),
             "deployment": {"backend": "remote_http", "status": "validated"},
             "runtime_logs": [],
-            "contract": {
-                "sample_input": sample_input,
-                "model_proposal": model_proposal or sample_input,
-                "description": description,
-            },
-            "model_proposal": model_proposal or sample_input,
+            "contract": contract,
+            "model_proposal": model_proposal,
             "visibility": visibility,
             "developer_attribution": None,
             "mentor_team": None,
@@ -731,7 +736,7 @@ class RemoteInterfaceService:
             "resource_assets": [],
             "result_envelope": None,
             "call_method": payload.interface_config.protocol.upper(),
-            "model_proposal": payload.model_proposal or payload.sample_input,
+            "model_proposal": payload.model_proposal,
             "trigger_modes": payload.trigger_modes,
             "runtime_dependency": "remote_interface",
             "version": payload.version,

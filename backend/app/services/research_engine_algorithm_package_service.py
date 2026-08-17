@@ -209,8 +209,6 @@ class AlgorithmPackageService:
                 contract["sample_input"] = sample_input
             if model_proposal is not None:
                 contract["model_proposal"] = model_proposal
-            elif sample_input is not None:
-                contract["model_proposal"] = sample_input
             self._validate_contract(contract)
             with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as target_zip:
                 for member in source_zip.infolist():
@@ -486,7 +484,7 @@ class AlgorithmPackageService:
                 "environment_digest": None,
                 "runtime_digest": None,
                 "status": "validated",
-                "model_proposal": contract.get("model_proposal") or sample_input or {},
+                "model_proposal": contract.get("model_proposal"),
                 "runtime": contract.get("runtime") or {},
                 "input_schema": contract.get("input_schema") or {},
                 "output_schema": contract.get("output_schema") or {},
@@ -763,7 +761,7 @@ class AlgorithmPackageService:
             "trigger_modes": contract.get("trigger_modes") or ["human_workflow"],
             "runtime_dependency": "uploaded_python_package",
             "version": contract.get("version", version.version),
-            "model_proposal": version.model_proposal or contract.get("model_proposal") or contract.get("sample_input") or {},
+            "model_proposal": version.model_proposal or contract.get("model_proposal"),
             "validation_metric": {},
             "owner": (registry_entry or {}).get("owner") or version.created_by,
             "status": "active",
@@ -1511,7 +1509,7 @@ class AlgorithmPackageService:
             "resource_assets": [item.model_dump(mode="python") for item in payload.resource_assets],
             "result_envelope": payload.result_envelope,
             "sample_input_path": "tests/sample_input.json",
-            "model_proposal": payload.model_proposal or payload.sample_input,
+            "model_proposal": payload.model_proposal,
             "description": payload.description,
             "developer": payload.developer,
             "developer_organization": payload.developer_organization,

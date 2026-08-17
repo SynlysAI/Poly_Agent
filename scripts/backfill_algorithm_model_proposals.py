@@ -1,4 +1,4 @@
-"""Backfill missing version-level model proposals from sample inputs."""
+"""Backfill version-level model proposals only when they are explicitly configured."""
 
 from __future__ import annotations
 
@@ -66,8 +66,10 @@ def main() -> None:
             current_proposal = version_doc.get("model_proposal")
             if isinstance(current_proposal, dict) and current_proposal:
                 continue
-            missing += 1
             proposal, source = resolve_model_proposal(version_doc)
+            if proposal is None:
+                continue
+            missing += 1
             if len(samples) < 5:
                 samples.append(f"{algorithm_id}/{version_id}: source={source} proposal={str(proposal)[:120]}")
             if apply_changes:

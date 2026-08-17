@@ -136,6 +136,10 @@ class AssistantToolCallApiTest(ComputationTestCase):
         )
         self.assertEqual(patched.status_code, 200, patched.text)
         self.assertEqual(patched.json()["data"]["phase"], "awaiting_confirmation")
+        self.assertEqual(
+            patched.json()["data"]["source_context"]["argument_sources"],
+            {"smiles": "user_edit"},
+        )
 
         with patch(
             "app.services.assistant_tool_service.ResearchEngineService.create_algorithm_run",
@@ -161,6 +165,29 @@ class AssistantToolCallApiTest(ComputationTestCase):
             page_size=100,
         )
         self.assertIn("tool.confirmed", [event["type"] for event in unified_events])
+
+    def test_schema_defaults_are_applied_and_traced(self) -> None:
+        """输入契约默认值可补充参数，并记录 schema_default 来源。"""
+        schema = {
+            "fields": {"smiles": "string", "temperature": "number"},
+            "required": ["smiles"],
+            "field_defaults": {"temperature": 298},
+        }
+        AlgorithmRegistryRepository.update_fields("vertical-tool", {"input_schema": schema})
+        AlgorithmVersionRepository.update_fields("vertical-tool-v1", {"input_schema": schema})
+
+        response = self.client.post(
+            "/api/v1/assistant/tool-calls",
+            json={"tool_id": "algorithm:vertical-tool", "arguments": {"smiles": "CCO"}},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        call = response.json()["data"]
+        self.assertEqual(call["arguments"], {"smiles": "CCO", "temperature": 298})
+        self.assertEqual(
+            call["source_context"]["argument_sources"],
+            {"smiles": "provider", "temperature": "schema_default"},
+        )
 
     def test_invalid_arguments_use_contract_error_code(self) -> None:
         response = self.client.post(

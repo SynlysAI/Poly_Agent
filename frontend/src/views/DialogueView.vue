@@ -588,6 +588,18 @@ function toolProposalModelLabel(call) {
   return route.model_id ? modelMetaLabel(route) : ''
 }
 
+function toolArgumentSourceText(call) {
+  const labels = {
+    provider: '模型',
+    schema_default: '契约默认',
+    user_edit: '用户修正',
+  }
+  const sources = call?.source_context?.argument_sources || {}
+  return Object.entries(sources)
+    .map(([field, source]) => `${field}: ${labels[source] || source}`)
+    .join('；')
+}
+
 function toolArgumentDiffResult(call) {
   return toolArgumentDiff(call)
 }
@@ -2076,6 +2088,7 @@ watch(
                     <span><em>Schema digest</em>{{ call.schema_digest || '未记录' }}</span>
                     <span><em>Finish reason</em>{{ call.finish_reason || '未记录' }}</span>
                     <span><em>Proposal usage</em>{{ formatUsage(call.proposal_usage || {}) || '未记录' }}</span>
+                    <span><em>参数来源</em>{{ toolArgumentSourceText(call) || '未记录' }}</span>
                   </div>
                   <div v-if="toolArgumentDiffResult(call).ok && toolArgumentDiffResult(call).changes.length" class="tool-arg-diff">
                     <strong>模型提议值与用户确认值差异</strong>

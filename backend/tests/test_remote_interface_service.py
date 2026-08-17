@@ -146,6 +146,19 @@ class RemoteInterfaceApiTest(ComputationTestCase):
         self.assertEqual(data["version"]["input_assets"][0]["key"], "spectrum")
         self.assertEqual(data["algorithm"]["output_assets"][0]["key"], "report")
 
+    def test_interface_sample_input_does_not_become_model_proposal(self) -> None:
+        """远程接口的 sample_input 不能自动派生为 LUI 参数模板。"""
+        created = self.client.post(
+            f"{self.base_url}/algorithm-interfaces",
+            json=interface_payload(),
+        )
+
+        self.assertEqual(created.status_code, 200, created.text)
+        data = created.json()["data"]
+        self.assertIsNone(data["version"]["model_proposal"])
+        self.assertEqual(data["version"]["contract"]["sample_input"], {"smiles": "CCO"})
+        self.assertIsNone(data["algorithm"]["model_proposal"])
+
     def test_multipart_sample_test_accepts_declared_file_and_returns_previews(self) -> None:
         payload = interface_payload(
             input_assets=[{

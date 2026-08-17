@@ -150,6 +150,28 @@ class AssistantToolCallService:
         return coerced
 
     @staticmethod
+    def _initial_argument_sources(
+        provider_arguments: dict[str, Any],
+        field_defaults: dict[str, Any],
+    ) -> dict[str, str]:
+        """记录初始参数来源，区分 provider 提案与输入契约默认值。
+
+        Args:
+            provider_arguments: provider 或受信任编排器提交的参数。
+            field_defaults: 输入契约声明的字段默认值。
+
+        Returns:
+            字段到 provider / schema_default 来源的映射。
+        """
+        sources = {field: "provider" for field in provider_arguments}
+        sources.update({
+            field: "schema_default"
+            for field in field_defaults
+            if field not in provider_arguments
+        })
+        return sources
+
+    @staticmethod
     def _validate_asset_refs(tool: AgentTool, refs: dict[str, Any]) -> None:
         declared_keys = {spec.key for spec in tool.input_assets}
         unknown = sorted(set(refs) - declared_keys)
@@ -396,8 +418,10 @@ class AssistantToolCallService:
         algorithm_id = payload.tool_id.removeprefix("algorithm:")
         cls._ensure_chat_link(payload.chat_id, payload.message_id, user_id)
         tool = cls._tool(algorithm_id, current_user)
-        arguments = dict(tool.input_schema.field_defaults or {})
+        field_defaults = dict(tool.input_schema.field_defaults or {})
+        arguments = dict(field_defaults)
         arguments.update(payload.arguments)
+        argument_sources = cls._initial_argument_sources(payload.arguments, field_defaults)
         arguments = cls._coerce_arguments(tool, arguments)
         missing_fields, _ = cls._validate_arguments(tool, arguments)
         cls._validate_asset_refs(tool, payload.input_asset_refs)
@@ -408,6 +432,7 @@ class AssistantToolCallService:
         now = utc_now()
         source_context = dict(payload.source_context or {})
         trace_id = str(payload.trace_id or source_context.get("trace_id") or payload.assistant_run_id or "")
+        source_context["argument_sources"] = _redact(argument_sources)
         source_context["trace_id"] = trace_id
         source_context.setdefault("original_user_message_id", payload.message_id)
         source_context.setdefault("chat_id", payload.chat_id)
@@ -555,6 +580,10 @@ class AssistantToolCallService:
         tool = cls._tool(document["algorithm_id"], current_user)
         arguments = dict(document.get("arguments") or {})
         arguments.update(payload.arguments)
+        source_context = dict(document.get("source_context") or {})
+        argument_sources = dict(source_context.get("argument_sources") or {})
+        argument_sources.update({field: "user_edit" for field in payload.arguments})
+        source_context["argument_sources"] = _redact(argument_sources)
         refs = dict(document.get("input_asset_refs") or {})
         refs.update(payload.input_asset_refs)
         missing_fields, _ = cls._validate_arguments(tool, arguments)
@@ -566,6 +595,7 @@ class AssistantToolCallService:
             phase,
             arguments=_redact(arguments),
             input_asset_refs=_redact(refs),
+            source_context=_redact(source_context),
             missing_fields=missing_fields,
             required_assets=[item.model_dump(mode="python") for item in missing_assets],
         )
@@ -664,6 +694,10 @@ class AssistantToolCallService:
         arguments = dict(document.get("arguments") or {})
         if payload.arguments is not None:
             arguments.update(payload.arguments)
+        source_context = dict(document.get("source_context") or {})
+        argument_sources = dict(source_context.get("argument_sources") or {})
+        argument_sources.update({field: "user_edit" for field in payload.arguments or {}})
+        source_context["argument_sources"] = _redact(argument_sources)
         refs = dict(document.get("input_asset_refs") or {})
         if payload.input_asset_refs is not None:
             refs.update(payload.input_asset_refs)
@@ -688,6 +722,7 @@ class AssistantToolCallService:
             "run_status": "queued",
             "arguments": _redact(arguments),
             "input_asset_refs": _redact(refs),
+            "source_context": _redact(source_context),
             "algorithm_version_id": tool.active_version_id,
             "algorithm_version": tool.version,
             "started_at": None,

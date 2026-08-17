@@ -534,11 +534,11 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         )
         self.assertEqual(calls[0]["phase"], "awaiting_confirmation")
 
-    def test_stream_uses_version_model_proposal_as_fixed_tool_arguments(self) -> None:
-        """active 版本存在 model_proposal 时，LUI 忽略模型现场生成的参数。"""
+    def test_stream_prefers_provider_arguments_over_version_model_proposal(self) -> None:
+        """active 版本模型模板不能覆盖 provider 根据用户上下文生成的参数。"""
         AlgorithmVersionRepository.update_fields(
             "vertical-tool-v1",
-            {"model_proposal": {"smiles": "CCC", "temperature": 320}},
+            {"model_proposal": {"smiles": "C=C(F)F", "temperature": 320}},
         )
         chat_id, message_id = self._chat_and_message()
         with patch(
@@ -547,7 +547,7 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
                 tool_calls=[
                     self._tool_call(
                         self._function_name("algorithm:vertical-tool"),
-                        '{"smiles": "WRONG", "temperature": 999}',
+                        '{"smiles": "O=C1OC(=O)c2cc3C(=O)OC(=O)c3cc12", "temperature": 298}',
                     ),
                 ],
             ),
@@ -571,10 +571,136 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         self.assertEqual(final["type"], "final")
         calls = final["data"]["tool_calls"]
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["arguments"], {"smiles": "CCC", "temperature": 320})
+        self.assertEqual(
+            calls[0]["arguments"],
+            {"smiles": "O=C1OC(=O)c2cc3C(=O)OC(=O)c3cc12", "temperature": 298},
+        )
         persisted = AssistantToolCallRepository.find_one({"call_id": calls[0]["call_id"]})
-        self.assertEqual(persisted["arguments"], {"smiles": "CCC", "temperature": 320})
-        self.assertEqual(persisted["raw_arguments"], '{"smiles": "CCC", "temperature": 320}')
+        self.assertEqual(
+            persisted["arguments"],
+            {"smiles": "O=C1OC(=O)c2cc3C(=O)OC(=O)c3cc12", "temperature": 298},
+        )
+        self.assertEqual(
+            persisted["raw_arguments"],
+            '{"smiles": "O=C1OC(=O)c2cc3C(=O)OC(=O)c3cc12", "temperature": 298}',
+        )
+        self.assertEqual(
+            persisted["source_context"]["argument_sources"],
+            {"smiles": "provider", "temperature": "provider"},
+        )
+
+    def test_stream_keeps_wrong_provider_arguments_without_version_template_fallback(self) -> None:
+        """即使是明显异常的 provider 值，也不能被版本示例静默覆盖。"""
+        AlgorithmVersionRepository.update_fields(
+            "vertical-tool-v1",
+            {"model_proposal": {"smiles": "C=C(F)F", "temperature": 320}},
+        )
+        chat_id, message_id = self._chat_and_message()
+        with patch(
+            "app.core.llm_client.chat_message",
+            return_value=self._fake_message(
+                tool_calls=[
+                    self._tool_call(
+                        self._function_name("algorithm:vertical-tool"),
+                        '{"smiles": "WRONG"}',
+                    ),
+                ],
+            ),
+        ), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测这个分子的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        calls = events[-1]["data"]["tool_calls"]
+        self.assertEqual(calls[0]["arguments"], {"smiles": "WRONG"})
+
+    def test_stream_requires_missing_input_without_version_template_fallback(self) -> None:
+        """provider 缺少必填字段时进入待补充输入，不能回退 sample_input。"""
+        AlgorithmVersionRepository.update_fields(
+            "vertical-tool-v1",
+            {"model_proposal": {"smiles": "C=C(F)F", "temperature": 320}},
+        )
+        chat_id, message_id = self._chat_and_message()
+        with patch(
+            "app.core.llm_client.chat_message",
+            return_value=self._fake_message(
+                tool_calls=[
+                    self._tool_call(
+                        self._function_name("algorithm:vertical-tool"),
+                        '{"temperature": 298}',
+                    ),
+                ],
+            ),
+        ), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测这个分子的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        calls = events[-1]["data"]["tool_calls"]
+        self.assertEqual(calls[0]["phase"], "awaiting_input")
+        self.assertEqual(calls[0]["missing_fields"], ["smiles"])
+        self.assertEqual(calls[0]["arguments"], {"temperature": 298})
+
+    def test_stream_keeps_malformed_arguments_without_version_template_fallback(self) -> None:
+        """provider JSON 解析失败时保留原始错误，不能用版本模板补值。"""
+        AlgorithmVersionRepository.update_fields(
+            "vertical-tool-v1",
+            {"model_proposal": {"smiles": "C=C(F)F", "temperature": 320}},
+        )
+        chat_id, message_id = self._chat_and_message()
+        with patch(
+            "app.core.llm_client.chat_message",
+            return_value=self._fake_message(
+                tool_calls=[
+                    self._tool_call(
+                        self._function_name("algorithm:vertical-tool"),
+                        '{"smiles": "CCO", "temperature":',
+                    ),
+                ],
+            ),
+        ), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测 CCO 的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "selected_tool_ids": ["algorithm:vertical-tool"],
+                    },
+                }
+            )
+
+        calls = events[-1]["data"]["tool_calls"]
+        self.assertEqual(calls[0]["phase"], "awaiting_input")
+        self.assertEqual(calls[0]["missing_fields"], ["smiles"])
+        self.assertEqual(calls[0]["arguments"], {})
+        self.assertEqual(calls[0]["raw_arguments"], '{"smiles": "CCO", "temperature":')
 
     def test_stream_surfaces_tool_proposal_validation_error(self) -> None:
         chat_id, message_id = self._chat_and_message()

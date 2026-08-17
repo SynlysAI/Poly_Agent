@@ -1048,6 +1048,18 @@ sample_input:
         )
         self.assertEqual(mismatch_resp.status_code, 409, mismatch_resp.text)
 
+    def test_package_sample_input_does_not_become_model_proposal(self) -> None:
+        """sample_input 仅保留测试样例语义，不能自动生成模型参数模板。"""
+        self._login_as("sample-owner")
+        version_id = self._pack_activate_simple_algorithm("sample_input_demo")
+
+        version = AlgorithmVersionRepository.find_one({"version_id": version_id})
+        registry = AlgorithmRegistryRepository.find_one({"algorithm_id": "sample_input_demo"})
+
+        self.assertIsNone(version.get("model_proposal"))
+        self.assertEqual(version.get("contract", {}).get("sample_input_path"), "tests/sample_input.json")
+        self.assertIsNone(registry.get("model_proposal"))
+
     def test_pack_algorithm_package_persists_developer_attribution(self) -> None:
         """网页打包入口会把开发者来源写入 AlgorithmVersion。"""
         handler_source = b"""

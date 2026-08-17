@@ -215,6 +215,11 @@ class AgentToolService:
 
         schema_source = version or registry
         owner = registry.get("owner") or (version or {}).get("created_by")
+        # 参数模板只是管理端元数据；样例输入保留测试语义，不能变成 LUI 默认参数。
+        model_proposal = (
+            (version or {}).get("model_proposal")
+            or registry.get("model_proposal")
+        )
         tool = AgentToolRegistryItem(
             tool_id=f"algorithm:{algorithm_id}",
             algorithm_id=algorithm_id,
@@ -230,11 +235,7 @@ class AgentToolService:
             version=(version or {}).get("version") or registry.get("version"),
             input_schema=AlgorithmIOSchema.model_validate(schema_source.get("input_schema") or {}),
             output_schema=AlgorithmIOSchema.model_validate(schema_source.get("output_schema") or {}),
-            model_proposal=(
-                schema_source.get("model_proposal")
-                or (schema_source.get("contract") or {}).get("model_proposal")
-                or (schema_source.get("contract") or {}).get("sample_input")
-            ),
+            model_proposal=model_proposal,
             input_assets=[AlgorithmAssetSpec.model_validate(item) for item in (schema_source.get("input_assets") or [])],
             output_assets=[AlgorithmAssetSpec.model_validate(item) for item in (schema_source.get("output_assets") or [])],
             developer_attribution=registry.get("developer_attribution"),
