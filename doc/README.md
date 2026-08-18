@@ -15,6 +15,7 @@
 | 上传垂类算法 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) |
 | 配置远程接口模型 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) |
 | 了解知识库服务 | [knowledge-base-rag-kg-product-design.md](knowledge-base-rag-kg-product-design.md) | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) |
+| 使用对话控制命令 | [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | [research-engine-plan-10-slash-command-and-agent-control-workplan.md](research-engine-plan-10-slash-command-and-agent-control-workplan.md) |
 | 维护来源标注 | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) | [../README.md#框架方法与机构来源](../README.md#框架方法与机构来源) |
 
 ## 用户指南
@@ -26,6 +27,7 @@
 | [autoresearch-user-guide.md](autoresearch-user-guide.md) | ResearchEngine / AutoResearch 的任务创建、运行推进、Gate 审批和追溯查看 |
 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | 垂类算法包结构、打包、上传、测试和上线流程 |
 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | HTTP/FastAPI/MCP 远程接口模型的配置、测试、激活、调用和安全边界 |
+| [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | `/dialogue` Slash Command、会话控制、统一回放与来源说明 |
 
 ## 产品与架构设计
 

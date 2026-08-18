@@ -175,10 +175,26 @@ class CommandExecution(BaseModel):
     interaction: CommandInteraction | None = None
     run: AssistantRun | None = None
     tool_call: AssistantToolCall | None = None
+    chat: "CommandChatReference | None" = None
     download_url: str | None = None
     download_filename: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
+
+
+class CommandChatReference(BaseModel):
+    """收尾命令创建或切换后的新会话摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chat_id: str
+    title: str
+    model: dict[str, Any] = Field(default_factory=dict)
+    plan_mode: bool = False
+    permission_mode: PermissionMode = "workspace_write"
+
+
+CommandExecution.model_rebuild()
 
 
 class AssistantFeedback(BaseModel):

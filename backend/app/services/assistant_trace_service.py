@@ -12,13 +12,17 @@ from fastapi import HTTPException
 
 from app.core.logging import get_logger
 from app.core.time import utc_now
+from app.infra.assistant_command_repositories import AssistantCommandRunRepository
 from app.infra.research_engine_repositories import (
+    AssistantChatRepository,
     AssistantEventRepository,
     AssistantRunRepository,
     AssistantToolCallRepository,
 )
 from app.schemas.assistant_trace import (
+    AssistantChatTraceData,
     AssistantTraceData,
+    AssistantTraceCommand,
     AssistantTraceRun,
     AssistantTraceSourceRef,
     AssistantTraceStatus,
@@ -107,6 +111,111 @@ class AssistantTraceProjectionService:
             steps=steps,
             summary=summary,
             cursor=cursor,
+            replay_warnings=warnings,
+        )
+
+    def get_chat(
+        self,
+        chat_id: str,
+        current_user: dict[str, str] | None,
+        *,
+        after_seq: int = 0,
+        event_types: set[str] | None = None,
+    ) -> AssistantChatTraceData:
+        """读取一个会话的命令、模型、工具与控制面统一 Trace。
+
+        Args:
+            chat_id: 会话 ID。
+            current_user: 当前用户。
+            after_seq: 会话级回放游标，只返回之后的事件投影。
+            event_types: 可选事件类型白名单。
+
+        Returns:
+            会话级 Trace 快照与下一个游标。
+
+        Raises:
+            HTTPException: 会话不存在或无权限访问。
+        """
+        normalized_chat_id = str(chat_id or "").strip()
+        owner_id = actor_id(current_user)
+        chat = AssistantChatRepository.find_one({"chat_id": normalized_chat_id})
+        if not chat:
+            raise HTTPException(status_code=404, detail=f"会话 '{chat_id}' 不存在")
+        if str(chat.get("created_by") or "") != owner_id:
+            raise HTTPException(status_code=403, detail="无权限访问该会话轨迹")
+
+        runs, _ = AssistantRunRepository.list_for_chat(
+            normalized_chat_id,
+            owner_id,
+            page=1,
+            page_size=10_000,
+        )
+        calls = AssistantToolCallRepository.list_for_chat(
+            normalized_chat_id,
+            created_by=owner_id,
+        )
+        command_documents, _ = AssistantCommandRunRepository.list_runs_for_chat(
+            normalized_chat_id,
+            owner_id,
+            page=1,
+            page_size=10_000,
+        )
+        events = self._events_for_chat(normalized_chat_id, owner_id, runs, calls)
+        events = self._assign_chat_sequence(events)
+
+        all_steps, warnings = self._project_steps(normalized_chat_id, events, calls)
+        for step in all_steps:
+            step.trace_id = normalized_chat_id
+
+        eligible_events = [
+            event
+            for event in events
+            if int(event.get("chat_seq") or 0) > int(after_seq)
+            and (event_types is None or str(event.get("type") or "") in event_types)
+        ]
+        eligible_event_ids = {
+            str(event.get("event_id") or "") for event in eligible_events
+        }
+        steps = [
+            step
+            for step in all_steps
+            if any(ref.event_id in eligible_event_ids for ref in step.details.source_event_refs)
+        ]
+        next_after_seq = max(
+            [
+                int(event.get("chat_seq") or 0)
+                for event in events
+                if int(event.get("chat_seq") or 0) > int(after_seq)
+            ],
+            default=int(after_seq),
+        )
+        status = self._derive_status(runs, calls, all_steps, events)
+        summary = self._build_summary(all_steps, calls, events, status, warnings)
+        timestamps = [self._event_time(event) for event in events]
+        timestamps = [item for item in timestamps if item is not None]
+        created_at = (
+            self._min_datetime(timestamps)
+            or self._parse_datetime(chat.get("created_at"))
+            or utc_now().replace(tzinfo=timezone.utc)
+        )
+        updated_at = (
+            self._max_datetime(timestamps)
+            or self._parse_datetime(chat.get("updated_at"))
+            or created_at
+        )
+
+        return AssistantChatTraceData(
+            chat_id=normalized_chat_id,
+            status=status,
+            created_at=created_at,
+            updated_at=updated_at,
+            runs=[self._trace_run(item) for item in runs],
+            tool_calls=[self._trace_tool_call(item) for item in calls],
+            commands=[self._trace_command(item) for item in command_documents],
+            steps=steps,
+            summary=summary,
+            next_after_seq=next_after_seq,
+            total_events=len(events),
             replay_warnings=warnings,
         )
 
@@ -245,6 +354,101 @@ class AssistantTraceProjectionService:
         ordered = list(events.values())
         return sorted(ordered, key=lambda item: (self._event_sort_text(item), str(item.get("event_id") or "")))
 
+    def _events_for_chat(
+        self,
+        chat_id: str,
+        owner_id: str,
+        runs: Iterable[dict[str, Any]],
+        calls: Iterable[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """聚合一个会话内 run、tool、command 与旧 embedded 事件。
+
+        Args:
+            chat_id: 会话 ID。
+            owner_id: 会话 owner。
+            runs: 会话中的 AssistantRun 文档。
+            calls: 会话中的 AssistantToolCall 文档。
+
+        Returns:
+            按时间稳定排序的事件列表。
+        """
+        events: dict[str, dict[str, Any]] = {}
+        unified_events, _ = AssistantEventRepository.list_all(
+            {"chat_id": chat_id, "created_by": owner_id},
+            page=1,
+            page_size=10_000,
+        )
+        unified_keys: set[tuple[str, str, int]] = set()
+        legacy_tool_keys: set[tuple[str, int]] = set()
+        for event in unified_events:
+            event_id = str(event.get("event_id") or "")
+            if not event_id:
+                continue
+            events[event_id] = event
+            unified_keys.add(self._event_identity(event))
+            if str(event.get("type") or "").startswith("tool."):
+                legacy_tool_keys.add(
+                    (str(event.get("run_id") or ""), int(event.get("seq") or 0))
+                )
+
+        for run in runs:
+            run_id = str(run.get("run_id") or "")
+            for event in run.get("events") or []:
+                identity = (run_id, "", int(event.get("seq") or 0))
+                if identity in unified_keys:
+                    continue
+                event_id = f"embedded:{run_id}:{identity[2]}"
+                events[event_id] = self._embedded_event(
+                    event,
+                    event_id,
+                    run_id=run_id,
+                    call_id="",
+                )
+
+        for call in calls:
+            call_id = str(call.get("call_id") or "")
+            run_id = str(call.get("assistant_run_id") or "")
+            for event in call.get("events") or []:
+                identity = (run_id, call_id, int(event.get("seq") or 0))
+                if identity in unified_keys:
+                    continue
+                if (run_id, identity[2]) in legacy_tool_keys:
+                    continue
+                event_id = f"embedded:call:{call_id}:{identity[2]}"
+                events[event_id] = self._embedded_event(
+                    event,
+                    event_id,
+                    run_id=run_id,
+                    call_id=call_id,
+                )
+
+        ordered = list(events.values())
+        return sorted(ordered, key=lambda item: (self._event_sort_text(item), str(item.get("event_id") or "")))
+
+    @staticmethod
+    def _event_identity(event: dict[str, Any]) -> tuple[str, str, int]:
+        """生成去重身份键，避免不同 run/call 的本地 seq 互相误伤。"""
+        return (
+            str(event.get("run_id") or ""),
+            str(event.get("call_id") or ""),
+            int(event.get("seq") or 0),
+        )
+
+    @classmethod
+    def _assign_chat_sequence(cls, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """为会话时间线生成连续、稳定的回放序号。
+
+        Args:
+            events: 已按时间稳定排序的事件。
+
+        Returns:
+            带 chat_seq 的事件副本。
+        """
+        result: list[dict[str, Any]] = []
+        for index, event in enumerate(events, start=1):
+            result.append({**event, "chat_seq": index})
+        return result
+
     @staticmethod
     def _embedded_event(event: dict[str, Any], event_id: str, *, run_id: str, call_id: str) -> dict[str, Any]:
         """把旧 embedded 事件转换成投影用统一事件形状。"""
@@ -288,6 +492,134 @@ class AssistantTraceProjectionService:
             data = dict(event.get("data") or {})
             ref = self._source_ref(event)
             timestamp = self._event_time(event) or utc_now().replace(tzinfo=timezone.utc)
+
+            if event_type in {"command.run", "command.done"}:
+                command_id = str(data.get("command_id") or event.get("trace_id") or event_id)
+                command_name = str(data.get("name") or "unknown")
+                done = event_type == "command.done"
+                command_status = str(data.get("status") or "")
+                status = "running"
+                if done:
+                    status = {
+                        "success": "success",
+                        "interaction": "waiting",
+                        "failed": "failed",
+                    }.get(command_status, "failed")
+                self._upsert(
+                    accumulator,
+                    step_id=f"command:{command_id}",
+                    step_type="command",
+                    title=f"Slash 命令 /{command_name}",
+                    summary=(
+                        self._safe_text(data.get("message"), 180)
+                        or (f"/{command_name} 已开始" if not done else f"/{command_name} 已结束")
+                    ),
+                    status=status,
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        command_id=command_id,
+                        command_name=command_name,
+                    ),
+                    started_at=None if done else timestamp,
+                    ended_at=timestamp if done else None,
+                )
+
+            if event_type in {
+                "plan.mode.changed",
+                "goal.changed",
+                "todo.changed",
+                "permission.mode.changed",
+                "session.reset",
+                "session.clear",
+            }:
+                self._upsert(
+                    accumulator,
+                    step_id=f"control:{event_id}",
+                    step_type="control",
+                    title=self._control_title(event_type, data),
+                    summary=self._control_summary(event_type, data),
+                    status="success",
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(event, command_id=data.get("command_id")),
+                )
+
+            if event_type == "permission.decision":
+                decision = str(data.get("decision") or "denied")
+                reason = str(data.get("reason") or "")
+                self._upsert(
+                    accumulator,
+                    step_id=f"permission:{data.get('call_id') or data.get('command_id') or event_id}",
+                    step_type="approval",
+                    title="权限决策",
+                    summary=(
+                        f"已允许 {data.get('tool_id') or '工具'} 执行"
+                        if decision == "allowed"
+                        else f"已阻断 {data.get('tool_id') or '工具'} 执行：{reason}"
+                    ),
+                    status="success" if decision == "allowed" else "failed",
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        command_id=data.get("command_id"),
+                    ),
+                )
+
+            if event_type == "context.compacted":
+                reduction = int(data.get("token_reduction") or 0)
+                self._upsert(
+                    accumulator,
+                    step_id=f"compact:{data.get('command_id') or event_id}",
+                    step_type="context",
+                    title="上下文已压缩",
+                    summary=f"估算 token 减少 {reduction}",
+                    status="success",
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        command_id=data.get("command_id"),
+                        result_summary={"token_reduction": reduction},
+                    ),
+                )
+
+            if event_type == "session.exported":
+                export_status = str(data.get("status") or "completed")
+                self._upsert(
+                    accumulator,
+                    step_id=f"export:{data.get('command_id') or event_id}",
+                    step_type="export",
+                    title="会话导出",
+                    summary=f"{str(data.get('format') or 'json').upper()} 导出{self._status_verb(export_status)}",
+                    status="failed" if export_status == "failed" else (
+                        "running" if export_status == "started" else "success"
+                    ),
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        command_id=data.get("command_id"),
+                    ),
+                )
+
+            if event_type == "feedback.recorded":
+                self._upsert(
+                    accumulator,
+                    step_id=f"feedback:{data.get('command_id') or event_id}",
+                    step_type="feedback",
+                    title="会话反馈",
+                    summary=f"已记录反馈：{'有帮助' if data.get('rating') == 'helpful' else '需改进'}",
+                    status="success",
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        command_id=data.get("command_id"),
+                    ),
+                )
 
             if event_type in {"run.created", "status"} and str(data.get("stage") or "") in {"intent", "facts"}:
                 stage = str(data.get("stage") or "intent")
@@ -930,6 +1262,8 @@ class AssistantTraceProjectionService:
         known = terminal and first is not None and last is not None
         return AssistantTraceSummary(
             total_steps=len(steps),
+            commands=count("command"),
+            control_changes=count("control"),
             tool_calls=count("tool_call", "algorithm"),
             llm_calls=count("tool_call", "llm"),
             retrievals=count("tool_call", "retrieval"),
@@ -938,6 +1272,9 @@ class AssistantTraceProjectionService:
             file_writes=count("write"),
             file_edits=count("edit"),
             artifacts=sum(len(item.get("artifact_refs") or []) for item in calls),
+            exports=count("export"),
+            feedback=count("feedback"),
+            compactions=sum(1 for step in steps if step.type == "context" and "context.compacted" in step.details.event_types),
             errors=count("error"),
             recoveries=sum(1 for step in steps if step.type == "error" and step.details.retry_scheduled),
             replay_warnings=len(warnings),
@@ -972,6 +1309,17 @@ class AssistantTraceProjectionService:
         )
 
     @staticmethod
+    def _trace_command(command: dict[str, Any]) -> AssistantTraceCommand:
+        """转换 Slash Command 摘要。"""
+        return AssistantTraceCommand(
+            command_id=str(command.get("command_id") or ""),
+            name=str(command.get("name") or ""),
+            status=str(command.get("status") or "running"),
+            run_id=command.get("run_id"),
+            call_id=command.get("call_id"),
+        )
+
+    @staticmethod
     def _source_ref(event: dict[str, Any]) -> AssistantTraceSourceRef:
         """构造真实事件引用。"""
         return AssistantTraceSourceRef(
@@ -980,7 +1328,60 @@ class AssistantTraceProjectionService:
             run_id=str(event.get("run_id") or ""),
             call_id=str(event.get("call_id") or ""),
             seq=int(event.get("seq") or 0),
+            chat_seq=int(event.get("chat_seq") or 0),
         )
+
+    @staticmethod
+    def _event_details(
+        event: dict[str, Any],
+        *,
+        command_id: object = None,
+        command_name: object = None,
+        result_summary: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """构造控制面事件的安全白名单详情。"""
+        event_type = str(event.get("type") or "")
+        return {
+            "event_type": event_type,
+            "event_types": [event_type],
+            "command_id": str(command_id) if command_id else None,
+            "command_name": str(command_name) if command_name else None,
+            "chat_seq": int(event.get("chat_seq") or 0),
+            "result_summary": result_summary or {},
+        }
+
+    @staticmethod
+    def _control_title(event_type: str, data: dict[str, Any]) -> str:
+        """把控制面事件映射为用户可读标题。"""
+        return {
+            "plan.mode.changed": "Plan Mode 已更新",
+            "goal.changed": "会话目标已更新",
+            "todo.changed": "会话 Todo 已更新",
+            "permission.mode.changed": "权限模式已更新",
+            "session.reset": "控制状态已重置",
+            "session.clear": "已切换新会话",
+        }.get(event_type, "会话控制事件")
+
+    @classmethod
+    def _control_summary(cls, event_type: str, data: dict[str, Any]) -> str:
+        """生成控制面事件的简短摘要。"""
+        if event_type == "plan.mode.changed":
+            return "Plan Mode 已启用" if bool(data.get("active")) else "Plan Mode 已退出"
+        if event_type == "goal.changed":
+            action = str(data.get("action") or "set")
+            return "长期目标已设置" if action == "set" else "长期目标已清除"
+        if event_type == "permission.mode.changed":
+            return f"{data.get('before') or 'unknown'} → {data.get('after') or 'unknown'}"
+        if event_type == "session.reset":
+            return "Plan、权限、目标与 Todo 已恢复默认值，审计历史保留"
+        if event_type == "session.clear":
+            return f"新会话 {data.get('new_chat_id') or ''}".rstrip()
+        return cls._safe_text(data.get("message"), 160) or "控制状态已记录"
+
+    @staticmethod
+    def _status_verb(status: str) -> str:
+        """把导出状态转换为简短动词。"""
+        return {"completed": "完成", "failed": "失败", "started": "开始"}.get(status, "更新")
 
     @staticmethod
     def _safe_sections(sections: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

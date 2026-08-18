@@ -44,7 +44,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 | **垂类预测** | `/vertical-prediction` | 算法包上传、治理、在线测试、运行历史、结果查看和 handoff | 运行时以算法契约和受限子进程为边界 |
 | **Knowledge Base** | `/knowledge` | WeKnora 问答、证据清单和 Neo4j 增强检索子图 | 通过 WeKnora API 接入；Neo4j 图谱增强可选 |
 | **Data Catalog** | `/database/data-catalog`、`/data-catalog` | 材料数据资产浏览、检索和只读外部数据接入 | 资产库使用 `poly_data` 与 MinIO |
-| **助手与报告** | `/dialogue`、ResearchEngine 报告面板 | 基于项目事实导航、垂类算法工具调用、历史会话和结构化报告生成 | 算法工具仅来自已部署且 active 的垂类算法；支持 OpenAI、Ollama、Edison、Codex 和自定义 HTTP provider |
+| **助手与报告** | `/dialogue`、ResearchEngine 报告面板 | 基于项目事实导航、垂类算法工具调用、Slash Command 控制、统一回放、历史会话和结构化报告生成 | 算法工具仅来自已部署且 active 的垂类算法；支持 OpenAI、Ollama、Edison、Codex 和自定义 HTTP provider |
 | **基础工作台** | `/dashboard`、`/tasks/center`、`/tools`、`/admin` | 统一任务视图、模型选择、集成状态和管理 | 与 AI4MS 门户共享认证体系 |
 
 ### 模块细节
@@ -55,7 +55,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 - **垂类预测**：支持 `.zip/.tar.gz` 算法包注册、版本管理、在线测试、运行历史、结果查看和 handoff；算法通过契约声明输入、输出、来源和运行时边界。
 - **Knowledge Base**：KnowledgeService 统一转发 WeKnora 的知识库列表、问答流和无总结检索；前端展示证据卡片，后端可用 Neo4j 补充 Entity 关系，并过滤 API key、object key 和 embedding 等敏感元数据。
 - **Data Catalog**：面向材料数据资产提供目录、分类和筛选；业务运行态写入 `poly_agent`，材料资产使用 `poly_data` MongoDB 和 MinIO `datasets/` 路径。
-- **助手与报告**：助手基于项目实时事实返回入口、算法、计算和审批引导；`/dialogue` 支持按用户隔离的历史会话、已部署垂类算法工具选择、参数确认、AlgorithmRun 结果与 artifact 回链；LUI Runtime 提供模型路由、上下文 manifest、统一事件、服务端续答、配置 schema 与调用质量指标；报告链路支持 OpenAI/Ollama/Edison/Codex/自定义 HTTP provider，以及 HTML/LaTeX/Markdown/PDF renderer。
+- **助手与报告**：助手基于项目实时事实返回入口、算法、计算和审批引导；`/dialogue` 支持按用户隔离的历史会话、已部署垂类算法工具选择、参数确认、AlgorithmRun 结果与 artifact 回链；Slash Command 覆盖 Plan、Goal、权限、模型、状态、重置、新会话、压缩、导出与反馈，并提供可按类型过滤的会话统一回放（见 [`doc/dialogue-slash-command-guide.md`](doc/dialogue-slash-command-guide.md)）；LUI Runtime 提供模型路由、上下文 manifest、统一事件、服务端续答、配置 schema 与调用质量指标；报告链路支持 OpenAI/Ollama/Edison/Codex/自定义 HTTP provider，以及 HTML/LaTeX/Markdown/PDF renderer。
 
 ## 当前项目状态
 

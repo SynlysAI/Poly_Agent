@@ -1234,6 +1234,22 @@ export function getAssistantSessionState(chatId) {
     .then(unwrapResponse)
 }
 
+/**
+ * 获取会话级统一 Execution Trace。
+ *
+ * Args:
+ *   chatId: 会话 ID。
+ *   params: after_seq 与 event_types 查询参数。
+ *
+ * Returns:
+ *   命令、模型、工具、控制、导出与反馈事件的统一投影。
+ */
+export function getAssistantChatTrace(chatId, params = {}) {
+  return apiClient
+    .get(`/assistant/chats/${encodeURIComponent(chatId)}/trace`, { params })
+    .then(unwrapResponse)
+}
+
 export function updateAssistantChat(chatId, payload) {
   return apiClient.patch(`/assistant/chats/${encodeURIComponent(chatId)}`, payload).then(unwrapResponse)
 }

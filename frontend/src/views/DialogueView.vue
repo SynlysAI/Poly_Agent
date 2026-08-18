@@ -32,6 +32,7 @@ import {
   executeAssistantCommand,
   getApiErrorMessage,
   getAssistantChat,
+  getAssistantChatTrace,
   getAssistantCommandCatalog,
   getAssistantSessionState,
   getAssistantTrace,
@@ -83,7 +84,9 @@ import {
 import { replayAssistantEvents } from '../utils/assistantEvents.js'
 import {
   applyTraceEvent,
+  createChatTraceState,
   createTraceState,
+  mergeChatTraceState,
 } from '../utils/assistantTrace.mjs'
 import {
   accumulateUsageSummary,
@@ -152,6 +155,9 @@ const runStates = ref(new Map())
 const runSubscriptions = new Map()
 const traceStates = ref(new Map())
 const traceSubscriptions = new Map()
+const chatTraceState = ref(null)
+const chatTraceFilter = ref('all')
+const chatTraceLoading = ref(false)
 const toolCallStreams = new Map()
 const continuedToolCalls = new Set()
 const pendingStreamDeltas = new Map()
@@ -161,6 +167,8 @@ const TOOL_CALL_STREAM_RETRY_DELAY_MS = 800
 let streamFlushFrameId = 0
 let historyRequestSeq = 0
 let chatOptionsSyncTimer = null
+let ensureChatPromise = null
+let commandCatalogLoadPromise = null
 const confirmingCallId = ref('')
 const modelLoading = ref(false)
 const modelSelectionOrigin = ref('')
@@ -497,7 +505,7 @@ watch(agentTools, () => {
 })
 
 watch([agentTools, llmCatalog], () => {
-  if (chatId.value) requestCommandCatalog({ force: true })
+  if (chatId.value && !commandCatalogState.loading) requestCommandCatalog({ force: true })
 }, { deep: true })
 
 function cleanInitialQuery() {
@@ -652,24 +660,34 @@ function applySessionControlState(state) {
  *   成功时返回目录数据；失败时返回 null。
  */
 async function loadCommandCatalog(options = {}) {
-  commandCatalogState.loading = true
-  commandCatalogState.error = ''
+  if (!options.force && commandCatalogLoadPromise) return commandCatalogLoadPromise
+  const request = (async () => {
+    commandCatalogState.loading = true
+    commandCatalogState.error = ''
+    try {
+      // 共享 ensureChat 与目录请求，避免输入 `/` 的预加载和命令提交重复等待。
+      if (!chatId.value) await ensureChat()
+      const data = await commandCatalogCache.load(chatId.value, options)
+      Object.assign(commandCatalogState, {
+        loading: commandCatalogCache.state.loading,
+        error: commandCatalogCache.state.error,
+        items: data.items,
+        sessionState: data.sessionState,
+        catalogVersion: data.catalogVersion,
+      })
+      applySessionControlState(data.sessionState)
+      return data
+    } catch (error) {
+      commandCatalogState.loading = false
+      commandCatalogState.error = commandCatalogCache.state.error || error?.message || String(error)
+      return null
+    }
+  })()
+  commandCatalogLoadPromise = request
   try {
-    if (!chatId.value) await ensureChat()
-    const data = await commandCatalogCache.load(chatId.value, options)
-    Object.assign(commandCatalogState, {
-      loading: commandCatalogCache.state.loading,
-      error: commandCatalogCache.state.error,
-      items: data.items,
-      sessionState: data.sessionState,
-      catalogVersion: data.catalogVersion,
-    })
-    applySessionControlState(data.sessionState)
-    return data
-  } catch (error) {
-    commandCatalogState.loading = false
-    commandCatalogState.error = commandCatalogCache.state.error || error?.message || String(error)
-    return null
+    return await request
+  } finally {
+    if (commandCatalogLoadPromise === request) commandCatalogLoadPromise = null
   }
 }
 
@@ -678,6 +696,7 @@ async function loadCommandCatalog(options = {}) {
  */
 function clearCommandCatalog() {
   commandCatalogCache.invalidate()
+  commandCatalogLoadPromise = null
   Object.assign(commandCatalogState, {
     loading: false,
     error: '',
@@ -882,6 +901,7 @@ async function loadChat(chatKey) {
     await loadCommandCatalog()
     await loadChatRun(chatKey)
     await hydrateAssistantTraces()
+    await refreshChatTrace()
     scrollToBottom()
   } catch (error) {
     ElMessage.warning(`会话恢复失败：${getApiErrorMessage(error)}`)
@@ -897,10 +917,19 @@ async function ensureChat() {
     await updateAssistantChat(chatId.value, chatOptionsPayload())
     return chatId.value
   }
-  const data = await createAssistantChat(chatOptionsPayload())
-  chatId.value = data.chat_id
-  await router.replace({ path: `/dialogue/${encodeURIComponent(chatId.value)}`, query: route.query })
-  return chatId.value
+  if (!ensureChatPromise) {
+    ensureChatPromise = (async () => {
+      const data = await createAssistantChat(chatOptionsPayload())
+      chatId.value = data.chat_id
+      await router.replace({ path: `/dialogue/${encodeURIComponent(chatId.value)}`, query: route.query })
+      return chatId.value
+    })()
+  }
+  try {
+    return await ensureChatPromise
+  } finally {
+    ensureChatPromise = null
+  }
 }
 
 async function createNewChat() {
@@ -908,6 +937,7 @@ async function createNewChat() {
   messages.value = defaultMessages()
   sessionControlState.value = DEFAULT_SESSION_CONTROL_STATE
   clearCommandCatalog()
+  resetChatTrace()
   commandPaletteActive.value = false
   commandPaletteQuery.value = ''
   resetConversationUsage()
@@ -1088,6 +1118,7 @@ async function submitFeedbackCommand(message) {
     if (result.state_after) applySessionControlState(result.state_after)
     message.feedback_submitted = true
     await loadChatHistory()
+    await refreshChatTrace({ incremental: true })
     scrollToBottom()
   } catch (error) {
     ElMessage.error(`反馈提交失败：${getApiErrorMessage(error)}`)
@@ -1108,7 +1139,8 @@ async function submitFeedbackCommand(message) {
 async function prepareCommandSubmission(text) {
   const submission = resolveCommandSubmission(text, commandCatalogItems.value)
   if (!submission.isCommand) return submission
-  if (!commandCatalogItems.value.length) {
+  const catalogChatId = commandCatalogState.sessionState?.chat_id
+  if (!commandCatalogItems.value.length || (catalogChatId && catalogChatId !== chatId.value)) {
     const catalog = await loadCommandCatalog()
     if (!catalog) throw new Error(commandCatalogState.error || '命令目录暂不可用')
   }
@@ -1146,8 +1178,19 @@ async function executeSlashCommand(line, submission) {
   inputText.value = ''
   commandPaletteActive.value = false
   commandPaletteQuery.value = ''
-  await loadChatHistory()
-  scrollToBottom()
+  const newChatId = result.chat?.chat_id
+  if (newChatId) {
+    chatId.value = newChatId
+    messages.value = defaultMessages()
+    resetChatTrace()
+    commandCatalogCache.invalidate()
+    await router.push({ path: `/dialogue/${encodeURIComponent(newChatId)}`, query: route.query })
+    await loadChat(newChatId)
+  } else {
+    await loadChatHistory()
+    await refreshChatTrace({ incremental: true })
+    scrollToBottom()
+  }
 }
 
 async function sendMessage() {
@@ -1270,6 +1313,45 @@ async function loadTraceSnapshot(traceId) {
     return state
   } catch {
     return traceStates.value.get(traceId) || null
+  }
+}
+
+/**
+ * 重置会话级 Trace 状态。
+ */
+function resetChatTrace() {
+  chatTraceState.value = null
+  chatTraceFilter.value = 'all'
+}
+
+/**
+ * 加载或增量合并会话级统一 Trace。
+ *
+ * Args:
+ *   options.incremental: 是否从当前 after_seq 游标继续读取。
+ *
+ * Returns:
+ *   成功时返回合并后的 Trace 状态；无会话或请求失败时返回 null。
+ */
+async function refreshChatTrace(options = {}) {
+  const targetChatId = chatId.value
+  if (!targetChatId) return null
+  chatTraceLoading.value = true
+  try {
+    const cursor = options.incremental
+      ? Number(chatTraceState.value?.nextAfterSeq || 0)
+      : 0
+    const snapshot = await getAssistantChatTrace(targetChatId, { after_seq: cursor })
+    if (chatId.value !== targetChatId) return null
+    chatTraceState.value = cursor && chatTraceState.value
+      ? mergeChatTraceState(chatTraceState.value, snapshot)
+      : createChatTraceState(snapshot)
+    return chatTraceState.value
+  } catch (error) {
+    if (isUnauthorizedStatus(error?.status)) throw error
+    return chatTraceState.value
+  } finally {
+    if (chatId.value === targetChatId) chatTraceLoading.value = false
   }
 }
 
@@ -2356,6 +2438,7 @@ watch(
       messages.value = defaultMessages()
       sessionControlState.value = DEFAULT_SESSION_CONTROL_STATE
       clearCommandCatalog()
+      resetChatTrace()
       commandPaletteActive.value = false
     }
   },
@@ -2429,6 +2512,28 @@ watch(
     </header>
 
     <main ref="bodyRef" class="dialogue-body" aria-live="polite">
+      <section v-if="chatTraceState" class="session-trace-panel">
+        <div class="session-trace-toolbar">
+          <div>
+            <strong>会话统一回放</strong>
+            <p>命令、模型、工具、权限、压缩、导出与反馈共用同一条事件时间线。</p>
+          </div>
+          <el-button
+            size="small"
+            text
+            type="primary"
+            :loading="chatTraceLoading"
+            @click="refreshChatTrace({ incremental: true })"
+          >
+            刷新增量
+          </el-button>
+        </div>
+        <ExecutionTraceTimeline
+          :trace="chatTraceState"
+          :show-filters="true"
+          v-model:type-filter="chatTraceFilter"
+        />
+      </section>
       <div class="message-stack">
         <div
           v-for="(msg, idx) in messages"
@@ -3315,6 +3420,31 @@ h1 {
   border-radius: var(--app-radius-lg);
   background: rgba(255, 255, 255, 0.78);
   box-shadow: var(--app-card-shadow);
+}
+
+.session-trace-panel {
+  width: min(980px, 100%);
+  margin: 18px auto 0;
+  padding: 0 18px;
+}
+
+.session-trace-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.session-trace-toolbar strong {
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.session-trace-toolbar p {
+  margin: 3px 0 0;
+  color: var(--app-ink-muted);
+  font-size: 12px;
 }
 
 .message-stack {
@@ -4487,9 +4617,18 @@ h1 {
   .composer-model-select {
     width: 100%;
   }
+
+  .session-trace-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 @media (max-width: 560px) {
+  .session-trace-panel {
+    padding: 0 10px;
+  }
+
   .message-stack {
     padding: 18px 10px 24px;
   }

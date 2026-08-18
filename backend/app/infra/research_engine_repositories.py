@@ -490,7 +490,7 @@ class AssistantToolCallRepository(BaseRepository):
                 if not current:
                     return False
                 seq = int(current.get("event_seq", 0)) + 1
-                payload = {"seq": seq, **clone_document(event)}
+                payload = {"seq": seq, "call_id": call_id, **clone_document(event)}
                 cls._collection().update_one(
                     {"call_id": call_id},
                     {"$push": {"events": {"$each": [payload], "$slice": -200}}},
@@ -513,7 +513,7 @@ class AssistantToolCallRepository(BaseRepository):
                 if item.get("call_id") == call_id:
                     seq = int(item.get("event_seq", 0)) + 1
                     item["event_seq"] = seq
-                    payload = {"seq": seq, **clone_document(event)}
+                    payload = {"seq": seq, "call_id": call_id, **clone_document(event)}
                     events = item.setdefault("events", [])
                     events.append(payload)
                     item["events"] = events[-200:]

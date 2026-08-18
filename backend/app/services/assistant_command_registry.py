@@ -278,6 +278,41 @@ class AssistantCommandRegistry:
         )
         self.register(
             CommandDescriptor(
+                name="reset",
+                title="Reset Session Control",
+                description="确认后仅重置 Plan、权限、目标与 Todo，不删除历史审计数据。",
+                usage="/reset [confirm]",
+                category="system",
+                source="PolyAgent Assistant Command Plane",
+                source_kind="builtin",
+                input_mode="single_choice",
+                argument_hint="裸命令先弹出确认",
+                choices=[
+                    CommandChoice(value="confirm", label="确认重置"),
+                    CommandChoice(value="cancel", label="取消"),
+                ],
+                risk_level="high",
+            ),
+            self._placeholder_handler,
+            reserved=True,
+        )
+        self.register(
+            CommandDescriptor(
+                name="clear",
+                title="Clear To New Session",
+                description="创建并切换到新会话；旧会话消息、命令、Trace 与工具结果均保留。",
+                usage="/clear",
+                category="system",
+                source="PolyAgent Assistant Command Plane",
+                source_kind="builtin",
+                input_mode="none",
+                risk_level="medium",
+            ),
+            self._placeholder_handler,
+            reserved=True,
+        )
+        self.register(
+            CommandDescriptor(
                 name="compact",
                 title="Context Compaction",
                 description="压缩已完成会话历史，保留目标、任务、权限、结论和活跃工具结果。",

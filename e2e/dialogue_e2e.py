@@ -158,7 +158,7 @@ def run_real_model_flow(page) -> None:
     awaiting_card = page.locator(".tool-call-card.tool-call-awaiting_confirmation")
     awaiting_card.first.wait_for(state="visible", timeout=120_000)
 
-    trace = page.locator(".execution-trace").first
+    trace = page.locator(".chat-message .execution-trace").first
     trace.wait_for(state="visible", timeout=30_000)
     expect(trace).to_contain_text("上下文准备")
     expect(trace).to_contain_text("等待确认")
@@ -171,16 +171,16 @@ def run_real_model_flow(page) -> None:
     page.get_by_role("button", name="确认执行").first.click()
 
     completed_card = page.locator(".tool-call-card.tool-call-completed")
-    completed_card.first.wait_for(state="visible", timeout=120_000)
+    completed_card.first.wait_for(state="visible", timeout=300_000)
 
     assistant_bubbles = page.locator(".chat-message-assistant .chat-bubble-text")
-    expect(assistant_bubbles.last).to_contain_text("难度", timeout=120_000)
+    expect(assistant_bubbles.last).to_contain_text("难度", timeout=300_000)
 
-    expect(trace).to_contain_text("任务完成", timeout=120_000)
+    expect(trace).to_contain_text("任务完成", timeout=300_000)
     expect(trace).to_contain_text("算法结果", timeout=30_000)
     assert not page.locator(".execution-trace", has_text="Chain of Thought").count(), "Trace 不应暴露内部推理"
     step_ids = page.eval_on_selector_all(
-        ".execution-trace li[data-step-id]",
+        ".chat-message .execution-trace li[data-step-id]",
         "nodes => nodes.map(node => node.dataset.stepId)",
     )
     assert step_ids and len(step_ids) == len(set(step_ids)), f"Trace 断线重连后出现重复步骤: {step_ids}"
@@ -188,11 +188,11 @@ def run_real_model_flow(page) -> None:
     # 刷新后从 Trace Snapshot 恢复，而不是依赖内存中的 SSE 状态。
     page.reload(wait_until="domcontentloaded", timeout=60_000)
     page.locator(".dialogue-page").wait_for(state="visible", timeout=60_000)
-    restored_trace = page.locator(".execution-trace").first
+    restored_trace = page.locator(".chat-message .execution-trace").first
     restored_trace.wait_for(state="visible", timeout=30_000)
     expect(restored_trace).to_contain_text("任务完成")
     restored_step_ids = page.eval_on_selector_all(
-        ".execution-trace li[data-step-id]",
+        ".chat-message .execution-trace li[data-step-id]",
         "nodes => nodes.map(node => node.dataset.stepId)",
     )
     assert restored_step_ids and len(restored_step_ids) == len(set(restored_step_ids)), (
@@ -293,6 +293,52 @@ def run_manual_model_selection_flow(page) -> bool:
     return True
 
 
+def run_session_control_trace_flow(page) -> None:
+    """验收 Slash Command、统一回放、/reset 与 /clear 的控制面链路。"""
+    composer = page.locator(".composer-box textarea")
+    expect(composer).to_be_enabled(timeout=300_000)
+    composer.fill("/plan")
+    page.get_by_role("button", name="发送").click()
+    page.locator(".command-result-card.command-result-success").first.wait_for(
+        state="visible",
+        timeout=30_000,
+    )
+    expect(page.locator(".control-status-row", has_text="Plan 开启")).to_be_visible()
+
+    trace_panel = page.locator(".session-trace-panel .execution-trace")
+    trace_panel.wait_for(state="visible", timeout=30_000)
+    trace_panel.locator("summary").first.click()
+    expect(trace_panel).to_contain_text("Slash 命令 /plan", timeout=30_000)
+    page.locator(".trace-filters button", has_text="控制").click()
+    expect(trace_panel).to_contain_text("Plan Mode 已更新", timeout=30_000)
+    page.locator(".trace-filters button", has_text="命令").click()
+    expect(trace_panel).to_contain_text("Slash 命令 /plan", timeout=30_000)
+
+    composer.fill("/reset")
+    page.get_by_role("button", name="发送").click()
+    confirmation = page.locator(".command-result-card.command-result-interaction").first
+    confirmation.wait_for(state="visible", timeout=30_000)
+    confirmation.get_by_role("button", name="确认重置").click()
+    page.get_by_role("button", name="发送").click()
+    page.locator(".command-result-card.command-result-success", has_text="控制状态已重置").wait_for(
+        state="visible",
+        timeout=30_000,
+    )
+    expect(page.locator(".control-status-row", has_text="Plan 关闭")).to_be_visible()
+
+    old_chat_url = page.url
+    composer.fill("/clear")
+    page.get_by_role("button", name="发送").click()
+    page.wait_for_function(
+        "() => Boolean(document.querySelector('.command-result-card') === null || document.querySelectorAll('.chat-message').length === 0)",
+        timeout=30_000,
+    )
+    assert page.url != old_chat_url, "/clear 应创建并切换到新会话"
+    history_items = page.locator(".history-item")
+    history_items.first.wait_for(state="visible", timeout=30_000)
+    assert history_items.count() >= 2, "/clear 后旧会话应保留在历史列表"
+
+
 def run_dashboard_flow(page) -> None:
     """工作台勾选工具后发送，工具选择应作为草稿透传到对话页。"""
     dashboard = page.locator(".lui-hero")
@@ -379,6 +425,24 @@ def main() -> int:
             if manual_selection_ran:
                 assert not model_errors, f"手动模型选择浏览器控制台存在错误: {model_errors[:10]}"
                 print("PASS manual model selection persistence flow")
+        finally:
+            browser.close()
+
+        browser, control_page, control_errors = open_authenticated_page(
+            playwright,
+            frontend_url,
+            token,
+            (1440, 900),
+        )
+        try:
+            run_session_control_trace_flow(control_page)
+            control_errors = [
+                item
+                for item in control_errors
+                if "favicon" not in item and "vite" not in item.lower()
+            ]
+            assert not control_errors, f"控制面回放浏览器控制台存在错误: {control_errors[:10]}"
+            print("PASS slash command trace, reset, and clear flow")
         finally:
             browser.close()
 

@@ -5,7 +5,9 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import time
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -25,13 +27,14 @@ from app.schemas.agent_tools import AssistantToolCall, AssistantToolCallCreate
 from app.schemas.assistant_commands import (
     AssistantFeedback,
     CommandCatalogData,
+    CommandChatReference,
     CommandChoice,
     CommandDescriptor,
     CommandExecution,
     CommandInteraction,
     SessionControlState,
 )
-from app.schemas.assistant_chats import AssistantMessageCreate
+from app.schemas.assistant_chats import AssistantChatCreate, AssistantMessageCreate
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate
 from app.services.assistant_compaction_service import assistant_compaction_service
 from app.services.assistant_export_service import (
@@ -53,9 +56,10 @@ from app.services.assistant_tool_command_provider import AssistantToolCommandPro
 from app.services.llm_model_service import LLMModelService
 
 
-CATALOG_VERSION = "assistant-command-catalog-v3"
+CATALOG_VERSION = "assistant-command-catalog-v4"
 ACTIVE_RUN_STATUSES = {"queued", "running"}
 ACTIVE_TOOL_PHASES = {"requested", "awaiting_input", "awaiting_confirmation", "queued", "running"}
+CATALOG_LATENCY_SAMPLES: list[tuple[datetime, float, bool]] = []
 
 
 @dataclass
@@ -67,6 +71,7 @@ class CommandHandlerResult:
     interaction: CommandInteraction | None = None
     run: AssistantRun | None = None
     tool_call: AssistantToolCall | None = None
+    chat: CommandChatReference | None = None
     source_event: str | None = None
     download_url: str | None = None
     download_filename: str | None = None
@@ -218,6 +223,8 @@ class AssistantCommandService:
             "permission": self._handle_permission,
             "model": self._handle_model,
             "status": self._handle_status,
+            "reset": self._handle_reset,
+            "clear": self._handle_clear,
             "compact": self._handle_compact,
             "export": self._handle_export,
             "feedback": self._handle_feedback,
@@ -239,16 +246,23 @@ class AssistantCommandService:
             current_user: 当前登录用户。
 
         Returns:
-            命令目录、控制状态与目录版本。
+        命令目录、控制状态与目录版本。
         """
-        chat = self._owned_chat(chat_id, current_user)
-        items = self.registry.descriptors(current_user)
-        return CommandCatalogData(
-            items=items,
-            total=len(items),
-            session_state=control_state(chat),
-            catalog_version=CATALOG_VERSION,
-        )
+        started_at = time.perf_counter()
+        try:
+            chat = self._owned_chat(chat_id, current_user)
+            items = self.registry.descriptors(current_user)
+            return CommandCatalogData(
+                items=items,
+                total=len(items),
+                session_state=control_state(chat),
+                catalog_version=CATALOG_VERSION,
+            )
+        finally:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            CATALOG_LATENCY_SAMPLES.append((utc_now(), elapsed_ms, True))
+            if len(CATALOG_LATENCY_SAMPLES) > 500:
+                del CATALOG_LATENCY_SAMPLES[:-500]
 
     def session_state(
         self,
@@ -313,6 +327,8 @@ class AssistantCommandService:
             "interaction": None,
             "run_id": None,
             "call_id": None,
+            "tool_id": descriptor.tool_id if descriptor else None,
+            "algorithm_id": descriptor.algorithm_id if descriptor else None,
             "download_url": None,
             "download_filename": None,
             "source_event": None,
@@ -378,6 +394,7 @@ class AssistantCommandService:
             interaction = result.interaction
             run = result.run
             tool_call = result.tool_call
+            chat_reference = result.chat
             source_event = result.source_event
             download_url = result.download_url
             download_filename = result.download_filename
@@ -396,6 +413,7 @@ class AssistantCommandService:
             interaction = None
             run = None
             tool_call = None
+            chat_reference = None
             download_url = None
             download_filename = None
             export_path = None
@@ -413,6 +431,7 @@ class AssistantCommandService:
             "interaction": interaction.model_dump(mode="python") if interaction else None,
             "run_id": getattr(run, "run_id", None),
             "call_id": getattr(tool_call, "call_id", None),
+            "chat": chat_reference.model_dump(mode="python") if chat_reference else None,
             "download_url": download_url,
             "download_filename": download_filename,
             "export_path": export_path,
@@ -442,6 +461,7 @@ class AssistantCommandService:
                 "interaction": interaction,
                 "run": run,
                 "tool_call": tool_call,
+                "chat": chat_reference,
             }
         )
 
@@ -815,6 +835,140 @@ class AssistantCommandService:
             {"model": next_model, "updated_at": utc_now()},
         )
         return CommandHandlerResult(status="success", message=f"模型已切换为 {provider_id}::{model_id}")
+
+    def _handle_reset(
+        self,
+        chat: dict[str, Any],
+        raw_args: str,
+        payload: dict[str, Any],
+        _current_user: dict[str, str] | None,
+        command_id: str,
+    ) -> CommandHandlerResult:
+        """处理 /reset 命令。
+
+        Args:
+            chat: 会话文档。
+            raw_args: confirm 或 cancel 参数。
+            payload: 结构化 payload，支持 confirmed=true。
+            _current_user: 当前用户，重置动作以会话归属校验为准。
+            command_id: 命令生命周期 ID。
+
+        Returns:
+            重置确认交互，或仅重置控制状态的结果。
+        """
+        argument = raw_args.strip().lower().replace("-", "_")
+        confirmed = argument in {"confirm", "confirmed", "yes"} or bool(payload.get("confirmed"))
+        canceled = argument in {"cancel", "no"} or bool(payload.get("canceled"))
+        payload_has_decision = "confirmed" in payload or "canceled" in payload
+        payload_decision = bool(payload.get("confirmed")) or bool(payload.get("canceled"))
+        if not argument and (not payload_has_decision or not payload_decision):
+            return CommandHandlerResult(
+                status="interaction",
+                message="确认重置当前会话控制状态吗？消息、run、工具调用与事件会全部保留。",
+                interaction=CommandInteraction(
+                    kind="confirmation",
+                    prompt="仅重置 Plan、权限、目标与 Todo",
+                    choices=[
+                        CommandChoice(value="confirm", label="确认重置", description="保留全部审计历史"),
+                        CommandChoice(value="cancel", label="取消", description="不做任何修改"),
+                    ],
+                ),
+            )
+        if canceled:
+            return CommandHandlerResult(status="success", message="已取消重置，控制状态保持不变")
+        if not confirmed:
+            raise ValueError("无效 reset 参数；请使用 /reset confirm 或 /reset cancel")
+
+        before = {
+            "plan_mode": bool(chat.get("plan_mode", False)),
+            "permission_mode": str(chat.get("permission_mode") or "workspace_write"),
+            "goal_id": (chat.get("goal") or {}).get("goal_id"),
+            "todo_count": len(chat.get("todos") or []),
+        }
+        event = self._update_state(
+            chat,
+            {
+                "plan_mode": False,
+                "permission_mode": "workspace_write",
+                "goal": None,
+                "todos": [],
+            },
+            {
+                "type": "session.reset",
+                "command_id": command_id,
+                "trace_id": command_id,
+                "before": before,
+                "after": {
+                    "plan_mode": False,
+                    "permission_mode": "workspace_write",
+                    "goal": None,
+                    "todos": [],
+                },
+            },
+        )
+        return CommandHandlerResult(
+            status="success",
+            message="控制状态已重置；消息、run、工具调用与事件均已保留",
+            source_event=(event or {}).get("event_id"),
+        )
+
+    def _handle_clear(
+        self,
+        chat: dict[str, Any],
+        raw_args: str,
+        _payload: dict[str, Any],
+        current_user: dict[str, str] | None,
+        command_id: str,
+    ) -> CommandHandlerResult:
+        """处理 /clear 命令。
+
+        Args:
+            chat: 旧会话文档。
+            raw_args: 原样参数；clear 不接受额外参数。
+            _payload: 前端交互 payload，当前命令不使用。
+            current_user: 当前用户。
+            command_id: 命令生命周期 ID。
+
+        Returns:
+            新会话引用；旧会话数据不做删除。
+        """
+        if raw_args.strip():
+            raise ValueError("/clear 不支持额外参数")
+        new_chat = assistant_chat_service.create(
+            AssistantChatCreate(
+                title="新对话",
+                model=dict(chat.get("model") or {}),
+                mode=str(chat.get("mode") or "qa"),
+                knowledge_base_ids=list(chat.get("knowledge_base_ids") or []),
+                knowledge_base_names=list(chat.get("knowledge_base_names") or []),
+                use_web_search=bool(chat.get("use_web_search", False)),
+                selected_tool_ids=list(chat.get("selected_tool_ids") or []),
+            ),
+            current_user,
+        )
+        event = AssistantCommandRunRepository.append_chat_event(
+            chat,
+            {
+                "type": "session.clear",
+                "command_id": command_id,
+                "trace_id": command_id,
+                "new_chat_id": new_chat.chat_id,
+                "old_chat_id": str(chat["chat_id"]),
+            },
+        )
+        reference = CommandChatReference(
+            chat_id=new_chat.chat_id,
+            title=new_chat.title,
+            model=new_chat.model,
+            plan_mode=new_chat.plan_mode,
+            permission_mode=new_chat.permission_mode,
+        )
+        return CommandHandlerResult(
+            status="success",
+            message=f"已创建新会话并保留旧会话 {chat['chat_id']}",
+            chat=reference,
+            source_event=(event or {}).get("event_id"),
+        )
 
     def _handle_compact(
         self,

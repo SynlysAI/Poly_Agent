@@ -40,7 +40,7 @@ from app.schemas.assistant_commands import (
     SessionControlState,
 )
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate, AssistantRunListData
-from app.schemas.assistant_trace import AssistantTraceData
+from app.schemas.assistant_trace import AssistantChatTraceData, AssistantTraceData
 from app.schemas.common import ApiResponse
 from app.services.assistant_service import chat_assistant
 from app.services.assistant_service import stream_chat_assistant
@@ -220,6 +220,31 @@ def list_assistant_command_events(
         code=0,
         message="ok",
         data=CommandEventListData(items=items, total=len(items), next_after_seq=next_after_seq),
+    )
+
+
+@router.get("/chats/{chat_id}/trace", response_model=ApiResponse[AssistantChatTraceData])
+def get_assistant_chat_trace(
+    chat_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    event_types: list[str] | None = Query(default=None),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantChatTraceData]:
+    """读取会话级命令、模型、工具与控制事件统一 Trace。"""
+    normalized_types = {
+        item.strip()
+        for item in (event_types or [])
+        if item.strip()
+    } or None
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=assistant_trace_service.get_chat(
+            chat_id,
+            current_user,
+            after_seq=after_seq,
+            event_types=normalized_types,
+        ),
     )
 
 

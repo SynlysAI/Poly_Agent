@@ -1,6 +1,6 @@
 # Plan 10：Slash Command、会话控制面与 Agent 控制体系工作计划
 
-> **状态：PR-05 已完成，PR-06 待启动**
+> **状态：PR-06 已完成，Plan 10 已完成**
 >
 > 日期：2026-08-16
 >
@@ -657,10 +657,10 @@ metadata.json
 
 **预计工作量**：2–3 天
 
-- [ ] 回填 Plan 09 完成后的实际基线提交，并确认 Trace API / SSE 契约。
-- [ ] 复用 Plan 09 AssistantTraceProjectionService，不新增第二套 Trace 聚合服务。
-- [ ] 扩展 Plan 09 Trace API 支持 chat scope 与命令事件。
-- [ ] 合并事件类型：
+- [x] 回填 Plan 09 完成后的实际基线提交，并确认 Trace API / SSE 契约。
+- [x] 复用 Plan 09 AssistantTraceProjectionService，不新增第二套 Trace 聚合服务。
+- [x] 扩展 Plan 09 Trace API 支持 chat scope 与命令事件。
+- [x] 合并事件类型：
   - command lifecycle
   - run lifecycle
   - tool call lifecycle
@@ -670,21 +670,21 @@ metadata.json
   - compaction
   - export
   - feedback
-- [ ] 提供连续 chat seq、稳定排序和 `after_seq` 游标。
-- [ ] 前端新增 Trace 时间线，支持按类型过滤。
-- [ ] `/plan → 调查 → 工具提议 → 权限阻断/确认 → 结果 → 导出` 可在同一时间线回放。
-- [ ] 实现 `/reset`：
+- [x] 提供连续 chat seq、稳定排序和 `after_seq` 游标。
+- [x] 前端新增 Trace 时间线，支持按类型过滤。
+- [x] `/plan → 调查 → 工具提议 → 权限阻断/确认 → 结果 → 导出` 可在同一时间线回放。
+- [x] 实现 `/reset`：
   - 退出 plan mode
   - permission mode 恢复 `workspace_write`
   - 清除 active goal
   - 清空 todo
   - 保留消息、run、tool call 和事件
   - 弹出确认，避免误操作
-- [ ] 实现 `/clear`：
+- [x] 实现 `/clear`：
   - 创建或切换到新会话
   - 不删除旧会话数据
   - 旧会话仍可从历史恢复
-- [ ] 增加质量指标：
+- [x] 增加质量指标：
   - command catalog latency
   - command execute success rate
   - unknown command rate
@@ -694,10 +694,10 @@ metadata.json
   - compact token reduction
   - export success rate
   - feedback submission rate
-- [ ] 指标接入现有 assistant quality summary，并支持时间窗口。
-- [ ] 增加命令目录与 Trace 管理视图或折叠面板。
-- [ ] 更新用户文档与来源标注说明。
-- [ ] 补充端到端回放测试。
+- [x] 指标接入现有 assistant quality summary，并支持时间窗口。
+- [x] 增加命令目录与 Trace 管理视图或折叠面板。
+- [x] 更新用户文档与来源标注说明。
+- [x] 补充端到端回放测试。
 
 **验收标准**
 
@@ -1021,3 +1021,4 @@ python e2e/dialogue_e2e.py
 - 2026-08-17：PR-04 完成：新增 `AssistantCompactionService` 与完整 `CompactionSnapshot` 契约，落地 snapshot id、摘要、cutoff / retained message、active tool call、token 前后估算、安全 route、usage、创建者与摘要 / 快照 digest；新增独立 `compact` LLM route purpose，辅助模型失败或输出无效时使用保留目标、Todo、权限、结论、配置和活跃工具结果的确定性摘要；`/compact` 在 active run 期间返回 busy，事件写入失败会回滚快照并返回稳定错误；原始消息保持不变，后续 run 由服务端基于持久化消息与 snapshot 重建摘要 + retained + cutoff 后有效历史，客户端历史仅作兼容输入不再可信；写入带 token reduction 的 `context.compacted` 事件。后端 Assistant + LLM 回归 143 项通过，相关 `py_compile` 通过；前端 slash commands / command catalog 测试与 `npm run build` 通过。全量后端混合探索为 804 通过、20 失败，失败集中在 Data Catalog / Report / Knowledge / WeKnora 的认证或外部依赖问题，与 PR04 直接回归面无交集，未作为 PR-04 通过依据。
 
 - 2026-08-18：PR-05 完成：新增 `AssistantExportService` 与 `/export`，同一会话快照导出 JSON 单对象、Markdown 报告和固定结构 ZIP，覆盖 session/control state、messages、commands、assistant runs、统一 execution trace、tool calls/results、algorithm run 关联、artifact 引用与 metadata；本地 computation / runtime artifact 按安全路径进入 ZIP，保留 Unicode 原名并处理重名，缺失、越界或过期只写入 manifest 错误；`session.exported` 开始/结束事件记录格式、状态、计数与 manifest digest，owner 专用原生下载端点避免 JavaScript 缓存 ZIP。新增 `assistant_feedback` 双模集合与 schema，`/feedback` 裸命令返回表单，提交正文仅保存权威反馈记录，`feedback.recorded` 只记录 rating、digest 与服务端解析的实际 model route、Agent 版本和 trace；命令目录版本提升 v3。后端 `py_compile` 通过，Assistant + AgentTool 回归 143 项通过；前端 25 个轻量测试脚本与 `npm run build` 通过。
+- 2026-08-18：PR-06 完成：复用 `AssistantTraceProjectionService` 新增 chat scope `get_chat()` 投影与 `GET /assistant/chats/{chat_id}/trace`，合并 command lifecycle、run lifecycle、tool lifecycle、permission decision、plan/goal/todo/permission 控制、compaction、export、feedback 与 reset/clear 事件；提供稳定排序、连续 `chat_seq`、`after_seq` 增量游标和 `event_types` 过滤，并修复工具统一事件顶层 `call_id` 缺失导致的 embedded 事件重复。前端新增“会话统一回放”折叠面板、类型过滤、增量刷新和 `assistantTrace` 纯函数合并测试；`ExecutionTraceTimeline` 支持 command/control/export/feedback 步骤。新增 `/reset` 二次确认并仅恢复控制状态，新增 `/clear` 创建并切换新会话且保留旧会话；命令目录版本提升 v4，并收敛 ensureChat / catalog 并发加载，避免重复创建会话。质量 API 扩展 command catalog latency、command success、unknown、permission/plan block、dynamic conversion、compact reduction、export success 与 feedback submission 指标并保留时间窗口。新增 `/dialogue` 用户指南、来源矩阵与 README 说明。后端指定回归 66 项通过，`py_compile` 通过；前端 21 个 npm 轻量测试脚本与 `npm run build` 通过；`e2e/dialogue_e2e.py` 完整通过真实模型工具链、320/768/1440 响应式、Slash Command 会话回放、`/reset`、`/clear` 与工作台草稿链路（手动模型选择因当前目录仅 1 个模型按脚本设计跳过）。

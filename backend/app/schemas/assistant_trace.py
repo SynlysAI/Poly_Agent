@@ -19,12 +19,16 @@ AssistantTraceStatus = Literal[
 AssistantTraceStepType = Literal[
     "context",
     "think",
+    "command",
+    "control",
     "tool_call",
     "tool_result",
     "read",
     "write",
     "edit",
     "approval",
+    "export",
+    "feedback",
     "error",
     "final",
 ]
@@ -42,6 +46,7 @@ class AssistantTraceSourceRef(BaseModel):
     run_id: str = ""
     call_id: str = ""
     seq: int = 0
+    chat_seq: int = 0
 
 
 class AssistantTraceStepDetails(BaseModel):
@@ -62,6 +67,11 @@ class AssistantTraceStepDetails(BaseModel):
     algorithm_id: str | None = None
     algorithm_version: str | None = None
     result_summary: dict[str, Any] = Field(default_factory=dict)
+    event_type: str | None = None
+    event_types: list[str] = Field(default_factory=list)
+    command_id: str | None = None
+    command_name: str | None = None
+    chat_seq: int = 0
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     error_type: str | None = None
     error_message: str | None = None
@@ -93,6 +103,8 @@ class AssistantTraceSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     total_steps: int = Field(default=0, ge=0)
+    commands: int = Field(default=0, ge=0)
+    control_changes: int = Field(default=0, ge=0)
     tool_calls: int = Field(default=0, ge=0)
     llm_calls: int = Field(default=0, ge=0)
     retrievals: int = Field(default=0, ge=0)
@@ -101,6 +113,9 @@ class AssistantTraceSummary(BaseModel):
     file_writes: int = Field(default=0, ge=0)
     file_edits: int = Field(default=0, ge=0)
     artifacts: int = Field(default=0, ge=0)
+    exports: int = Field(default=0, ge=0)
+    feedback: int = Field(default=0, ge=0)
+    compactions: int = Field(default=0, ge=0)
     errors: int = Field(default=0, ge=0)
     recoveries: int = Field(default=0, ge=0)
     replay_warnings: int = Field(default=0, ge=0)
@@ -132,6 +147,18 @@ class AssistantTraceToolCall(BaseModel):
     run_id: str | None = None
 
 
+class AssistantTraceCommand(BaseModel):
+    """Trace 关联的 Slash Command 摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: str
+    name: str
+    status: str
+    run_id: str | None = None
+    call_id: str | None = None
+
+
 class AssistantTraceData(BaseModel):
     """一条用户请求的完整 Execution Trace 快照。"""
 
@@ -149,4 +176,23 @@ class AssistantTraceData(BaseModel):
     steps: list[AssistantTraceStep] = Field(default_factory=list)
     summary: AssistantTraceSummary = Field(default_factory=AssistantTraceSummary)
     cursor: str = ""
+    replay_warnings: list[str] = Field(default_factory=list)
+
+
+class AssistantChatTraceData(BaseModel):
+    """一个会话内命令、模型、工具与控制事件的统一 Trace 快照。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chat_id: str
+    status: AssistantTraceStatus
+    created_at: datetime
+    updated_at: datetime
+    runs: list[AssistantTraceRun] = Field(default_factory=list)
+    tool_calls: list[AssistantTraceToolCall] = Field(default_factory=list)
+    commands: list[AssistantTraceCommand] = Field(default_factory=list)
+    steps: list[AssistantTraceStep] = Field(default_factory=list)
+    summary: AssistantTraceSummary = Field(default_factory=AssistantTraceSummary)
+    next_after_seq: int = Field(default=0, ge=0)
+    total_events: int = Field(default=0, ge=0)
     replay_warnings: list[str] = Field(default_factory=list)
