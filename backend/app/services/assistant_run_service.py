@@ -63,6 +63,16 @@ class AssistantRunService:
         return document
 
     @staticmethod
+    def _owned_status(run_id: str, current_user: dict[str, str] | None) -> dict[str, Any]:
+        """读取 run 状态与归属信息，避免 SSE 轮询加载完整 run 文档。"""
+        document = AssistantRunRepository.find_status(run_id)
+        if not document:
+            raise HTTPException(status_code=404, detail=f"回答任务 '{run_id}' 不存在")
+        if document.get("created_by") != actor_id(current_user):
+            raise HTTPException(status_code=403, detail="无权限访问该回答任务")
+        return document
+
+    @staticmethod
     def model_visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """过滤不进入模型请求历史的消息。
 
@@ -293,15 +303,22 @@ class AssistantRunService:
         return self._usage_for_chat(chat_id, owner_id)
 
     @staticmethod
-    def _usage_for_chat(chat_id: str, owner_id: str) -> AssistantUsageSummary:
+    def _usage_for_chat(
+        chat_id: str,
+        owner_id: str,
+        *,
+        runs: list[dict[str, Any]] | None = None,
+    ) -> AssistantUsageSummary:
         """基于会话全部 runs 与 usage 事件汇总 token 消耗。"""
-        runs, _ = AssistantRunRepository.list_for_chat(
-            chat_id,
-            owner_id,
-            page=1,
-            page_size=10_000,
-        )
-        return AssistantRunService._summarize_usage(runs)
+        if runs is None:
+            runs, _ = AssistantRunRepository.list_for_chat_light(
+                chat_id,
+                owner_id,
+                page=1,
+                page_size=10_000,
+            )
+        usage_events = AssistantEventRepository.list_for_chat_usage(chat_id, owner_id)
+        return AssistantRunService._summarize_usage(runs, usage_events)
 
     @staticmethod
     def _usage_component(usage: Any, key: str) -> int:
@@ -321,17 +338,24 @@ class AssistantRunService:
         return usage if isinstance(usage, dict) else {}
 
     @classmethod
-    def _summarize_usage(cls, runs: list[dict[str, Any]]) -> AssistantUsageSummary:
+    def _summarize_usage(
+        cls,
+        runs: list[dict[str, Any]],
+        usage_events: list[dict[str, Any]] | None = None,
+    ) -> AssistantUsageSummary:
         """按事件去重累加 runs 的 usage，兼容历史 run 字段回退。"""
         prompt_tokens = 0
         completion_tokens = 0
         total_tokens = 0
-        usage_events = 0
+        usage_events_count = 0
         seen: set[str] = set()
+        events_by_run: dict[str, list[dict[str, Any]]] = {}
+        for event in usage_events or []:
+            events_by_run.setdefault(str(event.get("run_id") or ""), []).append(event)
 
         for run in runs:
             run_id = str(run.get("run_id") or "")
-            events = AssistantEventRepository.list_for_run(run_id)
+            events = events_by_run.get(run_id, [])
             if not events:
                 events = run.get("events") or []
 
@@ -354,7 +378,7 @@ class AssistantRunService:
                 prompt_tokens += prompt
                 completion_tokens += completion
                 total_tokens += total if total else prompt + completion
-                usage_events += 1
+                usage_events_count += 1
                 had_usage_event = True
 
             if had_usage_event:
@@ -377,7 +401,7 @@ class AssistantRunService:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            usage_events=usage_events,
+            usage_events=usage_events_count,
         )
 
     def list_for_chat(
@@ -385,8 +409,15 @@ class AssistantRunService:
     ) -> AssistantRunListData:
         owner_id = actor_id(current_user)
         assistant_chat_service._owned_chat(chat_id, owner_id)
-        items, total = AssistantRunRepository.list_for_chat(chat_id, owner_id, page, page_size)
-        usage = self._usage_for_chat(chat_id, owner_id)
+        all_runs, total = AssistantRunRepository.list_for_chat_light(
+            chat_id,
+            owner_id,
+            page=1,
+            page_size=10_000,
+        )
+        start = (page - 1) * page_size
+        items = all_runs[start : start + page_size]
+        usage = self._usage_for_chat(chat_id, owner_id, runs=all_runs)
         active = next((item for item in items if item.get("status") in {"queued", "running"}), None)
         return AssistantRunListData(
             items=[self._public(item, include_events=False) for item in items],
@@ -409,7 +440,7 @@ class AssistantRunService:
         return self.get(run_id, current_user)
 
     def events(self, run_id: str, current_user: dict[str, str] | None, after_seq: int = 0) -> Iterator[dict[str, Any]]:
-        self._owned(run_id, current_user)
+        self._owned_status(run_id, current_user)
         if after_seq > 0:
             AssistantRunRepository.increment_metric(run_id, "reconnect_count")
         cursor = max(0, after_seq)
@@ -419,7 +450,7 @@ class AssistantRunService:
             for event in events:
                 cursor = max(cursor, int(event.get("seq", 0)))
                 yield event
-            document = self._owned(run_id, current_user)
+            document = self._owned_status(run_id, current_user)
             if document.get("status") in TERMINAL_STATUSES and not AssistantRunRepository.events_after(run_id, cursor):
                 return
             idle_polls += 1

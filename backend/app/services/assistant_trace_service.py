@@ -114,6 +114,30 @@ class AssistantTraceProjectionService:
             replay_warnings=warnings,
         )
 
+    def get_many(
+        self,
+        trace_ids: list[str],
+        current_user: dict[str, str] | None,
+    ) -> list[AssistantTraceData]:
+        """批量读取当前用户有权限访问的 Trace 快照。
+
+        Args:
+            trace_ids: 需要恢复的 Trace ID 列表。
+            current_user: 当前登录用户。
+
+        Returns:
+            可访问的 Trace 快照列表；不存在或无权限的 ID 会被忽略。
+        """
+        items: list[AssistantTraceData] = []
+        for trace_id in list(dict.fromkeys(trace_ids)):
+            if not trace_id:
+                continue
+            try:
+                items.append(self.get(trace_id, current_user))
+            except HTTPException:
+                continue
+        return items
+
     def get_chat(
         self,
         chat_id: str,
@@ -244,26 +268,38 @@ class AssistantTraceProjectionService:
         terminal_seen = False
 
         while not terminal_seen:
-            trace = self.get(trace_id, current_user)
-            new_event_ids = self._events_after_cursor(trace.trace_id, cursor)
+            new_event_ids = self._events_after_cursor(trace_id, cursor)
             if new_event_ids:
+                trace = self.get(trace_id, current_user)
                 yield from self._yield_steps(trace, emitted, new_event_ids)
                 cursor = trace.cursor
-            if trace.status in TERMINAL_RUN_STATUSES:
-                yield {
-                    "type": "trace.summary",
-                    "trace_id": trace.trace_id,
-                    "status": trace.status,
-                    "summary": trace.summary.model_dump(mode="python"),
-                }
-                yield {"type": "trace.end", "trace_id": trace.trace_id, "status": trace.status}
-                terminal_seen = True
-                break
+                if trace.status in TERMINAL_RUN_STATUSES:
+                    yield from self._terminal_trace_events(trace)
+                    terminal_seen = True
+                    break
+            else:
+                status_document = AssistantRunRepository.find_trace_status(trace_id)
+                if str(status_document.get("status") or "") in TERMINAL_RUN_STATUSES:
+                    trace = self.get(trace_id, current_user)
+                    yield from self._terminal_trace_events(trace)
+                    terminal_seen = True
+                    break
             now = time.monotonic()
             if now - last_heartbeat >= TRACE_HEARTBEAT_INTERVAL_SECONDS:
                 last_heartbeat = now
                 yield {"type": "trace.heartbeat", "trace_id": trace.trace_id, "cursor": cursor}
             time.sleep(TRACE_POLL_INTERVAL_SECONDS)
+
+    @staticmethod
+    def _terminal_trace_events(trace: AssistantTraceData) -> Iterator[dict[str, Any]]:
+        """输出 Trace 终态 summary 与 end 事件。"""
+        yield {
+            "type": "trace.summary",
+            "trace_id": trace.trace_id,
+            "status": trace.status,
+            "summary": trace.summary.model_dump(mode="python"),
+        }
+        yield {"type": "trace.end", "trace_id": trace.trace_id, "status": trace.status}
 
     def _yield_steps(
         self,
@@ -312,30 +348,43 @@ class AssistantTraceProjectionService:
         calls: Iterable[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """聚合统一事件与旧 embedded 事件并按时间排序。"""
+        run_items = list(runs)
+        call_items = list(calls)
+        run_ids = {str(item.get("run_id") or "") for item in run_items}
+        call_ids = {str(item.get("call_id") or "") for item in call_items}
         events: dict[str, dict[str, Any]] = {}
         for event in AssistantEventRepository.list_for_trace(trace_id):
             event_id = str(event.get("event_id") or "")
             if event_id:
                 events[event_id] = event
-        for run in runs:
+
+        unified_by_run: dict[str, list[dict[str, Any]]] = {}
+        for event in AssistantEventRepository.list_for_run_ids(run_ids):
+            event_id = str(event.get("event_id") or "")
+            if event_id:
+                events[event_id] = event
+            unified_by_run.setdefault(str(event.get("run_id") or ""), []).append(event)
+
+        unified_by_call: dict[str, list[dict[str, Any]]] = {}
+        for event in AssistantEventRepository.list_for_call_ids(call_ids):
+            event_id = str(event.get("event_id") or "")
+            if event_id:
+                events[event_id] = event
+            unified_by_call.setdefault(str(event.get("call_id") or ""), []).append(event)
+
+        for run in run_items:
             run_id = str(run.get("run_id") or "")
-            unified = AssistantEventRepository.list_for_run(run_id)
+            unified = unified_by_run.get(run_id, [])
             unified_seqs = {int(item.get("seq") or 0) for item in unified}
-            for event in unified:
-                event_id = str(event.get("event_id") or "")
-                if event_id:
-                    events[event_id] = event
             for event in run.get("events") or []:
                 seq = int(event.get("seq") or 0)
                 event_id = f"embedded:{run_id}:{seq}"
                 if seq in unified_seqs:
                     continue
                 events[event_id] = self._embedded_event(event, event_id, run_id=run_id, call_id="")
-        for call in calls:
+        for call in call_items:
             call_id = str(call.get("call_id") or "")
-            unified_events = AssistantEventRepository.list_all(
-                {"call_id": call_id}, page=1, page_size=10_000
-            )[0]
+            unified_events = unified_by_call.get(call_id, [])
             unified_seqs = {
                 int(item.get("seq") or 0)
                 for item in unified_events

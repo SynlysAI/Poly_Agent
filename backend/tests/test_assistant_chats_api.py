@@ -297,3 +297,23 @@ class AssistantChatsApiTest(ComputationTestCase):
         self.assertEqual(listed.status_code, 200, listed.text)
         item = next(item for item in listed.json()["data"]["items"] if item["chat_id"] == chat_id)
         self.assertEqual(item["tool_calls"][0]["run_status"], "completed")
+
+    def test_list_messages_reads_tool_calls_once_in_batch(self) -> None:
+        """消息列表不应为每条消息重复读取全会话工具调用。"""
+        created = self.client.post("/api/v1/assistant/chats", json={"title": "消息批量工具调用"})
+        chat_id = created.json()["data"]["chat_id"]
+        for content in ("第一问", "第二问"):
+            response = self.client.post(
+                f"/api/v1/assistant/chats/{chat_id}/messages",
+                json={"role": "user", "content": content},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+
+        with patch.object(
+            AssistantToolCallRepository,
+            "list_for_chat",
+            return_value=[],
+        ) as list_calls:
+            listed = self.client.get(f"/api/v1/assistant/chats/{chat_id}/messages")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(list_calls.call_count, 1)

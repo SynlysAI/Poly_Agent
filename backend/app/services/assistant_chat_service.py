@@ -340,8 +340,9 @@ class AssistantChatService:
         owner_id = actor_id(current_user)
         cls._owned_chat(chat_id, owner_id)
         items, total = AssistantMessageRepository.list_for_chat(chat_id, owner_id, page=page, page_size=page_size)
+        raw_calls = AssistantToolCallRepository.list_for_chat(chat_id, created_by=owner_id)
         return AssistantMessageListData(
-            items=[cls._message(item, owner_id) for item in items],
+            items=[cls._message(item, owner_id, raw_calls) for item in items],
             total=total,
             page=page,
             page_size=page_size,

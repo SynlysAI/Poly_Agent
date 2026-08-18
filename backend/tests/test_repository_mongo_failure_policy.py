@@ -54,6 +54,22 @@ class _OperationFailureRepository(BaseRepository):
         raise OperationFailure("Cannot do inclusion in exclusion projection")
 
 
+class _StatusProjectionCollection:
+    """记录并校验轻量状态读取投影的 fake collection。"""
+
+    def __init__(self, document: dict) -> None:
+        self.document = document
+        self.last_projection = None
+
+    def find_one(self, _filter, projection=None, **_kwargs):
+        self.last_projection = projection
+        return {
+            key: self.document.get(key)
+            for key in (projection or {})
+            if key != "_id"
+        }
+
+
 class MongoFailurePolicyTest(unittest.TestCase):
     """覆盖 Assistant 事件投影和生产模式禁止 SQLite 兜底。"""
 
@@ -94,6 +110,32 @@ class MongoFailurePolicyTest(unittest.TestCase):
 
         self.assertEqual(payload["seq"], 1)
         self.assertEqual(len(collection.update_payloads), 1)
+
+    def test_run_status_projection_does_not_load_events(self) -> None:
+        """SSE 轮询读取 run 状态时不应加载完整 events 文档。"""
+        collection = _StatusProjectionCollection(
+            {
+                "run_id": "asrun_status_projection",
+                "status": "running",
+                "created_by": "user_status",
+                "events": [{"seq": 1}],
+            }
+        )
+        with (
+            patch.object(AssistantRunRepository, "_collection", return_value=collection),
+            patch.object(AssistantRunRepository, "_can_use_mongo", return_value=True),
+        ):
+            status = AssistantRunRepository.find_projection(
+                "asrun_status_projection",
+                ["run_id", "created_by", "status"],
+            )
+
+        self.assertEqual(status, {
+            "run_id": "asrun_status_projection",
+            "created_by": "user_status",
+            "status": "running",
+        })
+        self.assertNotIn("events", collection.last_projection)
 
     def test_deterministic_mongo_error_does_not_disable_mongo(self) -> None:
         """生产模式下确定性查询错误不能把后续读取切到 SQLite。"""

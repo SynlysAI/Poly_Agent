@@ -18,10 +18,23 @@ from app.infra.mongo import (
 from app.infra.research_engine_repositories import AssistantEventRepository
 
 
+_assistant_command_run_indexes_ensured = False
+_assistant_feedback_indexes_ensured = False
+
+
 class AssistantCommandRunRepository(BaseRepository):
     """持久化命令执行生命周期，并把命令事件镜像到统一事件流。"""
 
     collection_name = "assistant_command_runs"
+
+    @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保命令运行索引只在当前进程内创建一次。"""
+        global _assistant_command_run_indexes_ensured
+        if _assistant_command_run_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _assistant_command_run_indexes_ensured = True
 
     @classmethod
     def _collection(cls):
@@ -51,7 +64,7 @@ class AssistantCommandRunRepository(BaseRepository):
             保存后的命令文档副本。
         """
         payload = clone_document(document)
-        cls.ensure_indexes()
+        cls._ensure_indexes_once()
         cls.save("command_id", payload)
         return payload
 
@@ -69,8 +82,8 @@ class AssistantCommandRunRepository(BaseRepository):
         now = utc_now()
         payload = {**clone_document(fields), "updated_at": now}
         if cls._can_use_mongo():
+            cls._ensure_indexes_once()
             try:
-                cls.ensure_indexes()
                 document = cls._collection().find_one_and_update(
                     {"command_id": command_id},
                     {"$set": payload},
@@ -90,7 +103,7 @@ class AssistantCommandRunRepository(BaseRepository):
                 return clone_document(item)
             return None
 
-        return demo_store.mutate(mutate)
+        return demo_store.mutate_collection(cls.collection_name, mutate)
 
     @classmethod
     def append_chat_event(
@@ -162,7 +175,10 @@ class AssistantCommandRunRepository(BaseRepository):
                 return clone_document(document)
             return None
 
-        return demo_store.mutate(mutate)
+        return demo_store.mutate_collections(
+            ["assistant_chats", AssistantEventRepository.collection_name],
+            mutate,
+        )
 
     @classmethod
     def list_runs_for_chat(
@@ -233,9 +249,9 @@ class AssistantCommandRunRepository(BaseRepository):
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
 
-        data = demo_store.load()
+        documents = demo_store.load_collection(AssistantEventRepository.collection_name)
         rows = []
-        for item in data[AssistantEventRepository.collection_name]:
+        for item in documents:
             if item.get("chat_id") != chat_id or item.get("created_by") != created_by:
                 continue
             if int(item.get("seq", 0)) <= int(after_seq):
@@ -251,6 +267,15 @@ class AssistantFeedbackRepository(BaseRepository):
     """持久化会话反馈权威记录。"""
 
     collection_name = "assistant_feedback"
+
+    @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保反馈索引只在当前进程内创建一次。"""
+        global _assistant_feedback_indexes_ensured
+        if _assistant_feedback_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _assistant_feedback_indexes_ensured = True
 
     @classmethod
     def _collection(cls):
@@ -279,7 +304,7 @@ class AssistantFeedbackRepository(BaseRepository):
             保存后的反馈文档副本。
         """
         payload = clone_document(document)
-        cls.ensure_indexes()
+        cls._ensure_indexes_once()
         cls.save("feedback_id", payload)
         return payload
 

@@ -36,6 +36,7 @@ import {
   getAssistantCommandCatalog,
   getAssistantSessionState,
   getAssistantTrace,
+  getAssistantTraces,
   getAssistantToolCall,
   getActiveAssistantRun,
   getAssistantRun,
@@ -166,7 +167,9 @@ const CHAT_OPTIONS_SYNC_DELAY_MS = 250
 const TOOL_CALL_STREAM_RETRY_DELAY_MS = 800
 let streamFlushFrameId = 0
 let historyRequestSeq = 0
+let chatLoadRequestSeq = 0
 let chatOptionsSyncTimer = null
+let historyRefreshTimer = null
 let ensureChatPromise = null
 let commandCatalogLoadPromise = null
 const confirmingCallId = ref('')
@@ -755,6 +758,14 @@ async function loadChatHistory() {
   }
 }
 
+function scheduleChatHistoryRefresh() {
+  if (historyRefreshTimer) window.clearTimeout(historyRefreshTimer)
+  historyRefreshTimer = window.setTimeout(() => {
+    historyRefreshTimer = null
+    void loadChatHistory()
+  }, 120)
+}
+
 function upsertHistoryItem(updated) {
   if (!updated?.chat_id) return
   const index = chatHistory.value.findIndex((item) => item.chat_id === updated.chat_id)
@@ -851,7 +862,7 @@ function stopToolCallStream(callId) {
  */
 function stopStaleStreams(targetChatId) {
   for (const [runId, controller] of runSubscriptions.entries()) {
-    const run = runStates.value.get(runId)
+    const run = runContexts.value.get(runId)
     if (run?.chat_id && run.chat_id !== targetChatId) {
       controller.abort()
       runSubscriptions.delete(runId)
@@ -903,11 +914,13 @@ async function backfillCompletedToolCall(message, call) {
 
 async function loadChat(chatKey) {
   if (!chatKey) return
+  const requestSeq = ++chatLoadRequestSeq
   stopStaleStreams(chatKey)
   resetConversationUsage()
   chatOptionsSyncSuspended.value = true
   try {
     const data = await getAssistantChat(chatKey)
+    if (requestSeq !== chatLoadRequestSeq) return
     chatId.value = data.chat_id
     chatMode.value = normalizeMode(data.mode)
     selectedKnowledgeBaseIds.value = data.knowledge_base_ids || []
@@ -928,14 +941,16 @@ async function loadChat(chatKey) {
         })
         .catch(() => {}),
       loadCommandCatalog({}, chatKey),
-      loadChatRun(chatKey),
-      hydrateAssistantTraces(),
+      loadChatRun(chatKey, requestSeq),
+      hydrateAssistantTraces(requestSeq),
       refreshChatTrace(),
     ])
   } catch (error) {
+    if (requestSeq !== chatLoadRequestSeq) return
     ElMessage.warning(`会话恢复失败：${getApiErrorMessage(error)}`)
     await router.replace({ path: '/dialogue', query: route.query })
   } finally {
+    if (requestSeq !== chatLoadRequestSeq) return
     await nextTick()
     chatOptionsSyncSuspended.value = false
   }
@@ -1277,7 +1292,7 @@ async function sendPrompt(prompt) {
     subscribeToRun(run)
     if (run.trace_id) subscribeToTrace(run.trace_id)
     scrollToBottom()
-    void loadChatHistory()
+    scheduleChatHistoryRefresh()
   } catch (error) {
     if (error.status === 409 && error.detail?.run_id) {
       ElMessage.warning('已有会话正在回答，请等待完成或先取消该回答')
@@ -1417,16 +1432,30 @@ function subscribeToTrace(traceId) {
   run().finally(() => traceSubscriptions.delete(traceId))
 }
 
-async function hydrateAssistantTraces() {
+async function hydrateAssistantTraces(requestSeq = chatLoadRequestSeq) {
   const traceIds = new Set()
   for (const message of messages.value) {
     if (message.role !== 'assistant' || !message.trace_id) continue
     traceIds.add(message.trace_id)
   }
-  const traces = await Promise.all([...traceIds].map((traceId) => loadTraceSnapshot(traceId)))
+  const uniqueTraceIds = [...traceIds]
+  if (!uniqueTraceIds.length) return
+  let snapshot = null
+  try {
+    snapshot = await getAssistantTraces(uniqueTraceIds)
+  } catch {
+    return
+  }
+  if (requestSeq !== chatLoadRequestSeq) return
+  const snapshotItems = snapshot?.items || []
+  const traceById = new Map(
+    (snapshotItems || []).map((trace) => [trace?.traceId, trace]).filter(([traceId]) => traceId),
+  )
+  const traces = uniqueTraceIds.map((traceId) => createTraceState(traceById.get(traceId)))
   for (const trace of traces) {
     if (!trace?.traceId) continue
     const traceId = trace.traceId
+    registerTraceState(trace)
     if (trace?.streaming) subscribeToTrace(traceId)
   }
 }
@@ -1534,9 +1563,10 @@ function hydrateMessagesWithRunContexts() {
   }
 }
 
-async function loadChatRun(chatKey) {
+async function loadChatRun(chatKey, requestSeq = chatLoadRequestSeq) {
   try {
     const data = await listAssistantRuns(chatKey, { page_size: 200 })
+    if (requestSeq !== chatLoadRequestSeq || chatId.value !== chatKey) return
     resetConversationUsage(data?.usage)
     const runs = data?.items || []
     for (const item of runs) registerRunContext(item)
@@ -1549,6 +1579,7 @@ async function loadChatRun(chatKey) {
     }
     hydrateMessagesWithRunContexts()
   } catch (error) {
+    if (requestSeq !== chatLoadRequestSeq || chatId.value !== chatKey) return
     ElMessage.warning(`回答状态恢复失败：${getApiErrorMessage(error)}`)
   }
 }
@@ -2366,6 +2397,10 @@ function cachedMarkdownBlocks(message) {
   return blocks
 }
 
+function messageItemKey(message, index) {
+  return message?.message_id || message?.run_id || message?.command_id || `message-${index}`
+}
+
 function parseMarkdownTableRow(line) {
   const trimmed = String(line || '').trim()
   if (!trimmed.includes('|')) return null
@@ -2410,8 +2445,11 @@ onMounted(() => {
   void loadKnowledgeBases().catch(() => {})
   void loadAgentTools().catch(() => {})
   void loadLlmModels().then(async () => {
-    await refreshActiveRun()
-    if (chatId.value) await loadChat(chatId.value)
+    if (chatId.value) {
+      await loadChat(chatId.value)
+    } else {
+      await refreshActiveRun()
+    }
     if (initialPrompt) await sendPrompt(initialPrompt)
   }).catch(() => {})
 })
@@ -2449,6 +2487,8 @@ onUnmounted(() => {
   continuedToolCalls.clear()
   if (chatOptionsSyncTimer) window.clearTimeout(chatOptionsSyncTimer)
   chatOptionsSyncTimer = null
+  if (historyRefreshTimer) window.clearTimeout(historyRefreshTimer)
+  historyRefreshTimer = null
   if (streamFlushFrameId) {
     window.cancelAnimationFrame(streamFlushFrameId)
     window.clearTimeout(streamFlushFrameId)
@@ -2569,7 +2609,7 @@ watch(
       <div class="message-stack">
         <div
           v-for="(msg, idx) in messages"
-          :key="idx"
+          :key="messageItemKey(msg, idx)"
           class="chat-message"
           :class="msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'"
         >

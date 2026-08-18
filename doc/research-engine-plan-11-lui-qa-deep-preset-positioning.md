@@ -249,7 +249,72 @@ research_code       受限科研代码 / 计算脚本
 - 算法工具调用不因切换到 `research_qa` 或 `research_deep` 而自动打开，仍需用户选择工具且模型支持。
 - Preset 不能覆盖平台 RBAC、AgentTool policy、审批和系统安全规则。
 
-## 12. 状态记录
+## 12. 成本、延迟、效果如何平衡？
+
+本 Preset 定位不能只追求“效果优先”。面向科研用户的商业系统需要同时管理三个互相制约的目标：
+
+```text
+Accuracy   效果与证据质量
+Latency    交互延迟
+Cost       模型、检索与执行成本
+```
+
+统一原则是“动态计算预算”：对每次请求按问题难度、风险等级和当前约束，动态决定模型、检索与 Agent 执行预算，而不是把所有请求固定到最强模型或固定开启最高强度检索。
+
+### 12.1 Model Router
+
+模型选择从静态 `route_purpose` 进一步演进为“先分类、再路由”：
+
+```text
+Simple Query      → Small Model
+Complex Reasoning → Large Model
+High-risk Task    → Large Model + Verification
+```
+
+映射到当前两个 Preset：
+
+- `research_qa` 的 `model_preference` 对应 Simple Query，优先 `fast` / 小模型，换取低延迟和低成本。
+- `research_deep` 的 `model_preference` 对应 Complex Reasoning，优先 `reasoning` / `long_context` 大模型，换取更高证据质量。
+- 高风险任务不单靠模型输出，而是“大模型 + 验证 / 审批 / 来源标注”，避免把高风险决策压缩成一次低成本回答。
+
+### 12.2 RAG 检索分层
+
+检索也按查询难度分级：
+
+```text
+Easy Query → Vector Search
+Hard Query → Hybrid Search + Reranker
+```
+
+- `research_qa` 优先项目事实与知识库向量检索，快速回答入口、能力和简单事实。
+- `research_deep` 在需要证据综合或多来源比对时，升级为混合检索（关键字 + 向量）+ Reranker，并按现有策略增加联网结果和证据数量。
+- 是否升级由问题复杂度、证据一致性和用户是否要求可解释结论决定，避免所有请求都付出最高检索成本。
+
+### 12.3 Agent 执行分级
+
+按任务风险和自主程度分级，而不是一律多步规划：
+
+```text
+Low-risk  → One-shot
+Medium    → Planning
+High-risk → Planning + Verification + Human
+```
+
+- `research_qa` 的导航与事实查询多数走 One-shot，减少等待与来回。
+- `research_deep` 对需要多步判断的问题走 Planning，并以高层 `reasoning_summary` 呈现步骤与依据。
+- 涉及算法执行、审批、不可逆操作或结果进入正式报告的高风险任务，必须保留 Human / 审批 / 验证节点；Preset 不能绕过 RBAC、AgentTool policy 和来源标注。
+
+### 12.4 动态计算预算的落地边界
+
+未来若实现 Preset Registry 或路由增强，可在 `AssistantPreset` / 路由层引入预算策略，但仍受以下约束：
+
+- 预算策略只提供“默认选择”，用户显式选择模型、工具或权限时优先。
+- 预算分级不改变系统安全策略，高风险必须保留验证 / 审批 / Human。
+- 模型路由、检索升级与 Agent 分级都要记录进 Execution Trace，保证成本、延迟和效果可回放、可审计。
+- 本期仍不落地代码，只明确“分类 → 路由 → 分级预算”的演进方向。
+
+## 13. 状态记录
 
 - 2026-08-16：创建 Plan 11 文档，定义 `research_qa` / `research_deep` 的定位、边界、共同不变量与演进方向；未修改业务代码。
+- 2026-08-18：补充成本、延迟、效果平衡与动态计算预算说明，明确 Model Router、RAG 检索分层、Agent 执行分级及落地边界；未修改业务代码。
 - 待办：后续若正式实施 Preset Registry，再拆出独立代码计划并同步 Plan 10 的会话控制状态。

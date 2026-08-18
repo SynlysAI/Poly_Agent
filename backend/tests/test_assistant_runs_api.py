@@ -367,3 +367,27 @@ class AssistantRunsApiTest(ComputationTestCase):
         self.assertEqual(len(delta_events), 1)
         self.assertEqual(delta_events[0]["delta"], "第一第二第三")
         self.assertEqual(restored["partial_content"], "第一第二第三")
+
+    def test_run_list_uses_light_queries_and_batched_usage(self) -> None:
+        """会话 run 列表应使用轻量 run 查询和批量 usage 事件，不逐 run 拉事件。"""
+        chat_id = self._chat("轻量与批量")
+        created = self._run(chat_id)
+        self.assertEqual(created.status_code, 200, created.text)
+
+        with (
+            patch.object(
+                AssistantRunRepository,
+                "list_for_chat_light",
+                wraps=AssistantRunRepository.list_for_chat_light,
+            ) as light_query,
+            patch.object(
+                AssistantEventRepository,
+                "list_for_chat_usage",
+                wraps=AssistantEventRepository.list_for_chat_usage,
+            ) as usage_query,
+        ):
+            listed = self.client.get(f"/api/v1/assistant/chats/{chat_id}/runs?page_size=200")
+
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(light_query.call_count, 1)
+        self.assertEqual(usage_query.call_count, 1)

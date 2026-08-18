@@ -40,7 +40,11 @@ from app.schemas.assistant_commands import (
     SessionControlState,
 )
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate, AssistantRunListData
-from app.schemas.assistant_trace import AssistantChatTraceData, AssistantTraceData
+from app.schemas.assistant_trace import (
+    AssistantChatTraceData,
+    AssistantTraceBatchData,
+    AssistantTraceData,
+)
 from app.schemas.common import ApiResponse
 from app.services.assistant_service import chat_assistant
 from app.services.assistant_service import stream_chat_assistant
@@ -337,6 +341,23 @@ def get_active_assistant_run(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AssistantRun | None]:
     return ApiResponse(code=0, message="ok", data=assistant_run_service.get_active(current_user))
+
+
+@router.get("/traces/batch", response_model=ApiResponse[AssistantTraceBatchData])
+def list_assistant_traces_batch(
+    trace_ids: list[str] = Query(default=[]),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantTraceBatchData]:
+    """批量恢复当前会话中的多条 Execution Trace。"""
+    if len(trace_ids) > 200:
+        raise HTTPException(status_code=422, detail="trace_ids 单次最多 200 个")
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=AssistantTraceBatchData(
+            items=assistant_trace_service.get_many(trace_ids, current_user)
+        ),
+    )
 
 
 @router.get("/traces/{trace_id}", response_model=ApiResponse[AssistantTraceData])

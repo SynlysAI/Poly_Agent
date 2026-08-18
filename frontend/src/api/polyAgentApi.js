@@ -1286,6 +1286,21 @@ export function getAssistantTrace(traceId) {
   return apiClient.get(`/assistant/traces/${encodeURIComponent(traceId)}`).then(unwrapResponse)
 }
 
+/**
+ * 批量读取当前会话涉及的 Execution Trace。
+ *
+ * Args:
+ *   traceIds: 去重后的 Trace ID 列表。
+ *
+ * Returns:
+ *   当前用户有权限访问的 Trace 快照列表。
+ */
+export function getAssistantTraces(traceIds = []) {
+  const params = new URLSearchParams()
+  traceIds.forEach((traceId) => params.append('trace_ids', traceId))
+  return apiClient.get('/assistant/traces/batch', { params }).then(unwrapResponse)
+}
+
 export function cancelAssistantRun(runId) {
   return apiClient.post(`/assistant/runs/${encodeURIComponent(runId)}/cancel`).then(unwrapResponse)
 }

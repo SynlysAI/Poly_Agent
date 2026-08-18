@@ -47,6 +47,31 @@ from app.infra.mongo import (
 
 
 _assistant_event_indexes_ensured = False
+_assistant_chat_indexes_ensured = False
+_assistant_message_indexes_ensured = False
+_assistant_tool_call_indexes_ensured = False
+_assistant_runtime_asset_indexes_ensured = False
+_assistant_run_indexes_ensured = False
+
+
+def ensure_lui_repository_indexes() -> None:
+    """创建 LUI 热路径仓储所需的 MongoDB 索引。
+
+    后端与 assistant worker 启动时调用一次；SQLite 模式下各仓储会直接跳过。
+    """
+    AssistantEventRepository.ensure_indexes()
+    AssistantRunRepository.ensure_indexes()
+    AssistantChatRepository.ensure_indexes()
+    AssistantMessageRepository.ensure_indexes()
+    AssistantToolCallRepository.ensure_indexes()
+    AssistantRuntimeAssetRepository.ensure_indexes()
+    from app.infra.assistant_command_repositories import (
+        AssistantCommandRunRepository,
+        AssistantFeedbackRepository,
+    )
+
+    AssistantCommandRunRepository.ensure_indexes()
+    AssistantFeedbackRepository.ensure_indexes()
 
 
 class ResearchProblemSpecRepository(BaseRepository):
@@ -447,6 +472,31 @@ class AssistantToolCallRepository(BaseRepository):
     collection_name = "assistant_tool_calls"
 
     @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保工具调用索引只在当前进程内创建一次。"""
+        global _assistant_tool_call_indexes_ensured
+        if _assistant_tool_call_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _assistant_tool_call_indexes_ensured = True
+
+    @classmethod
+    def ensure_indexes(cls) -> None:
+        """创建工具调用查询与幂等索引。"""
+        if not cls._can_use_mongo():
+            return
+        try:
+            collection = cls._collection()
+            collection.create_index("call_id", unique=True)
+            collection.create_index([("chat_id", 1), ("created_by", 1), ("created_at", 1)])
+            collection.create_index([("message_id", 1), ("chat_id", 1), ("created_by", 1)])
+            collection.create_index([("trace_id", 1), ("created_at", 1)])
+            collection.create_index([("assistant_run_id", 1), ("created_at", 1)])
+            collection.create_index([("continuation_state", 1), ("phase", 1), ("updated_at", 1)])
+        except PyMongoError as exc:
+            cls._handle_mongo_error(exc)
+
+    @classmethod
     def _collection(cls):
         return get_assistant_tool_calls_collection()
 
@@ -696,7 +746,7 @@ class AssistantToolCallRepository(BaseRepository):
             data[cls.collection_name] = [item for item in data[cls.collection_name] if not _matches(item, filters)]
             return before - len(data[cls.collection_name])
 
-        return int(demo_store.mutate(mutate))
+        return int(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def delete_for_message(cls, message_id: str, chat_id: str, *, created_by: str) -> int:
@@ -712,13 +762,35 @@ class AssistantToolCallRepository(BaseRepository):
             data[cls.collection_name] = [item for item in data[cls.collection_name] if not _matches(item, filters)]
             return before - len(data[cls.collection_name])
 
-        return int(demo_store.mutate(mutate))
+        return int(demo_store.mutate_collection(cls.collection_name, mutate))
 
 
 class AssistantRuntimeAssetRepository(BaseRepository):
     """受管 LUI 运行时附件仓储。"""
 
     collection_name = "assistant_runtime_assets"
+
+    @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保运行时附件索引只在当前进程内创建一次。"""
+        global _assistant_runtime_asset_indexes_ensured
+        if _assistant_runtime_asset_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _assistant_runtime_asset_indexes_ensured = True
+
+    @classmethod
+    def ensure_indexes(cls) -> None:
+        """创建运行时附件查询与过期清理索引。"""
+        if not cls._can_use_mongo():
+            return
+        try:
+            collection = cls._collection()
+            collection.create_index("asset_id", unique=True)
+            collection.create_index([("call_id", 1), ("created_at", 1)])
+            collection.create_index([("status", 1), ("expires_at", 1)])
+        except PyMongoError as exc:
+            cls._handle_mongo_error(exc)
 
     @classmethod
     def _collection(cls):
@@ -744,7 +816,7 @@ class AssistantRuntimeAssetRepository(BaseRepository):
                     return True
             return False
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def list_for_call(cls, call_id: str) -> list[dict[str, Any]]:
@@ -794,6 +866,27 @@ class AssistantChatRepository(BaseRepository):
     """按用户隔离的 assistant chat 仓储。"""
 
     collection_name = "assistant_chats"
+
+    @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保会话索引只在当前进程内创建一次。"""
+        global _assistant_chat_indexes_ensured
+        if _assistant_chat_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _assistant_chat_indexes_ensured = True
+
+    @classmethod
+    def ensure_indexes(cls) -> None:
+        """创建会话归属与列表查询索引。"""
+        if not cls._can_use_mongo():
+            return
+        try:
+            collection = cls._collection()
+            collection.create_index("chat_id", unique=True)
+            collection.create_index([("created_by", 1), ("archived", 1), ("updated_at", -1)])
+        except PyMongoError as exc:
+            cls._handle_mongo_error(exc)
 
     @classmethod
     def _collection(cls):
@@ -888,6 +981,28 @@ class AssistantMessageRepository(BaseRepository):
     """按会话和用户隔离的 assistant message 仓储。"""
 
     collection_name = "assistant_messages"
+
+    @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保消息索引只在当前进程内创建一次。"""
+        global _assistant_message_indexes_ensured
+        if _assistant_message_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _assistant_message_indexes_ensured = True
+
+    @classmethod
+    def ensure_indexes(cls) -> None:
+        """创建消息归属与列表查询索引。"""
+        if not cls._can_use_mongo():
+            return
+        try:
+            collection = cls._collection()
+            collection.create_index("message_id", unique=True)
+            collection.create_index([("chat_id", 1), ("created_by", 1), ("created_at", 1)])
+            collection.create_index([("chat_id", 1), ("created_by", 1)])
+        except PyMongoError as exc:
+            cls._handle_mongo_error(exc)
 
     @classmethod
     def _collection(cls):
@@ -1221,6 +1336,89 @@ class AssistantEventRepository(BaseRepository):
         return sorted(items, key=lambda item: int(item.get("seq", 0)))
 
     @classmethod
+    def list_for_run_ids(cls, run_ids: set[str]) -> list[dict[str, Any]]:
+        """批量读取多个 run 的统一事件，避免逐 run 查询。"""
+        unique_ids = [item for item in sorted(run_ids) if item]
+        if not unique_ids:
+            return []
+        if cls._can_use_mongo():
+            try:
+                cursor = (
+                    cls._collection()
+                    .find({"run_id": {"$in": unique_ids}}, {"_id": 0})
+                    .sort([("run_id", 1), ("seq", 1)])
+                )
+                return [dict(item) for item in cursor]
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        allowed = set(unique_ids)
+        documents = demo_store.load_collection(cls.collection_name)
+        return sorted(
+            [clone_document(item) for item in documents if item.get("run_id") in allowed],
+            key=lambda item: (str(item.get("run_id") or ""), int(item.get("seq", 0))),
+        )
+
+    @classmethod
+    def list_for_call_ids(cls, call_ids: set[str]) -> list[dict[str, Any]]:
+        """批量读取多个工具调用的事件，避免逐 call 查询。"""
+        unique_ids = [item for item in sorted(call_ids) if item]
+        if not unique_ids:
+            return []
+        if cls._can_use_mongo():
+            try:
+                cursor = (
+                    cls._collection()
+                    .find({"call_id": {"$in": unique_ids}}, {"_id": 0})
+                    .sort([("call_id", 1), ("seq", 1)])
+                )
+                return [dict(item) for item in cursor]
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        allowed = set(unique_ids)
+        documents = demo_store.load_collection(cls.collection_name)
+        return sorted(
+            [clone_document(item) for item in documents if item.get("call_id") in allowed],
+            key=lambda item: (str(item.get("call_id") or ""), int(item.get("seq", 0))),
+        )
+
+    @classmethod
+    def list_for_chat_usage(
+        cls,
+        chat_id: str,
+        created_by: str,
+    ) -> list[dict[str, Any]]:
+        """读取会话内全部 usage 事件，用于批量汇总 token 消耗。"""
+        filters = {
+            "chat_id": chat_id,
+            "created_by": created_by,
+            "type": "llm.usage.recorded",
+        }
+        if cls._can_use_mongo():
+            try:
+                cursor = (
+                    cls._collection()
+                    .find(filters, {"_id": 0})
+                    .sort([("seq", 1)])
+                )
+                return [dict(item) for item in cursor]
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        documents = demo_store.load_collection(cls.collection_name)
+        return sorted(
+            [
+                clone_document(item)
+                for item in documents
+                if item.get("chat_id") == chat_id
+                and item.get("created_by") == created_by
+                and item.get("type") == "llm.usage.recorded"
+            ],
+            key=lambda item: int(item.get("seq", 0)),
+        )
+
+    @classmethod
     def list_for_trace(cls, trace_id: str) -> list[dict[str, Any]]:
         """按 Trace ID 读取统一事件，并按时间与事件 ID 稳定排序。
 
@@ -1413,6 +1611,15 @@ class AssistantRunRepository(BaseRepository):
     collection_name = "assistant_runs"
 
     @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保回答运行索引只在当前进程内创建一次。"""
+        global _assistant_run_indexes_ensured
+        if _assistant_run_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _assistant_run_indexes_ensured = True
+
+    @classmethod
     def _collection(cls):
         return get_assistant_runs_collection()
 
@@ -1429,17 +1636,100 @@ class AssistantRunRepository(BaseRepository):
                 name="one_active_assistant_run_per_user",
                 partialFilterExpression={"active": True},
             )
+            collection.create_index([("created_by", 1), ("status", 1), ("created_at", 1)])
             collection.create_index([("chat_id", 1), ("created_at", -1)])
+            collection.create_index([("chat_id", 1), ("created_by", 1), ("created_at", -1)])
+            collection.create_index([("trace_id", 1), ("created_at", 1)])
+            collection.create_index([("request_snapshot.context.trace_id", 1), ("created_at", 1)])
         except PyMongoError as exc:
             cls._handle_mongo_error(exc)
+
+    @classmethod
+    def find_projection(
+        cls,
+        run_id: str,
+        fields: list[str],
+    ) -> dict[str, Any] | None:
+        """按 run_id 读取指定字段，避免高频轮询加载完整 run。
+
+        Args:
+            run_id: Assistant run ID。
+            fields: 需要返回的顶层字段。
+
+        Returns:
+            命中的文档片段；未找到时返回 None。
+        """
+        normalized_fields = list(dict.fromkeys(["_id", *fields]))
+        if cls._can_use_mongo():
+            try:
+                projection = {field: 1 for field in normalized_fields}
+                projection["_id"] = 0
+                return _without_mongo_id(
+                    cls._collection().find_one({"run_id": run_id}, projection)
+                )
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        for item in demo_store.load_collection(cls.collection_name):
+            if item.get("run_id") != run_id:
+                continue
+            return {field: clone_document(item.get(field)) for field in fields if field in item}
+        return None
+
+    @classmethod
+    def find_status(cls, run_id: str) -> dict[str, Any]:
+        """读取 run 状态与归属信息，供 SSE 轮询判断终态。"""
+        return cls.find_projection(
+            run_id,
+            ["run_id", "chat_id", "created_by", "status", "stage", "updated_at"],
+        ) or {}
+
+    @classmethod
+    def find_trace_status(cls, trace_id: str) -> dict[str, Any]:
+        """读取 Trace 关联 run 的最新状态，避免 Trace SSE 完整投影。"""
+        filters = {
+            "$or": [
+                {"trace_id": trace_id},
+                {"run_id": trace_id},
+                {"request_snapshot.context.trace_id": trace_id},
+            ]
+        }
+        if cls._can_use_mongo():
+            try:
+                documents = list(
+                    cls._collection().find(
+                        filters,
+                        {"_id": 0, "run_id": 1, "status": 1, "created_at": 1},
+                    ).sort([("created_at", 1)])
+                )
+                return documents[-1] if documents else {}
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        rows = []
+        for item in demo_store.load_collection(cls.collection_name):
+            context = ((item.get("request_snapshot") or {}).get("context") or {})
+            if (
+                item.get("trace_id") == trace_id
+                or item.get("run_id") == trace_id
+                or context.get("trace_id") == trace_id
+            ):
+                rows.append(
+                    {
+                        "run_id": item.get("run_id"),
+                        "status": item.get("status"),
+                        "created_at": item.get("created_at"),
+                    }
+                )
+        return _sort_documents(rows, "created_at", reverse=False)[0] if rows else {}
 
     @classmethod
     def create_active(cls, document: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         """原子创建用户唯一活动 run；冲突时返回现有活动 run。"""
         payload = clone_document(document)
         if cls._can_use_mongo():
+            cls._ensure_indexes_once()
             try:
-                cls.ensure_indexes()
                 cls._collection().insert_one(payload)
                 return True, payload
             except DuplicateKeyError:
@@ -1655,7 +1945,7 @@ class AssistantRunRepository(BaseRepository):
             int(event.get("seq", 0)): AssistantEventRepository.to_legacy_event(event)
             for event in unified_events
         }
-        document = cls.find_one({"run_id": run_id}) or {}
+        document = cls.find_projection(run_id, ["events", "event_seq"]) or {}
         for event in document.get("events", []):
             seq = int(event.get("seq", 0))
             if seq > after_seq and seq not in merged:
@@ -1665,6 +1955,53 @@ class AssistantRunRepository(BaseRepository):
     @classmethod
     def list_for_chat(cls, chat_id: str, created_by: str, page: int = 1, page_size: int = 20):
         return cls.list_all({"chat_id": chat_id, "created_by": created_by}, sort_field="created_at", reverse=True, page=page, page_size=page_size)
+
+    @classmethod
+    def list_for_chat_light(
+        cls,
+        chat_id: str,
+        created_by: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """读取 run 列表但剥离 events 与完整请求快照，降低会话恢复负载。"""
+        if cls._can_use_mongo():
+            try:
+                filters = {"chat_id": chat_id, "created_by": created_by}
+                collection = cls._collection()
+                total = int(collection.count_documents(filters))
+                cursor = (
+                    collection.find(
+                        filters,
+                        {
+                            "_id": 0,
+                            "events": 0,
+                            "request_snapshot.messages": 0,
+                        },
+                    )
+                    .sort([("created_at", -1)])
+                    .skip((page - 1) * page_size)
+                    .limit(page_size)
+                )
+                return [dict(item) for item in cursor], total
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        documents = demo_store.load_collection(cls.collection_name)
+        rows = [
+            clone_document(item)
+            for item in documents
+            if item.get("chat_id") == chat_id and item.get("created_by") == created_by
+        ]
+        for item in rows:
+            item.pop("events", None)
+            request_snapshot = item.get("request_snapshot") or {}
+            if isinstance(request_snapshot, dict):
+                request_snapshot.pop("messages", None)
+        rows = _sort_documents(rows, "created_at", reverse=True)
+        start = (page - 1) * page_size
+        return rows[start : start + page_size], len(rows)
 
     @classmethod
     def list_for_trace(cls, trace_id: str) -> list[dict[str, Any]]:

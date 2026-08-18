@@ -196,3 +196,11 @@ class AssistantChatTraceData(BaseModel):
     next_after_seq: int = Field(default=0, ge=0)
     total_events: int = Field(default=0, ge=0)
     replay_warnings: list[str] = Field(default_factory=list)
+
+
+class AssistantTraceBatchData(BaseModel):
+    """一次会话恢复请求返回的多条 Trace 快照。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[AssistantTraceData] = Field(default_factory=list)

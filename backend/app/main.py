@@ -139,6 +139,14 @@ async def app_lifespan(app: FastAPI):
     except Exception:
         app_logger.exception("LUI 算法工具目录缓存预热失败")
 
+    try:
+        from app.infra.research_engine_repositories import ensure_lui_repository_indexes
+
+        ensure_lui_repository_indexes()
+        app_logger.info("LUI 热路径 MongoDB 索引检查完成")
+    except Exception:
+        app_logger.exception("LUI 热路径 MongoDB 索引初始化失败")
+
     async def stale_reaper_loop() -> None:
         logger_reaper.info(
             "stale-run reaper started (interval=%ds, heartbeat_threshold=%ds, wallclock_factor=%.1f)",
