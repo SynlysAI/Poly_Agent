@@ -466,7 +466,7 @@ class AssistantToolCallRepository(BaseRepository):
                     return True
             return False
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def append_event(cls, call_id: str, event: dict[str, Any]) -> bool:
@@ -531,7 +531,12 @@ class AssistantToolCallRepository(BaseRepository):
                     return True
             return False
 
-        return bool(demo_store.mutate(mutate))
+        return bool(
+            demo_store.mutate_collections(
+                [cls.collection_name, AssistantEventRepository.collection_name],
+                mutate,
+            )
+        )
 
     @classmethod
     def update_if_phase(
@@ -558,7 +563,7 @@ class AssistantToolCallRepository(BaseRepository):
                     return True
             return False
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def list_continuation_pending(cls, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -668,9 +673,9 @@ class AssistantToolCallRepository(BaseRepository):
             )
             return items
 
-        data = demo_store.load()
+        documents = demo_store.load_collection(cls.collection_name)
         rows = []
-        for item in data[cls.collection_name]:
+        for item in documents:
             if item.get("trace_id") == trace_id or item.get("assistant_run_id") in run_ids:
                 rows.append(clone_document(item))
         return _sort_documents(rows, "created_at", reverse=False)
@@ -825,10 +830,10 @@ class AssistantChatRepository(BaseRepository):
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
 
-        data = demo_store.load()
+        documents = demo_store.load_collection(cls.collection_name)
         rows = []
         needle = query.lower() if query else None
-        for item in data[cls.collection_name]:
+        for item in documents:
             if item.get("created_by") != created_by or bool(item.get("archived", False)) != archived:
                 continue
             if needle and needle not in str(item.get("search_text") or item.get("title") or "").lower():
@@ -856,7 +861,7 @@ class AssistantChatRepository(BaseRepository):
                     return True
             return False
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def delete_owned(cls, chat_id: str, created_by: str) -> bool:
@@ -876,7 +881,7 @@ class AssistantChatRepository(BaseRepository):
             ]
             return before != len(data[cls.collection_name])
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
 
 class AssistantMessageRepository(BaseRepository):
@@ -923,11 +928,51 @@ class AssistantMessageRepository(BaseRepository):
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
 
-        data = demo_store.load()
+        documents = demo_store.load_collection(cls.collection_name)
         return sum(
             item.get("chat_id") == chat_id and item.get("created_by") == created_by
-            for item in data[cls.collection_name]
+            for item in documents
         )
+
+    @classmethod
+    def count_for_chats(cls, chat_ids: list[str], created_by: str) -> dict[str, int]:
+        """批量统计多个会话的消息数量，避免历史列表逐会话查询。
+
+        Args:
+            chat_ids: 会话 ID 列表。
+            created_by: 会话所有者 ID。
+
+        Returns:
+            会话 ID 到消息数量的映射。
+        """
+        unique_ids = list(dict.fromkeys(chat_ids))
+        if not unique_ids:
+            return {}
+        if cls._can_use_mongo():
+            try:
+                pipeline = [
+                    {
+                        "$match": {
+                            "chat_id": {"$in": unique_ids},
+                            "created_by": created_by,
+                        }
+                    },
+                    {"$group": {"_id": "$chat_id", "total": {"$sum": 1}}},
+                ]
+                return {
+                    str(row["_id"]): int(row["total"])
+                    for row in cls._collection().aggregate(pipeline)
+                }
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+
+        documents = demo_store.load_collection(cls.collection_name)
+        counts = {chat_id: 0 for chat_id in unique_ids}
+        for item in documents:
+            chat_id = str(item.get("chat_id") or "")
+            if chat_id in counts and item.get("created_by") == created_by:
+                counts[chat_id] += 1
+        return counts
 
     @classmethod
     def update_owned(cls, message_id: str, chat_id: str, created_by: str, fields: dict[str, Any]) -> bool:
@@ -952,7 +997,7 @@ class AssistantMessageRepository(BaseRepository):
                     return True
             return False
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def delete_owned(cls, message_id: str, chat_id: str, created_by: str) -> bool:
@@ -978,7 +1023,7 @@ class AssistantMessageRepository(BaseRepository):
             ]
             return before != len(data[cls.collection_name])
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def delete_for_chat(cls, chat_id: str, created_by: str) -> int:
@@ -999,7 +1044,7 @@ class AssistantMessageRepository(BaseRepository):
             ]
             return before - len(data[cls.collection_name])
 
-        return int(demo_store.mutate(mutate))
+        return int(demo_store.mutate_collection(cls.collection_name, mutate))
 
 
 class AssistantEventRepository(BaseRepository):
@@ -1150,7 +1195,7 @@ class AssistantEventRepository(BaseRepository):
             data[cls.collection_name].append(clone_document(document))
             return clone_document(document)
 
-        return demo_store.mutate(mutate)
+        return demo_store.mutate_collection(cls.collection_name, mutate)
 
     @classmethod
     def list_for_run(cls, run_id: str) -> list[dict[str, Any]]:
@@ -1162,14 +1207,18 @@ class AssistantEventRepository(BaseRepository):
         Returns:
             事件文档列表。
         """
-        items, _ = cls.list_all(
-            {"run_id": run_id},
-            sort_field="seq",
-            reverse=False,
-            page=1,
-            page_size=10_000,
-        )
-        return items
+        if cls._can_use_mongo():
+            try:
+                cursor = (
+                    cls._collection()
+                    .find({"run_id": run_id}, {"_id": 0})
+                    .sort([("seq", 1)])
+                )
+                return [dict(item) for item in cursor]
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        items = demo_store.load_collection_where(cls.collection_name, "run_id", run_id)
+        return sorted(items, key=lambda item: int(item.get("seq", 0)))
 
     @classmethod
     def list_for_trace(cls, trace_id: str) -> list[dict[str, Any]]:
@@ -1228,9 +1277,8 @@ class AssistantEventRepository(BaseRepository):
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
 
-        data = demo_store.load()
         rows = []
-        for item in data[cls.collection_name]:
+        for item in demo_store.load_collection_where(cls.collection_name, "run_id", run_id):
             if item.get("run_id") != run_id:
                 continue
             if int(item.get("seq", 0)) <= int(after_seq):
@@ -1356,7 +1404,7 @@ class AssistantEventRepository(BaseRepository):
             data[cls.collection_name] = [item for item in data[cls.collection_name] if item.get("run_id") != run_id]
             return before - len(data[cls.collection_name])
 
-        return int(demo_store.mutate(mutate))
+        return int(demo_store.mutate_collection(cls.collection_name, mutate))
 
 
 class AssistantRunRepository(BaseRepository):
@@ -1404,7 +1452,7 @@ class AssistantRunRepository(BaseRepository):
                     return False, clone_document(item)
             data[cls.collection_name].append(payload)
             return True, clone_document(payload)
-        return demo_store.mutate(mutate)
+        return demo_store.mutate_collection(cls.collection_name, mutate)
 
     @classmethod
     def find_active_for_user(cls, created_by: str) -> dict[str, Any] | None:
@@ -1414,8 +1462,11 @@ class AssistantRunRepository(BaseRepository):
                 return _without_mongo_id(cls._collection().find_one(filters, {"_id": 0}, sort=[("created_at", 1)]))
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
-        data = demo_store.load()
-        rows = [clone_document(x) for x in data[cls.collection_name] if _matches(x, filters)]
+        rows = [
+            clone_document(x)
+            for x in demo_store.load_collection(cls.collection_name)
+            if _matches(x, filters)
+        ]
         return sorted(rows, key=lambda x: str(x.get("created_at", "")))[0] if rows else None
 
     @classmethod
@@ -1449,7 +1500,7 @@ class AssistantRunRepository(BaseRepository):
                     _apply_update_fields(item, fields)
                     return True
             return False
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def update_claim(cls, run_id: str, worker_id: str, fields: dict[str, Any]) -> bool:
@@ -1465,7 +1516,7 @@ class AssistantRunRepository(BaseRepository):
                     _apply_update_fields(item, fields)
                     return True
             return False
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def increment_metric(cls, run_id: str, field: str) -> None:
@@ -1480,7 +1531,7 @@ class AssistantRunRepository(BaseRepository):
                 if item.get("run_id") == run_id:
                     item[field] = int(item.get(field, 0)) + 1
                     return
-        demo_store.mutate(mutate)
+        demo_store.mutate_collection(cls.collection_name, mutate)
 
     @classmethod
     def claim_next(cls, worker_id: str, now: datetime) -> dict[str, Any] | None:
@@ -1507,7 +1558,7 @@ class AssistantRunRepository(BaseRepository):
             selected = sorted(queued, key=lambda x: str(x.get("created_at", "")))[0]
             _apply_update_fields(selected, fields)
             return clone_document(selected)
-        return demo_store.mutate(mutate)
+        return demo_store.mutate_collection(cls.collection_name, mutate)
 
     @classmethod
     def requeue_stale(cls, stale_before: datetime, now: datetime) -> list[str]:
@@ -1540,7 +1591,7 @@ class AssistantRunRepository(BaseRepository):
                     })
                     run_ids.append(item["run_id"])
             return run_ids
-        return list(demo_store.mutate(mutate))
+        return list(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def append_event(cls, run_id: str, event: dict[str, Any]) -> dict[str, Any] | None:
@@ -1586,7 +1637,10 @@ class AssistantRunRepository(BaseRepository):
                         )
                     return payload
             return None
-        return demo_store.mutate(mutate)
+        return demo_store.mutate_collections(
+            [cls.collection_name, AssistantEventRepository.collection_name],
+            mutate,
+        )
 
     @classmethod
     def events_after(cls, run_id: str, after_seq: int = 0) -> list[dict[str, Any]]:
@@ -1632,9 +1686,9 @@ class AssistantRunRepository(BaseRepository):
             )
             return items
 
-        data = demo_store.load()
+        documents = demo_store.load_collection(cls.collection_name)
         rows = []
-        for item in data[cls.collection_name]:
+        for item in documents:
             context = ((item.get("request_snapshot") or {}).get("context") or {})
             if item.get("trace_id") == trace_id or item.get("run_id") == trace_id or context.get("trace_id") == trace_id:
                 rows.append(clone_document(item))

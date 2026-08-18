@@ -185,12 +185,11 @@ class AssistantChatService:
         )
 
     @classmethod
-    def _summary(cls, document: dict[str, Any], owner_id: str) -> AssistantChatSummary:
+    def _summary(cls, document: dict[str, Any], message_count: int) -> AssistantChatSummary:
         """将会话文档转换为历史栏摘要。"""
-        chat_id = document["chat_id"]
         return AssistantChatSummary.model_validate({
             **document,
-            "message_count": AssistantMessageRepository.count_for_chat(chat_id, owner_id),
+            "message_count": int(message_count),
         })
 
     @classmethod
@@ -212,8 +211,15 @@ class AssistantChatService:
             page=page,
             page_size=page_size,
         )
+        message_counts = AssistantMessageRepository.count_for_chats(
+            [str(item.get("chat_id") or "") for item in items],
+            owner_id,
+        )
         return AssistantChatSummaryListData(
-            items=[cls._summary(item, owner_id) for item in items],
+            items=[
+                cls._summary(item, message_counts.get(str(item.get("chat_id") or ""), 0))
+                for item in items
+            ],
             total=total,
             page=page,
             page_size=page_size,

@@ -175,7 +175,7 @@ class BaseRepository:
             rows.append(payload)
             return None
 
-        demo_store.mutate(mutate)
+        demo_store.mutate_collection(cls.collection_name, mutate)
 
     @classmethod
     def find_one(cls, filters: dict[str, Any]) -> dict[str, Any] | None:
@@ -186,8 +186,8 @@ class BaseRepository:
                 return _without_mongo_id(doc)
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
-        data = demo_store.load()
-        for item in data[cls.collection_name]:
+        rows = demo_store.load_collection(cls.collection_name)
+        for item in rows:
             if _matches(item, filters):
                 return clone_document(item)
         return None
@@ -213,8 +213,8 @@ class BaseRepository:
                 return [dict(item) for item in cursor], total
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
-        data = demo_store.load()
-        rows = [clone_document(item) for item in data[cls.collection_name] if _matches(item, filters)]
+        documents = demo_store.load_collection(cls.collection_name)
+        rows = [clone_document(item) for item in documents if _matches(item, filters)]
         rows = _sort_documents(rows, sort_field, reverse=reverse)
         return rows[skip : skip + page_size], len(rows)
 
@@ -243,7 +243,7 @@ class BaseRepository:
                     return True
             return False
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def delete_one(cls, key_field: str, key_value: Any) -> bool:
@@ -264,7 +264,7 @@ class BaseRepository:
             ]
             return len(data[cls.collection_name]) != before
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def count(cls, filters: dict[str, Any]) -> int:
@@ -274,8 +274,8 @@ class BaseRepository:
                 return int(cls._collection().count_documents(filters))
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
-        data = demo_store.load()
-        return sum(1 for item in data[cls.collection_name] if _matches(item, filters))
+        documents = demo_store.load_collection(cls.collection_name)
+        return sum(1 for item in documents if _matches(item, filters))
 
 
 class ComputationRunRepository(BaseRepository):

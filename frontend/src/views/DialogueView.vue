@@ -659,15 +659,19 @@ function applySessionControlState(state) {
  * Returns:
  *   成功时返回目录数据；失败时返回 null。
  */
-async function loadCommandCatalog(options = {}) {
-  if (!options.force && commandCatalogLoadPromise) return commandCatalogLoadPromise
+async function loadCommandCatalog(options = {}, targetChatId = chatId.value) {
+  if (
+    !options.force
+    && commandCatalogLoadPromise
+    && targetChatId === chatId.value
+  ) return commandCatalogLoadPromise
   const request = (async () => {
     commandCatalogState.loading = true
     commandCatalogState.error = ''
     try {
       // 共享 ensureChat 与目录请求，避免输入 `/` 的预加载和命令提交重复等待。
-      if (!chatId.value) await ensureChat()
-      const data = await commandCatalogCache.load(chatId.value, options)
+      const catalogChatId = targetChatId || chatId.value || await ensureChat()
+      const data = await commandCatalogCache.load(catalogChatId, options)
       Object.assign(commandCatalogState, {
         loading: commandCatalogCache.state.loading,
         error: commandCatalogCache.state.error,
@@ -839,6 +843,25 @@ function stopToolCallStream(callId) {
   toolCallStreams.delete(callId)
 }
 
+/**
+ * 停止旧会话的实时订阅，避免历史切换后残留请求继续消耗后端。
+ *
+ * Args:
+ *   targetChatId: 即将恢复的会话 ID。
+ */
+function stopStaleStreams(targetChatId) {
+  for (const [runId, controller] of runSubscriptions.entries()) {
+    const run = runStates.value.get(runId)
+    if (run?.chat_id && run.chat_id !== targetChatId) {
+      controller.abort()
+      runSubscriptions.delete(runId)
+    }
+  }
+  for (const controller of traceSubscriptions.values()) controller.abort()
+  traceSubscriptions.clear()
+  for (const callId of [...toolCallStreams.keys()]) stopToolCallStream(callId)
+}
+
 function startToolCallStream(message, call) {
   if (!call?.call_id || !['queued', 'running'].includes(call.phase) || toolCallStreams.has(call.call_id)) return
   const poll = async () => {
@@ -880,6 +903,7 @@ async function backfillCompletedToolCall(message, call) {
 
 async function loadChat(chatKey) {
   if (!chatKey) return
+  stopStaleStreams(chatKey)
   resetConversationUsage()
   chatOptionsSyncSuspended.value = true
   try {
@@ -896,13 +920,18 @@ async function loadChat(chatKey) {
       }
     }
     selectDefaultModelForMode(data.model || {})
-    const controlState = await getAssistantSessionState(chatKey)
-    applySessionControlState(controlState)
-    await loadCommandCatalog()
-    await loadChatRun(chatKey)
-    await hydrateAssistantTraces()
-    await refreshChatTrace()
     scrollToBottom()
+    await Promise.all([
+      getAssistantSessionState(chatKey)
+        .then((state) => {
+          if (chatId.value === data.chat_id) applySessionControlState(state)
+        })
+        .catch(() => {}),
+      loadCommandCatalog({}, chatKey),
+      loadChatRun(chatKey),
+      hydrateAssistantTraces(),
+      refreshChatTrace(),
+    ])
   } catch (error) {
     ElMessage.warning(`会话恢复失败：${getApiErrorMessage(error)}`)
     await router.replace({ path: '/dialogue', query: route.query })
@@ -1247,8 +1276,8 @@ async function sendPrompt(prompt) {
     registerRun(run)
     subscribeToRun(run)
     if (run.trace_id) subscribeToTrace(run.trace_id)
-    await loadChatHistory()
     scrollToBottom()
+    void loadChatHistory()
   } catch (error) {
     if (error.status === 409 && error.detail?.run_id) {
       ElMessage.warning('已有会话正在回答，请等待完成或先取消该回答')
