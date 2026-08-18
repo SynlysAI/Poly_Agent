@@ -45,6 +45,7 @@ COLLECTION_NAMES = [
     "assistant_events",
     "assistant_command_runs",
     "assistant_runtime_assets",
+    "assistant_feedback",
     "algorithm_packages",
     "algorithm_versions",
     "algorithm_resources",

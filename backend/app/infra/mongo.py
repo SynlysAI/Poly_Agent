@@ -171,6 +171,11 @@ def get_assistant_runtime_assets_collection() -> Collection:
     return get_database()["assistant_runtime_assets"]
 
 
+def get_assistant_feedback_collection() -> Collection:
+    """获取 assistant_feedback 会话反馈权威集合。"""
+    return get_database()["assistant_feedback"]
+
+
 def get_algorithm_packages_collection() -> Collection:
     """获取 algorithm_packages 集合。"""
     return get_database()["algorithm_packages"]

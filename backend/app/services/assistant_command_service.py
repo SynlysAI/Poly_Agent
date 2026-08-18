@@ -12,7 +12,10 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.core.time import utc_now
-from app.infra.assistant_command_repositories import AssistantCommandRunRepository
+from app.infra.assistant_command_repositories import (
+    AssistantCommandRunRepository,
+    AssistantFeedbackRepository,
+)
 from app.infra.research_engine_repositories import (
     AssistantChatRepository,
     AssistantRunRepository,
@@ -20,6 +23,7 @@ from app.infra.research_engine_repositories import (
 )
 from app.schemas.agent_tools import AssistantToolCall, AssistantToolCallCreate
 from app.schemas.assistant_commands import (
+    AssistantFeedback,
     CommandCatalogData,
     CommandChoice,
     CommandDescriptor,
@@ -30,6 +34,10 @@ from app.schemas.assistant_commands import (
 from app.schemas.assistant_chats import AssistantMessageCreate
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate
 from app.services.assistant_compaction_service import assistant_compaction_service
+from app.services.assistant_export_service import (
+    AGENT_VERSION,
+    AssistantExportService,
+)
 from app.services.assistant_chat_service import actor_id, assistant_chat_service
 from app.services.assistant_command_parser import CommandParseError, parse_command
 from app.services.assistant_command_registry import AssistantCommandRegistry
@@ -45,7 +53,7 @@ from app.services.assistant_tool_command_provider import AssistantToolCommandPro
 from app.services.llm_model_service import LLMModelService
 
 
-CATALOG_VERSION = "assistant-command-catalog-v2"
+CATALOG_VERSION = "assistant-command-catalog-v3"
 ACTIVE_RUN_STATUSES = {"queued", "running"}
 ACTIVE_TOOL_PHASES = {"requested", "awaiting_input", "awaiting_confirmation", "queued", "running"}
 
@@ -60,6 +68,9 @@ class CommandHandlerResult:
     run: AssistantRun | None = None
     tool_call: AssistantToolCall | None = None
     source_event: str | None = None
+    download_url: str | None = None
+    download_filename: str | None = None
+    export_path: str | None = None
 
 
 class AssistantCommandService:
@@ -69,6 +80,7 @@ class AssistantCommandService:
         self.registry = AssistantCommandRegistry()
         self.run_service = AssistantRunService()
         self.llm_model_service = LLMModelService()
+        self.export_service = AssistantExportService()
         self.registry.register_provider(
             AssistantToolCommandProvider(),
             self._handle_tool_command,
@@ -207,6 +219,8 @@ class AssistantCommandService:
             "model": self._handle_model,
             "status": self._handle_status,
             "compact": self._handle_compact,
+            "export": self._handle_export,
+            "feedback": self._handle_feedback,
         }
         for name, handler in handlers.items():
             registered = self.registry._commands.get(name)
@@ -300,6 +314,7 @@ class AssistantCommandService:
             "run_id": None,
             "call_id": None,
             "download_url": None,
+            "download_filename": None,
             "source_event": None,
             "created_at": now,
             "updated_at": now,
@@ -364,6 +379,9 @@ class AssistantCommandService:
             run = result.run
             tool_call = result.tool_call
             source_event = result.source_event
+            download_url = result.download_url
+            download_filename = result.download_filename
+            export_path = result.export_path
             error = None
         except Exception as exc:
             final_status = "failed"
@@ -378,6 +396,9 @@ class AssistantCommandService:
             interaction = None
             run = None
             tool_call = None
+            download_url = None
+            download_filename = None
+            export_path = None
             source_event = (run_event or {}).get("event_id")
             error = {"error_type": exc.__class__.__name__, "message": message}
 
@@ -392,7 +413,9 @@ class AssistantCommandService:
             "interaction": interaction.model_dump(mode="python") if interaction else None,
             "run_id": getattr(run, "run_id", None),
             "call_id": getattr(tool_call, "call_id", None),
-            "download_url": None,
+            "download_url": download_url,
+            "download_filename": download_filename,
+            "export_path": export_path,
             "source_event": source_event,
             "error": error,
             "finished_at": finished_at,
@@ -825,6 +848,194 @@ class AssistantCommandService:
                 f"{snapshot.token_estimate} tokens，节省 {reduction} tokens"
             ),
         )
+
+    def _handle_export(
+        self,
+        chat: dict[str, Any],
+        raw_args: str,
+        _payload: dict[str, Any],
+        current_user: dict[str, str] | None,
+        command_id: str,
+    ) -> CommandHandlerResult:
+        """处理 /export 命令。
+
+        Args:
+            chat: 当前会话文档。
+            raw_args: 原样导出格式参数。
+            _payload: 前端交互 payload，当前命令不使用。
+            current_user: 当前登录用户。
+            command_id: 命令生命周期 ID。
+
+        Returns:
+            格式选择交互或导出下载结果。
+        """
+        export_format = raw_args.strip()
+        if not export_format:
+            return CommandHandlerResult(
+                status="interaction",
+                message="请选择会话导出格式。",
+                interaction=CommandInteraction(
+                    kind="choice",
+                    prompt="选择导出格式",
+                    choices=[
+                        CommandChoice(value="json", label="JSON", description="单一结构化对象"),
+                        CommandChoice(value="markdown", label="Markdown", description="人类可读报告"),
+                        CommandChoice(value="zip", label="ZIP", description="包含 Trace 与 artifact 的归档"),
+                    ],
+                ),
+            )
+        exported = self.export_service.export(chat, current_user, command_id, export_format)
+        return CommandHandlerResult(
+            status="success",
+            message=(
+                f"会话导出完成：{exported.filename}，"
+                f"{exported.counts.get('messages', 0)} 条消息 / "
+                f"{exported.counts.get('execution_trace', 0)} 条 Trace 事件"
+            ),
+            download_url=f"/api/v1/assistant/commands/{command_id}/download",
+            download_filename=exported.filename,
+            export_path=str(exported.path),
+            source_event=command_id,
+        )
+
+    def _handle_feedback(
+        self,
+        chat: dict[str, Any],
+        raw_args: str,
+        payload: dict[str, Any],
+        current_user: dict[str, str] | None,
+        command_id: str,
+    ) -> CommandHandlerResult:
+        """处理 /feedback 命令。
+
+        Args:
+            chat: 当前会话文档。
+            raw_args: 原样参数；提交正文必须走结构化 payload。
+            payload: 包含 rating、comment 和可选目标 command_id 的表单数据。
+            current_user: 当前登录用户。
+            command_id: 当前反馈命令生命周期 ID。
+
+        Returns:
+            反馈表单交互或权威反馈写入结果。
+        """
+        if raw_args.strip():
+            raise ValueError("反馈正文不能作为命令参数重复记录，请在表单中提交")
+        rating = payload.get("rating")
+        if not rating:
+            return CommandHandlerResult(
+                status="interaction",
+                message="请提交会话反馈。",
+                interaction=CommandInteraction(
+                    kind="form",
+                    prompt="这次模型执行有帮助吗？",
+                    choices=[
+                        CommandChoice(value="helpful", label="有帮助"),
+                        CommandChoice(value="not_helpful", label="需改进"),
+                    ],
+                ),
+            )
+        comment = str(payload.get("comment") or "").strip()
+        target_command_id = payload.get("command_id")
+        context = self._feedback_context(chat, current_user, target_command_id)
+        feedback = AssistantFeedback(
+            feedback_id=f"fb_{uuid4().hex[:16]}",
+            chat_id=str(chat["chat_id"]),
+            rating=rating,
+            comment=comment,
+            command_id=context["command_id"],
+            submitted_by_command_id=command_id,
+            trace_id=context["trace_id"],
+            model_route=context["model_route"],
+            agent_version=AGENT_VERSION,
+            created_by=actor_id(current_user),
+            created_at=utc_now(),
+        )
+        document = AssistantFeedbackRepository.create(feedback.model_dump(mode="python"))
+        feedback_event = AssistantCommandRunRepository.append_chat_event(
+            chat,
+            {
+                "type": "feedback.recorded",
+                "command_id": command_id,
+                "feedback_command_id": context["command_id"],
+                "feedback_id": feedback.feedback_id,
+                "rating": feedback.rating,
+                "trace_id": feedback.trace_id,
+                "model_route": feedback.model_route,
+                "agent_version": feedback.agent_version,
+                "comment_digest": self._objective_digest(comment) if comment else "",
+                "chat_id": str(chat["chat_id"]),
+            },
+        )
+        rating_label = "有帮助" if feedback.rating == "helpful" else "需改进"
+        return CommandHandlerResult(
+            status="success",
+            message=f"反馈已记录（{rating_label}），关联 Trace {feedback.trace_id}",
+            source_event=str((feedback_event or {}).get("event_id") or document["feedback_id"]),
+        )
+
+    def _feedback_context(
+        self,
+        chat: dict[str, Any],
+        current_user: dict[str, str] | None,
+        target_command_id: Any = None,
+    ) -> dict[str, Any]:
+        """从权威 run / command 记录解析反馈关联上下文。
+
+        Args:
+            chat: 当前会话文档。
+            current_user: 当前登录用户。
+            target_command_id: 用户指定的目标命令 ID。
+
+        Returns:
+            实际模型 run 的 command_id、trace_id 与 model_route。
+        """
+        owner_id = actor_id(current_user)
+        chat_id = str(chat["chat_id"])
+        runs, _ = AssistantRunRepository.list_for_chat(
+            chat_id,
+            owner_id,
+            page=1,
+            page_size=100,
+        )
+        candidate_run_ids: set[str] = set()
+        normalized_target = str(target_command_id or "").strip() or None
+        if normalized_target:
+            command = AssistantCommandRunRepository.find_one(
+                {
+                    "command_id": normalized_target,
+                    "chat_id": chat_id,
+                    "created_by": owner_id,
+                }
+            )
+            if not command:
+                raise ValueError("反馈目标命令不存在")
+            if command.get("run_id"):
+                candidate_run_ids.add(str(command["run_id"]))
+            call = AssistantToolCallRepository.find_one(
+                {"command_id": normalized_target, "chat_id": chat_id, "created_by": owner_id}
+            )
+            if call:
+                for key in ("assistant_run_id", "continuation_run_id"):
+                    if call.get(key):
+                        candidate_run_ids.add(str(call[key]))
+        run = next((item for item in runs if str(item.get("run_id")) in candidate_run_ids), None)
+        if run is None and not candidate_run_ids:
+            run = runs[0] if runs else None
+        if run is None:
+            raise ValueError("当前会话暂无可反馈的实际模型执行记录")
+        route = dict(run.get("route") or {})
+        route.update(
+            {
+                "provider_id": run.get("provider_id") or route.get("provider_id") or "",
+                "model_id": run.get("model_id") or route.get("model_id") or "",
+                "run_id": run.get("run_id"),
+            }
+        )
+        return {
+            "command_id": normalized_target,
+            "trace_id": str(run.get("trace_id") or run.get("run_id") or ""),
+            "model_route": route,
+        }
 
     def _handle_status(
         self,

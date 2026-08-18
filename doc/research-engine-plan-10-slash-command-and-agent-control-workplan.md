@@ -1,6 +1,6 @@
 # Plan 10：Slash Command、会话控制面与 Agent 控制体系工作计划
 
-> **状态：PR-04 已完成，PR-05 待启动**
+> **状态：PR-05 已完成，PR-06 待启动**
 >
 > 日期：2026-08-16
 >
@@ -601,8 +601,8 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2–3 天
 
-- [ ] 新增会话导出服务，支持 `json`、`markdown`、`zip`。
-- [ ] 导出数据包含：
+- [x] 新增会话导出服务，支持 `json`、`markdown`、`zip`。
+- [x] 导出数据包含：
   - session 与控制状态
   - messages
   - commands
@@ -613,7 +613,7 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - algorithm run 关联
   - artifact 引用
   - metadata
-- [ ] ZIP 结构固定为：
+- [x] ZIP 结构固定为：
 
 ```text
 session.json
@@ -625,13 +625,13 @@ artifacts/
 metadata.json
 ```
 
-- [ ] JSON 导出为单个对象，Markdown 导出为人类可读报告。
-- [ ] 本地受管 artifact 进入 ZIP，保留原文件名并处理重名。
-- [ ] 无法读取或已过期的 artifact 不导致整个导出失败，写入 manifest 错误。
-- [ ] `/export` 裸命令返回格式选择交互；带参数命令返回下载 URL。
-- [ ] 前端通过浏览器下载，不在 JavaScript 中完整缓存 ZIP。
-- [ ] 写入 `session.exported` 开始与结束事件。
-- [ ] 新增反馈 schema 与集合：
+- [x] JSON 导出为单个对象，Markdown 导出为人类可读报告。
+- [x] 本地受管 artifact 进入 ZIP，保留原文件名并处理重名。
+- [x] 无法读取或已过期的 artifact 不导致整个导出失败，写入 manifest 错误。
+- [x] `/export` 裸命令返回格式选择交互；带参数命令返回下载 URL。
+- [x] 前端通过浏览器下载，不在 JavaScript 中完整缓存 ZIP。
+- [x] 写入 `session.exported` 开始与结束事件。
+- [x] 新增反馈 schema 与集合：
   - rating: `helpful | not_helpful`
   - comment
   - chat id
@@ -639,9 +639,9 @@ metadata.json
   - model route
   - agent version
   - created by / at
-- [ ] `/feedback` 裸命令打开反馈对话框，提交后写权威 `feedback.recorded` 事件。
-- [ ] 反馈正文只保存在权威反馈记录，`command.run` 不重复记录正文。
-- [ ] 补充导出内容一致性、owner 校验、artifact 错误和反馈关联测试。
+- [x] `/feedback` 裸命令打开反馈对话框，提交后写权威 `feedback.recorded` 事件。
+- [x] 反馈正文只保存在权威反馈记录，`command.run` 不重复记录正文。
+- [x] 补充导出内容一致性、owner 校验、artifact 错误和反馈关联测试。
 
 **验收标准**
 
@@ -1019,3 +1019,5 @@ python e2e/dialogue_e2e.py
 - 2026-08-17：PR-03 完成：新增用户态动态算法命令 provider，目录从 `AgentToolService.list_tools()` 实时派生并携带 JSON schema、确认策略与算法 attribution；保留 `capability_group` 并实现稳定 slug 与内置名冲突 hash；动态命令直接创建复用既有输入 / 附件 / 确认 / 执行状态机的 `AssistantToolCall`，贯通 `command_id → call_id → AlgorithmRun/continuation run → trace_id`；命令 owned message 标记 `model_visible=false`，无 `task_content` 时前后端均阻止自动续答，工具结果继续展示算法来源。后端 Assistant + AgentTool 回归 136 项通过，`py_compile` 通过；前端 assistant tool calls / trace / events / context / ui / tool menu / auto select / slash commands / command catalog 测试与 `npm run build` 通过；真实浏览器专项冒烟覆盖动态 Tools 命令选择、JSON 参数直接创建、确认执行、结果来源标注和 0 次模型 run 请求。既有完整 `dialogue_e2e.py` 中外部模型续答超时，未作为 PR-03 通过依据。
 
 - 2026-08-17：PR-04 完成：新增 `AssistantCompactionService` 与完整 `CompactionSnapshot` 契约，落地 snapshot id、摘要、cutoff / retained message、active tool call、token 前后估算、安全 route、usage、创建者与摘要 / 快照 digest；新增独立 `compact` LLM route purpose，辅助模型失败或输出无效时使用保留目标、Todo、权限、结论、配置和活跃工具结果的确定性摘要；`/compact` 在 active run 期间返回 busy，事件写入失败会回滚快照并返回稳定错误；原始消息保持不变，后续 run 由服务端基于持久化消息与 snapshot 重建摘要 + retained + cutoff 后有效历史，客户端历史仅作兼容输入不再可信；写入带 token reduction 的 `context.compacted` 事件。后端 Assistant + LLM 回归 143 项通过，相关 `py_compile` 通过；前端 slash commands / command catalog 测试与 `npm run build` 通过。全量后端混合探索为 804 通过、20 失败，失败集中在 Data Catalog / Report / Knowledge / WeKnora 的认证或外部依赖问题，与 PR04 直接回归面无交集，未作为 PR-04 通过依据。
+
+- 2026-08-18：PR-05 完成：新增 `AssistantExportService` 与 `/export`，同一会话快照导出 JSON 单对象、Markdown 报告和固定结构 ZIP，覆盖 session/control state、messages、commands、assistant runs、统一 execution trace、tool calls/results、algorithm run 关联、artifact 引用与 metadata；本地 computation / runtime artifact 按安全路径进入 ZIP，保留 Unicode 原名并处理重名，缺失、越界或过期只写入 manifest 错误；`session.exported` 开始/结束事件记录格式、状态、计数与 manifest digest，owner 专用原生下载端点避免 JavaScript 缓存 ZIP。新增 `assistant_feedback` 双模集合与 schema，`/feedback` 裸命令返回表单，提交正文仅保存权威反馈记录，`feedback.recorded` 只记录 rating、digest 与服务端解析的实际 model route、Agent 版本和 trace；命令目录版本提升 v3。后端 `py_compile` 通过，Assistant + AgentTool 回归 143 项通过；前端 25 个轻量测试脚本与 `npm run build` 通过。

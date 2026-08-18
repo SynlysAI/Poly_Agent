@@ -39,6 +39,7 @@ import {
   getActiveAssistantRun,
   getAssistantRun,
   getLlmModels,
+  getResolvedApiBaseUrl,
   listAgentTools,
   listAssistantChatSummaries,
   listAssistantRuns,
@@ -49,6 +50,7 @@ import {
   updateAssistantToolCallInput,
   uploadAssistantToolCallInput,
 } from '../api/polyAgentApi'
+import { getAuthorizationHeader } from '../auth/authState'
 import ExecutionTraceTimeline from '../components/assistant/ExecutionTraceTimeline.vue'
 import CommandPalette from '../components/assistant/CommandPalette.vue'
 import GlobeIcon from '../components/GlobeIcon.vue'
@@ -106,6 +108,10 @@ import {
 } from '../utils/assistantUi.mjs'
 import { downloadArtifactToBrowser } from '../utils/artifactDownload.mjs'
 import { createCommandCatalogCache } from '../utils/commandCatalog.mjs'
+import {
+  buildAuthenticatedDownloadUrl,
+  openNativeDownload,
+} from '../utils/nativeDownload.mjs'
 import {
   loadHistoryPanelPreference,
   loadKnowledgePreference,
@@ -1004,6 +1010,10 @@ function createCommandResultMessage(line, result) {
     command_status: result.status || 'failed',
     command_message: result.message || '命令执行失败',
     interaction: result.interaction || null,
+    feedback_rating: result.name === 'feedback' && result.interaction?.kind === 'form' ? 'helpful' : '',
+    feedback_comment: '',
+    feedback_submitting: false,
+    feedback_submitted: false,
     actions: [],
     references: [],
     suggested_questions: [],
@@ -1042,7 +1052,48 @@ function attachCommandExecution(commandMessage, result) {
     commandMessage.tool_calls = [normalized]
     startToolCallStream(commandMessage, normalized)
   }
-  if (result?.download_url) window.open(result.download_url, '_blank', 'noopener,noreferrer')
+  if (result?.download_url) {
+    openNativeDownload({
+      url: buildAuthenticatedDownloadUrl({
+        baseUrl: getResolvedApiBaseUrl(),
+        path: result.download_url,
+        authorizationHeader: getAuthorizationHeader(),
+      }),
+      filename: result.download_filename || 'assistant-export.dat',
+    })
+  }
+}
+
+/**
+ * 提交反馈表单；正文只进入请求 payload，不进入命令行参数。
+ *
+ * Args:
+ *   message: 当前反馈命令结果消息。
+ */
+async function submitFeedbackCommand(message) {
+  if (message.feedback_submitting || message.feedback_submitted) return
+  message.feedback_submitting = true
+  try {
+    await ensureChat()
+    const result = await executeAssistantCommand({
+      chat_id: chatId.value,
+      line: '/feedback',
+      payload: {
+        rating: message.feedback_rating,
+        comment: message.feedback_comment,
+      },
+    })
+    const resultMessage = createCommandResultMessage('/feedback', result)
+    messages.value.push(resultMessage)
+    if (result.state_after) applySessionControlState(result.state_after)
+    message.feedback_submitted = true
+    await loadChatHistory()
+    scrollToBottom()
+  } catch (error) {
+    ElMessage.error(`反馈提交失败：${getApiErrorMessage(error)}`)
+  } finally {
+    message.feedback_submitting = false
+  }
 }
 
 /**
@@ -2519,6 +2570,39 @@ watch(
                     <small v-if="choice.description">{{ choice.description }}</small>
                   </button>
                 </div>
+                <div
+                  v-if="msg.interaction?.kind === 'form'
+                    && msg.command_name === 'feedback'
+                    && !msg.feedback_submitted"
+                  class="feedback-form"
+                >
+                  <div class="command-interaction">
+                    <button
+                      v-for="choice in msg.interaction.choices"
+                      :key="choice.value"
+                      type="button"
+                      :class="{ selected: msg.feedback_rating === choice.value }"
+                      @click="msg.feedback_rating = choice.value"
+                    >
+                      <strong>{{ choice.label }}</strong>
+                      <small v-if="choice.description">{{ choice.description }}</small>
+                    </button>
+                  </div>
+                  <textarea
+                    v-model="msg.feedback_comment"
+                    rows="3"
+                    maxlength="4000"
+                    placeholder="补充说明（不会进入模型历史，也不会写入命令事件正文）"
+                  ></textarea>
+                  <button
+                    type="button"
+                    class="feedback-submit"
+                    :disabled="msg.feedback_submitting || !msg.feedback_rating"
+                    @click="submitFeedbackCommand(msg)"
+                  >
+                    {{ msg.feedback_submitting ? '提交中…' : '提交反馈' }}
+                  </button>
+                </div>
                 <footer>
                   <span>命令 ID：{{ msg.command_id || '未返回' }}</span>
                   <span>该结果不进入模型历史</span>
@@ -3545,6 +3629,51 @@ h1 {
 
 .command-interaction small {
   color: var(--app-ink-muted);
+}
+
+.feedback-form {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  background: #ffffff;
+}
+
+.feedback-form textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  color: var(--app-ink-body);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.feedback-form textarea:focus {
+  border-color: var(--app-primary-active);
+  outline: none;
+}
+
+.feedback-submit {
+  justify-self: end;
+  padding: 7px 13px;
+  border: 1px solid rgba(35, 92, 178, 0.24);
+  border-radius: var(--app-radius-sm);
+  background: var(--app-primary);
+  color: #ffffff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.feedback-submit:disabled {
+  border-color: var(--app-border-soft);
+  background: #edf2f9;
+  color: var(--app-ink-muted);
+  cursor: not-allowed;
 }
 
 .streaming-plaintext {

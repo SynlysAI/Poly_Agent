@@ -19,6 +19,7 @@ PermissionMode = Literal["read_only", "workspace_write", "full_access"]
 SessionGoalStatus = Literal["active", "completed"]
 SessionTodoStatus = Literal["pending", "in_progress", "completed"]
 CompactionSummaryMethod = Literal["llm", "deterministic_fallback"]
+FeedbackRating = Literal["helpful", "not_helpful"]
 
 
 class CommandVariant(BaseModel):
@@ -175,8 +176,27 @@ class CommandExecution(BaseModel):
     run: AssistantRun | None = None
     tool_call: AssistantToolCall | None = None
     download_url: str | None = None
+    download_filename: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
+
+
+class AssistantFeedback(BaseModel):
+    """会话反馈权威记录；正文只保存在该集合，不复制到命令事件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    feedback_id: str = Field(min_length=1, max_length=80)
+    chat_id: str = Field(min_length=1, max_length=80)
+    rating: FeedbackRating
+    comment: str = Field(default="", max_length=4_000)
+    command_id: str | None = Field(default=None, max_length=80)
+    submitted_by_command_id: str = Field(min_length=1, max_length=80)
+    trace_id: str = Field(min_length=1, max_length=120)
+    model_route: dict[str, Any] = Field(default_factory=dict)
+    agent_version: str = Field(min_length=1, max_length=80)
+    created_by: str = Field(min_length=1, max_length=120)
+    created_at: datetime
 
 
 class CommandEventListData(BaseModel):

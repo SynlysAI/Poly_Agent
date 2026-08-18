@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
-from app.core.auth import get_current_user, require_admin
+from app.core.auth import get_current_user, get_current_user_with_query_token, require_admin
+from app.core.config import settings
+from app.infra.assistant_command_repositories import AssistantCommandRunRepository
 from app.schemas.agent_tools import (
     AssistantToolCall,
     AssistantToolCallConfirm,
@@ -73,6 +77,47 @@ def execute_assistant_command(
         code=0,
         message="ok",
         data=assistant_command_service.execute(payload, current_user),
+    )
+
+
+@router.get("/commands/{command_id}/download")
+def download_assistant_command_export(
+    command_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user_with_query_token),
+) -> FileResponse:
+    """以原生浏览器下载方式返回会话导出文件。
+
+    Args:
+        command_id: 导出命令 ID。
+        current_user: 当前登录用户。
+
+    Returns:
+        受管导出文件响应。
+    """
+    owner_id = (current_user or {}).get("user_id") or "demo_user"
+    command = AssistantCommandRunRepository.find_one(
+        {"command_id": command_id, "created_by": owner_id}
+    )
+    if not command or command.get("name") != "export" or command.get("status") != "success":
+        raise HTTPException(status_code=404, detail="导出文件不存在")
+    filename = str(command.get("download_filename") or "")
+    extension = Path(filename).suffix.lower()
+    extension_map = {
+        ".json": "application/json",
+        ".md": "text/markdown; charset=utf-8",
+        ".zip": "application/zip",
+    }
+    if extension not in extension_map:
+        raise HTTPException(status_code=404, detail="导出文件不存在")
+    expected_path = (
+        settings.runtime_root / "assistant-exports" / f"{command_id}{extension}"
+    ).resolve()
+    if not expected_path.is_file():
+        raise HTTPException(status_code=404, detail="导出文件已过期或不存在")
+    return FileResponse(
+        expected_path,
+        media_type=extension_map[extension],
+        filename=filename,
     )
 
 

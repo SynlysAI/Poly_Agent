@@ -291,6 +291,41 @@ class AssistantCommandRegistry:
             self._placeholder_handler,
             reserved=True,
         )
+        self.register(
+            CommandDescriptor(
+                name="export",
+                title="Session Export",
+                description="把会话、命令、Trace、工具结果和 artifact 导出为 JSON、Markdown 或 ZIP。",
+                usage="/export [json|markdown|zip]",
+                category="system",
+                source="PolyAgent Assistant Command Plane",
+                source_kind="builtin",
+                input_mode="single_choice",
+                argument_hint="json、markdown 或 zip",
+                choices=[
+                    CommandChoice(value="json", label="JSON"),
+                    CommandChoice(value="markdown", label="Markdown"),
+                    CommandChoice(value="zip", label="ZIP 归档"),
+                ],
+            ),
+            self._placeholder_handler,
+            reserved=True,
+        )
+        self.register(
+            CommandDescriptor(
+                name="feedback",
+                title="Session Feedback",
+                description="对当前会话的实际模型执行提交有帮助或需改进反馈。",
+                usage="/feedback",
+                category="agent",
+                source="PolyAgent Assistant Command Plane",
+                source_kind="builtin",
+                input_mode="text",
+                argument_hint="裸命令打开反馈表单",
+            ),
+            self._placeholder_handler,
+            reserved=True,
+        )
 
     @staticmethod
     def _placeholder_handler(*_args: object, **_kwargs: object) -> None:

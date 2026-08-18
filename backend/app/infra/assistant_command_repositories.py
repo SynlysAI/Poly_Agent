@@ -13,6 +13,7 @@ from app.infra.mongo import (
     get_assistant_chats_collection,
     get_assistant_command_runs_collection,
     get_assistant_events_collection,
+    get_assistant_feedback_collection,
 )
 from app.infra.research_engine_repositories import AssistantEventRepository
 
@@ -244,3 +245,67 @@ class AssistantCommandRunRepository(BaseRepository):
             rows.append(clone_document(item))
         rows.sort(key=lambda item: int(item.get("seq", 0)))
         return rows[: max(1, int(limit))]
+
+
+class AssistantFeedbackRepository(BaseRepository):
+    """持久化会话反馈权威记录。"""
+
+    collection_name = "assistant_feedback"
+
+    @classmethod
+    def _collection(cls):
+        return get_assistant_feedback_collection()
+
+    @classmethod
+    def ensure_indexes(cls) -> None:
+        """创建反馈 ID 与会话查询索引。"""
+        if not cls._can_use_mongo():
+            return
+        try:
+            collection = cls._collection()
+            collection.create_index("feedback_id", unique=True)
+            collection.create_index([("chat_id", 1), ("created_by", 1), ("created_at", -1)])
+        except PyMongoError as exc:
+            cls._handle_mongo_error(exc)
+
+    @classmethod
+    def create(cls, document: dict[str, Any]) -> dict[str, Any]:
+        """保存一条反馈记录。
+
+        Args:
+            document: 已通过 schema 校验的反馈文档。
+
+        Returns:
+            保存后的反馈文档副本。
+        """
+        payload = clone_document(document)
+        cls.ensure_indexes()
+        cls.save("feedback_id", payload)
+        return payload
+
+    @classmethod
+    def list_for_chat(
+        cls,
+        chat_id: str,
+        created_by: str,
+        *,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """按会话读取反馈记录。
+
+        Args:
+            chat_id: 会话 ID。
+            created_by: 会话 owner。
+            limit: 单次最大返回数量。
+
+        Returns:
+            按创建时间倒序的反馈文档列表。
+        """
+        items, _ = cls.list_all(
+            {"chat_id": chat_id, "created_by": created_by},
+            sort_field="created_at",
+            reverse=True,
+            page=1,
+            page_size=limit,
+        )
+        return items
