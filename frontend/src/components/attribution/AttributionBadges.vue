@@ -27,7 +27,7 @@ function label(item) {
 </script>
 
 <template>
-  <div v-if="publicAttributions.length" class="attribution-badges">
+  <span v-if="publicAttributions.length" class="attribution-badges">
     <el-tag
       v-for="item in publicAttributions.slice(0, limit)"
       :key="`${item.role}-${item.name}`"
@@ -40,7 +40,7 @@ function label(item) {
     <el-tag v-if="publicAttributions.length > limit" size="small" effect="plain" type="info">
       +{{ publicAttributions.length - limit }}
     </el-tag>
-  </div>
+  </span>
 </template>
 
 <style scoped>

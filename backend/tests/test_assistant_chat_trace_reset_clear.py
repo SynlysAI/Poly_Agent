@@ -166,6 +166,8 @@ class AssistantChatTraceResetClearTest(ComputationTestCase):
         self.assertNotEqual(new_chat["chat_id"], old_chat_id)
         self.assertFalse(new_chat["plan_mode"])
         self.assertEqual(new_chat["permission_mode"], "workspace_write")
+        self.assertEqual(result["state_after"]["chat_id"], new_chat["chat_id"])
+        self.assertIsNone(result["state_after"]["goal"])
 
         old_chat = AssistantChatRepository.find_one({"chat_id": old_chat_id}) or {}
         self.assertEqual(old_chat.get("goal", {}).get("objective"), "旧会话目标")

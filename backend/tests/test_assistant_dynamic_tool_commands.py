@@ -230,6 +230,15 @@ class AssistantDynamicToolCommandTest(ComputationTestCase):
         )
         self.assertEqual(enabled.status_code, 200, enabled.text)
 
+        catalog = self.client.get("/api/v1/assistant/commands", params={"chat_id": chat_id})
+        self.assertEqual(catalog.status_code, 200, catalog.text)
+        dynamic_command = next(
+            item for item in catalog.json()["data"]["items"]
+            if item["tool_id"] == "algorithm:Vertical Predictor.v2"
+        )
+        self.assertFalse(dynamic_command["available"])
+        self.assertIn("只读", dynamic_command["unavailable_reason"])
+
         response = self.client.post(
             "/api/v1/assistant/commands/execute",
             json={"chat_id": chat_id, "line": "/vertical-predictor-v2"},
@@ -248,6 +257,23 @@ class AssistantDynamicToolCommandTest(ComputationTestCase):
         ]
         self.assertTrue(decisions)
         self.assertEqual(decisions[0]["data"]["reason"], "read_only_blocked")
+
+    def test_plan_mode_marks_dynamic_commands_unavailable_in_catalog(self) -> None:
+        chat_id = self._chat_id()
+        enabled = self.client.post(
+            "/api/v1/assistant/commands/execute",
+            json={"chat_id": chat_id, "line": "/plan"},
+        )
+        self.assertEqual(enabled.status_code, 200, enabled.text)
+
+        response = self.client.get("/api/v1/assistant/commands", params={"chat_id": chat_id})
+        self.assertEqual(response.status_code, 200, response.text)
+        dynamic_command = next(
+            item for item in response.json()["data"]["items"]
+            if item["tool_id"] == "algorithm:Vertical Predictor.v2"
+        )
+        self.assertFalse(dynamic_command["available"])
+        self.assertIn("Plan Mode", dynamic_command["unavailable_reason"])
 
     def test_continuation_requires_task_content_and_prefers_it(self) -> None:
         chat_id = self._chat_id()

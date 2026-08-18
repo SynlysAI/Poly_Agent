@@ -1175,6 +1175,9 @@ async function executeSlashCommand(line, submission) {
   messages.value.push(commandMessage)
   if (result.state_after) applySessionControlState(result.state_after)
   attachCommandExecution(commandMessage, result)
+  if (['plan', 'permission', 'reset'].includes(result.name)) {
+    requestCommandCatalog({ force: true })
+  }
   inputText.value = ''
   commandPaletteActive.value = false
   commandPaletteQuery.value = ''

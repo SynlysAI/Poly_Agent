@@ -1,6 +1,8 @@
 <script setup>
 import { computed } from 'vue'
 
+import AttributionBadges from '../attribution/AttributionBadges.vue'
+
 const props = defineProps({
   visible: { type: Boolean, default: false },
   groups: { type: Array, default: () => [] },
@@ -110,6 +112,11 @@ function sourceLabel(item) {
               <em v-if="!item.available || !item.enabled">
                 {{ item.unavailableReason || '当前不可用' }}
               </em>
+              <AttributionBadges
+                v-if="item.sourceKind !== 'builtin'"
+                :attributions="item.attributions || []"
+                :limit="1"
+              />
             </span>
           </span>
         </button>

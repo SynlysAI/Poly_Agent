@@ -199,6 +199,23 @@ class AssistantCommandService:
         input_asset_refs = payload_asset_refs if isinstance(payload_asset_refs, dict) else {}
         return arguments, input_asset_refs, task_content
 
+    @staticmethod
+    def _tool_command_unavailable_reason(chat: dict[str, Any]) -> str | None:
+        """生成当前会话控制状态下动态工具命令的不可用提示。
+
+        Args:
+            chat: 当前会话文档。
+
+        Returns:
+            工具命令不可用时的用户可读原因；可执行时返回 None。
+        """
+        reason = tool_execution_block_reason(chat)
+        if reason == "plan_mode_blocked":
+            return "Plan Mode 已开启，工具命令暂不可执行"
+        if reason == "read_only_blocked":
+            return "当前权限为只读，工具命令不可执行"
+        return None
+
     @classmethod
     def _latest_chat(cls, chat_id: str, owner_id: str) -> dict[str, Any]:
         """读取最新会话文档；并发删除时返回空文档以闭合命令结果。
@@ -252,6 +269,19 @@ class AssistantCommandService:
         try:
             chat = self._owned_chat(chat_id, current_user)
             items = self.registry.descriptors(current_user)
+            unavailable_reason = self._tool_command_unavailable_reason(chat)
+            if unavailable_reason:
+                items = [
+                    item.model_copy(
+                        update={
+                            "available": False,
+                            "unavailable_reason": unavailable_reason,
+                        }
+                    )
+                    if item.tool_id
+                    else item
+                    for item in items
+                ]
             return CommandCatalogData(
                 items=items,
                 total=len(items),
@@ -421,7 +451,10 @@ class AssistantCommandService:
             error = {"error_type": exc.__class__.__name__, "message": message}
 
         latest_chat = self._latest_chat(payload.chat_id, owner_id)
-        state = control_state(latest_chat)
+        state_chat = latest_chat
+        if chat_reference and chat_reference.chat_id:
+            state_chat = self._latest_chat(str(chat_reference.chat_id), owner_id)
+        state = control_state(state_chat)
         finished_at = utc_now()
         result_document = {
             **document,

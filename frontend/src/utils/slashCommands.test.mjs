@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  buildCommandDialogueRoute,
   COMMAND_CATEGORY_ORDER,
   createCommandOption,
   createPaletteState,
@@ -105,6 +106,7 @@ assert.equal(unavailable.unavailableReason, '当前权限为只读')
 assert.equal(unavailable.riskLevel, 'high')
 assert.equal(unavailable.inputMode, 'tool_schema')
 assert.equal(unavailable.toolId, 'tool-1')
+assert.deepEqual(unavailable.attributions, [{ name: 'Example Lab', organization: 'Example Lab' }])
 
 const fuzzy = filterCommandPalette(commands, 'exper')
 assert.deepEqual(
@@ -166,5 +168,15 @@ assert.deepEqual(resolveCommandSubmission('https://example.com/a', commands), {
 })
 assert.equal(resolveCommandSubmission('/PLAN', commands).name, 'plan')
 assert.equal(resolveCommandSubmission('/tmp', commands).isCommand, false)
+
+assert.equal(buildCommandDialogueRoute('', 'chat-1'), null)
+assert.deepEqual(buildCommandDialogueRoute('  /plan off  ', ''), {
+  path: '/dialogue',
+  query: { prompt: '/plan off' },
+})
+assert.deepEqual(buildCommandDialogueRoute('/status', 'chat/123'), {
+  path: '/dialogue/chat%2F123',
+  query: { prompt: '/status' },
+})
 
 console.log('slashCommands tests passed')

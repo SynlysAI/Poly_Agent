@@ -99,6 +99,7 @@ export function createCommandOption(command) {
     requiresConfirmation: Boolean(descriptor.requires_confirmation),
     toolId: descriptor.tool_id || '',
     choices: descriptor.choices || [],
+    attributions: descriptor.attributions || [],
   }
   const variants = Array.isArray(descriptor.variants) ? descriptor.variants : []
   return [
@@ -292,5 +293,25 @@ export function resolveCommandSubmission(text, commands = []) {
     name,
     rawArgs,
     error: known ? '' : `未知命令 /${name}`,
+  }
+}
+
+/**
+ * 构造从首页跳转到对话页执行 Slash Command 的路由。
+ *
+ * Args:
+ *   commandLine: 首页提交的完整命令行。
+ *   chatId: 首页为命令目录预创建的会话 ID。
+ *
+ * Returns:
+ *   Vue Router 路由对象；缺少命令行时返回 null。
+ */
+export function buildCommandDialogueRoute(commandLine, chatId) {
+  const line = String(commandLine || '').trim()
+  if (!line) return null
+  if (!chatId) return { path: '/dialogue', query: { prompt: line } }
+  return {
+    path: `/dialogue/${encodeURIComponent(chatId)}`,
+    query: { prompt: line },
   }
 }
