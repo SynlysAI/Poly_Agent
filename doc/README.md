@@ -18,6 +18,15 @@
 | 使用对话控制命令 | [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | [research-engine-plan-10-slash-command-and-agent-control-workplan.md](research-engine-plan-10-slash-command-and-agent-control-workplan.md) |
 | 维护来源标注 | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) | [../README.md#框架方法与机构来源](../README.md#框架方法与机构来源) |
 
+## 官网内容
+
+| 文档 | 内容 |
+|------|------|
+| [../docs/website/features.md](../docs/website/features.md) | Poly Agent 主要功能、模块操作路径、Slash Command 调用方法与能力边界 |
+| [../docs/website/releases/0.1.0/product-feature-updates.md](../docs/website/releases/0.1.0/product-feature-updates.md) | 当前产品版本 `0.1.0` 的详细特性更新、操作流程、命令参考与下一阶段方向 |
+
+官网内容使用 Markdown frontmatter 记录版本、日期、语言与发布状态；后续产品版本发布时，需要同步更新 release note 的版本字段，并检查功能页的版本与能力边界。
+
 ## 用户指南
 
 | 文档 | 内容 |
