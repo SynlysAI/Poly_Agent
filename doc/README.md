@@ -62,9 +62,10 @@
 | [research-engine-plan-08-wrapup.md](research-engine-plan-08-wrapup.md) | Plan 08 剩余技术债 P08-F2–F8 的独立收尾计划，已完成并关闭 |
 | [research-engine-plan-09-lui-execution-trace.md](research-engine-plan-09-lui-execution-trace.md) | LUI Execution Trace 与可追溯执行增强计划 |
 | [research-engine-plan-10-slash-command-and-agent-control-workplan.md](research-engine-plan-10-slash-command-and-agent-control-workplan.md) | Slash Command、会话控制面与 Agent 控制体系工作计划 |
-| [research-engine-plan-11-lui-qa-deep-preset-positioning.md](research-engine-plan-11-lui-qa-deep-preset-positioning.md) | LUI 科研问答与深度思考 Preset 定位、差异、动态计算预算与演进 |
+| [research-engine-plan-11-lui-qa-deep-preset-positioning.md](research-engine-plan-11-lui-qa-deep-preset-positioning.md) | LUI 科研问答与深度思考 Preset 定位、差异与兼容基础 |
 | [research-engine-plan-12-product-positioning-evolution.md](research-engine-plan-12-product-positioning-evolution.md) | PI Agent / DSH / Codex 时代的产品定位、生态位与演进路线 |
 | [research-engine-plan-13-lui-agent-evaluation-plan.md](research-engine-plan-13-lui-agent-evaluation-plan.md) | LUI Agent 八项指标评估体系：任务成功、工具调用、检索召回、回答准确、幻觉、延迟、成本与人工兜底 |
+| [research-engine-plan-14-lui-dynamic-compute-budget-plan.md](research-engine-plan-14-lui-dynamic-compute-budget-plan.md) | LUI 动态计算预算：Query 分类、Model Router、RAG 分层、执行分级与灰度发布 |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |
 
 ## 部署、工具链与治理
