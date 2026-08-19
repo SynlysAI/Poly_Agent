@@ -884,7 +884,12 @@ class AssistantChatRepository(BaseRepository):
         try:
             collection = cls._collection()
             collection.create_index("chat_id", unique=True)
-            collection.create_index([("created_by", 1), ("archived", 1), ("updated_at", -1)])
+            # 使用与历史部署一致的显式索引名；默认名会与既有同名键模式索引
+            # 触发 MongoDB IndexOptionsConflict(code=85)，进而导致创建会话 503。
+            collection.create_index(
+                [("created_by", 1), ("archived", 1), ("updated_at", -1)],
+                name="owner_archived_updated",
+            )
         except PyMongoError as exc:
             cls._handle_mongo_error(exc)
 
