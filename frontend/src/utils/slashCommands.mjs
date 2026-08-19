@@ -76,7 +76,7 @@ export function getSlashContext(text, caretPosition = 0) {
  *   command: 后端返回的 handler-free 命令 descriptor。
  *
  * Returns:
- *   该命令的基础选项与各 variant 选项数组。
+ *   该命令的基础选项、variant 选项与 choice 选项数组。
  */
 export function createCommandOption(command) {
   const descriptor = command || {}
@@ -102,9 +102,27 @@ export function createCommandOption(command) {
     attributions: descriptor.attributions || [],
   }
   const variants = Array.isArray(descriptor.variants) ? descriptor.variants : []
-  return [
-    base,
-    ...variants.filter((variant) => variant.usage !== `/${base.commandName}`).map((variant) => ({
+  const descriptorChoices = descriptor.input_mode === 'single_choice' && Array.isArray(descriptor.choices)
+    ? descriptor.choices
+    : []
+  const choiceVariants = descriptorChoices.map((choice) => ({
+      usage: `/${base.commandName} ${choice.value}`,
+      description: choice.label || choice.description || base.description,
+      argumentHint: choice.value,
+      choiceValue: choice.value,
+      choiceLabel: choice.label || '',
+  }))
+  const rawVariants = [
+    ...variants,
+    ...choiceVariants,
+  ]
+  const seenUsages = new Set([`/${base.commandName}`])
+  const normalizedVariants = rawVariants.flatMap((variant) => {
+    const usage = variant.usage || ''
+    if (seenUsages.has(usage)) return []
+    seenUsages.add(usage)
+    return [variant]
+  }).map((variant) => ({
       ...base,
       key: variant.usage?.startsWith(`/${base.commandName} `)
         ? `${base.commandName}:${variant.usage.slice(base.commandName.length + 2)}`
@@ -114,8 +132,10 @@ export function createCommandOption(command) {
       argumentHint: variant.usage?.startsWith('/')
         ? variant.usage.slice(1).slice(base.commandName.length).trim()
         : base.argumentHint,
-    })),
-  ]
+      choiceValue: variant.choiceValue || '',
+      choiceLabel: variant.choiceLabel || '',
+    }))
+  return [base, ...normalizedVariants]
 }
 
 /**
@@ -139,6 +159,14 @@ function commandMatchScore(option, query) {
   const name = option.commandName.toLowerCase()
   if (name.startsWith(normalizedQuery)) return 300
   if (name.includes(normalizedQuery)) return 250
+
+  const choiceHaystack = `${option.choiceValue || ''} ${option.choiceLabel || ''} ${option.description || ''}`.toLowerCase()
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  if (queryTokens.length > 1 && name.startsWith(queryTokens[0])) {
+    const argumentQuery = queryTokens.slice(1).join(' ')
+    if (argumentQuery && choiceHaystack.includes(argumentQuery)) return 380
+  }
+  if (choiceHaystack && choiceHaystack.includes(normalizedQuery)) return 260
 
   const haystack = `${option.commandName} ${option.title}`.toLowerCase()
   if (haystack.includes(normalizedQuery)) return 180

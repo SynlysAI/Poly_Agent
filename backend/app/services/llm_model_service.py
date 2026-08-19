@@ -65,9 +65,75 @@ class LLMModelService:
     def get_routing(self, *, providers: list[LLMProviderInfo] | None = None) -> LLMRoutingData:
         providers = providers or self._build_providers()
         persisted = LLMRoutingRepository.find_one({"config_id": ROUTING_CONFIG_ID}) or {}
-        if persisted.get("routing"):
-            return LLMRoutingData.model_validate(persisted["routing"])
-        return self._default_routing(providers)
+        if not persisted.get("routing"):
+            return self._default_routing(providers)
+        routing = LLMRoutingData.model_validate(persisted["routing"])
+        healed = self._heal_routing(routing, providers)
+        if healed != routing:
+            self._persist_routing(healed, actor_user_id="llm_routing_self_heal")
+        return healed
+
+    @staticmethod
+    def _route_selection_valid(
+        providers: list[LLMProviderInfo],
+        selection: LLMRouteSelection | None,
+    ) -> bool:
+        """判断持久化路由选择是否仍能在当前 provider 目录中解析。
+
+        Args:
+            providers: 当前 provider 目录。
+            selection: 待校验的路由选择。
+
+        Returns:
+            provider 和 model 同时存在时返回 True，否则返回 False。
+        """
+        if not selection:
+            return False
+        for provider in providers:
+            if provider.provider_id != selection.provider_id:
+                continue
+            return any(model.model_id == selection.model_id for model in provider.models)
+        return False
+
+    def _heal_routing(
+        self,
+        routing: LLMRoutingData,
+        providers: list[LLMProviderInfo],
+    ) -> LLMRoutingData:
+        """用当前默认路由替换已失效的持久化路由选择。
+
+        Args:
+            routing: 持久化的全局路由。
+            providers: 当前 provider 目录。
+
+        Returns:
+            所有用途均可解析的修复后路由。
+        """
+        defaults = self._default_routing(providers)
+        data = routing.model_dump(mode="python")
+        for purpose in ("qa", "deep", "report", "compact"):
+            selection = getattr(routing, purpose)
+            if not self._route_selection_valid(providers, selection):
+                default = getattr(defaults, purpose)
+                data[purpose] = default.model_dump(mode="python") if default else None
+        return LLMRoutingData.model_validate(data)
+
+    def _persist_routing(self, routing: LLMRoutingData, *, actor_user_id: str) -> None:
+        """保存全局 LLM 路由配置。
+
+        Args:
+            routing: 待保存的路由数据。
+            actor_user_id: 触发保存的用户标识。
+        """
+        LLMRoutingRepository.save(
+            "config_id",
+            {
+                "config_id": ROUTING_CONFIG_ID,
+                "routing": routing.model_dump(mode="python"),
+                "updated_by": actor_user_id,
+                "updated_at": datetime.now(timezone.utc),
+            },
+        )
 
     def update_routing(self, payload: LLMRoutingUpdateRequest, *, actor_user_id: str = "system") -> LLMRoutingData:
         providers = self._build_providers()
@@ -129,6 +195,29 @@ class LLMModelService:
             route_reason=route_reason,
             requested_provider_id=requested_provider_id or None,
             requested_model_id=requested_model_id or None,
+        )
+
+    def resolve_default_route(self, *, purpose: LLMRoutePurpose) -> dict[str, Any]:
+        """解析不依赖持久化路由的默认用途路由。
+
+        Args:
+            purpose: 当前助手用途（qa / deep / report / compact）。
+
+        Returns:
+            可直接用于 LLM 请求的默认路由。
+        """
+        providers = self._build_providers()
+        routing = self._default_routing(providers)
+        selection = getattr(routing, purpose, None)
+        if not selection:
+            raise HTTPException(status_code=503, detail="LLM 模型路由未配置")
+        provider = self._provider_by_id(providers, selection.provider_id)
+        model = self._model_by_id(provider, selection.model_id)
+        return self._route_payload(
+            provider,
+            model,
+            purpose=purpose,
+            route_reason="fallback",
         )
 
     def resolve_tool_capable_route(

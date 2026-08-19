@@ -90,6 +90,11 @@ class AssistantCommandsApiTest(ComputationTestCase):
                 },
             )
             self.assertEqual(data["session_state"]["permission_mode"], "workspace_write")
+            model_item = next(item for item in data["items"] if item["name"] == "model")
+            self.assertEqual(
+                [choice["value"] for choice in model_item["choices"]],
+                ["provider-a::model-a", "provider-a::model-b"],
+            )
 
             enabled = self._execute(chat_id, "/PLAN")
             self.assertEqual(enabled["status"], "success")
@@ -158,6 +163,41 @@ class AssistantCommandsApiTest(ComputationTestCase):
         run = AssistantRunRepository.find_one({"run_id": result["run"]["run_id"]})
         self.assertIsNotNone(run)
         self.assertTrue(run["request_snapshot"]["context"]["plan_mode"])
+
+    def test_plan_message_prefers_available_chat_model(self) -> None:
+        chat_id = self._chat_id()
+        with patch(
+            "app.services.assistant_command_service.LLMModelService.get_catalog",
+            return_value=self._catalog(),
+        ):
+            selected = self._execute(chat_id, "/model provider-a::model-b")
+            result = self._execute(chat_id, "/plan 制定聚合物实验方案")
+
+        self.assertEqual(selected["status"], "success")
+        self.assertEqual(result["status"], "success")
+        run = AssistantRunRepository.find_one({"run_id": result["run"]["run_id"]})
+        self.assertIsNotNone(run)
+        self.assertEqual(
+            run["request_snapshot"]["context"].get("model"),
+            {"providerId": "provider-a", "modelId": "model-b"},
+        )
+
+    def test_plan_message_omits_unavailable_chat_model(self) -> None:
+        chat_id = self._chat_id()
+        chat = AssistantChatRepository.find_one({"chat_id": chat_id}) or {}
+        chat["model"] = {"providerId": "missing-provider", "modelId": "missing-model"}
+        AssistantChatRepository.save("chat_id", chat)
+
+        with patch(
+            "app.services.assistant_command_service.LLMModelService.get_catalog",
+            return_value=self._catalog(),
+        ):
+            result = self._execute(chat_id, "/plan 制定聚合物实验方案")
+
+        self.assertEqual(result["status"], "success")
+        run = AssistantRunRepository.find_one({"run_id": result["run"]["run_id"]})
+        self.assertIsNotNone(run)
+        self.assertEqual(run["request_snapshot"]["context"].get("model", {}), {})
 
     def test_legacy_chat_control_fields_receive_defaults_on_read(self) -> None:
         chat_id = self._chat_id()

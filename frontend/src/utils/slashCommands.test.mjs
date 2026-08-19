@@ -41,6 +41,27 @@ const commands = [
     ],
   },
   {
+    name: 'model',
+    title: '模型选择',
+    description: '切换当前会话模型',
+    usage: '/model [<provider_id>::<model_id>]',
+    category: 'system',
+    source: 'PolyAgent',
+    input_mode: 'single_choice',
+    choices: [
+      {
+        value: 'default_openai::deepseek-v4-flash',
+        label: 'Default chat model / DeepSeek V4 Flash',
+        description: 'deepseek-v4-flash',
+      },
+      {
+        value: 'glm_chat::glm-52',
+        label: 'GLM Chat / GLM 5.2',
+        description: 'glm-52',
+      },
+    ],
+  },
+  {
     name: 'run-experiment',
     title: '运行实验',
     description: '执行材料实验工具',
@@ -78,6 +99,17 @@ assert.equal(getSlashContext('', 0).active, false)
 
 const options = commands.flatMap((command) => createCommandOption(command))
 assert.equal(options.filter((option) => option.commandName === 'plan').length, 2)
+const modelOptions = createCommandOption(commands.find((command) => command.name === 'model'))
+assert.deepEqual(
+  modelOptions.map((option) => option.usage),
+  [
+    '/model [<provider_id>::<model_id>]',
+    '/model default_openai::deepseek-v4-flash',
+    '/model glm_chat::glm-52',
+  ],
+)
+assert.equal(modelOptions[1].description, 'Default chat model / DeepSeek V4 Flash')
+assert.equal(modelOptions[2].argumentHint, 'glm_chat::glm-52')
 
 const planOptions = filterCommandPalette(commands, 'pl')
 assert.deepEqual(
@@ -95,7 +127,15 @@ assert.deepEqual(
 )
 assert.deepEqual(
   allGroups.flatMap((group) => group.items.map((item) => item.key)),
-  ['status', 'plan', 'plan:off', 'run-experiment'],
+  [
+    'model',
+    'model:default_openai::deepseek-v4-flash',
+    'model:glm_chat::glm-52',
+    'status',
+    'plan',
+    'plan:off',
+    'run-experiment',
+  ],
 )
 
 const unavailable = allGroups
@@ -118,6 +158,11 @@ const offVariant = filterCommandPalette(commands, 'plan off')
 assert.deepEqual(
   offVariant.flatMap((group) => group.items.map((item) => item.key)),
   ['plan:off'],
+)
+const glmModel = filterCommandPalette(commands, 'model glm')
+assert.deepEqual(
+  glmModel.flatMap((group) => group.items.map((item) => item.key)),
+  ['model:glm_chat::glm-52'],
 )
 
 assert.equal(movePaletteHighlight(0, 1, 3), 1)

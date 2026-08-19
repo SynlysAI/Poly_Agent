@@ -165,6 +165,31 @@ class AssistantCommandService:
                 )
         return choices
 
+    @classmethod
+    def _available_chat_model(cls, chat: dict[str, Any]) -> dict[str, str]:
+        """读取仍存在于当前目录中的会话模型。
+
+        Args:
+            chat: 会话文档。
+
+        Returns:
+            可用的 provider/model 对；缺失或失效时返回空对象。
+        """
+        provider_id, model_id = cls._model_pair(chat.get("model") or {})
+        if not provider_id or not model_id:
+            return {}
+        try:
+            catalog = LLMModelService().get_catalog()
+        except Exception:
+            return {}
+        for provider in catalog.providers:
+            if provider.provider_id != provider_id:
+                continue
+            if any(model.model_id == model_id for model in provider.models):
+                return {"providerId": provider_id, "modelId": model_id}
+            break
+        return {}
+
     @staticmethod
     def _tool_command_inputs(
         raw_args: str,
@@ -269,6 +294,14 @@ class AssistantCommandService:
         try:
             chat = self._owned_chat(chat_id, current_user)
             items = self.registry.descriptors(current_user)
+            items = [
+                item.model_copy(
+                    update={"choices": self._model_choices(chat.get("model") or {})},
+                )
+                if item.name == "model" and item.input_mode == "single_choice"
+                else item
+                for item in items
+            ]
             unavailable_reason = self._tool_command_unavailable_reason(chat)
             if unavailable_reason:
                 items = [
@@ -684,6 +717,7 @@ class AssistantCommandService:
                 context={
                     "plan_mode": True,
                     "command_id": command_id,
+                    "model": self._available_chat_model(chat),
                     "session_state": control_state({**chat, "plan_mode": True}).model_dump(mode="python"),
                 },
             ),

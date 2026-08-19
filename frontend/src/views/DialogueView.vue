@@ -101,6 +101,7 @@ import {
   formatTokenCount,
   formatUsage,
   normalizeUsageSummary,
+  resolveContextTokenEstimate,
   modelMetaLabel,
   normalizeAssistantRoute,
   routeCapabilityLabels,
@@ -324,13 +325,22 @@ const selectedToolSummary = computed(() =>
 )
 const conversationStarted = computed(() => messages.value.some((item) => item.role === 'user'))
 const conversationUsageDetail = computed(() => formatConversationUsageDetail(conversationUsage.value))
-const latestContextManifest = computed(() => {
-  const latestAssistant = [...messages.value].reverse().find((item) => item.role === 'assistant')
-  return latestAssistant ? messageContextManifest(latestAssistant) : null
+const latestContextManifestMessage = computed(() => {
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    const message = messages.value[index]
+    if (message.role !== 'assistant') continue
+    const manifest = messageContextManifest(message)
+    if (manifest) return { manifest, createdAt: message.created_at || '' }
+  }
+  return null
 })
-const latestContextEstimate = computed(() =>
-  Number(latestContextManifest.value?.context?.token_estimate || 0),
-)
+const latestContextEstimate = computed(() => {
+  return resolveContextTokenEstimate({
+    manifestEstimate: latestContextManifestMessage.value?.manifest?.context?.token_estimate,
+    manifestCreatedAt: latestContextManifestMessage.value?.createdAt,
+    compaction: sessionControlState.value?.compaction,
+  })
+})
 const selectedModelContextWindow = computed(() =>
   Number(selectedModel.value?.contextWindow || DEFAULT_CONTEXT_WINDOW),
 )
@@ -1219,7 +1229,7 @@ async function executeSlashCommand(line, submission) {
   messages.value.push(commandMessage)
   if (result.state_after) applySessionControlState(result.state_after)
   attachCommandExecution(commandMessage, result)
-  if (['plan', 'permission', 'reset'].includes(result.name)) {
+  if (['plan', 'permission', 'reset', 'model'].includes(result.name)) {
     requestCommandCatalog({ force: true })
   }
   inputText.value = ''
@@ -1318,6 +1328,7 @@ function runPlaceholder(run) {
     tool_catalog: replay.tool_catalog,
     tool_calls: [], pending_tool_call_ids: [], run_id: run.run_id,
     trace_id: run.trace_id || '',
+    created_at: run.created_at || '',
     continuation_tool_call_ids: run.request_snapshot?.context?.tool_call_ids || [],
     execution_trace: run.trace_id ? traceStates.value.get(run.trace_id) || createTraceState({
       trace_id: run.trace_id,
@@ -4635,10 +4646,11 @@ h1 {
 
 @media (max-width: 900px) {
   .dialogue-page {
-    height: calc(100vh - 78px);
-    min-height: 560px;
+    height: auto;
+    min-height: calc(100vh - 78px);
+    align-content: start;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(180px, 1fr) auto;
   }
 
   .dialogue-page.history-docked {
@@ -4697,6 +4709,18 @@ h1 {
 }
 
 @media (max-width: 560px) {
+  .suggestion-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+
+  .suggestion-row button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
   .session-trace-panel {
     padding: 0 10px;
   }
@@ -4715,6 +4739,12 @@ h1 {
 
   .mode-trigger {
     flex: 0 0 auto;
+  }
+
+  .composer-toolbar-left,
+  .composer-toolbar-right {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .tool-call-meta-grid {

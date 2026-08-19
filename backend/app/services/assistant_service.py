@@ -2477,13 +2477,17 @@ class AssistantService:
                 detail = getattr(exc, "detail", None) or str(exc)
                 raise ValueError(f"所选 LLM 模型不可用：{detail}") from exc
             logger.warning("assistant llm route unavailable: %s", exc)
-            return {
-                "purpose": purpose,
-                "provider_id": None,
-                "model_id": settings.llm_model or None,
-                "capabilities": [],
-                "reasoning_model_available": False,
-            }
+            try:
+                return self.llm_model_service.resolve_default_route(purpose=purpose)
+            except Exception as fallback_exc:
+                logger.warning("assistant llm default route unavailable: %s", fallback_exc)
+                return {
+                    "purpose": purpose,
+                    "provider_id": None,
+                    "model_id": settings.llm_model or None,
+                    "capabilities": [],
+                    "reasoning_model_available": False,
+                }
 
     def _has_requested_model(self, requested_model) -> bool:
         provider_id, model_id = self._requested_model_identifiers(requested_model)

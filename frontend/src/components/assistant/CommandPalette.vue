@@ -63,6 +63,28 @@ function riskLabel(riskLevel) {
 function sourceLabel(item) {
   return item.sourceKind === 'builtin' ? '内置命令' : item.source
 }
+
+/**
+ * 判断是否需要在 meta 行单独展示“来源”文本。
+ *
+ * 非内置命令若已经通过归属徽标（AttributionBadges）展示开发者来源，
+ * 再显示“来源：xxx”会与徽标内容重复，导致视觉上显得重叠冗余。
+ *
+ * Args:
+ *   item: 命令面板选项。
+ *
+ * Returns:
+ *   需要展示来源文本时返回 True；已由归属徽标承载来源时返回 False。
+ */
+function showSourceLabel(item) {
+  if (item.sourceKind === 'builtin') return true
+  const hasBadge = (item.attributions || []).some((attribution) => {
+    const name = String(attribution?.name || '').trim()
+    const organization = String(attribution?.organization || '').trim()
+    return Boolean(name || organization)
+  })
+  return !hasBadge
+}
 </script>
 
 <template>
@@ -107,7 +129,7 @@ function sourceLabel(item) {
             <span class="command-title">{{ item.title }}</span>
             <span class="command-description">{{ item.description }}</span>
             <span class="command-meta">
-              <em>来源：{{ sourceLabel(item) || '未记录' }}</em>
+              <em v-if="showSourceLabel(item)">来源：{{ sourceLabel(item) || '未记录' }}</em>
               <em v-if="riskLabel(item.riskLevel)">{{ riskLabel(item.riskLevel) }}</em>
               <em v-if="!item.available || !item.enabled">
                 {{ item.unavailableReason || '当前不可用' }}
@@ -137,7 +159,7 @@ function sourceLabel(item) {
   right: 12px;
   bottom: calc(100% + 6px);
   z-index: 30;
-  max-height: min(360px, 46vh);
+  max-height: min(340px, 42vh);
   overflow: auto;
   border: 1px solid #bfd8f8;
   border-radius: var(--app-radius-md);
@@ -210,6 +232,7 @@ function sourceLabel(item) {
 }
 
 .command-usage {
+  min-width: 0;
   display: grid;
   gap: 3px;
 }
@@ -218,6 +241,8 @@ function sourceLabel(item) {
   color: var(--app-primary-active);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .command-usage small,
@@ -225,6 +250,11 @@ function sourceLabel(item) {
 .command-meta {
   color: var(--app-ink-muted);
   font-size: 12px;
+  line-height: 1.45;
+}
+
+.command-usage small {
+  overflow-wrap: anywhere;
 }
 
 .command-info {
@@ -234,7 +264,12 @@ function sourceLabel(item) {
 }
 
 .command-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 650;
+  line-height: 1.45;
 }
 
 .command-description {
@@ -244,9 +279,20 @@ function sourceLabel(item) {
 }
 
 .command-meta {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 7px;
+}
+
+.command-meta em {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
 }
 
 .command-palette footer {

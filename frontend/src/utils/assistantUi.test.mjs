@@ -15,6 +15,7 @@ import {
   modelMetaLabel,
   normalizeAssistantRoute,
   normalizeUsageSummary,
+  resolveContextTokenEstimate,
   routeCapabilityLabels,
   routeReasonLabel,
   toolArgumentDiff,
@@ -78,6 +79,32 @@ assert.equal(contextUsageRing(115200, 128000).percent, 90)
 assert.equal(contextUsageRing(115200, 128000).tone, 'danger')
 assert.equal(contextUsageRing(90000, 128000).tone, 'warning')
 assert.equal(contextUsageRing(200000, 128000).percent, 100)
+assert.equal(resolveContextTokenEstimate({
+  manifestEstimate: 900,
+  manifestCreatedAt: '2026-08-19T10:00:00Z',
+  compaction: {
+    token_estimate: 500,
+    created_at: '2026-08-19T11:00:00Z',
+  },
+}), 500)
+assert.equal(resolveContextTokenEstimate({
+  manifestEstimate: 950,
+  manifestCreatedAt: '2026-08-19T12:00:00Z',
+  compaction: {
+    token_estimate: 500,
+    created_at: '2026-08-19T11:00:00Z',
+  },
+}), 950)
+assert.equal(resolveContextTokenEstimate({ manifestEstimate: 900 }), 900)
+assert.equal(resolveContextTokenEstimate({}), 0)
+assert.equal(resolveContextTokenEstimate({
+  manifestEstimate: 900,
+  manifestCreatedAt: '2026-08-19T10:00:00Z',
+  compaction: {
+    token_estimate: 0,
+    created_at: '2026-08-19T11:00:00Z',
+  },
+}), 0)
 
 const manifest = {
   context: {

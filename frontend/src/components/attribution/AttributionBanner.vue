@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { InfoFilled, Link } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, getModuleAttribution } from '../../api/polyAgentApi'
+import AttributionBadges from './AttributionBadges.vue'
 import AttributionLogoStrip from './AttributionLogoStrip.vue'
 
 const props = defineProps({
@@ -13,6 +14,7 @@ const props = defineProps({
   attributions: { type: Array, default: () => [] },
   compact: { type: Boolean, default: false },
   embedded: { type: Boolean, default: false },
+  dense: { type: Boolean, default: false },
   label: { type: String, default: '' },
 })
 
@@ -121,7 +123,11 @@ onMounted(loadModuleAttribution)
 
 <template>
   <section v-if="resolvedAttributions.length || moduleId" class="attribution-banner-wrap">
-    <div class="attribution-banner" :class="{ compact, embedded }" v-loading="loading">
+    <div v-if="dense" class="attribution-dense">
+      <span class="attribution-dense-label">{{ resolvedLabel }}</span>
+      <AttributionBadges :attributions="prominentItems" :limit="prominentItems.length || 1" />
+    </div>
+    <div v-else class="attribution-banner" :class="{ compact, embedded }" v-loading="loading">
       <div class="attribution-copy">
         <div class="attribution-kicker">
           <el-icon><InfoFilled /></el-icon>
@@ -138,6 +144,7 @@ onMounted(loadModuleAttribution)
       />
     </div>
     <el-drawer
+      v-if="!dense"
       v-model="drawerVisible"
       class="attribution-drawer"
       direction="rtl"
@@ -182,6 +189,22 @@ onMounted(loadModuleAttribution)
 <style scoped>
 .attribution-banner-wrap {
   min-width: 0;
+}
+
+.attribution-dense {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attribution-dense-label {
+  color: var(--app-primary-active);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .attribution-banner {
