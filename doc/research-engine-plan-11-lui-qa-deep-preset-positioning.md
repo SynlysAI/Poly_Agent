@@ -1,6 +1,6 @@
 # Plan 11：LUI 科研问答 / 深度思考 Preset 定位与演进
 
-> 状态：待评审
+> 状态：已完成（P11-A–P11-E 待独立实施）
 >
 > 日期：2026-08-16
 >
@@ -256,17 +256,17 @@ research_code       受限科研代码 / 计算脚本
 
 ## 10. 验收标准
 
-- [ ] 文档能明确区分 `科研问答` 与 `深度思考`：前者是快速问答与导航，后者是带证据链和高层推理摘要的深度分析。
-- [ ] 文档明确写出 `qa` / `deep` 当前只是 mode 开关，不是完整 Preset。
-- [ ] 文档定义 `research_qa` / `research_deep` 的模型偏好、检索策略、工具策略、输出策略、Trace 策略和 UI 策略。
-- [ ] 文档说明未来 `preset_id` 与当前 `mode` 的兼容/映射关系。
-- [ ] 文档说明 Preset 切换保留会话、消息、工具调用、Trace 和 Artifact，只改变 runtime 配置。
-- [ ] 文档定义动态计算预算原则，并能把 Simple / Complex / High-risk 查询映射到两个 Preset 的模型、检索与执行策略。
-- [ ] 文档说明预算默认值、用户显式选择与系统安全策略的优先级，特别是高风险任务不可因降本绕过验证 / 审批 / Human。
-- [ ] 文档给出未来动态预算的分层落地行动、Trace 要求和评估依赖，且不在本期直接修改代码。
-- [ ] 文档不照搬 `Standard` / `PTC` / `Minimal` / `Cordis`，不引入 Cordis / TypeScript runtime。
-- [ ] 文档不直接修改代码，也不把本期写成完整 Preset Registry 实施任务。
-- [ ] 相关相对链接和 `doc/README.md` 索引保持一致。
+- [x] 文档能明确区分 `科研问答` 与 `深度思考`：前者是快速问答与导航，后者是带证据链和高层推理摘要的深度分析。
+- [x] 文档明确写出 `qa` / `deep` 当前只是 mode 开关，不是完整 Preset。
+- [x] 文档定义 `research_qa` / `research_deep` 的模型偏好、检索策略、工具策略、输出策略、Trace 策略和 UI 策略。
+- [x] 文档说明未来 `preset_id` 与当前 `mode` 的兼容/映射关系。
+- [x] 文档说明 Preset 切换保留会话、消息、工具调用、Trace 和 Artifact，只改变 runtime 配置。
+- [x] 文档定义动态计算预算原则，并能把 Simple / Complex / High-risk 查询映射到两个 Preset 的模型、检索与执行策略。
+- [x] 文档说明预算默认值、用户显式选择与系统安全策略的优先级，特别是高风险任务不可因降本绕过验证 / 审批 / Human。
+- [x] 文档给出未来动态预算的分层落地行动、Trace 要求和评估依赖，且不在本期直接修改代码。
+- [x] 文档不照搬 `Standard` / `PTC` / `Minimal` / `Cordis`，不引入 Cordis / TypeScript runtime。
+- [x] 文档不直接修改代码，也不把本期写成完整 Preset Registry 实施任务。
+- [x] 相关相对链接和 `doc/README.md` 索引保持一致。
 
 ## 11. 假设与默认选择
 
@@ -415,4 +415,5 @@ High-risk → Planning + Verification + Human
 - 2026-08-16：创建 Plan 11 文档，定义 `research_qa` / `research_deep` 的定位、边界、共同不变量与演进方向；未修改业务代码。
 - 2026-08-18：补充成本、延迟、效果平衡与动态计算预算说明，明确 Model Router、RAG 检索分层、Agent 执行分级及落地边界；未修改业务代码。
 - 2026-08-19：将动态计算预算贯穿 Preset 契约、两个模式策略、切换不变量、验收标准和落地边界，并新增 P11-A–P11-E 后续行动框架；未修改业务代码。
+- 2026-08-19：完成本期定位与演进方案评审闭环，勾选第 10 节验收项；P11-A–P11-E 保持待办，待拆分独立实施计划。
 - 待办：后续若正式实施 Preset Registry 与动态预算，先拆出独立代码计划并同步 Plan 10 的会话控制状态与 Plan 13 的评估指标。
