@@ -77,6 +77,8 @@
 | [research-engine-plan-14-lui-dynamic-compute-budget-plan.md](research-engine-plan-14-lui-dynamic-compute-budget-plan.md) | LUI 动态计算预算：Query 分类、Model Router、RAG 分层、执行分级与灰度发布 |
 | [research-engine-plan-15-agent-exec-provider-seam-workplan.md](research-engine-plan-15-agent-exec-provider-seam-workplan.md) | 受控外部 Agent 执行 Provider Seam：readiness、独立 workdir、Codex MVP、Audit / Trace 与管理 API |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |
+| [polymer-inverse-design-and-property-prediction-demo-plan.md](polymer-inverse-design-and-property-prediction-demo-plan.md) | 基于 Polymer-Agent 参考评估的自然语言目标逆向设计、性质预测与候选结构 demo 三阶段计划 |
+| [multi-site-collaborative-optimization-fedbo-pilot-plan.md](multi-site-collaborative-optimization-fedbo-pilot-plan.md) | 多站点协同实验优化与联邦贝叶斯 FedBO 试点：参考解读、产品边界、架构预案与分阶段落地计划 |
 
 ## 部署、工具链与治理
 
