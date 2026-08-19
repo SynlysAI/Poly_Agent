@@ -14,6 +14,7 @@ from app.schemas.assistant_commands import (
     SessionGoal,
     SessionTodo,
 )
+from app.schemas.assistant import AssistantPresetId
 
 
 ChatMessageRole = Literal["system", "user", "assistant", "tool"]
@@ -64,6 +65,7 @@ class AssistantChatCreate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     model: dict[str, Any] = Field(default_factory=dict)
     mode: str = Field(default="qa", max_length=40)
+    preset_id: AssistantPresetId | None = Field(default=None, max_length=40)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=100)
     knowledge_base_names: list[str] = Field(default_factory=list, max_length=100)
     use_web_search: bool = False
@@ -77,6 +79,7 @@ class AssistantChatUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     model: dict[str, Any] | None = None
     mode: str | None = Field(default=None, max_length=40)
+    preset_id: AssistantPresetId | None = Field(default=None, max_length=40)
     knowledge_base_ids: list[str] | None = Field(default=None, max_length=100)
     knowledge_base_names: list[str] | None = Field(default=None, max_length=100)
     use_web_search: bool | None = None
@@ -91,6 +94,7 @@ class AssistantChat(AssistantChatCreate):
     chat_id: str
     title: str
     created_by: str
+    preset_id: AssistantPresetId = "research_qa"
     archived: bool = False
     plan_mode: bool = False
     permission_mode: PermissionMode = "workspace_write"
@@ -116,6 +120,7 @@ class AssistantChatSummary(BaseModel):
     chat_id: str
     title: str
     created_by: str
+    preset_id: AssistantPresetId = "research_qa"
     archived: bool = False
     created_at: datetime
     updated_at: datetime

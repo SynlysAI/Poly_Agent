@@ -12,6 +12,7 @@ from app.schemas.agent_tools import AssistantToolCall
 AssistantAnswerMode = Literal["llm_project_grounded", "web_grounded", "hybrid_grounded", "fallback"]
 AssistantAnswerScope = Literal["project", "web", "hybrid", "model", "unknown"]
 AssistantRetrievalStatus = Literal["not_needed", "skipped_disabled", "searched", "no_results", "failed"]
+AssistantPresetId = Literal["research_qa", "research_deep"]
 
 
 class AssistantMessage(BaseModel):
