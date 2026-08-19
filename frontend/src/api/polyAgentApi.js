@@ -1163,12 +1163,34 @@ export function retryReport(reportId) {
   return apiClient.post(`/reports/${encodeURIComponent(reportId)}/retry`).then(unwrapResponse)
 }
 
+/**
+ * 构建带报告唯一 ID 的下载文件名，避免多份同名报告下载后互相覆盖。
+ *
+ * @param {string} reportId 报告任务唯一 ID
+ * @param {string} [filename] 产物原始文件名
+ * @returns {string} 带 report_id 的下载文件名
+ */
+export function buildReportArtifactDownloadName(reportId, filename = '') {
+  const safeName = String(filename || '').trim().split(/[\\/]/).pop() || 'report.dat'
+  const dotIndex = safeName.lastIndexOf('.')
+  const stem = dotIndex > 0 ? safeName.slice(0, dotIndex) : safeName
+  const extension = dotIndex > 0 ? safeName.slice(dotIndex) : '.dat'
+  const reportKey = String(reportId || '').trim() || 'report_unknown'
+  if (stem === 'report') {
+    return `${reportKey}${extension}`
+  }
+  return `${stem}_${reportKey}${extension}`
+}
+
 export function downloadReportArtifact(reportId, artifactId, fallbackName = 'report.dat') {
   return apiClient
     .get(`/reports/${encodeURIComponent(reportId)}/artifacts/${encodeURIComponent(artifactId)}/download`, { responseType: 'blob' })
     .then((response) => ({
       blob: response.data,
-      filename: parseDownloadFilename(response.headers['content-disposition'], fallbackName),
+      filename: parseDownloadFilename(
+        response.headers['content-disposition'],
+        buildReportArtifactDownloadName(reportId, fallbackName),
+      ),
       contentType: response.headers['content-type'] || 'application/octet-stream',
     }))
 }

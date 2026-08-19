@@ -188,6 +188,9 @@ def download_report_artifact(
     )
     return FileResponse(
         path,
-        filename=str(artifact.get("filename") or "report-artifact"),
+        filename=ReportService.build_download_filename(
+            report_id,
+            str(artifact.get("filename") or "report-artifact"),
+        ),
         media_type="application/octet-stream",
     )

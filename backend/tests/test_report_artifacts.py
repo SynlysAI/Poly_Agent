@@ -109,6 +109,52 @@ class ReportArtifactStorageTest(unittest.TestCase):
         self.assertNotIn(str(settings.report_output_root), response.text)
         client.close()
 
+    def test_download_filename_includes_report_id_for_default_pdf_name(self) -> None:
+        artifact = ReportService().create_artifact(
+            report_id="report_artifact_001",
+            artifact_type="pdf",
+            filename="report.pdf",
+            content=b"%PDF-1.4 test",
+        )
+        app = FastAPI()
+        app.include_router(reports_router, prefix="/api/v1")
+        client = TestClient(app)
+
+        response = client.get(
+            f"/api/v1/reports/report_artifact_001/artifacts/{artifact['artifact_id']}/download"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("report_artifact_001.pdf", response.headers["content-disposition"])
+        client.close()
+
+    def test_download_filename_keeps_custom_name_and_appends_report_id(self) -> None:
+        artifact = ReportService().create_artifact(
+            report_id="report_artifact_001",
+            artifact_type="markdown",
+            filename="summary.md",
+            content=b"# Summary\n",
+        )
+        app = FastAPI()
+        app.include_router(reports_router, prefix="/api/v1")
+        client = TestClient(app)
+
+        response = client.get(
+            f"/api/v1/reports/report_artifact_001/artifacts/{artifact['artifact_id']}/download"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("summary_report_artifact_001.md", response.headers["content-disposition"])
+        client.close()
+
+    def test_build_download_filename_handles_default_and_custom_names(self) -> None:
+        build = ReportService.build_download_filename
+
+        self.assertEqual(build("report_abc123", "report.pdf"), "report_abc123.pdf")
+        self.assertEqual(build("report_abc123", "report.md"), "report_abc123.md")
+        self.assertEqual(build("report_abc123", "summary.pdf"), "summary_report_abc123.pdf")
+        self.assertEqual(build("report_abc123", None), "artifact_report_abc123.bin")
+
     def test_download_rejects_artifact_from_another_report(self) -> None:
         artifact = ReportService().create_artifact(
             report_id="report_artifact_001",
