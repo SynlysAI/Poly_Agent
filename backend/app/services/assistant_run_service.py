@@ -30,6 +30,7 @@ from app.schemas.assistant_runs import (
 )
 from app.services.assistant_compaction_service import assistant_compaction_service
 from app.services.assistant_chat_service import actor_id, assistant_chat_service
+from app.services.assistant_presets import resolve_assistant_runtime
 from app.services.assistant_service import stream_chat_assistant
 from app.services.assistant_tool_service import assistant_tool_call_service
 
@@ -127,6 +128,12 @@ class AssistantRunService:
         now = utc_now()
         run_id = f"asrun_{uuid4().hex[:16]}"
         context = dict(payload.context)
+        preset_id, compatibility_mode = resolve_assistant_runtime(
+            context.get("preset_id") or chat.get("preset_id"),
+            context.get("mode") or chat.get("mode"),
+        )
+        context["preset_id"] = preset_id
+        context["mode"] = compatibility_mode
         tool_call_ids = [str(item) for item in (context.get("tool_call_ids") or []) if str(item)]
         is_continuation = bool(tool_call_ids)
         trace_id = str(context.get("trace_id") or "") if is_continuation else run_id
@@ -183,6 +190,7 @@ class AssistantRunService:
             "provider_id": requested_provider_id,
             "model_id": requested_model_id,
             "route": {
+                "preset_id": preset_id,
                 "requested_provider_id": requested_provider_id,
                 "requested_model_id": requested_model_id,
             },

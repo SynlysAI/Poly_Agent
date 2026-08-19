@@ -1,6 +1,6 @@
 # Plan 11：LUI 科研问答 / 深度思考 Preset 定位与演进
 
-> 状态：已完成（P11-A–P11-E 待独立实施）
+> 状态：已完成（第 11 节兼容基础已实施；P11-A–P11-E 待独立实施）
 >
 > 日期：2026-08-16
 >
@@ -27,13 +27,13 @@ research_deep  需要证据综合、多步判断或可解释结论的深度科�
 
 两者共享同一个 Base Agent / AssistantService，不复制 DeepSeek Harness 的 Cordis / TypeScript runtime，也不照搬 `Standard` / `PTC` / `Minimal` / `Cordis`。两个 Preset 的长期演进遵循“动态计算预算”原则：按问题难度、风险等级、证据需求和当前约束，在效果、延迟与成本之间选择默认预算，而不是固定使用最强模型或最高强度检索。
 
-本计划先定义定位、边界、共同不变量、预算演进方向和后续行动，不直接落地完整 Preset Registry、Query Classifier、Budget Router 或代码改动。
+本计划先定义定位、边界、共同不变量、预算演进方向和后续行动；除 11.1 的轻量兼容基础外，不直接落地完整 Preset Registry、Query Classifier、Budget Router 或其他代码改动。
 
 ## 2. 非目标
 
 本计划明确不做以下事项：
 
-- 不修改业务代码、API、Pydantic schema、前端组件或自动化测试。
+- 除 11.1 的最小兼容落地外，不修改其他业务代码、API、Pydantic schema、前端组件或自动化测试。
 - 不在本次实现完整 Preset Registry、Preset 编辑器或 Preset 市场。
 - 不引入 Cordis、DSH 插件系统或 TypeScript runtime。
 - 不照搬通用 `Standard` / `PTC` / `Minimal` / `Cordis` 四类定义。
@@ -45,7 +45,7 @@ research_deep  需要证据综合、多步判断或可解释结论的深度科�
 
 ## 3. 当前实现基线
 
-截至 2026-08-16，LUI 的 `qa` / `deep` 行为如下：
+截至 2026-08-16，LUI 的 `qa` / `deep` 行为如下；2026-08-19 仅按 11.1 增加 `preset_id` 兼容记录，其余演进项仍保持待办：
 
 | 维度 | 当前实现 | 说明 |
 | --- | --- | --- |
@@ -271,7 +271,7 @@ research_code       受限科研代码 / 计算脚本
 ## 11. 假设与默认选择
 
 - 本期只定义 `科研问答` 与 `深度思考` 两个 Preset，不扩展完整 PolyAgent Preset 体系。
-- 本期为定位、架构与验收文档，不拆成后端/前端/测试的逐文件实施任务。
+- 本计划原为定位、架构与验收文档，不拆成后端/前端/测试的逐文件实施任务；2026-08-19 仅补充 11.1 的最小兼容落地。
 - 动态计算预算的落地后续应拆成独立代码计划；本节只定义目标架构、优先级、行动拆分和验收边界。
 - 未来若实现 Preset Registry，`preset_id` 成为权威标识，`mode` 作为兼容字段保留。
 - Query Classifier 初期优先使用确定性规则和既有上下文信号，不默认引入一个昂贵的分类模型；分类不确定时向更高证据质量或更高安全档位回退。
@@ -279,6 +279,18 @@ research_code       受限科研代码 / 计算脚本
 - `deep` 的高层 `reasoning_summary` 仍只展示可审计的高层推理，不展示 hidden CoT 或私有 scratchpad。
 - 算法工具调用不因切换到 `research_qa` 或 `research_deep` 而自动打开，仍需用户选择工具且模型支持。
 - Preset 不能覆盖平台 RBAC、AgentTool policy、审批和系统安全规则。
+
+### 11.1 最小代码落地记录（2026-08-19）
+
+- [x] 新增 `research_qa` / `research_deep` 轻量标识与兼容映射，不引入完整 Preset Registry、Preset 编辑器或新 Agent。
+- [x] 会话创建、更新与恢复保留 `mode`，同步保存 `preset_id`；历史会话缺少 `preset_id` 时按旧 `mode` 回退。
+- [x] run 请求快照、初始 route 与 `route.resolved` 事件记录 `preset_id`，保证后续 Trace 回放可识别本轮 Preset。
+- [x] 保持用户显式模型选择优先；Preset 只决定默认路由用途，不改变既有工具确认、RBAC、审批和安全策略。
+- [x] 保持算法工具启用条件不变：仍由用户已选工具、模型能力和既有确认状态机决定，不因 Preset 自动开启。
+- [x] 补充 Preset 兼容、旧会话回退、run 记录、显式模型优先与工具不自动开启的回归测试。
+- [x] 验证 Assistant 相关后端测试、模型排序前端测试与前端构建通过。
+
+本节不实现第 12 节动态计算预算，也不开启 Query Classifier、动态 Model Router、Hybrid Retrieval、Reranker 或 Agent 执行分级。
 
 ## 12. 动态计算预算：成本、延迟、效果平衡
 
@@ -416,4 +428,5 @@ High-risk → Planning + Verification + Human
 - 2026-08-18：补充成本、延迟、效果平衡与动态计算预算说明，明确 Model Router、RAG 检索分层、Agent 执行分级及落地边界；未修改业务代码。
 - 2026-08-19：将动态计算预算贯穿 Preset 契约、两个模式策略、切换不变量、验收标准和落地边界，并新增 P11-A–P11-E 后续行动框架；未修改业务代码。
 - 2026-08-19：完成本期定位与演进方案评审闭环，勾选第 10 节验收项；P11-A–P11-E 保持待办，待拆分独立实施计划。
+- 2026-08-19：完成第 11 节最小代码落地：新增两个 Preset 标识、`mode` 兼容映射、会话与 run 的 `preset_id` 记录；显式模型、工具选择和安全策略优先级保持不变。第 12 节动态计算预算与 P11-A–P11-E 仍未实施。
 - 待办：后续若正式实施 Preset Registry 与动态预算，先拆出独立代码计划并同步 Plan 10 的会话控制状态与 Plan 13 的评估指标。

@@ -36,6 +36,10 @@ from app.schemas.assistant import AssistantRetrievalStatus
 from app.schemas.agent_tools import AgentTool, AssistantToolCall, AssistantToolCallCreate
 from app.services.agent_tool_service import agent_tool_service
 from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID, classify_provider_error
+from app.services.assistant_presets import (
+    assistant_route_purpose,
+    resolve_assistant_runtime,
+)
 from app.services.assistant_context_assembler import (
     AssistantContextAssembler,
     ContextAssembly,
@@ -1522,11 +1526,16 @@ class AssistantService:
         """
         context = request.context or {}
         requested_provider_id, requested_model_id = self._requested_model_identifiers(context.get("model"))
+        preset_id, _compatibility_mode = resolve_assistant_runtime(
+            context.get("preset_id"),
+            context.get("mode"),
+        )
         return {
             "trace_id": context.get("trace_id") or context.get("run_id"),
             "original_user_message_id": context.get("message_id"),
             "chat_id": context.get("chat_id"),
             "selected_tool_ids": list(selected_tool_ids or []),
+            "preset_id": preset_id,
             "mode": context.get("mode") or "qa",
             "model_request": (
                 {"providerId": requested_provider_id, "modelId": requested_model_id}
@@ -1914,14 +1923,17 @@ class AssistantService:
 
     def chat(self, request: AssistantChatRequest, current_user: dict | None = None) -> AssistantChatResponse:
         user_text = self._latest_user_text(request.messages)
-        mode = self._normalize_mode(request.context.get("mode"))
+        preset_id, mode = resolve_assistant_runtime(
+            request.context.get("preset_id"),
+            request.context.get("mode"),
+        )
         intent = self.intent_router.route(user_text, mode=mode)
         intent = self._apply_web_search_preference(intent, request.context.get("use_web_search"))
         facts = self.project_service.build_facts(intent=intent)
         project_refs = self.project_service.build_project_references(user_text)
         actions = self.project_service.build_actions(user_text)
         suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
-        llm_route = self._resolve_llm_route(mode=mode, request=request)
+        llm_route = self._resolve_llm_route(mode=mode, request=request, preset_id=preset_id)
         knowledge_outcome = self._retrieve_knowledge(user_text, request)
 
         if mode == "model":
@@ -2072,7 +2084,10 @@ class AssistantService:
         try:
             yield {"type": "status", "stage": "intent", "message": "正在识别问题范围..."}
             user_text = self._latest_user_text(request.messages)
-            mode = self._normalize_mode(request.context.get("mode"))
+            preset_id, mode = resolve_assistant_runtime(
+                request.context.get("preset_id"),
+                request.context.get("mode"),
+            )
             intent = self.intent_router.route(user_text, mode=mode)
             intent = self._apply_web_search_preference(intent, request.context.get("use_web_search"))
 
@@ -2081,7 +2096,7 @@ class AssistantService:
             project_refs = self.project_service.build_project_references(user_text)
             actions = self.project_service.build_actions(user_text)
             suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
-            llm_route = self._resolve_llm_route(mode=mode, request=request)
+            llm_route = self._resolve_llm_route(mode=mode, request=request, preset_id=preset_id)
             logger.info(
                 "assistant stream llm route resolved: purpose=%s provider_id=%s model_id=%s",
                 llm_route.get("purpose"),
@@ -2366,7 +2381,10 @@ class AssistantService:
         llm_route: dict | None = None,
     ) -> dict:
         response_facts = dict(facts)
-        response_facts["request_context"] = dict(request.context)
+        request_context = dict(request.context)
+        if llm_route and llm_route.get("preset_id"):
+            request_context["preset_id"] = llm_route.get("preset_id")
+        response_facts["request_context"] = request_context
         response_facts["llm_route"] = self._safe_llm_route(llm_route or {})
         if knowledge_outcome:
             response_facts["knowledge_search"] = {
@@ -2455,8 +2473,18 @@ class AssistantService:
             }
         return response_facts
 
-    def _resolve_llm_route(self, *, mode: str, request: AssistantChatRequest) -> dict:
-        purpose = "deep" if mode == "deep" else "qa"
+    def _resolve_llm_route(
+        self,
+        *,
+        mode: str,
+        request: AssistantChatRequest,
+        preset_id: str | None = None,
+    ) -> dict:
+        resolved_preset_id, _compatibility_mode = resolve_assistant_runtime(
+            preset_id or (request.context or {}).get("preset_id"),
+            (request.context or {}).get("mode") or mode,
+        )
+        purpose = assistant_route_purpose(resolved_preset_id)
         requested_model = (request.context or {}).get("model")
         requested_provider_id, requested_model_id = self._requested_model_identifiers(requested_model)
         if (requested_provider_id or requested_model_id) and not (requested_provider_id and requested_model_id):
@@ -2471,18 +2499,21 @@ class AssistantService:
             return resolve_method(
                 purpose=purpose,
                 requested_model=requested_model,
-            )
+            ) | {"preset_id": resolved_preset_id}
         except Exception as exc:
             if self._has_requested_model(requested_model):
                 detail = getattr(exc, "detail", None) or str(exc)
                 raise ValueError(f"所选 LLM 模型不可用：{detail}") from exc
             logger.warning("assistant llm route unavailable: %s", exc)
             try:
-                return self.llm_model_service.resolve_default_route(purpose=purpose)
+                return self.llm_model_service.resolve_default_route(purpose=purpose) | {
+                    "preset_id": resolved_preset_id
+                }
             except Exception as fallback_exc:
                 logger.warning("assistant llm default route unavailable: %s", fallback_exc)
                 return {
                     "purpose": purpose,
+                    "preset_id": resolved_preset_id,
                     "provider_id": None,
                     "model_id": settings.llm_model or None,
                     "capabilities": [],
@@ -2503,6 +2534,7 @@ class AssistantService:
     def _safe_llm_route(self, route: dict) -> dict:
         """Build a serializable route snapshot without provider credentials."""
         return {
+            "preset_id": route.get("preset_id"),
             "purpose": route.get("purpose"),
             "route_reason": route.get("route_reason"),
             "requested_provider_id": route.get("requested_provider_id"),

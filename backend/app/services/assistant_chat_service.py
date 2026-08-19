@@ -28,6 +28,7 @@ from app.schemas.assistant_chats import (
     AssistantMessageUpdate,
 )
 from app.services.agent_tool_service import agent_tool_service
+from app.services.assistant_presets import resolve_assistant_runtime
 
 
 def actor_id(current_user: dict[str, str] | None) -> str:
@@ -47,6 +48,22 @@ def _title_from_messages(messages: list[dict[str, Any]]) -> str:
 
 class AssistantChatService:
     """Create, update, delete and restore user-owned assistant chats."""
+
+    @staticmethod
+    def _preset_fields(document: dict[str, Any]) -> dict[str, str]:
+        """解析持久化 Preset 与兼容模式字段。
+
+        Args:
+            document: 可能来自旧客户端的原始会话文档。
+
+        Returns:
+            包含权威 Preset ID 和同步旧版模式的字段。
+        """
+        preset_id, mode = resolve_assistant_runtime(
+            document.get("preset_id"),
+            document.get("mode"),
+        )
+        return {"preset_id": preset_id, "mode": mode}
 
     @staticmethod
     def _validate_selected_tools(tool_ids: list[str], current_user: dict[str, str] | None) -> None:
@@ -117,6 +134,7 @@ class AssistantChatService:
         public_messages = [cls._message(item, owner_id, raw_calls) for item in messages]
         calls = [cls._public_call(call) for call in raw_calls]
         payload = {**document, "messages": public_messages, "tool_calls": calls}
+        payload.update(cls._preset_fields(document))
         payload.pop("search_text", None)
         return AssistantChat.model_validate(payload)
 
@@ -127,6 +145,9 @@ class AssistantChatService:
         now = utc_now()
         initial_messages = [item.model_dump(mode="python") for item in payload.messages]
         chat_id = f"chat_{uuid4().hex[:16]}"
+        preset_fields = cls._preset_fields(
+            {"preset_id": payload.preset_id, "mode": payload.mode}
+        )
         document = {
             "chat_id": chat_id,
             "title": (payload.title or "").strip() or _title_from_messages(initial_messages),
@@ -139,7 +160,7 @@ class AssistantChatService:
             "created_by": owner_id,
             "archived": False,
             "model": payload.model,
-            "mode": payload.mode,
+            **preset_fields,
             "knowledge_base_ids": payload.knowledge_base_ids,
             "knowledge_base_names": payload.knowledge_base_names,
             "use_web_search": payload.use_web_search,
@@ -187,8 +208,10 @@ class AssistantChatService:
     @classmethod
     def _summary(cls, document: dict[str, Any], message_count: int) -> AssistantChatSummary:
         """将会话文档转换为历史栏摘要。"""
+        preset_fields = cls._preset_fields(document)
         return AssistantChatSummary.model_validate({
             **document,
+            "preset_id": preset_fields["preset_id"],
             "message_count": int(message_count),
         })
 
@@ -242,6 +265,15 @@ class AssistantChatService:
         requested = payload.model_dump(exclude_unset=True)
         if "selected_tool_ids" in requested:
             cls._validate_selected_tools(requested["selected_tool_ids"] or [], current_user)
+        if "preset_id" in requested or "mode" in requested:
+            requested.update(
+                cls._preset_fields(
+                    {
+                        "preset_id": requested.get("preset_id", current.get("preset_id")),
+                        "mode": requested.get("mode", current.get("mode")),
+                    }
+                )
+            )
         requested["updated_at"] = utc_now()
         if "title" in requested:
             requested["title"] = (requested["title"] or "").strip() or current.get("title") or "新对话"
