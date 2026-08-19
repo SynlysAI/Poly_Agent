@@ -180,6 +180,32 @@ export const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
 export const DEFAULT_CONTEXT_WINDOW = 131072
 
 /**
+ * 解析当前应展示的上下文 token 估算。
+ *
+ * @param {object} options 估算输入。
+ * @param {number|string} options.manifestEstimate 最新模型请求 manifest 的 token 估算。
+ * @param {string} options.manifestCreatedAt 最新模型请求消息的创建时间。
+ * @param {object} options.compaction 会话压缩快照。
+ * @returns {number} 可信的最新估算；没有数据时返回 0。
+ */
+export function resolveContextTokenEstimate({
+  manifestEstimate = 0,
+  manifestCreatedAt = '',
+  compaction = null,
+} = {}) {
+  const manifestTokens = usageNumber(manifestEstimate)
+  const compactionTokens = usageNumber(compaction?.token_estimate)
+  if (!compaction) return manifestTokens
+
+  const manifestTime = Date.parse(manifestCreatedAt || '')
+  const compactionTime = Date.parse(compaction?.created_at || '')
+  if (Number.isFinite(manifestTime) && Number.isFinite(compactionTime)) {
+    return manifestTime > compactionTime ? manifestTokens : compactionTokens
+  }
+  return manifestTokens || compactionTokens
+}
+
+/**
  * 计算 dsh 风格上下文占用圆环所需的展示数据。
  *
  * @param {number|string} contextEstimate 最新一次请求的上下文 token 估算。

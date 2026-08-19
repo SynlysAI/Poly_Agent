@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import {
   applyTraceEvent,
   createTraceState,
+  filterTraceSteps,
   formatTraceDuration,
   traceDetailText,
   traceDisplayGroups,
@@ -127,6 +128,48 @@ state = applyTraceEvent(state, { type: 'trace.end', status: 'completed' })
 assert.equal(state.status, 'completed')
 assert.equal(state.streaming, false)
 assert.equal(traceSummaryRows(state).at(-1)[1], '未记录')
+
+const controlStep = {
+  trace_id: 'chat_trace',
+  step_id: 'control:goal-1',
+  timestamp: '2026-08-18T01:00:00Z',
+  type: 'control',
+  title: '会话目标已更新',
+  summary: '目标已记录',
+  status: 'success',
+  details: { event_types: ['goal.changed'], source_event_refs: [] },
+}
+const commandStep = {
+  trace_id: 'chat_trace',
+  step_id: 'command:cmd-1',
+  timestamp: '2026-08-18T01:00:01Z',
+  type: 'command',
+  title: 'Slash 命令',
+  summary: '/status',
+  status: 'success',
+  details: { event_types: ['command.run', 'command.done'], source_event_refs: [] },
+}
+const exportStep = {
+  trace_id: 'chat_trace',
+  step_id: 'export:cmd-2',
+  timestamp: '2026-08-18T01:00:02Z',
+  type: 'export',
+  title: '会话已导出',
+  summary: 'ZIP 导出完成',
+  status: 'success',
+  details: { event_types: ['session.exported'], source_event_refs: [] },
+}
+const chatSteps = [...state.steps, controlStep, commandStep, exportStep]
+assert.equal(filterTraceSteps(chatSteps, 'all').length, chatSteps.length)
+assert.deepEqual(filterTraceSteps(chatSteps, 'command').map((step) => step.step_id), ['command:cmd-1'])
+assert.deepEqual(filterTraceSteps(chatSteps, 'control').map((step) => step.step_id), ['control:goal-1'])
+assert.deepEqual(filterTraceSteps(chatSteps, 'export').map((step) => step.step_id), ['export:cmd-2'])
+assert.deepEqual(filterTraceSteps(chatSteps, 'unknown-filter'), [])
+
+const chatGroups = traceDisplayGroups({ steps: chatSteps })
+assert.ok(chatGroups.some((group) => group.steps.some((step) => step.step_id === 'command:cmd-1')))
+assert.ok(chatGroups.some((group) => group.steps.some((step) => step.step_id === 'control:goal-1')))
+assert.ok(chatGroups.some((group) => group.steps.some((step) => step.step_id === 'export:cmd-2')))
 
 assert.equal(formatTraceDuration({ duration_ms: 1200, details: { duration_known: true } }), '1.2s')
 assert.equal(formatTraceDuration({ duration_ms: 0, details: { duration_known: false } }), '未记录')

@@ -161,9 +161,19 @@ def get_assistant_events_collection() -> Collection:
     return get_database()["assistant_events"]
 
 
+def get_assistant_command_runs_collection() -> Collection:
+    """获取 assistant_command_runs 命令执行集合。"""
+    return get_database()["assistant_command_runs"]
+
+
 def get_assistant_runtime_assets_collection() -> Collection:
     """获取 assistant_runtime_assets 受管运行时附件集合。"""
     return get_database()["assistant_runtime_assets"]
+
+
+def get_assistant_feedback_collection() -> Collection:
+    """获取 assistant_feedback 会话反馈权威集合。"""
+    return get_database()["assistant_feedback"]
 
 
 def get_algorithm_packages_collection() -> Collection:

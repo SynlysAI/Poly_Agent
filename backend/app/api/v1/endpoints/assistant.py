@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
-from app.core.auth import get_current_user, require_admin
+from app.core.auth import get_current_user, get_current_user_with_query_token, require_admin
+from app.core.config import settings
+from app.infra.assistant_command_repositories import AssistantCommandRunRepository
 from app.schemas.agent_tools import (
     AssistantToolCall,
     AssistantToolCallConfirm,
@@ -28,11 +32,23 @@ from app.schemas.assistant_chats import (
     AssistantMessageListData,
     AssistantMessageUpdate,
 )
+from app.schemas.assistant_commands import (
+    CommandCatalogData,
+    CommandEventListData,
+    CommandExecuteRequest,
+    CommandExecution,
+    SessionControlState,
+)
 from app.schemas.assistant_runs import AssistantRun, AssistantRunCreate, AssistantRunListData
-from app.schemas.assistant_trace import AssistantTraceData
+from app.schemas.assistant_trace import (
+    AssistantChatTraceData,
+    AssistantTraceBatchData,
+    AssistantTraceData,
+)
 from app.schemas.common import ApiResponse
 from app.services.assistant_service import chat_assistant
 from app.services.assistant_service import stream_chat_assistant
+from app.services.assistant_command_service import assistant_command_service
 from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.assistant_chat_service import assistant_chat_service
 from app.services.assistant_quality_service import build_quality_metrics
@@ -40,6 +56,73 @@ from app.services.assistant_run_service import assistant_run_service
 from app.services.assistant_trace_service import assistant_trace_service
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
+
+
+@router.get("/commands", response_model=ApiResponse[CommandCatalogData])
+def list_assistant_commands(
+    chat_id: str = Query(min_length=1, max_length=80),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[CommandCatalogData]:
+    """返回当前会话可发现的 Slash Command 目录。"""
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=assistant_command_service.catalog(chat_id, current_user),
+    )
+
+
+@router.post("/commands/execute", response_model=ApiResponse[CommandExecution])
+def execute_assistant_command(
+    payload: CommandExecuteRequest,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[CommandExecution]:
+    """在命令平面执行一行 Slash Command。"""
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=assistant_command_service.execute(payload, current_user),
+    )
+
+
+@router.get("/commands/{command_id}/download")
+def download_assistant_command_export(
+    command_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user_with_query_token),
+) -> FileResponse:
+    """以原生浏览器下载方式返回会话导出文件。
+
+    Args:
+        command_id: 导出命令 ID。
+        current_user: 当前登录用户。
+
+    Returns:
+        受管导出文件响应。
+    """
+    owner_id = (current_user or {}).get("user_id") or "demo_user"
+    command = AssistantCommandRunRepository.find_one(
+        {"command_id": command_id, "created_by": owner_id}
+    )
+    if not command or command.get("name") != "export" or command.get("status") != "success":
+        raise HTTPException(status_code=404, detail="导出文件不存在")
+    filename = str(command.get("download_filename") or "")
+    extension = Path(filename).suffix.lower()
+    extension_map = {
+        ".json": "application/json",
+        ".md": "text/markdown; charset=utf-8",
+        ".zip": "application/zip",
+    }
+    if extension not in extension_map:
+        raise HTTPException(status_code=404, detail="导出文件不存在")
+    expected_path = (
+        settings.runtime_root / "assistant-exports" / f"{command_id}{extension}"
+    ).resolve()
+    if not expected_path.is_file():
+        raise HTTPException(status_code=404, detail="导出文件已过期或不存在")
+    return FileResponse(
+        expected_path,
+        media_type=extension_map[extension],
+        filename=filename,
+    )
 
 
 @router.get("/chats", response_model=ApiResponse[AssistantChatListData])
@@ -110,6 +193,63 @@ def delete_assistant_chat(
 ) -> ApiResponse[None]:
     assistant_chat_service.delete(chat_id, current_user)
     return ApiResponse(code=0, message="deleted", data=None)
+
+
+@router.get("/chats/{chat_id}/session-state", response_model=ApiResponse[SessionControlState])
+def get_assistant_session_state(
+    chat_id: str,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[SessionControlState]:
+    """读取带旧数据默认值的会话控制状态。"""
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=assistant_command_service.session_state(chat_id, current_user),
+    )
+
+
+@router.get("/chats/{chat_id}/command-events", response_model=ApiResponse[CommandEventListData])
+def list_assistant_command_events(
+    chat_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[CommandEventListData]:
+    """按会话事件序号回放命令生命周期事件。"""
+    items, next_after_seq = assistant_command_service.command_events(
+        chat_id,
+        current_user,
+        after_seq,
+    )
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=CommandEventListData(items=items, total=len(items), next_after_seq=next_after_seq),
+    )
+
+
+@router.get("/chats/{chat_id}/trace", response_model=ApiResponse[AssistantChatTraceData])
+def get_assistant_chat_trace(
+    chat_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    event_types: list[str] | None = Query(default=None),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantChatTraceData]:
+    """读取会话级命令、模型、工具与控制事件统一 Trace。"""
+    normalized_types = {
+        item.strip()
+        for item in (event_types or [])
+        if item.strip()
+    } or None
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=assistant_trace_service.get_chat(
+            chat_id,
+            current_user,
+            after_seq=after_seq,
+            event_types=normalized_types,
+        ),
+    )
 
 
 @router.get("/chats/{chat_id}/messages", response_model=ApiResponse[AssistantMessageListData])
@@ -201,6 +341,23 @@ def get_active_assistant_run(
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AssistantRun | None]:
     return ApiResponse(code=0, message="ok", data=assistant_run_service.get_active(current_user))
+
+
+@router.get("/traces/batch", response_model=ApiResponse[AssistantTraceBatchData])
+def list_assistant_traces_batch(
+    trace_ids: list[str] = Query(default=[]),
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AssistantTraceBatchData]:
+    """批量恢复当前会话中的多条 Execution Trace。"""
+    if len(trace_ids) > 200:
+        raise HTTPException(status_code=422, detail="trace_ids 单次最多 200 个")
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=AssistantTraceBatchData(
+            items=assistant_trace_service.get_many(trace_ids, current_user)
+        ),
+    )
 
 
 @router.get("/traces/{trace_id}", response_model=ApiResponse[AssistantTraceData])

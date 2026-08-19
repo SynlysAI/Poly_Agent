@@ -13,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
+from app.infra.llm_repositories import LLMRoutingRepository
 
 try:
     from ._computation_test_utils import ComputationTestCase
@@ -59,7 +60,12 @@ class LLMModelManagementApiTest(ComputationTestCase):
                         "provider_type": "openai_compatible",
                         "base_url": "https://fast.example.test/v1",
                         "api_key_env": "LLM_API_KEY",
-                        "models": ["DeepSeek-V4-Flash-w8a8-mtp"],
+                        "models": [
+                            {
+                                "model_id": "legacy-fast-model",
+                                "capabilities": ["chat", "fast", "reasoning", "structured_json"],
+                            },
+                        ],
                         "capabilities": ["chat", "structured_json"],
                         "recommended_for": ["qa", "deep"],
                     },
@@ -103,12 +109,12 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
         text = json.dumps(data, ensure_ascii=False)
-        self.assertIn("DeepSeek-V4-Flash-w8a8-mtp", text)
+        self.assertIn("legacy-fast-model", text)
         self.assertIn("Qwen3.6-35B-A3B", text)
         self.assertIn("qwen2.5:3b", text)
         self.assertNotIn("reasoning-secret-key", text)
         self.assertEqual(data["routing"]["deep"]["provider_id"], "default_openai")
-        self.assertEqual(data["routing"]["deep"]["model_id"], "DeepSeek-V4-Flash-w8a8-mtp")
+        self.assertEqual(data["routing"]["deep"]["model_id"], "legacy-fast-model")
         self.assertTrue(data["routing"]["deep"]["reasoning_model_available"])
         reasoning_provider = next(item for item in data["providers"] if item["provider_id"] == "qwen_reasoning_primary")
         self.assertTrue(reasoning_provider["api_key_configured"])
@@ -121,6 +127,30 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertIn("fast", default_capabilities)
         self.assertIn("reasoning", default_capabilities)
         self.assertIn("structured_json", default_capabilities)
+
+    def test_stale_persisted_route_is_healed_and_persisted(self) -> None:
+        LLMRoutingRepository.save(
+            "config_id",
+            {
+                "config_id": "global",
+                "routing": {
+                    "qa": {"provider_id": "default_openai", "model_id": "missing-model"},
+                    "deep": {"provider_id": "default_openai", "model_id": "missing-model"},
+                },
+                "updated_by": "test",
+            },
+        )
+
+        resp = self.client.get("/api/v1/llm/models")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        routing = resp.json()["data"]["routing"]
+        self.assertEqual(routing["qa"]["model_id"], "legacy-fast-model")
+        self.assertEqual(routing["deep"]["model_id"], "legacy-fast-model")
+        persisted = LLMRoutingRepository.find_one({"config_id": "global"}) or {}
+        self.assertEqual(persisted["routing"]["qa"]["model_id"], "legacy-fast-model")
+        self.assertEqual(persisted["routing"]["deep"]["model_id"], "legacy-fast-model")
+        self.assertEqual(persisted["updated_by"], "llm_routing_self_heal")
 
     def test_config_schema_endpoint_documents_provider_and_per_model_fields(self) -> None:
         resp = self.client.get("/api/v1/llm/config-schema")
@@ -147,7 +177,7 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
         self.assertEqual(data["routing"]["deep"]["provider_id"], "default_openai")
-        self.assertEqual(data["routing"]["deep"]["model_id"], "DeepSeek-V4-Flash-w8a8-mtp")
+        self.assertEqual(data["routing"]["deep"]["model_id"], "legacy-fast-model")
         self.assertTrue(data["routing"]["deep"]["reasoning_model_available"])
 
     def test_models_check_refreshes_provider_models(self) -> None:
@@ -272,17 +302,17 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertEqual(resp.json()["data"]["qa"]["provider_id"], "qwen_reasoning_primary")
 
         deepseek_payload = {
-            "qa": {"provider_id": "default_openai", "model_id": "DeepSeek-V4-Flash-w8a8-mtp"},
-            "deep": {"provider_id": "default_openai", "model_id": "DeepSeek-V4-Flash-w8a8-mtp"},
+            "qa": {"provider_id": "default_openai", "model_id": "legacy-fast-model"},
+            "deep": {"provider_id": "default_openai", "model_id": "legacy-fast-model"},
         }
         resp = self.client.put("/api/v1/llm/routing", json=deepseek_payload)
 
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
         self.assertEqual(data["qa"]["provider_id"], "default_openai")
-        self.assertEqual(data["qa"]["model_id"], "DeepSeek-V4-Flash-w8a8-mtp")
+        self.assertEqual(data["qa"]["model_id"], "legacy-fast-model")
         self.assertEqual(data["deep"]["provider_id"], "default_openai")
-        self.assertEqual(data["deep"]["model_id"], "DeepSeek-V4-Flash-w8a8-mtp")
+        self.assertEqual(data["deep"]["model_id"], "legacy-fast-model")
 
     def test_legacy_llm_chat_uses_default_route(self) -> None:
         calls = []
@@ -300,12 +330,12 @@ class LLMModelManagementApiTest(ComputationTestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["content"], "legacy ok")
-        self.assertEqual(calls[0]["model"], "DeepSeek-V4-Flash-w8a8-mtp")
+        self.assertEqual(calls[0]["model"], "legacy-fast-model")
 
     def test_assistant_deep_uses_reasoning_route_metadata(self) -> None:
         def fake_chat(messages, **kwargs):  # noqa: ANN001
             self.assertEqual(kwargs["provider_id"], "default_openai")
-            self.assertEqual(kwargs["model"], "DeepSeek-V4-Flash-w8a8-mtp")
+            self.assertEqual(kwargs["model"], "legacy-fast-model")
             return "深度回答"
 
         with patch("app.core.llm_client.chat", side_effect=fake_chat):
@@ -320,7 +350,7 @@ class LLMModelManagementApiTest(ComputationTestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()["data"]
         self.assertEqual(data["content"], "深度回答")
-        self.assertEqual(data["grounding_facts"]["llm_route"]["model_id"], "DeepSeek-V4-Flash-w8a8-mtp")
+        self.assertEqual(data["grounding_facts"]["llm_route"]["model_id"], "legacy-fast-model")
         self.assertTrue(data["grounding_facts"]["llm_route"]["reasoning_model_available"])
 
     def test_assistant_model_mode_returns_model_management_action(self) -> None:

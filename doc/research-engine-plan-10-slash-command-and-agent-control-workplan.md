@@ -1,16 +1,16 @@
 # Plan 10：Slash Command、会话控制面与 Agent 控制体系工作计划
 
-> **状态：待 Plan 09 完成**
+> **状态：PR-06 已完成，Plan 10 已完成**
 >
 > 日期：2026-08-16
 >
-> 基线：Plan 09 完成后的 `develop` 提交（待回填）
+> 基线：Plan 09 完成后的 `develop` 提交 `21d407`
 >
 > 前置计划：[research-engine-plan-09-lui-execution-trace.md](research-engine-plan-09-lui-execution-trace.md)
 >
 > 启动条件：Plan 09 必须先完成实现、测试、E2E、文档复选框与状态记录更新；本计划不得与 Plan 09 并行实施。
 >
-> 评审结论：待 Plan 09 完成后评审。
+> 评审结论：2026-08-17 确认 Plan 09 已完成并启动 PR-01。
 
 ## 1. 背景与目标
 
@@ -413,7 +413,7 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2–3 天
 
-- [ ] 新增 `assistant_commands` schema：
+- [x] 新增 `assistant_commands` schema：
   - `CommandDescriptor`
   - `CommandCatalogData`
   - `CommandExecuteRequest`
@@ -421,31 +421,31 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - `SessionGoal`
   - `SessionTodo`
   - `CompactionSnapshot`
-- [ ] 实现命令名解析、大小写规范化、raw input 保留和未知命令错误。
-- [ ] 新增 `AssistantCommandRegistry`，注册内置命令并保留动态 provider seam。
-- [ ] 新增 `AssistantCommandService`，统一执行解析、目录、权限、handler 和事件。
-- [ ] 新增 `AssistantCommandRunRepository`，支持 Mongo 与 SQLite 双模。
-- [ ] 为 `AssistantChat` 增加控制状态字段，读取旧数据时补默认值。
-- [ ] 实现会话级 `command_event_seq` 原子递增。
-- [ ] 实现 `command.run` / `command.done` 生命周期事件与 `assistant_events` 镜像。
-- [ ] 实现 `/plan`：
+- [x] 实现命令名解析、大小写规范化、raw input 保留和未知命令错误。
+- [x] 新增 `AssistantCommandRegistry`，注册内置命令并保留动态 provider seam。
+- [x] 新增 `AssistantCommandService`，统一执行解析、目录、权限、handler 和事件。
+- [x] 新增 `AssistantCommandRunRepository`，支持 Mongo 与 SQLite 双模。
+- [x] 为 `AssistantChat` 增加控制状态字段，读取旧数据时补默认值。
+- [x] 实现会话级 `command_event_seq` 原子递增。
+- [x] 实现 `command.run` / `command.done` 生命周期事件与 `assistant_events` 镜像。
+- [x] 实现 `/plan`：
   - 裸 `/plan` 启用 Plan Mode
   - `/plan off` 退出
   - `/plan <message>` 启用后创建受计划政策约束的 run
-- [ ] 实现 `/goal`：
+- [x] 实现 `/goal`：
   - 裸命令查看当前目标
   - `/goal <objective>` 设置目标
   - `/goal clear` 清除 active goal
-- [ ] 实现 `/permission`：
+- [x] 实现 `/permission`：
   - 裸命令返回选项交互
   - `/permission read-only|workspace-write|full-access` 切换
-- [ ] 实现 `/model`：
+- [x] 实现 `/model`：
   - 裸命令返回当前模型与可用选项
   - `/model <provider_id>::<model_id>` 切换并保留控制状态
-- [ ] 实现 `/status`，汇总模型、模式、目标、Todo、权限、active run、active tool call 和 trace 摘要。
-- [ ] 在 `AssistantContextAssembler` 中加入 session state 与 plan policy。
-- [ ] 在 `AssistantToolCallService.confirm()` 中接入 permission / plan gate。
-- [ ] 补充后端单元与 API 测试。
+- [x] 实现 `/status`，汇总模型、模式、目标、Todo、权限、active run、active tool call 和 trace 摘要。
+- [x] 在 `AssistantContextAssembler` 中加入 session state 与 plan policy。
+- [x] 在 `AssistantToolCallService.confirm()` 中接入 permission / plan gate。
+- [x] 补充后端单元与 API 测试。
 
 **验收标准**
 
@@ -462,7 +462,7 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2–3 天
 
-- [ ] 新增 `frontend/src/utils/slashCommands.mjs` 纯函数模块：
+- [x] 新增 `frontend/src/utils/slashCommands.mjs` 纯函数模块：
   - 行首 slash 检测
   - 当前 token 提取
   - URL / 路径 carve-out
@@ -470,12 +470,12 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - category 排序
   - variant 展开与合并
   - keyboard highlight 状态计算
-- [ ] 新增 `slashCommands.test.mjs` 覆盖纯函数。
-- [ ] 新增 `CommandPalette.vue`，挂载在 composer 输入框上方。
-- [ ] 支持 `/` 打开、输入实时过滤、空结果自动关闭。
-- [ ] 支持鼠标点击、`↑` / `↓` 循环高亮、`Enter` 选择、`Esc` 关闭。
-- [ ] 支持 IME composition 期间不触发 Enter 选择。
-- [ ] 支持展示：
+- [x] 新增 `slashCommands.test.mjs` 覆盖纯函数。
+- [x] 新增 `CommandPalette.vue`，挂载在 composer 输入框上方。
+- [x] 支持 `/` 打开、输入实时过滤、空结果自动关闭。
+- [x] 支持鼠标点击、`↑` / `↓` 循环高亮、`Enter` 选择、`Esc` 关闭。
+- [x] 支持 IME composition 期间不触发 Enter 选择。
+- [x] 支持展示：
   - 命令名
   - 参数提示
   - 描述
@@ -484,14 +484,14 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - 可用状态
   - 不可用原因
   - 风险标识
-- [ ] 支持 `/plan` 与 `/plan off` variant 提示。
-- [ ] 命令目录加载、缓存、失败重试和 catalog version 失效刷新。
-- [ ] `DialogueView` 接入 `GET /assistant/commands` 与 `POST /assistant/commands/execute`。
-- [ ] 普通文本提交前先识别 slash；未知命令显示直接错误，不调用 run API。
-- [ ] 渲染命令结果行，支持成功、失败、交互、run 创建和 tool call 创建状态。
-- [ ] composer 顶部增加 Plan / Permission / Goal / Model 状态标签。
-- [ ] 会话加载时恢复控制状态并同步命令目录。
-- [ ] 补充前端单测与构建验证。
+- [x] 支持 `/plan` 与 `/plan off` variant 提示。
+- [x] 命令目录加载、缓存、失败重试和 catalog version 失效刷新。
+- [x] `DialogueView` 接入 `GET /assistant/commands` 与 `POST /assistant/commands/execute`。
+- [x] 普通文本提交前先识别 slash；未知命令显示直接错误，不调用 run API。
+- [x] 渲染命令结果行，支持成功、失败、交互、run 创建和 tool call 创建状态。
+- [x] composer 顶部增加 Plan / Permission / Goal / Model 状态标签。
+- [x] 会话加载时恢复控制状态并同步命令目录。
+- [x] 补充前端单测与构建验证。
 
 **验收标准**
 
@@ -508,29 +508,29 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2–3 天
 
-- [ ] 从 `AgentToolService.list_tools()` 派生动态 command descriptor。
-- [ ] 按 `algorithm_family` / `tool_type` / `capability_group` 映射 `tool` 或 `skill` 分类。
-- [ ] 实现 `algorithm_id → command slug` 稳定规范化：
+- [x] 从 `AgentToolService.list_tools()` 派生动态 command descriptor。
+- [x] 按 `algorithm_family` / `tool_type` / `capability_group` 映射 `tool` 或 `skill` 分类。
+- [x] 实现 `algorithm_id → command slug` 稳定规范化：
   - 小写
   - 非法字符转 `-`
   - 收缩连续分隔符
   - 内置名冲突追加短 hash
-- [ ] descriptor 携带 `tool_id`、`input_mode=tool_schema`、确认要求和算法 attribution 摘要。
-- [ ] 选择动态命令后，前端打开基于 `input_json_schema` 的参数表单。
-- [ ] 表单支持字符串、数字、布尔、枚举、数组、对象和必填标识。
-- [ ] 文件输入复用 AssistantToolCall 附件上传。
-- [ ] 后端命令 handler 创建 `AssistantToolCall`，并写入 `command_id` 关联。
-- [ ] `AssistantToolCall` schema 与集合新增 `command_id`。
-- [ ] 命令 owned message 增加：
+- [x] descriptor 携带 `tool_id`、`input_mode=tool_schema`、确认要求和算法 attribution 摘要。
+- [x] 选择动态命令后，前端打开基于 `input_json_schema` 的参数表单。
+- [x] 表单支持字符串、数字、布尔、枚举、数组、对象和必填标识。
+- [x] 文件输入复用 AssistantToolCall 附件上传。
+- [x] 后端命令 handler 创建 `AssistantToolCall`，并写入 `command_id` 关联。
+- [x] `AssistantToolCall` schema 与集合新增 `command_id`。
+- [x] 命令 owned message 增加：
   - `metadata.origin=slash_command`
   - `metadata.model_visible=false`
   - `metadata.command_id`
   - 可选 `metadata.task_content`
-- [ ] 模型历史构建过滤 `metadata.model_visible=false`。
-- [ ] 工具完成后的续答优先使用 `metadata.task_content`，没有任务说明则只展示结果，不自动编造续答目标。
-- [ ] 动态命令执行前后保留算法 developer / framework / method attribution。
-- [ ] 工具不可用、权限不足、schema 缺失、参数缺失和执行失败均返回可展示状态。
-- [ ] 补充动态命令目录与执行测试。
+- [x] 模型历史构建过滤 `metadata.model_visible=false`。
+- [x] 工具完成后的续答优先使用 `metadata.task_content`，没有任务说明则只展示结果，不自动编造续答目标。
+- [x] 动态命令执行前后保留算法 developer / framework / method attribution。
+- [x] 工具不可用、权限不足、schema 缺失、参数缺失和执行失败均返回可展示状态。
+- [x] 补充动态命令目录与执行测试。
 
 **验收标准**
 
@@ -547,7 +547,7 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2 天
 
-- [ ] 定义 `CompactionSnapshot`：
+- [x] 定义 `CompactionSnapshot`：
   - snapshot id
   - summary
   - cutoff message id
@@ -557,10 +557,10 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - usage
   - created at / created by
   - digest
-- [ ] `/compact` 仅在无 active run 时允许执行；有 active run 返回 busy。
-- [ ] 使用辅助 LLM 请求生成摘要，purpose 使用独立 compact route。
-- [ ] LLM 不可用或返回无效摘要时，使用确定性摘要兜底。
-- [ ] 摘要必须保留：
+- [x] `/compact` 仅在无 active run 时允许执行；有 active run 返回 busy。
+- [x] 使用辅助 LLM 请求生成摘要，purpose 使用独立 compact route。
+- [x] LLM 不可用或返回无效摘要时，使用确定性摘要兜底。
+- [x] 摘要必须保留：
   - 用户目标
   - active Goal
   - Todo 状态
@@ -572,21 +572,21 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - 关键配置
   - 未完成任务
   - 活跃工具结果
-- [ ] 摘要必须压缩：
+- [x] 摘要必须压缩：
   - 重复对话
   - 已解决的问题
   - 无关过程信息
   - 冗长工具返回
-- [ ] 原始消息不删除、不改写。
-- [ ] 后续 assistant run 由服务端按 snapshot 构建有效历史：
+- [x] 原始消息不删除、不改写。
+- [x] 后续 assistant run 由服务端按 snapshot 构建有效历史：
   - compaction summary
   - retained messages
   - cutoff 后消息
   - 活跃 tool result
-- [ ] 前端请求消息只作为兼容输入，服务端以持久化消息和 snapshot 为准。
-- [ ] 写入 `context.compacted` 事件并记录 token 收益。
-- [ ] 压缩失败时不改变有效历史，并返回稳定错误。
-- [ ] 补充压缩服务、run 请求构建和事件测试。
+- [x] 前端请求消息只作为兼容输入，服务端以持久化消息和 snapshot 为准。
+- [x] 写入 `context.compacted` 事件并记录 token 收益。
+- [x] 压缩失败时不改变有效历史，并返回稳定错误。
+- [x] 补充压缩服务、run 请求构建和事件测试。
 
 **验收标准**
 
@@ -601,8 +601,8 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
 
 **预计工作量**：2–3 天
 
-- [ ] 新增会话导出服务，支持 `json`、`markdown`、`zip`。
-- [ ] 导出数据包含：
+- [x] 新增会话导出服务，支持 `json`、`markdown`、`zip`。
+- [x] 导出数据包含：
   - session 与控制状态
   - messages
   - commands
@@ -613,7 +613,7 @@ GET /assistant/chats/{chat_id}/export?format=json|markdown|zip
   - algorithm run 关联
   - artifact 引用
   - metadata
-- [ ] ZIP 结构固定为：
+- [x] ZIP 结构固定为：
 
 ```text
 session.json
@@ -625,13 +625,13 @@ artifacts/
 metadata.json
 ```
 
-- [ ] JSON 导出为单个对象，Markdown 导出为人类可读报告。
-- [ ] 本地受管 artifact 进入 ZIP，保留原文件名并处理重名。
-- [ ] 无法读取或已过期的 artifact 不导致整个导出失败，写入 manifest 错误。
-- [ ] `/export` 裸命令返回格式选择交互；带参数命令返回下载 URL。
-- [ ] 前端通过浏览器下载，不在 JavaScript 中完整缓存 ZIP。
-- [ ] 写入 `session.exported` 开始与结束事件。
-- [ ] 新增反馈 schema 与集合：
+- [x] JSON 导出为单个对象，Markdown 导出为人类可读报告。
+- [x] 本地受管 artifact 进入 ZIP，保留原文件名并处理重名。
+- [x] 无法读取或已过期的 artifact 不导致整个导出失败，写入 manifest 错误。
+- [x] `/export` 裸命令返回格式选择交互；带参数命令返回下载 URL。
+- [x] 前端通过浏览器下载，不在 JavaScript 中完整缓存 ZIP。
+- [x] 写入 `session.exported` 开始与结束事件。
+- [x] 新增反馈 schema 与集合：
   - rating: `helpful | not_helpful`
   - comment
   - chat id
@@ -639,9 +639,9 @@ metadata.json
   - model route
   - agent version
   - created by / at
-- [ ] `/feedback` 裸命令打开反馈对话框，提交后写权威 `feedback.recorded` 事件。
-- [ ] 反馈正文只保存在权威反馈记录，`command.run` 不重复记录正文。
-- [ ] 补充导出内容一致性、owner 校验、artifact 错误和反馈关联测试。
+- [x] `/feedback` 裸命令打开反馈对话框，提交后写权威 `feedback.recorded` 事件。
+- [x] 反馈正文只保存在权威反馈记录，`command.run` 不重复记录正文。
+- [x] 补充导出内容一致性、owner 校验、artifact 错误和反馈关联测试。
 
 **验收标准**
 
@@ -657,10 +657,10 @@ metadata.json
 
 **预计工作量**：2–3 天
 
-- [ ] 回填 Plan 09 完成后的实际基线提交，并确认 Trace API / SSE 契约。
-- [ ] 复用 Plan 09 AssistantTraceProjectionService，不新增第二套 Trace 聚合服务。
-- [ ] 扩展 Plan 09 Trace API 支持 chat scope 与命令事件。
-- [ ] 合并事件类型：
+- [x] 回填 Plan 09 完成后的实际基线提交，并确认 Trace API / SSE 契约。
+- [x] 复用 Plan 09 AssistantTraceProjectionService，不新增第二套 Trace 聚合服务。
+- [x] 扩展 Plan 09 Trace API 支持 chat scope 与命令事件。
+- [x] 合并事件类型：
   - command lifecycle
   - run lifecycle
   - tool call lifecycle
@@ -670,21 +670,21 @@ metadata.json
   - compaction
   - export
   - feedback
-- [ ] 提供连续 chat seq、稳定排序和 `after_seq` 游标。
-- [ ] 前端新增 Trace 时间线，支持按类型过滤。
-- [ ] `/plan → 调查 → 工具提议 → 权限阻断/确认 → 结果 → 导出` 可在同一时间线回放。
-- [ ] 实现 `/reset`：
+- [x] 提供连续 chat seq、稳定排序和 `after_seq` 游标。
+- [x] 前端新增 Trace 时间线，支持按类型过滤。
+- [x] `/plan → 调查 → 工具提议 → 权限阻断/确认 → 结果 → 导出` 可在同一时间线回放。
+- [x] 实现 `/reset`：
   - 退出 plan mode
   - permission mode 恢复 `workspace_write`
   - 清除 active goal
   - 清空 todo
   - 保留消息、run、tool call 和事件
   - 弹出确认，避免误操作
-- [ ] 实现 `/clear`：
+- [x] 实现 `/clear`：
   - 创建或切换到新会话
   - 不删除旧会话数据
   - 旧会话仍可从历史恢复
-- [ ] 增加质量指标：
+- [x] 增加质量指标：
   - command catalog latency
   - command execute success rate
   - unknown command rate
@@ -694,10 +694,10 @@ metadata.json
   - compact token reduction
   - export success rate
   - feedback submission rate
-- [ ] 指标接入现有 assistant quality summary，并支持时间窗口。
-- [ ] 增加命令目录与 Trace 管理视图或折叠面板。
-- [ ] 更新用户文档与来源标注说明。
-- [ ] 补充端到端回放测试。
+- [x] 指标接入现有 assistant quality summary，并支持时间窗口。
+- [x] 增加命令目录与 Trace 管理视图或折叠面板。
+- [x] 更新用户文档与来源标注说明。
+- [x] 补充端到端回放测试。
 
 **验收标准**
 
@@ -1011,3 +1011,15 @@ python e2e/dialogue_e2e.py
 ## 13. 状态记录
 
 - 2026-08-16：文档创建，并按项目排期调整为 Plan 10；待 Plan 09 完成后启动评审与实施。
+- 2026-08-17：确认 Plan 09 已完成，回填基线提交 `21d407`，启动 PR-01 后端命令平面实施。
+- 2026-08-17：PR-01 完成：新增命令 schema、解析器、注册表、执行服务、Mongo/SQLite 双模命令仓储、会话控制状态、命令生命周期事件镜像与命令 API；落地 `/plan`、`/goal`、`/permission`、`/model`、`/status`，接入上下文 session state / plan policy，并在工具确认阶段阻断 read-only 与 Plan Mode。PR-01 相关回归 59 项通过，assistant 后端全量回归 122 项通过。
+
+- 2026-08-17：PR-02 完成：新增 slash 纯函数、命令目录缓存与 `CommandPalette`，接入命令目录 / 执行 API、IME 与键盘交互、URL / 路径 carve-out、未知命令直接失败闭环、命令结果行、Plan / Permission / Goal / Model 控制状态标签和会话恢复；命令结果不进入模型请求历史。后端指定回归 36 项通过，前端 assistant events / tool calls / slash commands / command catalog 测试与 `npm run build` 通过；真实浏览器冒烟覆盖 `/` 面板、`/pl` 过滤、URL 不触发、键盘选择、`/plan off`、未知命令且 0 次 run 请求。
+
+- 2026-08-17：PR-03 完成：新增用户态动态算法命令 provider，目录从 `AgentToolService.list_tools()` 实时派生并携带 JSON schema、确认策略与算法 attribution；保留 `capability_group` 并实现稳定 slug 与内置名冲突 hash；动态命令直接创建复用既有输入 / 附件 / 确认 / 执行状态机的 `AssistantToolCall`，贯通 `command_id → call_id → AlgorithmRun/continuation run → trace_id`；命令 owned message 标记 `model_visible=false`，无 `task_content` 时前后端均阻止自动续答，工具结果继续展示算法来源。后端 Assistant + AgentTool 回归 136 项通过，`py_compile` 通过；前端 assistant tool calls / trace / events / context / ui / tool menu / auto select / slash commands / command catalog 测试与 `npm run build` 通过；真实浏览器专项冒烟覆盖动态 Tools 命令选择、JSON 参数直接创建、确认执行、结果来源标注和 0 次模型 run 请求。既有完整 `dialogue_e2e.py` 中外部模型续答超时，未作为 PR-03 通过依据。
+
+- 2026-08-17：PR-04 完成：新增 `AssistantCompactionService` 与完整 `CompactionSnapshot` 契约，落地 snapshot id、摘要、cutoff / retained message、active tool call、token 前后估算、安全 route、usage、创建者与摘要 / 快照 digest；新增独立 `compact` LLM route purpose，辅助模型失败或输出无效时使用保留目标、Todo、权限、结论、配置和活跃工具结果的确定性摘要；`/compact` 在 active run 期间返回 busy，事件写入失败会回滚快照并返回稳定错误；原始消息保持不变，后续 run 由服务端基于持久化消息与 snapshot 重建摘要 + retained + cutoff 后有效历史，客户端历史仅作兼容输入不再可信；写入带 token reduction 的 `context.compacted` 事件。后端 Assistant + LLM 回归 143 项通过，相关 `py_compile` 通过；前端 slash commands / command catalog 测试与 `npm run build` 通过。全量后端混合探索为 804 通过、20 失败，失败集中在 Data Catalog / Report / Knowledge / WeKnora 的认证或外部依赖问题，与 PR04 直接回归面无交集，未作为 PR-04 通过依据。
+
+- 2026-08-18：PR-05 完成：新增 `AssistantExportService` 与 `/export`，同一会话快照导出 JSON 单对象、Markdown 报告和固定结构 ZIP，覆盖 session/control state、messages、commands、assistant runs、统一 execution trace、tool calls/results、algorithm run 关联、artifact 引用与 metadata；本地 computation / runtime artifact 按安全路径进入 ZIP，保留 Unicode 原名并处理重名，缺失、越界或过期只写入 manifest 错误；`session.exported` 开始/结束事件记录格式、状态、计数与 manifest digest，owner 专用原生下载端点避免 JavaScript 缓存 ZIP。新增 `assistant_feedback` 双模集合与 schema，`/feedback` 裸命令返回表单，提交正文仅保存权威反馈记录，`feedback.recorded` 只记录 rating、digest 与服务端解析的实际 model route、Agent 版本和 trace；命令目录版本提升 v3。后端 `py_compile` 通过，Assistant + AgentTool 回归 143 项通过；前端 25 个轻量测试脚本与 `npm run build` 通过。
+- 2026-08-18：PR-06 完成：复用 `AssistantTraceProjectionService` 新增 chat scope `get_chat()` 投影与 `GET /assistant/chats/{chat_id}/trace`，合并 command lifecycle、run lifecycle、tool lifecycle、permission decision、plan/goal/todo/permission 控制、compaction、export、feedback 与 reset/clear 事件；提供稳定排序、连续 `chat_seq`、`after_seq` 增量游标和 `event_types` 过滤，并修复工具统一事件顶层 `call_id` 缺失导致的 embedded 事件重复。前端新增“会话统一回放”折叠面板、类型过滤、增量刷新和 `assistantTrace` 纯函数合并测试；`ExecutionTraceTimeline` 支持 command/control/export/feedback 步骤。新增 `/reset` 二次确认并仅恢复控制状态，新增 `/clear` 创建并切换新会话且保留旧会话；命令目录版本提升 v4，并收敛 ensureChat / catalog 并发加载，避免重复创建会话。质量 API 扩展 command catalog latency、command success、unknown、permission/plan block、dynamic conversion、compact reduction、export success 与 feedback submission 指标并保留时间窗口。新增 `/dialogue` 用户指南、来源矩阵与 README 说明。后端指定回归 66 项通过，`py_compile` 通过；前端 21 个 npm 轻量测试脚本与 `npm run build` 通过；`e2e/dialogue_e2e.py` 完整通过真实模型工具链、320/768/1440 响应式、Slash Command 会话回放、`/reset`、`/clear` 与工作台草稿链路（手动模型选择因当前目录仅 1 个模型按脚本设计跳过）。
+- 2026-08-18：Plan 10 完成后 review 优化：命令目录根据当前会话控制状态把动态算法工具命令标记为不可用，并在 read-only / Plan Mode 下展示明确原因；前端在 `/plan`、`/permission`、`/reset` 后强制刷新命令目录，避免缓存继续展示可执行工具。`/clear` 的 `state_after` 改为返回新会话控制状态，与 API 返回的新会话引用和前端切换语义一致。后端动态命令 / 收尾命令 / 控制面相关回归 22 项通过，`py_compile` 通过；前端 command catalog、slash commands、assistant trace 测试与 `npm run build` 通过。

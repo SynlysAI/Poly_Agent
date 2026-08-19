@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 LLMProviderType = Literal["openai_compatible", "ollama", "custom_http"]
 LLMProviderStatus = Literal["available", "degraded", "down", "not_configured", "unknown"]
 LLMCapability = Literal["chat", "fast", "reasoning", "structured_json", "tool_calling", "long_context", "local"]
-LLMRoutePurpose = Literal["qa", "deep", "report"]
+LLMRoutePurpose = Literal["qa", "deep", "report", "compact"]
 LLMCapabilitySource = Literal["configured", "probed", "inferred"]
 
 
@@ -27,7 +27,7 @@ class LLMModelInfo(BaseModel):
     )
     recommended_for: list[LLMRoutePurpose] = Field(
         default_factory=list,
-        description="推荐用途路由（qa / deep / report）",
+        description="推荐用途路由（qa / deep / report / compact）",
     )
     is_default: bool = Field(default=False, description="是否为该 provider 的默认模型")
     context_window: int | None = Field(default=None, ge=1, description="上下文窗口 token 上限")
@@ -96,6 +96,7 @@ class LLMRoutingData(BaseModel):
     qa: LLMRouteSelection | None = None
     deep: LLMRouteSelection | None = None
     report: LLMRouteSelection | None = None
+    compact: LLMRouteSelection | None = None
 
 
 class LLMRoutingUpdateRequest(BaseModel):
@@ -106,6 +107,7 @@ class LLMRoutingUpdateRequest(BaseModel):
     qa: LLMRouteSelection | None = None
     deep: LLMRouteSelection | None = None
     report: LLMRouteSelection | None = None
+    compact: LLMRouteSelection | None = None
 
 
 class LLMProviderConfigInput(BaseModel):

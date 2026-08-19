@@ -43,7 +43,9 @@ COLLECTION_NAMES = [
     "assistant_messages",
     "assistant_runs",
     "assistant_events",
+    "assistant_command_runs",
     "assistant_runtime_assets",
+    "assistant_feedback",
     "algorithm_packages",
     "algorithm_versions",
     "algorithm_resources",
@@ -162,6 +164,51 @@ class SqliteDocumentStore:
         with self._connection() as connection:
             return self._load_unlocked(connection)
 
+    def load_collection(self, collection_name: str) -> list[dict[str, Any]]:
+        """只读取指定集合，避免高频查询解析整个 SQLite 文档库。
+
+        Args:
+            collection_name: 集合名称。
+
+        Returns:
+            按插入顺序返回的集合文档列表。
+        """
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT document_json FROM documents WHERE collection_name = ? ORDER BY id",
+                (collection_name,),
+            ).fetchall()
+            return [json.loads(row["document_json"]) for row in rows]
+
+    def load_collection_where(
+        self,
+        collection_name: str,
+        field: str,
+        value: Any,
+    ) -> list[dict[str, Any]]:
+        """按顶层字段过滤读取指定集合。
+
+        Args:
+            collection_name: 集合名称。
+            field: 顶层 JSON 字段名。
+            value: 字段匹配值。
+
+        Returns:
+            命中的集合文档列表；SQLite JSON1 负责过滤，减少 Python 反序列化量。
+        """
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT document_json
+                FROM documents
+                WHERE collection_name = ?
+                  AND json_extract(document_json, ?) = ?
+                ORDER BY id
+                """,
+                (collection_name, f"$.{field}", value),
+            ).fetchall()
+            return [json.loads(row["document_json"]) for row in rows]
+
     def save(self, data: dict[str, list[dict[str, Any]]]) -> None:
         """以原子事务保存完整数据。"""
         with self._connection() as connection:
@@ -176,6 +223,60 @@ class SqliteDocumentStore:
             result = callback(data)
             self._save_unlocked(connection, data)
             return result
+
+    def mutate_collections(self, collection_names: list[str] | tuple[str, ...], callback):
+        """只读改写指定集合，避免小更新重写整个 SQLite 文档库。
+
+        Args:
+            collection_names: 本次回调可能访问的集合名称列表。
+            callback: 接收 ``{collection_name: documents}`` 的修改回调。
+
+        Returns:
+            callback 的返回值；未列出的集合保持不变。
+        """
+        names = list(dict.fromkeys(collection_names))
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            data = {name: [] for name in names}
+            placeholders = ",".join("?" for _ in names)
+            rows = connection.execute(
+                f"""
+                SELECT collection_name, document_json
+                FROM documents
+                WHERE collection_name IN ({placeholders})
+                ORDER BY id
+                """,
+                names,
+            ).fetchall()
+            for row in rows:
+                data[row["collection_name"]].append(json.loads(row["document_json"]))
+            result = callback(data)
+            for name in names:
+                connection.execute(
+                    "DELETE FROM documents WHERE collection_name = ?",
+                    (name,),
+                )
+                documents = data.get(name, [])
+                connection.executemany(
+                    "INSERT INTO documents(collection_name, document_json) VALUES (?, ?)",
+                    [
+                        (name, json.dumps(document, ensure_ascii=False, default=_json_default))
+                        for document in documents
+                    ],
+                )
+            return result
+
+    def mutate_collection(self, collection_name: str, callback):
+        """只读改写单个集合。
+
+        Args:
+            collection_name: 集合名称。
+            callback: 接收完整 demo 数据结构的修改回调。
+
+        Returns:
+            callback 的返回值；其他集合保持不变。
+        """
+        return self.mutate_collections([collection_name], callback)
 
     def clear(self) -> None:
         """清空 SQLite 文件中的全部文档。"""

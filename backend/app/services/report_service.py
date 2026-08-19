@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -443,6 +444,25 @@ class ReportService:
         )
         return artifact, candidate
 
+    @staticmethod
+    def build_download_filename(report_id: str, filename: str | None) -> str:
+        """构建带报告唯一 ID 的下载文件名，避免多份同名报告互相覆盖。
+
+        Args:
+            report_id: 报告任务唯一 ID。
+            filename: 产物原始文件名。
+
+        Returns:
+            带 report_id 后缀的安全下载文件名。
+        """
+        safe_name = ReportService._safe_filename(filename or "")
+        report_key = re.sub(r"[^A-Za-z0-9_-]", "_", str(report_id or "").strip()) or "report_unknown"
+        path = Path(safe_name)
+        suffix = path.suffix or ".dat"
+        if path.stem == "report":
+            return f"{report_key}{suffix}"
+        return f"{path.stem}_{report_key}{suffix}"
+
     def get_markdown_preview(
         self,
         report_id: str,
@@ -659,7 +679,9 @@ class ReportService:
             return "custom_http"
         return "openai_compatible"
 
-    def _safe_filename(self, filename: str) -> str:
+    @staticmethod
+    def _safe_filename(filename: str) -> str:
+        """清洗文件名，仅保留 basename 并过滤空值。"""
         safe = Path(filename).name.strip()
         if not safe or safe in {".", ".."}:
             return "artifact.bin"

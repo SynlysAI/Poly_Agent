@@ -92,6 +92,36 @@ class SqliteDocumentStoreTest(unittest.TestCase):
             self.assertEqual(len(store.load()["assistant_runs"]), 2)
             self.assertTrue(store.ping())
 
+    def test_collection_scoped_read_and_mutate_preserve_other_collections(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="poly-agent-sqlite-scoped-test-") as tmp_dir:
+            store = SqliteDocumentStore(Path(tmp_dir) / "store.sqlite3")
+            store.save(
+                {
+                    "assistant_runs": [
+                        {"run_id": "run-1", "status": "queued"},
+                        {"run_id": "run-2", "status": "completed"},
+                    ],
+                    "assistant_events": [],
+                    "users": [{"user_id": "user-1"}],
+                }
+            )
+
+            self.assertEqual(
+                store.load_collection_where("assistant_runs", "run_id", "run-1"),
+                [{"run_id": "run-1", "status": "queued"}],
+            )
+            result = store.mutate_collection(
+                "assistant_runs",
+                lambda data: data["assistant_runs"].pop(0),
+            )
+
+            self.assertEqual(result, {"run_id": "run-1", "status": "queued"})
+            self.assertEqual(
+                store.load_collection("assistant_runs"),
+                [{"run_id": "run-2", "status": "completed"}],
+            )
+            self.assertEqual(store.load_collection("users"), [{"user_id": "user-1"}])
+
 
 class SqliteRepositoryTest(unittest.TestCase):
     """验证直连仓库在 SQLite 模式下不创建 MongoClient。"""

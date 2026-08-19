@@ -226,7 +226,7 @@ class AssistantApiTest(ComputationTestCase):
 
         calls = []
         original_llm_model = settings.llm_model
-        settings.llm_model = "DeepSeek-V4-Flash-w8a8-mtp"
+        settings.llm_model = "legacy-fast-model"
 
         def fake_stream(messages, **kwargs):  # noqa: ANN001
             calls.append(kwargs)
@@ -272,11 +272,11 @@ class AssistantApiTest(ComputationTestCase):
         original_llm_default_model = settings.llm_default_model
         original_llm_provider_configs_file = getattr(settings, "llm_provider_configs_file", "")
         original_llm_provider_configs_json = settings.llm_provider_configs_json
-        settings.llm_model = "DeepSeek-V4-Flash-w8a8-mtp"
+        settings.llm_model = "legacy-fast-model"
         settings.llm_base_url = "https://fast.example.test/v1"
         settings.llm_api_key = "fast-secret-key"
         settings.llm_default_provider = "default_openai"
-        settings.llm_default_model = "DeepSeek-V4-Flash-w8a8-mtp"
+        settings.llm_default_model = "legacy-fast-model"
         settings.llm_provider_configs_file = ""
         settings.llm_provider_configs_json = "[]"
 
@@ -296,7 +296,7 @@ class AssistantApiTest(ComputationTestCase):
                             "mode": "qa",
                             "model": {
                                 "providerId": "default_openai",
-                                "modelId": "DeepSeek-V4-Flash-w8a8-mtp",
+                                "modelId": "legacy-fast-model",
                             },
                         },
                     }
@@ -313,7 +313,7 @@ class AssistantApiTest(ComputationTestCase):
         self.assertEqual(events[-1]["type"], "final")
         self.assertEqual(calls[0]["purpose"], "qa")
         self.assertEqual(calls[0]["provider_id"], "default_openai")
-        self.assertEqual(calls[0]["model"], "DeepSeek-V4-Flash-w8a8-mtp")
+        self.assertEqual(calls[0]["model"], "legacy-fast-model")
 
     def test_assistant_stream_reports_invalid_requested_model(self) -> None:
         with patch("app.core.llm_client.chat_stream", side_effect=AssertionError("invalid route should not call llm"), create=True):

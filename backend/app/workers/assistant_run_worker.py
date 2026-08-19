@@ -26,6 +26,12 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
+    try:
+        from app.infra.research_engine_repositories import ensure_lui_repository_indexes
+
+        ensure_lui_repository_indexes()
+    except Exception:
+        logger.exception("LUI 热路径 MongoDB 索引初始化失败")
     recovered = assistant_run_service.requeue_stale()
     logger.info("assistant worker started worker_id=%s recovered=%d", args.worker_id, recovered)
     while not stopping:

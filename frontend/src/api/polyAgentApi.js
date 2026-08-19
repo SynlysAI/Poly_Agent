@@ -1163,12 +1163,34 @@ export function retryReport(reportId) {
   return apiClient.post(`/reports/${encodeURIComponent(reportId)}/retry`).then(unwrapResponse)
 }
 
+/**
+ * 构建带报告唯一 ID 的下载文件名，避免多份同名报告下载后互相覆盖。
+ *
+ * @param {string} reportId 报告任务唯一 ID
+ * @param {string} [filename] 产物原始文件名
+ * @returns {string} 带 report_id 的下载文件名
+ */
+export function buildReportArtifactDownloadName(reportId, filename = '') {
+  const safeName = String(filename || '').trim().split(/[\\/]/).pop() || 'report.dat'
+  const dotIndex = safeName.lastIndexOf('.')
+  const stem = dotIndex > 0 ? safeName.slice(0, dotIndex) : safeName
+  const extension = dotIndex > 0 ? safeName.slice(dotIndex) : '.dat'
+  const reportKey = String(reportId || '').trim() || 'report_unknown'
+  if (stem === 'report') {
+    return `${reportKey}${extension}`
+  }
+  return `${stem}_${reportKey}${extension}`
+}
+
 export function downloadReportArtifact(reportId, artifactId, fallbackName = 'report.dat') {
   return apiClient
     .get(`/reports/${encodeURIComponent(reportId)}/artifacts/${encodeURIComponent(artifactId)}/download`, { responseType: 'blob' })
     .then((response) => ({
       blob: response.data,
-      filename: parseDownloadFilename(response.headers['content-disposition'], fallbackName),
+      filename: parseDownloadFilename(
+        response.headers['content-disposition'],
+        buildReportArtifactDownloadName(reportId, fallbackName),
+      ),
       contentType: response.headers['content-type'] || 'application/octet-stream',
     }))
 }
@@ -1189,6 +1211,65 @@ export function createAssistantChat(payload = {}) {
 
 export function getAssistantChat(chatId) {
   return apiClient.get(`/assistant/chats/${encodeURIComponent(chatId)}`).then(unwrapResponse)
+}
+
+/**
+ * 获取当前会话的 Slash Command 目录。
+ *
+ * Args:
+ *   chatId: 会话 ID。
+ *
+ * Returns:
+ *   命令 descriptor、会话控制状态与目录版本。
+ */
+export function getAssistantCommandCatalog(chatId) {
+  return apiClient
+    .get('/assistant/commands', { params: { chat_id: chatId } })
+    .then(unwrapResponse)
+}
+
+/**
+ * 执行一行 Slash Command。
+ *
+ * Args:
+ *   payload: 包含 chat_id、line 与交互 payload 的请求对象。
+ *
+ * Returns:
+ *   不进入模型历史的直接命令执行结果。
+ */
+export function executeAssistantCommand(payload) {
+  return apiClient.post('/assistant/commands/execute', payload).then(unwrapResponse)
+}
+
+/**
+ * 读取会话控制状态。
+ *
+ * Args:
+ *   chatId: 会话 ID。
+ *
+ * Returns:
+ *   Plan、Permission、Goal、Todo、Compaction 与模型控制状态。
+ */
+export function getAssistantSessionState(chatId) {
+  return apiClient
+    .get(`/assistant/chats/${encodeURIComponent(chatId)}/session-state`)
+    .then(unwrapResponse)
+}
+
+/**
+ * 获取会话级统一 Execution Trace。
+ *
+ * Args:
+ *   chatId: 会话 ID。
+ *   params: after_seq 与 event_types 查询参数。
+ *
+ * Returns:
+ *   命令、模型、工具、控制、导出与反馈事件的统一投影。
+ */
+export function getAssistantChatTrace(chatId, params = {}) {
+  return apiClient
+    .get(`/assistant/chats/${encodeURIComponent(chatId)}/trace`, { params })
+    .then(unwrapResponse)
 }
 
 export function updateAssistantChat(chatId, payload) {
@@ -1225,6 +1306,21 @@ export function getActiveAssistantRun() {
 
 export function getAssistantTrace(traceId) {
   return apiClient.get(`/assistant/traces/${encodeURIComponent(traceId)}`).then(unwrapResponse)
+}
+
+/**
+ * 批量读取当前会话涉及的 Execution Trace。
+ *
+ * Args:
+ *   traceIds: 去重后的 Trace ID 列表。
+ *
+ * Returns:
+ *   当前用户有权限访问的 Trace 快照列表。
+ */
+export function getAssistantTraces(traceIds = []) {
+  const params = new URLSearchParams()
+  traceIds.forEach((traceId) => params.append('trace_ids', traceId))
+  return apiClient.get('/assistant/traces/batch', { params }).then(unwrapResponse)
 }
 
 export function cancelAssistantRun(runId) {

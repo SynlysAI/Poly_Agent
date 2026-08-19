@@ -8,6 +8,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.agent_tools import AssistantToolCall
+from app.schemas.assistant_commands import (
+    CompactionSnapshot,
+    PermissionMode,
+    SessionGoal,
+    SessionTodo,
+)
 
 
 ChatMessageRole = Literal["system", "user", "assistant", "tool"]
@@ -86,6 +92,12 @@ class AssistantChat(AssistantChatCreate):
     title: str
     created_by: str
     archived: bool = False
+    plan_mode: bool = False
+    permission_mode: PermissionMode = "workspace_write"
+    goal: SessionGoal | None = None
+    todos: list[SessionTodo] = Field(default_factory=list)
+    compaction: CompactionSnapshot | None = None
+    command_event_seq: int = 0
     created_at: datetime
     updated_at: datetime
     messages: list[AssistantMessage] = Field(default_factory=list)

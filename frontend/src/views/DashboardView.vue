@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -7,7 +7,9 @@ import {
 } from '@element-plus/icons-vue'
 
 import {
+  createAssistantChat,
   getApiErrorMessage,
+  getAssistantCommandCatalog,
   getIntegrationStatus,
   getLlmModels,
   listAgentTools,
@@ -16,7 +18,9 @@ import {
   listCampaigns,
   listComputations,
   listResearchRuns,
+  updateAssistantChat,
 } from '../api/polyAgentApi'
+import CommandPalette from '../components/assistant/CommandPalette.vue'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import ToolMenuPicker from '../components/ToolMenuPicker.vue'
@@ -34,6 +38,16 @@ import {
   mapResearchRunToGlobalTask,
 } from '../tasks/taskModules'
 import { buildSelectableLlmModels } from '../utils/llmModels'
+import { createCommandCatalogCache } from '../utils/commandCatalog'
+import {
+  buildCommandDialogueRoute,
+  filterCommandPalette,
+  getSlashContext,
+  movePaletteHighlight,
+  paletteKeyAction,
+  resolveCaretPosition,
+  resolveCommandSubmission,
+} from '../utils/slashCommands'
 
 const router = useRouter()
 const loading = ref(false)
@@ -49,6 +63,16 @@ const algorithmRunsTotal = ref(0)
 const researchRunsTotal = ref(0)
 const chatMode = ref('qa')
 const chatInput = ref('')
+const homeComposerRef = ref(null)
+const homeComposerCaretPosition = ref(0)
+const homeComposerComposing = ref(false)
+const commandPaletteActive = ref(false)
+const commandPaletteDismissed = ref(false)
+const commandPaletteHighlightedIndex = ref(0)
+const commandPaletteQuery = ref('')
+const commandChatId = ref('')
+const commandChatCreatingPromise = ref(null)
+const commandCatalogLoadPromise = ref(null)
 const modelLoading = ref(false)
 const knowledgeLoading = ref(false)
 const llmCatalog = ref({ providers: [], routing: {} })
@@ -59,6 +83,15 @@ const selectedModelKey = ref('')
 const selectedKnowledgeBaseIds = ref(loadKnowledgePreference())
 const selectedToolIds = ref([])
 const useWebSearch = ref(loadWebSearchPreference())
+const commandCatalogCache = createCommandCatalogCache(async (targetChatId) =>
+  getAssistantCommandCatalog(targetChatId))
+const commandCatalogState = reactive({
+  loading: false,
+  error: '',
+  items: [],
+  sessionState: null,
+  catalogVersion: '',
+})
 
 const dashboardViewOptions = [
   { label: '问答', value: 'chat' },
@@ -140,6 +173,16 @@ const selectedKnowledgeBases = computed(() =>
 const selectedToolSummary = computed(() =>
   (agentTools.value || []).filter((tool) => selectedToolIds.value.includes(tool.tool_id)),
 )
+const commandCatalogItems = computed(() => commandCatalogState.items || [])
+const commandPaletteGroups = computed(() =>
+  filterCommandPalette(commandCatalogItems.value, commandPaletteQuery.value))
+const commandPaletteOptions = computed(() =>
+  commandPaletteGroups.value.flatMap((group) => group.items))
+const commandPaletteVisible = computed(() => commandPaletteActive.value && (
+  commandCatalogState.loading
+  || Boolean(commandCatalogState.error)
+  || commandPaletteGroups.value.length > 0
+))
 
 const stats = computed(() => {
   const visibleCampaignRows = campaignRows.value.filter((item) => !isResearchEngineContainerCampaign(item))
@@ -280,6 +323,186 @@ function selectDefaultModelForMode() {
   selectedModelKey.value = selectableModels.value[0]?.key || ''
 }
 
+/**
+ * 构造首页预备会话的选项快照。
+ *
+ * Returns:
+ *   与后端 AssistantChatCreate 契约一致的会话选项。
+ */
+function homeCommandChatPayload() {
+  return {
+    title: '首页命令会话',
+    model: selectedModel.value
+      ? { providerId: selectedModel.value.providerId, modelId: selectedModel.value.modelId }
+      : {},
+    mode: chatMode.value,
+    knowledge_base_ids: selectedKnowledgeBaseIds.value,
+    knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
+    use_web_search: Boolean(useWebSearch.value),
+    selected_tool_ids: selectedToolIds.value,
+  }
+}
+
+/**
+ * 创建或复用首页 Slash Command 预备会话。
+ *
+ * Returns:
+ *   可加载命令目录的会话 ID；创建失败时返回空字符串。
+ */
+async function ensureHomeCommandChat() {
+  if (commandChatId.value) return commandChatId.value
+  if (!commandChatCreatingPromise.value) {
+    commandChatCreatingPromise.value = createAssistantChat(homeCommandChatPayload())
+      .then((data) => {
+        commandChatId.value = data?.chat_id || ''
+        return commandChatId.value
+      })
+      .finally(() => {
+        commandChatCreatingPromise.value = null
+      })
+  }
+  try {
+    return await commandChatCreatingPromise.value
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 加载首页命令目录，并把错误保留在面板状态中供重试。
+ *
+ * Returns:
+ *   成功时返回目录数据；失败时返回 null。
+ */
+async function loadHomeCommandCatalog() {
+  if (commandCatalogLoadPromise.value) return commandCatalogLoadPromise.value
+  const request = (async () => {
+    commandCatalogState.loading = true
+    commandCatalogState.error = ''
+    try {
+      const targetChatId = await ensureHomeCommandChat()
+      if (!targetChatId) throw new Error('命令会话创建失败')
+      const data = await commandCatalogCache.load(targetChatId)
+      Object.assign(commandCatalogState, {
+        loading: commandCatalogCache.state.loading,
+        error: commandCatalogCache.state.error,
+        items: data.items,
+        sessionState: data.sessionState,
+        catalogVersion: data.catalogVersion,
+      })
+      return data
+    } catch (error) {
+      commandCatalogState.loading = false
+      commandCatalogState.error = getApiErrorMessage(error)
+      return null
+    }
+  })()
+  commandCatalogLoadPromise.value = request
+  try {
+    return await request
+  } finally {
+    if (commandCatalogLoadPromise.value === request) commandCatalogLoadPromise.value = null
+  }
+}
+
+/**
+ * 请求首页命令目录刷新，不阻塞首页输入。
+ */
+function requestHomeCommandCatalog() {
+  void loadHomeCommandCatalog()
+}
+
+/**
+ * 根据首页输入光标刷新 Slash Command 面板状态。
+ *
+ * Args:
+ *   caretPosition: 首页 textarea 的当前光标位置。
+ */
+function refreshHomeCommandPalette(caretPosition = homeComposerCaretPosition.value) {
+  const context = getSlashContext(chatInput.value, caretPosition)
+  if (context.active && commandPaletteDismissed.value && context.query.length > 1) {
+    commandPaletteActive.value = false
+    return
+  }
+  commandPaletteDismissed.value = false
+  commandPaletteActive.value = context.active
+  commandPaletteQuery.value = context.query
+  if (!context.active) {
+    commandPaletteHighlightedIndex.value = 0
+    return
+  }
+  if (!commandCatalogItems.value.length
+    && !commandCatalogState.loading
+    && !commandCatalogState.error) {
+    requestHomeCommandCatalog()
+  }
+  const optionCount = commandPaletteOptions.value.length
+  if (commandPaletteHighlightedIndex.value >= optionCount) commandPaletteHighlightedIndex.value = 0
+}
+
+/**
+ * 同步首页输入光标并刷新命令面板。
+ *
+ * Args:
+ *   event: 输入事件或 Element Plus 输入值。
+ */
+function syncHomeComposerCaret(event) {
+  const nativeSelectionStart = homeComposerRef.value?.textarea?.selectionStart
+  homeComposerCaretPosition.value = resolveCaretPosition(
+    event,
+    chatInput.value.length,
+    typeof nativeSelectionStart === 'number' ? nativeSelectionStart : null,
+  )
+  refreshHomeCommandPalette()
+}
+
+/**
+ * 生成首页命令选项被选中后的命令行。
+ *
+ * Args:
+ *   option: 命令面板返回的选项。
+ *
+ * Returns:
+ *   可继续补充参数的 slash 命令行。
+ */
+function homeCommandLineForOption(option) {
+  if (option.usage.includes('<')) return `/${option.commandName} `
+  if (option.key === option.commandName) {
+    return option.inputMode === 'none' ? `/${option.commandName}` : `/${option.commandName} `
+  }
+  return option.usage
+}
+
+/**
+ * 选中首页命令选项并保持输入框焦点。
+ *
+ * Args:
+ *   option: 命令面板中的当前选项。
+ */
+function selectHomeCommandOption(option) {
+  const line = homeCommandLineForOption(option)
+  chatInput.value = line
+  homeComposerCaretPosition.value = line.length
+  commandPaletteQuery.value = getSlashContext(line, line.length).query
+  commandPaletteHighlightedIndex.value = 0
+  commandPaletteActive.value = false
+  commandPaletteDismissed.value = true
+  nextTick(() => homeComposerRef.value?.focus?.())
+}
+
+/**
+ * 从首页工具栏打开 Slash Command 面板。
+ */
+function openHomeCommandPalette() {
+  if (!chatInput.value.trim()) {
+    chatInput.value = '/'
+    homeComposerCaretPosition.value = 1
+  }
+  commandPaletteDismissed.value = false
+  refreshHomeCommandPalette()
+  nextTick(() => homeComposerRef.value?.focus?.())
+}
+
 function openDialogue(prompt) {
   const text = String(prompt || chatInput.value).trim()
   if (chatMode.value === 'model') {
@@ -287,6 +510,15 @@ function openDialogue(prompt) {
     return
   }
   if (!text) return
+  if (resolveCommandSubmission(text, commandCatalogItems.value).isCommand) {
+    void ensureHomeCommandChat().then(async (targetChatId) => {
+      if (targetChatId) {
+        await updateAssistantChat(targetChatId, homeCommandChatPayload()).catch(() => null)
+      }
+      router.push(buildCommandDialogueRoute(text, targetChatId))
+    })
+    return
+  }
   const query = {
     prompt: text,
     mode: chatMode.value,
@@ -303,10 +535,53 @@ function openDialogue(prompt) {
 }
 
 function handleChatKeydown(event) {
+  if (commandPaletteVisible.value) {
+    const action = paletteKeyAction({
+      key: event.key,
+      keyCode: event.keyCode,
+      isComposing: homeComposerComposing.value || event.isComposing,
+    })
+    if (action.action === 'close') {
+      event.preventDefault()
+      commandPaletteActive.value = false
+      commandPaletteDismissed.value = true
+      return
+    }
+    if (action.action === 'move') {
+      event.preventDefault()
+      commandPaletteHighlightedIndex.value = movePaletteHighlight(
+        commandPaletteHighlightedIndex.value,
+        action.direction,
+        commandPaletteOptions.value.length,
+      )
+      return
+    }
+    if (action.action === 'select') {
+      event.preventDefault()
+      const option = commandPaletteOptions.value[commandPaletteHighlightedIndex.value]
+      if (option) selectHomeCommandOption(option)
+      return
+    }
+  }
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     openDialogue()
   }
+}
+
+/**
+ * 标记首页输入法组合开始，避免 Enter 误选命令。
+ */
+function handleHomeCompositionStart() {
+  homeComposerComposing.value = true
+}
+
+/**
+ * 标记首页输入法组合结束并刷新命令过滤词。
+ */
+function handleHomeCompositionEnd(event) {
+  homeComposerComposing.value = false
+  syncHomeComposerCaret(event)
 }
 
 async function loadDashboardData() {
@@ -475,11 +750,26 @@ onMounted(() => {
           <el-icon class="composer-mark"><ChatLineRound /></el-icon>
           <el-input
             v-model="chatInput"
+            ref="homeComposerRef"
             type="textarea"
             :rows="5"
             :placeholder="homeGreeting.placeholder"
             resize="none"
+            @input="syncHomeComposerCaret"
+            @compositionstart="handleHomeCompositionStart"
+            @compositionend="handleHomeCompositionEnd"
             @keydown="handleChatKeydown"
+          />
+          <CommandPalette
+            :visible="commandPaletteVisible"
+            :groups="commandPaletteGroups"
+            :highlighted-index="commandPaletteHighlightedIndex"
+            :loading="commandCatalogState.loading"
+            :error="commandCatalogState.error"
+            @highlight="commandPaletteHighlightedIndex = $event"
+            @close="commandPaletteActive = false"
+            @retry="requestHomeCommandCatalog"
+            @select="selectHomeCommandOption"
           />
         </div>
         <div class="composer-toolbar">
@@ -512,6 +802,18 @@ onMounted(() => {
                 @click="useWebSearch = !useWebSearch"
               >
                 <el-icon><GlobeIcon /></el-icon>
+              </button>
+            </el-tooltip>
+            <el-tooltip content="输入 / 打开命令面板" placement="top">
+              <button
+                type="button"
+                class="icon-tool-btn command-trigger"
+                :class="{ active: commandPaletteVisible }"
+                :aria-pressed="commandPaletteVisible"
+                aria-label="打开命令面板"
+                @click="openHomeCommandPalette"
+              >
+                /
               </button>
             </el-tooltip>
             <el-popover
@@ -691,7 +993,7 @@ h2 { font-size: 16px; line-height: 1.35; }
 .mention-chip-name { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-chip button { width: 16px; height: 16px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 999px; background: transparent; color: #94a3b8; cursor: pointer; line-height: 1; }
 .mention-chip button:hover { background: #e2e8f0; color: var(--app-ink); }
-.composer-input { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; align-items: start; }
+.composer-input { position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; align-items: start; }
 .composer-mark { margin-top: 8px; color: var(--app-primary-active); font-size: 20px; }
 .composer-input :deep(.el-textarea__inner) { min-height: 116px !important; border: 0; box-shadow: none; font-size: 15px; line-height: 1.7; }
 .composer-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--app-border-soft); }

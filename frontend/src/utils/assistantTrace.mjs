@@ -6,6 +6,16 @@
 const MAX_SUMMARY_CHARACTERS = 512
 const MAX_DETAIL_CHARACTERS = 4096
 
+export const TRACE_TYPE_FILTERS = [
+  { value: 'all', label: '全部' },
+  { value: 'command', label: '命令' },
+  { value: 'control', label: '控制' },
+  { value: 'model', label: '模型' },
+  { value: 'tool', label: '工具' },
+  { value: 'export', label: '导出' },
+  { value: 'feedback', label: '反馈' },
+]
+
 /**
  * 截断面向用户的主界面文本。
  *
@@ -39,6 +49,55 @@ export function createTraceState(snapshot) {
 }
 
 /**
+ * 初始化会话级 Trace 状态。
+ *
+ * @param {object} snapshot 后端 AssistantChatTraceData 快照。
+ * @returns {object} 可增量合并的会话 Trace 状态。
+ */
+export function createChatTraceState(snapshot) {
+  const state = createTraceState({
+    ...snapshot,
+    trace_id: snapshot?.chat_id || '',
+    cursor: String(snapshot?.next_after_seq || 0),
+  })
+  return {
+    ...state,
+    chatId: snapshot?.chat_id || '',
+    nextAfterSeq: Number(snapshot?.next_after_seq || 0),
+    totalEvents: Number(snapshot?.total_events || 0),
+    streaming: false,
+  }
+}
+
+/**
+ * 合并 chat scope Trace 增量快照。
+ *
+ * @param {object} current 当前会话 Trace 状态。
+ * @param {object} snapshot 增量 AssistantChatTraceData 快照。
+ * @returns {object} 合并后的会话 Trace 状态。
+ */
+export function mergeChatTraceState(current, snapshot) {
+  const incoming = createChatTraceState(snapshot)
+  const stepsById = new Map((current?.steps || []).map((step) => [step.step_id, step]))
+  for (const step of incoming.steps) {
+    stepsById.set(step.step_id, stepsById.has(step.step_id)
+      ? mergeTraceStep(stepsById.get(step.step_id), step)
+      : step)
+  }
+  return {
+    ...(current || incoming),
+    chatId: incoming.chatId,
+    status: incoming.status,
+    steps: sortTraceSteps([...stepsById.values()]),
+    summary: { ...(current?.summary || {}), ...incoming.summary },
+    replayWarnings: [...new Set([...(current?.replayWarnings || []), ...incoming.replayWarnings])],
+    nextAfterSeq: Math.max(Number(current?.nextAfterSeq || 0), incoming.nextAfterSeq),
+    totalEvents: Math.max(Number(current?.totalEvents || 0), incoming.totalEvents),
+    streaming: false,
+  }
+}
+
+/**
  * 规范化单条 Trace step，保证主界面文本和详情不会无限增长。
  *
  * @param {object} step 后端 Trace step。
@@ -61,6 +120,32 @@ export function normalizeTraceStep(step) {
     duration_ms: Number(step?.duration_ms || 0),
     details,
   }
+}
+
+/**
+ * 按用户可见类型过滤 Trace step。
+ *
+ * @param {Array<object>} steps Trace step 列表。
+ * @param {string} filter TRACE_TYPE_FILTERS 中的类型值。
+ * @returns {Array<object>} 过滤后的 step 列表。
+ */
+export function filterTraceSteps(steps, filter = 'all') {
+  const values = Array.isArray(steps) ? steps : []
+  if (filter === 'all') return [...values]
+  if (filter === 'command') return values.filter((step) => step?.type === 'command')
+  if (filter === 'control') {
+    return values.filter((step) => step?.type === 'control')
+  }
+  if (filter === 'model') {
+    return values.filter((step) => step?.tool_type === 'llm' || ['think', 'context'].includes(step?.type))
+  }
+  if (filter === 'tool') {
+    return values.filter((step) => ['tool_call', 'tool_result', 'read', 'write', 'edit', 'error'].includes(step?.type)
+      && step?.tool_type !== 'llm')
+  }
+  if (filter === 'export') return values.filter((step) => step?.type === 'export')
+  if (filter === 'feedback') return values.filter((step) => step?.type === 'feedback')
+  return []
 }
 
 /**
@@ -140,6 +225,10 @@ export function traceDisplayGroups(state) {
   const steps = state?.steps || []
   return [
     {
+      label: '命令与控制',
+      steps: steps.filter((step) => ['command', 'control'].includes(step.type)),
+    },
+    {
       label: '请求与上下文',
       steps: steps.filter((step) => ['think', 'context'].includes(step.type) || step.tool_type === 'retrieval'),
     },
@@ -155,6 +244,10 @@ export function traceDisplayGroups(state) {
       label: '结果与续答',
       steps: steps.filter((step) => ['tool_result', 'write', 'read', 'edit', 'final'].includes(step.type)),
     },
+    {
+      label: '导出与反馈',
+      steps: steps.filter((step) => ['export', 'feedback'].includes(step.type)),
+    },
   ].filter((group) => group.steps.length > 0)
 }
 
@@ -168,9 +261,13 @@ export function traceSummaryRows(state) {
   const summary = state?.summary || {}
   return [
     ['总步骤', String(summary.total_steps ?? state?.steps?.length ?? 0)],
+    ['命令', String(summary.commands ?? 0)],
+    ['控制变更', String(summary.control_changes ?? 0)],
     ['工具调用', String(summary.tool_calls ?? 0)],
     ['模型请求', String(summary.llm_calls ?? 0)],
     ['审批', String(summary.approvals ?? 0)],
+    ['导出', String(summary.exports ?? 0)],
+    ['反馈', String(summary.feedback ?? 0)],
     ['异常', String(summary.errors ?? 0)],
     ['总耗时', summary.duration_known ? formatDurationMs(summary.duration_ms) : '未记录'],
   ]

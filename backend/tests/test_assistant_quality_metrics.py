@@ -10,6 +10,7 @@ except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 from app.core.time import utc_now
+from app.infra.assistant_command_repositories import AssistantCommandRunRepository
 from app.infra.research_engine_repositories import (
     AssistantEventRepository,
     AssistantRunRepository,
@@ -155,3 +156,77 @@ class AssistantQualityMetricsTest(ComputationTestCase):
         self.assertFalse(first["cache_hit"])
         self.assertTrue(second["cache_hit"])
         self.assertEqual(first["totals"]["runs"], second["totals"]["runs"])
+
+    def test_command_control_and_delivery_metrics_are_aggregated(self) -> None:
+        now = utc_now()
+        commands = [
+            {
+                "command_id": "cmd_catalog_success",
+                "chat_id": "chat_command_quality",
+                "created_by": "quality-user",
+                "name": "status",
+                "source_kind": "builtin",
+                "raw_args": "",
+                "status": "success",
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "command_id": "cmd_unknown",
+                "chat_id": "chat_command_quality",
+                "created_by": "quality-user",
+                "name": "unknown",
+                "source_kind": "unknown",
+                "raw_args": "unknown",
+                "status": "failed",
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "command_id": "cmd_dynamic_tool",
+                "chat_id": "chat_command_quality",
+                "created_by": "quality-user",
+                "name": "demo-tool",
+                "source_kind": "tool",
+                "raw_args": "",
+                "status": "success",
+                "call_id": "atc_dynamic_conversion",
+                "tool_id": "algorithm:demo",
+                "created_at": now,
+                "updated_at": now,
+            },
+            {
+                "command_id": "cmd_export_failed",
+                "chat_id": "chat_command_quality",
+                "created_by": "quality-user",
+                "name": "export",
+                "source_kind": "builtin",
+                "raw_args": "zip",
+                "status": "failed",
+                "created_at": now,
+                "updated_at": now,
+            },
+        ]
+        for command in commands:
+            AssistantCommandRunRepository.save("command_id", command)
+
+        result = build_quality_metrics()
+        metric_map = {item["key"]: item for item in result["metrics"]}
+        for key in (
+            "command_catalog_latency",
+            "command_execute_success_rate",
+            "unknown_command_rate",
+            "permission_blocked_rate",
+            "plan_mode_block_rate",
+            "dynamic_tool_command_conversion",
+            "compact_token_reduction",
+            "export_success_rate",
+            "feedback_submission_rate",
+        ):
+            self.assertIn(key, metric_map)
+        self.assertEqual(metric_map["command_execute_success_rate"]["numerator"], 2)
+        self.assertEqual(metric_map["command_execute_success_rate"]["denominator"], 4)
+        self.assertEqual(metric_map["unknown_command_rate"]["numerator"], 1)
+        self.assertEqual(metric_map["dynamic_tool_command_conversion"]["numerator"], 1)
+        self.assertEqual(metric_map["export_success_rate"]["numerator"], 0)
+        self.assertEqual(result["totals"]["commands"], 4)

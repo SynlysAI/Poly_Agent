@@ -25,6 +25,28 @@ export function toolPhaseTagType(phase) {
   return 'primary'
 }
 
+/**
+ * 格式化工具调用参数来源说明。
+ *
+ * Args:
+ *   call: 工具调用快照。
+ *
+ * Returns:
+ *   以中文分号连接的字段来源说明。
+ */
+export function toolArgumentSourceText(call) {
+  const labels = {
+    provider: '模型',
+    version_model_proposal: '版本模板',
+    schema_default: '契约默认',
+    user_edit: '用户修正',
+  }
+  const sources = call?.source_context?.argument_sources || {}
+  return Object.entries(sources)
+    .map(([field, source]) => `${field}: ${labels[source] || source}`)
+    .join('；')
+}
+
 const EARLY_PHASES = new Set(['requested', 'awaiting_input', 'awaiting_confirmation'])
 const TERMINAL_PHASES = new Set(['completed', 'failed', 'canceled'])
 
@@ -41,6 +63,28 @@ export function isStaleToolCallPhase(existingPhase, incomingPhase) {
 
 export function canEditToolCall(call) {
   return ['awaiting_input', 'awaiting_confirmation'].includes(call?.phase)
+}
+
+/**
+ * 判断前端是否还应为已完成的工具调用发起客户端续答。
+ *
+ * Args:
+ *   call: 工具调用快照。
+ *
+ * Returns:
+ *   仅遗留调用（没有 continuation 状态和 run）返回 true。
+ */
+export function shouldContinueToolCall(call) {
+  if (!call?.call_id) return false
+  if (call.continuation_run_id) return false
+  const sourceContext = call.source_context || {}
+  const commandOwned = Boolean(
+    call.command_id
+    || sourceContext.command_id
+    || sourceContext.origin === 'slash_command',
+  )
+  if (commandOwned && !String(sourceContext.task_content || '').trim()) return false
+  return call.continuation_state == null
 }
 
 export function normalizeToolCall(call) {

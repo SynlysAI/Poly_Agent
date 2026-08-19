@@ -33,6 +33,7 @@ from app.schemas.research_engine import AlgorithmAssetSpec, AlgorithmRunCreate
 from app.services.agent_tool_service import agent_tool_service
 from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID
 from app.services.assistant_runtime_asset_service import assistant_runtime_asset_service
+from app.services.assistant_session_control import ensure_tool_confirmation_allowed
 from app.services.assistant_tool_contract import SENSITIVE_KEYS, missing_inputs, validate_arguments
 from app.services.research_engine_service import ResearchEngineService
 
@@ -153,17 +154,19 @@ class AssistantToolCallService:
     def _initial_argument_sources(
         provider_arguments: dict[str, Any],
         field_defaults: dict[str, Any],
+        initial_source: str = "provider",
     ) -> dict[str, str]:
-        """记录初始参数来源，区分 provider 提案与输入契约默认值。
+        """记录初始参数来源，区分版本模板、provider 提案与输入契约默认值。
 
         Args:
-            provider_arguments: provider 或受信任编排器提交的参数。
+            provider_arguments: 版本模板、provider 或受信任编排器提交的参数。
             field_defaults: 输入契约声明的字段默认值。
+            initial_source: 显式模板覆盖时使用 version_model_proposal，否则 provider。
 
         Returns:
-            字段到 provider / schema_default 来源的映射。
+            字段到版本模板 / provider / schema_default 来源的映射。
         """
-        sources = {field: "provider" for field in provider_arguments}
+        sources = {field: initial_source for field in provider_arguments}
         sources.update({
             field: "schema_default"
             for field in field_defaults
@@ -234,6 +237,12 @@ class AssistantToolCallService:
                     "knowledge_base_names": [],
                     "use_web_search": False,
                     "selected_tool_ids": [],
+                    "plan_mode": False,
+                    "permission_mode": "workspace_write",
+                    "goal": None,
+                    "todos": [],
+                    "compaction": None,
+                    "command_event_seq": 0,
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -249,8 +258,10 @@ class AssistantToolCallService:
 
     @staticmethod
     def _event(document: dict[str, Any]) -> dict[str, Any]:
+        """把工具调用文档转换为前端可回放的状态事件。"""
         return AssistantToolCallEvent(
             call_id=document["call_id"],
+            command_id=document.get("command_id"),
             provider_tool_call_id=document.get("provider_tool_call_id"),
             tool_id=document["tool_id"],
             algorithm_id=document["algorithm_id"],
@@ -289,6 +300,7 @@ class AssistantToolCallService:
             return
         event = AssistantToolInputRequiredEvent(
             call_id=document["call_id"],
+            command_id=document.get("command_id"),
             missing_fields=missing_fields,
             field_schema=tool.input_schema,
             input_json_schema=tool.input_json_schema,
@@ -326,6 +338,24 @@ class AssistantToolCallService:
         if document.get("continuation_state") in {"scheduled", "completed"} and document.get("continuation_run_id"):
             return
         source_context = document.get("source_context") or cls._fallback_source_context(document)
+        command_owned = bool(
+            source_context.get("command_id")
+            or source_context.get("origin") == "slash_command"
+            or document.get("command_id")
+        )
+        task_content = str(source_context.get("task_content") or "").strip()
+        if command_owned and not task_content:
+            skip_update = {
+                "continuation_state": "skipped",
+                "continuation_error": {
+                    "error_type": "MISSING_TASK_CONTENT",
+                    "message": "未提供任务说明，仅展示工具结果，不自动生成续答",
+                },
+                "updated_at": utc_now(),
+            }
+            AssistantToolCallRepository.update_fields(document["call_id"], skip_update)
+            document.update(skip_update)
+            return
         if not source_context.get("original_user_message_id") and not document.get("message_id"):
             AssistantToolCallRepository.update_fields(
                 document["call_id"],
@@ -419,9 +449,19 @@ class AssistantToolCallService:
         cls._ensure_chat_link(payload.chat_id, payload.message_id, user_id)
         tool = cls._tool(algorithm_id, current_user)
         field_defaults = dict(tool.input_schema.field_defaults or {})
+        source_context = dict(payload.source_context or {})
+        initial_source = (
+            "version_model_proposal"
+            if source_context.get("argument_origin") == "version_model_proposal"
+            else "provider"
+        )
         arguments = dict(field_defaults)
         arguments.update(payload.arguments)
-        argument_sources = cls._initial_argument_sources(payload.arguments, field_defaults)
+        argument_sources = cls._initial_argument_sources(
+            payload.arguments,
+            field_defaults,
+            initial_source,
+        )
         arguments = cls._coerce_arguments(tool, arguments)
         missing_fields, _ = cls._validate_arguments(tool, arguments)
         cls._validate_asset_refs(tool, payload.input_asset_refs)
@@ -430,10 +470,10 @@ class AssistantToolCallService:
         missing_assets = missing_result["assets"]
         next_phase = "awaiting_input" if missing_fields or missing_assets else "awaiting_confirmation"
         now = utc_now()
-        source_context = dict(payload.source_context or {})
         trace_id = str(payload.trace_id or source_context.get("trace_id") or payload.assistant_run_id or "")
         source_context["argument_sources"] = _redact(argument_sources)
         source_context["trace_id"] = trace_id
+        source_context["command_id"] = payload.command_id
         source_context.setdefault("original_user_message_id", payload.message_id)
         source_context.setdefault("chat_id", payload.chat_id)
         source_context.setdefault("selected_tool_ids", [payload.tool_id])
@@ -443,6 +483,7 @@ class AssistantToolCallService:
         document = {
             "call_id": f"atc_{uuid4().hex[:16]}",
             "trace_id": trace_id,
+            "command_id": payload.command_id,
             "provider_tool_call_id": payload.provider_tool_call_id,
             "chat_id": payload.chat_id,
             "message_id": payload.message_id,
@@ -682,6 +723,7 @@ class AssistantToolCallService:
         current_user: dict[str, str] | None,
     ) -> AssistantToolCall:
         cls.get(call_id, current_user)
+        user_id, _role, _is_admin = _actor_context(current_user)
         document = AssistantToolCallRepository.find_one({"call_id": call_id}) or {}
         phase = document.get("phase")
         if phase == "completed":
@@ -690,6 +732,7 @@ class AssistantToolCallService:
             raise HTTPException(status_code=409, detail="当前工具调用已结束，不能确认")
         if phase in {"queued", "running"}:
             return cls._public_document(document)
+        ensure_tool_confirmation_allowed(document, user_id)
         tool = cls._tool(document["algorithm_id"], current_user)
         arguments = dict(document.get("arguments") or {})
         if payload.arguments is not None:
@@ -752,7 +795,7 @@ class AssistantToolCallService:
             "assistant_tool_call_confirmed",
             {"status": "queued", "algorithm_version_id": tool.active_version_id},
         )
-        user_id, _role, is_admin = _actor_context(current_user)
+        is_admin = _is_admin
         legacy_sync = False
         try:
             try:

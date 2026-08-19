@@ -21,6 +21,8 @@ DEFAULT_SECTION_TOKEN_BUDGETS = {
     "web_evidence": 1228,
     "prior_tool_results": 921,
     "conversation_policy": 82,
+    "session_state": 164,
+    "plan_policy": 246,
 }
 SECTION_ORDER = tuple(DEFAULT_SECTION_TOKEN_BUDGETS)
 SECTION_HEADERS = {
@@ -31,6 +33,8 @@ SECTION_HEADERS = {
     "web_evidence": "WEB_EVIDENCE",
     "prior_tool_results": "PRIOR_TOOL_RESULTS",
     "conversation_policy": "CONVERSATION_POLICY",
+    "session_state": "SESSION_STATE",
+    "plan_policy": "PLAN_POLICY",
 }
 SECTION_SOURCES = {
     "project_facts": "ProjectGroundingService",
@@ -40,6 +44,8 @@ SECTION_SOURCES = {
     "web_evidence": "AssistantWebSearchService",
     "prior_tool_results": "AssistantToolCallRepository",
     "conversation_policy": "AssistantAnswerSynthesizer",
+    "session_state": "AssistantChatRepository",
+    "plan_policy": "AssistantCommandService",
 }
 
 
@@ -123,6 +129,7 @@ class AssistantContextAssembler:
         native_tool_schema_tokens: int | None = None,
         chars_per_token: float = 4,
         allow_section_truncation: bool = False,
+        session_state: Mapping[str, Any] | None = None,
     ) -> ContextAssembly:
         """Assemble built-in context sections under section and total budgets.
 
@@ -142,6 +149,7 @@ class AssistantContextAssembler:
             chars_per_token: Estimator denominator used for explainability.
             allow_section_truncation: Whether over-budget sections may be truncated
                 instead of omitted entirely.
+            session_state: Session control state persisted on the chat, if available.
 
         Returns:
             A deterministic assembly containing all section decisions.
@@ -151,7 +159,7 @@ class AssistantContextAssembler:
         divisor = max(0.1, float(chars_per_token or 4))
         native_tokens = max(0, int(native_tool_schema_tokens or 0))
         budgets = {**DEFAULT_SECTION_TOKEN_BUDGETS, **(section_token_budgets or {})}
-        contents = {
+        contents: dict[str, str] = {
             "project_facts": self._project_facts(facts),
             "llm_route": self._llm_route(safe_route),
             "selected_tools": self._selected_tools(selected_tools or []),
@@ -160,11 +168,20 @@ class AssistantContextAssembler:
             "prior_tool_results": self._prior_tool_results(prior_tool_messages or []),
             "conversation_policy": self._conversation_policy(intent_scope, deep),
         }
+        section_order = SECTION_ORDER
+        if session_state is not None:
+            contents["session_state"] = self._session_state(session_state)
+            section_order = section_order + ("session_state",)
+            if bool(session_state.get("plan_mode")):
+                contents["plan_policy"] = self._plan_policy()
+                section_order = section_order + ("plan_policy",)
 
         sections: list[ContextSection] = []
         section_pool = max(0, budget - native_tokens)
         remaining = section_pool
-        for name in SECTION_ORDER:
+        for name in section_order:
+            if name not in contents:
+                continue
             content = contents[name]
             estimate = estimate_tokens(content, divisor)
             section_budget = max(0, int(budgets.get(name, 0)))
@@ -369,6 +386,45 @@ class AssistantContextAssembler:
             "先给结论，再给依据，最后给可执行建议；"
             "知识库证据用 [K1] [K2] 引用，网页证据用 [1] [2] 引用；"
             "不要编造未提供的算法、事实或外部资料。"
+        )
+
+    @staticmethod
+    def _session_state(session_state: Mapping[str, Any]) -> str:
+        """Render a whitelist of persistent session control state.
+
+        Args:
+            session_state: Control state serialized from AssistantChat.
+
+        Returns:
+            Compact JSON context without raw command output.
+        """
+        goal = dict(session_state.get("goal") or {})
+        compaction = dict(session_state.get("compaction") or {})
+        todos = [
+            {"status": item.get("status"), "content": item.get("content")}
+            for item in (session_state.get("todos") or [])
+        ]
+        compact = {
+            "plan_mode": bool(session_state.get("plan_mode", False)),
+            "permission_mode": session_state.get("permission_mode", "workspace_write"),
+            "goal": {
+                "status": goal.get("status"),
+                "objective": goal.get("objective"),
+            }
+            if goal
+            else None,
+            "todos": todos,
+            "compaction_summary_digest": compaction.get("summary_digest"),
+        }
+        return json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _plan_policy() -> str:
+        """Render the hard-to-misunderstand Plan Mode instruction."""
+        return (
+            "PLAN_ONLY_POLICY: 只调查、读取、分析和制定方案；"
+            "不修改文件、不删除数据、不修改配置、不执行副作用操作；"
+            "输出分步计划、风险与所需确认，并等待用户确认。"
         )
 
     @staticmethod

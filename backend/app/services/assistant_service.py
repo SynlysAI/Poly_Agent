@@ -22,7 +22,10 @@ from app.core import llm_client
 from app.core.config import settings
 from app.core.llm_context import get_message_metadata
 from app.core.logging import get_logger
-from app.infra.research_engine_repositories import AssistantToolCallRepository
+from app.infra.research_engine_repositories import (
+    AssistantChatRepository,
+    AssistantToolCallRepository,
+)
 from app.schemas.assistant import AssistantAction
 from app.schemas.assistant import AssistantAnswerMode
 from app.schemas.assistant import AssistantAnswerScope
@@ -44,6 +47,7 @@ from app.services.assistant_tool_contract import (
     safe_function_name,
 )
 from app.services.assistant_tool_service import assistant_tool_call_service
+from app.services.assistant_session_control import control_state
 from app.services.integration_status_service import IntegrationStatusService
 from app.services.knowledge_service import KnowledgeService
 from app.services.llm_model_service import LLMModelService
@@ -1429,6 +1433,11 @@ class AssistantService:
         native_tool_schema_tokens = 0
         if request_kind == "tool_proposal" and selected_tools:
             native_tool_schema_tokens = estimate_native_tool_schema_tokens(selected_tools)
+        session_state = request.context.get("session_state")
+        chat_id = str(request.context.get("chat_id") or "")
+        if session_state is None and chat_id:
+            chat = AssistantChatRepository.find_one({"chat_id": chat_id})
+            session_state = control_state(chat or {}).model_dump(mode="python") if chat else None
         return self.context_assembler.assemble(
             request_kind=request_kind,
             intent_scope=intent.scope,
@@ -1442,6 +1451,7 @@ class AssistantService:
             native_tool_schema_tokens=native_tool_schema_tokens,
             chars_per_token=float(safe_route.get("token_estimate_chars_per_token") or 4),
             allow_section_truncation=True,
+            session_state=session_state,
         )
 
     def _context_event(
@@ -1745,11 +1755,21 @@ class AssistantService:
             if tool is None:
                 logger.warning("assistant tool proposal references unknown function: %s", function_name)
                 continue
-            # 版本模板只是管理端示例；当前对话生成的 provider 参数始终优先，
-            # 避免样例输入伪装成用户分子。
+            # 显式版本模板是管理端固定的调用载荷；仅未配置模板时才信任
+            # provider 根据当前对话自由生成的参数。
             provider_arguments = normalize_provider_arguments(
-                getattr(function, "arguments", None)
+                tool.model_proposal
+                if tool.model_proposal
+                else getattr(function, "arguments", None)
             )
+            call_source_context = {
+                **(tool_source_context or {}),
+                "argument_origin": (
+                    "version_model_proposal"
+                    if tool.model_proposal
+                    else "provider"
+                ),
+            }
             proposal_usage = message_metadata.get("usage")
             try:
                 created = assistant_tool_call_service.create(
@@ -1771,7 +1791,7 @@ class AssistantService:
                         schema_digest=tool.schema_digest,
                         selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool.tool_id}",
                         selection_confidence=0.5,
-                        source_context=tool_source_context,
+                        source_context=call_source_context,
                     ),
                     current_user,
                 )
@@ -2457,13 +2477,17 @@ class AssistantService:
                 detail = getattr(exc, "detail", None) or str(exc)
                 raise ValueError(f"所选 LLM 模型不可用：{detail}") from exc
             logger.warning("assistant llm route unavailable: %s", exc)
-            return {
-                "purpose": purpose,
-                "provider_id": None,
-                "model_id": settings.llm_model or None,
-                "capabilities": [],
-                "reasoning_model_available": False,
-            }
+            try:
+                return self.llm_model_service.resolve_default_route(purpose=purpose)
+            except Exception as fallback_exc:
+                logger.warning("assistant llm default route unavailable: %s", fallback_exc)
+                return {
+                    "purpose": purpose,
+                    "provider_id": None,
+                    "model_id": settings.llm_model or None,
+                    "capabilities": [],
+                    "reasoning_model_available": False,
+                }
 
     def _has_requested_model(self, requested_model) -> bool:
         provider_id, model_id = self._requested_model_identifiers(requested_model)

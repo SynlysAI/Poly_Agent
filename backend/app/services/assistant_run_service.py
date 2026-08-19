@@ -28,6 +28,7 @@ from app.schemas.assistant_runs import (
     AssistantRunListData,
     AssistantUsageSummary,
 )
+from app.services.assistant_compaction_service import assistant_compaction_service
 from app.services.assistant_chat_service import actor_id, assistant_chat_service
 from app.services.assistant_service import stream_chat_assistant
 from app.services.assistant_tool_service import assistant_tool_call_service
@@ -61,6 +62,50 @@ class AssistantRunService:
             raise HTTPException(status_code=403, detail="无权限访问该回答任务")
         return document
 
+    @staticmethod
+    def _owned_status(run_id: str, current_user: dict[str, str] | None) -> dict[str, Any]:
+        """读取 run 状态与归属信息，避免 SSE 轮询加载完整 run 文档。"""
+        document = AssistantRunRepository.find_status(run_id)
+        if not document:
+            raise HTTPException(status_code=404, detail=f"回答任务 '{run_id}' 不存在")
+        if document.get("created_by") != actor_id(current_user):
+            raise HTTPException(status_code=403, detail="无权限访问该回答任务")
+        return document
+
+    @staticmethod
+    def model_visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """过滤不进入模型请求历史的消息。
+
+        Args:
+            messages: 请求快照中的历史消息。
+
+        Returns:
+            metadata.model_visible 不为 false 的消息列表。
+        """
+        return [
+            dict(item)
+            for item in (messages or [])
+            if (item.get("metadata") or {}).get("model_visible") is not False
+        ]
+
+    @staticmethod
+    def continuation_user_content(
+        message: dict[str, Any],
+        source_context: dict[str, Any],
+    ) -> str:
+        """解析工具续答应使用的用户任务说明。
+
+        Args:
+            message: 工具调用关联的原始用户消息。
+            source_context: 工具调用保存的来源上下文。
+
+        Returns:
+            优先返回 metadata.task_content，其次返回消息内容。
+        """
+        metadata_task = str((message.get("metadata") or {}).get("task_content") or "").strip()
+        context_task = str((source_context or {}).get("task_content") or "").strip()
+        return context_task or metadata_task or str(message.get("content") or "").strip()
+
     def create(
         self,
         chat_id: str,
@@ -68,7 +113,7 @@ class AssistantRunService:
         current_user: dict[str, str] | None,
     ) -> AssistantRun:
         owner_id = actor_id(current_user)
-        assistant_chat_service._owned_chat(chat_id, owner_id)
+        chat = assistant_chat_service._owned_chat(chat_id, owner_id)
         existing_user_message = None
         if payload.user_message_id:
             existing_user_message = AssistantMessageRepository.find_one({
@@ -94,6 +139,14 @@ class AssistantRunService:
             )
         if not trace_id:
             trace_id = run_id
+        effective_messages = self.model_visible_messages(payload.messages)
+        compacted_history = assistant_compaction_service.effective_history(
+            chat_id,
+            owner_id,
+            payload.messages,
+        )
+        if compacted_history is not None:
+            effective_messages = compacted_history
         context["trace_id"] = trace_id
         context["chat_id"] = chat_id
         context["run_id"] = run_id
@@ -111,7 +164,7 @@ class AssistantRunService:
             "stage": "queued",
             "request_snapshot": {
                 "content": payload.content.strip(),
-                "messages": payload.messages,
+                "messages": effective_messages,
                 "context": context,
             },
             "partial_content": "",
@@ -250,15 +303,22 @@ class AssistantRunService:
         return self._usage_for_chat(chat_id, owner_id)
 
     @staticmethod
-    def _usage_for_chat(chat_id: str, owner_id: str) -> AssistantUsageSummary:
+    def _usage_for_chat(
+        chat_id: str,
+        owner_id: str,
+        *,
+        runs: list[dict[str, Any]] | None = None,
+    ) -> AssistantUsageSummary:
         """基于会话全部 runs 与 usage 事件汇总 token 消耗。"""
-        runs, _ = AssistantRunRepository.list_for_chat(
-            chat_id,
-            owner_id,
-            page=1,
-            page_size=10_000,
-        )
-        return AssistantRunService._summarize_usage(runs)
+        if runs is None:
+            runs, _ = AssistantRunRepository.list_for_chat_light(
+                chat_id,
+                owner_id,
+                page=1,
+                page_size=10_000,
+            )
+        usage_events = AssistantEventRepository.list_for_chat_usage(chat_id, owner_id)
+        return AssistantRunService._summarize_usage(runs, usage_events)
 
     @staticmethod
     def _usage_component(usage: Any, key: str) -> int:
@@ -278,17 +338,24 @@ class AssistantRunService:
         return usage if isinstance(usage, dict) else {}
 
     @classmethod
-    def _summarize_usage(cls, runs: list[dict[str, Any]]) -> AssistantUsageSummary:
+    def _summarize_usage(
+        cls,
+        runs: list[dict[str, Any]],
+        usage_events: list[dict[str, Any]] | None = None,
+    ) -> AssistantUsageSummary:
         """按事件去重累加 runs 的 usage，兼容历史 run 字段回退。"""
         prompt_tokens = 0
         completion_tokens = 0
         total_tokens = 0
-        usage_events = 0
+        usage_events_count = 0
         seen: set[str] = set()
+        events_by_run: dict[str, list[dict[str, Any]]] = {}
+        for event in usage_events or []:
+            events_by_run.setdefault(str(event.get("run_id") or ""), []).append(event)
 
         for run in runs:
             run_id = str(run.get("run_id") or "")
-            events = AssistantEventRepository.list_for_run(run_id)
+            events = events_by_run.get(run_id, [])
             if not events:
                 events = run.get("events") or []
 
@@ -311,7 +378,7 @@ class AssistantRunService:
                 prompt_tokens += prompt
                 completion_tokens += completion
                 total_tokens += total if total else prompt + completion
-                usage_events += 1
+                usage_events_count += 1
                 had_usage_event = True
 
             if had_usage_event:
@@ -334,7 +401,7 @@ class AssistantRunService:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            usage_events=usage_events,
+            usage_events=usage_events_count,
         )
 
     def list_for_chat(
@@ -342,8 +409,15 @@ class AssistantRunService:
     ) -> AssistantRunListData:
         owner_id = actor_id(current_user)
         assistant_chat_service._owned_chat(chat_id, owner_id)
-        items, total = AssistantRunRepository.list_for_chat(chat_id, owner_id, page, page_size)
-        usage = self._usage_for_chat(chat_id, owner_id)
+        all_runs, total = AssistantRunRepository.list_for_chat_light(
+            chat_id,
+            owner_id,
+            page=1,
+            page_size=10_000,
+        )
+        start = (page - 1) * page_size
+        items = all_runs[start : start + page_size]
+        usage = self._usage_for_chat(chat_id, owner_id, runs=all_runs)
         active = next((item for item in items if item.get("status") in {"queued", "running"}), None)
         return AssistantRunListData(
             items=[self._public(item, include_events=False) for item in items],
@@ -366,7 +440,7 @@ class AssistantRunService:
         return self.get(run_id, current_user)
 
     def events(self, run_id: str, current_user: dict[str, str] | None, after_seq: int = 0) -> Iterator[dict[str, Any]]:
-        self._owned(run_id, current_user)
+        self._owned_status(run_id, current_user)
         if after_seq > 0:
             AssistantRunRepository.increment_metric(run_id, "reconnect_count")
         cursor = max(0, after_seq)
@@ -376,7 +450,7 @@ class AssistantRunService:
             for event in events:
                 cursor = max(cursor, int(event.get("seq", 0)))
                 yield event
-            document = self._owned(run_id, current_user)
+            document = self._owned_status(run_id, current_user)
             if document.get("status") in TERMINAL_STATUSES and not AssistantRunRepository.events_after(run_id, cursor):
                 return
             idle_polls += 1
@@ -455,7 +529,27 @@ class AssistantRunService:
         if not user_message:
             raise HTTPException(status_code=422, detail="原用户消息不存在，无法自动续答")
 
-        user_content = str(user_message.get("content") or "")
+        command_owned = bool(
+            call.get("command_id")
+            or source_context.get("command_id")
+            or source_context.get("origin") == "slash_command"
+        )
+        if command_owned:
+            user_content = str(
+                source_context.get("task_content")
+                or (user_message.get("metadata") or {}).get("task_content")
+                or ""
+            ).strip()
+            if not user_content:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "MISSING_TASK_CONTENT",
+                        "message": "未提供任务说明，不自动生成续答",
+                    },
+                )
+        else:
+            user_content = self.continuation_user_content(user_message, source_context)
         request_messages = [{"role": "user", "content": user_content}] if user_content.strip() else []
         context = self._continuation_context(call, source_context, message_id)
         actor = {"user_id": owner_id, "role": call.get("_actor_role") or "user"}
@@ -493,6 +587,7 @@ class AssistantRunService:
             "selected_tool_ids": list(source_context.get("selected_tool_ids") or [call.get("tool_id")]),
             "model": source_context.get("model_request") or {},
             "tool_call_ids": [call.get("call_id")],
+            "command_id": call.get("command_id") or source_context.get("command_id"),
             "continuation_key": call.get("call_id"),
             "continuation_source": {
                 "call_id": call.get("call_id"),
@@ -672,7 +767,7 @@ class AssistantRunService:
         worker_id = document["worker_id"]
         started = time.monotonic()
         snapshot = document.get("request_snapshot") or {}
-        request_messages = list(snapshot.get("messages") or [])
+        request_messages = self.model_visible_messages(snapshot.get("messages") or [])
         if snapshot.get("content"):
             request_messages.append({"role": "user", "content": snapshot["content"]})
         request = AssistantChatRequest(messages=request_messages, context=snapshot.get("context") or {})

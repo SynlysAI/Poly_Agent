@@ -2,9 +2,11 @@
 import { computed } from 'vue'
 import {
   formatTraceDuration,
+  filterTraceSteps,
   traceDetailText,
   traceDisplayGroups,
   traceSummaryRows,
+  TRACE_TYPE_FILTERS,
 } from '../../utils/assistantTrace.mjs'
 
 /**
@@ -16,7 +18,17 @@ const props = defineProps({
     type: Object,
     required: true,
   },
+  showFilters: {
+    type: Boolean,
+    default: false,
+  },
+  typeFilter: {
+    type: String,
+    default: 'all',
+  },
 })
+
+const emit = defineEmits(['update:typeFilter'])
 
 const STATUS_LABELS = {
   planning: '规划中',
@@ -37,11 +49,16 @@ const STEP_ICONS = {
   write: '✎',
   edit: '✎',
   approval: '✓',
+  command: '/',
+  control: '⌥',
+  export: '⇩',
+  feedback: '★',
   error: '!',
   final: '★',
 }
 
-const groups = computed(() => traceDisplayGroups(props.trace))
+const filteredSteps = computed(() => filterTraceSteps(props.trace?.steps || [], props.typeFilter))
+const groups = computed(() => traceDisplayGroups({ ...props.trace, steps: filteredSteps.value }))
 const summaryRows = computed(() => traceSummaryRows(props.trace))
 const statusLabel = computed(() => STATUS_LABELS[props.trace?.status] || props.trace?.status || '执行中')
 const openByDefault = computed(() => Boolean(props.trace?.streaming))
@@ -61,6 +78,11 @@ function stepStatusLabel(step) {
 
 function stepStatusClass(step) {
   return `trace-step-${step?.status || 'running'}`
+}
+
+function selectTypeFilter(filter) {
+  /** 向父组件同步当前 Trace 类型过滤值。 */
+  emit('update:typeFilter', filter)
 }
 </script>
 
@@ -84,8 +106,21 @@ function stepStatusClass(step) {
       {{ statusLabel }}，{{ trace.steps?.length || 0 }} 个步骤
     </span>
 
+    <div v-if="showFilters" class="trace-filters" role="group" aria-label="按类型过滤执行轨迹">
+      <button
+        v-for="filter in TRACE_TYPE_FILTERS"
+        :key="filter.value"
+        type="button"
+        :class="{ active: typeFilter === filter.value }"
+        :aria-pressed="typeFilter === filter.value"
+        @click="selectTypeFilter(filter.value)"
+      >
+        {{ filter.label }}
+      </button>
+    </div>
+
     <div v-if="!groups.length" class="trace-empty">
-      正在等待第一个真实执行事件…
+      {{ typeFilter === 'all' ? '正在等待第一个真实执行事件…' : '当前过滤条件下暂无事件' }}
     </div>
 
     <details class="trace-body" :open="openByDefault">
@@ -166,6 +201,30 @@ function stepStatusClass(step) {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+.trace-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.trace-filters button {
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+}
+
+.trace-filters button.active,
+.trace-filters button:hover {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
 }
 
 .trace-status {

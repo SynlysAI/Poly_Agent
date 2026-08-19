@@ -160,6 +160,33 @@ def test_manifest_records_context_and_tool_digests() -> None:
     ]
 
 
+def test_session_state_and_plan_policy_sections_are_budgeted() -> None:
+    assembler = AssistantContextAssembler()
+    state = {
+        "plan_mode": True,
+        "permission_mode": "read_only",
+        "goal": {"status": "active", "objective": "构建材料实验智能体"},
+        "todos": [{"status": "pending", "content": "调研数据"}],
+        "compaction": {"summary_digest": "sha256:compact"},
+    }
+    assembly = assembler.assemble(
+        request_kind="final_answer",
+        intent_scope="project",
+        deep=False,
+        facts={"project": "PolyAgent"},
+        route={"provider_id": "provider-a", "model_id": "model-a"},
+        session_state=state,
+    )
+    sections = {section.name: section for section in assembly.sections}
+
+    assert sections["session_state"].included is True
+    assert "构建材料实验智能体" in sections["session_state"].content
+    assert "read_only" in sections["session_state"].content
+    assert "sha256:compact" in sections["session_state"].content
+    assert sections["plan_policy"].included is True
+    assert "不修改文件" in sections["plan_policy"].content
+
+
 def test_truncation_and_native_tool_schema_tokens_are_recorded() -> None:
     assembler = AssistantContextAssembler()
     assembly = assembler.assemble(

@@ -226,6 +226,7 @@ class AgentToolService:
             name=str(registry.get("name") or algorithm_id),
             description=registry.get("description"),
             algorithm_family=str(registry.get("algorithm_family") or "vertical_prediction"),
+            capability_group=registry.get("capability_group"),
             material_scope=list(registry.get("material_scope") or []),
             tool_type=str(registry.get("type") or "predictor"),
             source=str(registry.get("source") or "builtin"),

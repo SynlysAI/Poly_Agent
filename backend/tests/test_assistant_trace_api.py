@@ -141,3 +141,12 @@ class AssistantTraceApiTest(ComputationTestCase):
         )
         self.assertEqual(continued.status_code, 200, continued.text)
         self.assertEqual(continued.json()["data"]["trace_id"], run["trace_id"])
+
+    def test_trace_batch_endpoint_returns_accessible_traces_and_skips_missing(self) -> None:
+        response = self.client.get(
+            "/api/v1/assistant/traces/batch",
+            params=[("trace_ids", "asrun_trace_api"), ("trace_ids", "missing_trace")],
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertEqual([item["trace_id"] for item in data["items"]], ["asrun_trace_api"])

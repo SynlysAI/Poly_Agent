@@ -5,14 +5,21 @@ from __future__ import annotations
 import copy
 from collections import defaultdict
 from datetime import datetime
+import math
 import time
 from typing import Any
 
 from app.infra.research_engine_repositories import (
+    AssistantChatRepository,
     AssistantEventRepository,
     AssistantRunRepository,
     AssistantToolCallRepository,
 )
+from app.infra.assistant_command_repositories import (
+    AssistantCommandRunRepository,
+    AssistantFeedbackRepository,
+)
+from app.services.assistant_command_service import CATALOG_LATENCY_SAMPLES
 
 
 EXECUTING_TOOL_PHASES = {"queued", "running", "completed", "failed"}
@@ -54,6 +61,23 @@ def _metric(
         "display": _display_rate(value),
         "target": target,
     }
+
+
+def _percentile(values: list[float], percentile: float) -> float | None:
+    """计算有序百分位数；空样本返回 None。
+
+    Args:
+        values: 数值样本。
+        percentile: 0-1 之间的百分位。
+
+    Returns:
+        对应百分位数；无样本时为 None。
+    """
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(percentile * len(ordered)) - 1))
+    return ordered[index]
 
 
 def _has_tool_calling(route: dict[str, Any] | None) -> bool:
@@ -261,6 +285,54 @@ def build_quality_metrics(
         call for call in continuation_tool_calls if call.get("continuation_state") == "completed"
     ]
 
+    commands, _ = AssistantCommandRunRepository.list_all(
+        page=1,
+        page_size=10_000,
+        sort_field="created_at",
+        reverse=False,
+    )
+    commands = [command for command in commands if _within_window(command, since_value, until_value)]
+    feedbacks, _ = AssistantFeedbackRepository.list_all(
+        page=1,
+        page_size=10_000,
+        sort_field="created_at",
+        reverse=False,
+    )
+    feedbacks = [feedback for feedback in feedbacks if _within_window(feedback, since_value, until_value)]
+    chats, _ = AssistantChatRepository.list_all(page=1, page_size=10_000)
+
+    successful_commands = [command for command in commands if command.get("status") == "success"]
+    unknown_commands = [command for command in commands if command.get("name") == "unknown"]
+    dynamic_tool_commands = [
+        command for command in commands
+        if command.get("source_kind") == "tool" or str(command.get("tool_id") or "").startswith("algorithm:")
+    ]
+    dynamic_tool_conversions = [command for command in dynamic_tool_commands if command.get("call_id")]
+    export_commands = [command for command in commands if command.get("name") == "export"]
+    successful_exports = [command for command in export_commands if command.get("status") == "success"]
+    feedback_command_chats = {
+        str(command.get("chat_id") or "") for command in commands if command.get("name") == "feedback"
+    }
+    permission_decisions = [event for event in events if event.get("type") == "permission.decision"]
+    denied_decisions = [
+        event for event in permission_decisions if str((event.get("data") or {}).get("decision")) == "denied"
+    ]
+    plan_mode_blocks = [
+        event for event in denied_decisions
+        if str((event.get("data") or {}).get("reason")) == "plan_mode_blocked"
+    ]
+    compactions = [chat.get("compaction") for chat in chats if chat.get("compaction")]
+    compact_original_tokens = sum(int((item or {}).get("original_token_estimate") or 0) for item in compactions)
+    compact_current_tokens = sum(int((item or {}).get("token_estimate") or 0) for item in compactions)
+    compact_reduction = max(0, compact_original_tokens - compact_current_tokens)
+    catalog_values = [
+        value
+        for sampled_at, value, _success in CATALOG_LATENCY_SAMPLES
+        if (since_value is None or sampled_at >= since_value)
+        and (until_value is None or sampled_at <= until_value)
+    ]
+    catalog_latency = _percentile(catalog_values, 0.95)
+
     context_distribution = _context_token_distribution(runs)
     context_tokens = sum(int(row["token_total"]) for row in context_distribution)
 
@@ -269,6 +341,8 @@ def build_quality_metrics(
             "runs": len(runs),
             "tool_calls": len(calls),
             "events": len(events),
+            "commands": len(commands),
+            "feedback": len(feedbacks),
         },
         "window": {
             "since": since_value.isoformat() if since_value else None,
@@ -276,6 +350,79 @@ def build_quality_metrics(
         },
         "cache_hit": False,
         "metrics": [
+            {
+                "key": "command_catalog_latency",
+                "label": "command catalog latency",
+                "value": catalog_latency,
+                "numerator": len(catalog_values),
+                "denominator": len(catalog_values),
+                "display": f"{catalog_latency:.2f} ms" if catalog_latency is not None else "—",
+                "target": "热缓存 P95 < 100ms",
+            },
+            _metric(
+                "command_execute_success_rate",
+                "command execute success rate",
+                _ratio(len(successful_commands), len(commands)),
+                len(successful_commands),
+                len(commands),
+                target="接近 100%",
+            ),
+            _metric(
+                "unknown_command_rate",
+                "unknown command rate",
+                _ratio(len(unknown_commands), len(commands)),
+                len(unknown_commands),
+                len(commands),
+                target="持续下降",
+            ),
+            _metric(
+                "permission_blocked_rate",
+                "permission blocked rate",
+                _ratio(len(denied_decisions), len(permission_decisions)),
+                len(denied_decisions),
+                len(permission_decisions),
+                target="阻断均带明确 reason",
+            ),
+            _metric(
+                "plan_mode_block_rate",
+                "plan mode block rate",
+                _ratio(len(plan_mode_blocks), len(denied_decisions)),
+                len(plan_mode_blocks),
+                len(denied_decisions),
+                target="Plan Mode 阻断可审计",
+            ),
+            _metric(
+                "dynamic_tool_command_conversion",
+                "dynamic tool command conversion",
+                _ratio(len(dynamic_tool_conversions), len(dynamic_tool_commands)),
+                len(dynamic_tool_conversions),
+                len(dynamic_tool_commands),
+                target="提升",
+            ),
+            _metric(
+                "compact_token_reduction",
+                "compact token reduction",
+                _ratio(compact_reduction, compact_original_tokens),
+                compact_reduction,
+                compact_original_tokens,
+                target="长会话可观测下降",
+            ),
+            _metric(
+                "export_success_rate",
+                "export success rate",
+                _ratio(len(successful_exports), len(export_commands)),
+                len(successful_exports),
+                len(export_commands),
+                target="接近 100%",
+            ),
+            _metric(
+                "feedback_submission_rate",
+                "feedback submission rate",
+                _ratio(len(feedbacks), len(feedback_command_chats)),
+                len(feedbacks),
+                len(feedback_command_chats),
+                target="提升",
+            ),
             _metric(
                 "route_resolved_rate",
                 "route resolved rate",

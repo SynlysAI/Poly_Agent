@@ -128,6 +128,11 @@ class BaseRepository:
     collection_name: str
 
     @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """供仓储子类覆盖的一次性索引初始化钩子。"""
+        return None
+
+    @classmethod
     def _can_use_mongo(cls) -> bool:
         """判断当前进程是否继续尝试 MongoDB。"""
         return settings.uses_mongodb and (
@@ -160,6 +165,7 @@ class BaseRepository:
         """保存单条文档。"""
         payload = clone_document(document)
         if cls._can_use_mongo():
+            cls._ensure_indexes_once()
             try:
                 cls._collection().update_one({key_field: payload[key_field]}, {"$set": payload}, upsert=True)
                 return
@@ -175,19 +181,20 @@ class BaseRepository:
             rows.append(payload)
             return None
 
-        demo_store.mutate(mutate)
+        demo_store.mutate_collection(cls.collection_name, mutate)
 
     @classmethod
     def find_one(cls, filters: dict[str, Any]) -> dict[str, Any] | None:
         """查询单条文档。"""
         if cls._can_use_mongo():
+            cls._ensure_indexes_once()
             try:
                 doc = cls._collection().find_one(filters, {"_id": 0})
                 return _without_mongo_id(doc)
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
-        data = demo_store.load()
-        for item in data[cls.collection_name]:
+        rows = demo_store.load_collection(cls.collection_name)
+        for item in rows:
             if _matches(item, filters):
                 return clone_document(item)
         return None
@@ -206,6 +213,7 @@ class BaseRepository:
         filters = filters or {}
         skip = (page - 1) * page_size
         if cls._can_use_mongo():
+            cls._ensure_indexes_once()
             try:
                 collection = cls._collection()
                 total = int(collection.count_documents(filters))
@@ -213,8 +221,8 @@ class BaseRepository:
                 return [dict(item) for item in cursor], total
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
-        data = demo_store.load()
-        rows = [clone_document(item) for item in data[cls.collection_name] if _matches(item, filters)]
+        documents = demo_store.load_collection(cls.collection_name)
+        rows = [clone_document(item) for item in documents if _matches(item, filters)]
         rows = _sort_documents(rows, sort_field, reverse=reverse)
         return rows[skip : skip + page_size], len(rows)
 
@@ -227,6 +235,7 @@ class BaseRepository:
     ) -> bool:
         """按唯一键更新部分字段。"""
         if cls._can_use_mongo():
+            cls._ensure_indexes_once()
             try:
                 result = cls._collection().update_one(
                     {key_field: key_value},
@@ -243,12 +252,13 @@ class BaseRepository:
                     return True
             return False
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def delete_one(cls, key_field: str, key_value: Any) -> bool:
         """按唯一键删除单条文档。"""
         if cls._can_use_mongo():
+            cls._ensure_indexes_once()
             try:
                 result = cls._collection().delete_one({key_field: key_value})
                 return result.deleted_count > 0
@@ -264,18 +274,19 @@ class BaseRepository:
             ]
             return len(data[cls.collection_name]) != before
 
-        return bool(demo_store.mutate(mutate))
+        return bool(demo_store.mutate_collection(cls.collection_name, mutate))
 
     @classmethod
     def count(cls, filters: dict[str, Any]) -> int:
         """统计匹配文档数量。"""
         if cls._can_use_mongo():
+            cls._ensure_indexes_once()
             try:
                 return int(cls._collection().count_documents(filters))
             except PyMongoError as exc:
                 cls._handle_mongo_error(exc)
-        data = demo_store.load()
-        return sum(1 for item in data[cls.collection_name] if _matches(item, filters))
+        documents = demo_store.load_collection(cls.collection_name)
+        return sum(1 for item in documents if _matches(item, filters))
 
 
 class ComputationRunRepository(BaseRepository):
