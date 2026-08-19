@@ -2191,6 +2191,19 @@ function syncComposerCaret(event) {
 }
 
 /**
+ * 从对话页工具栏打开 Slash 命令面板。
+ */
+function openCommandPalette() {
+  if (!inputText.value.trim()) {
+    inputText.value = '/'
+    composerCaretPosition.value = 1
+  }
+  commandPaletteDismissed.value = false
+  refreshCommandPalette()
+  nextTick(() => composerInputRef.value?.focus?.())
+}
+
+/**
  * 处理输入法组合开始。
  */
 function handleCompositionStart() {
@@ -3168,6 +3181,19 @@ watch(
                 @click="useWebSearch = !useWebSearch"
               >
                 <el-icon><GlobeIcon /></el-icon>
+              </button>
+            </el-tooltip>
+            <el-tooltip content="输入 / 打开命令面板" placement="top">
+              <button
+                type="button"
+                class="icon-tool-btn command-trigger"
+                :class="{ active: commandPaletteVisible }"
+                :disabled="composerCommandBusy"
+                :aria-pressed="commandPaletteVisible"
+                aria-label="打开命令面板"
+                @click="openCommandPalette"
+              >
+                /
               </button>
             </el-tooltip>
             <el-popover
