@@ -52,6 +52,15 @@
 | [platform-positioning-and-small-iteration-plan.md](platform-positioning-and-small-iteration-plan.md) | 平台定位、credit、低学习成本和小步优化方案 |
 | [internagents-inspired-product-optimization-design.md](internagents-inspired-product-optimization-design.md) | 借鉴 InternAgents 工作台模型的 PolyAgent 产品设计优化方案 |
 
+## 规划与设计
+
+| 文档 | 内容 |
+|------|------|
+| [plan-polymer-inverse-design-and-property-prediction-demo.md](plan-polymer-inverse-design-and-property-prediction-demo.md) | 聚合物自然语言逆向设计与性质预测 Demo 落地计划：三阶段参考评估、逆向设计、性质预测与候选结构 demo |
+| [plan-multi-site-collaborative-optimization-fedbo-pilot.md](plan-multi-site-collaborative-optimization-fedbo-pilot.md) | 多站点协同实验优化与联邦贝叶斯 FedBO 试点计划：参考解读、产品边界、架构预案与分阶段落地 |
+| [plan-als-orchestration-and-bounded-execution.md](plan-als-orchestration-and-bounded-execution.md) | 大装置 Agent 编排与受限执行设计（ALS 范式）：Plan-first 显式依赖计划、动态能力选择、只读/可写双模式、统一安全层、NL 驱动参数解析器 |
+| [plan-ssrl-agent-honing-and-closed-loop-execution.md](plan-ssrl-agent-honing-and-closed-loop-execution.md) | 智能体打磨与闭环执行设计（SSRL 范式）：虚拟打磨环境、双层提示词、图像化观测、会话级持久与短期记忆、被动转发安全模式、工作流级鲁棒性基准 |
+
 ## 进度、计划与验收
 
 | 文档 | 内容 |
@@ -77,8 +86,6 @@
 | [research-engine-plan-14-lui-dynamic-compute-budget-plan.md](research-engine-plan-14-lui-dynamic-compute-budget-plan.md) | LUI 动态计算预算：Query 分类、Model Router、RAG 分层、执行分级与灰度发布 |
 | [research-engine-plan-15-agent-exec-provider-seam-workplan.md](research-engine-plan-15-agent-exec-provider-seam-workplan.md) | 受控外部 Agent 执行 Provider Seam：readiness、独立 workdir、Codex MVP、Audit / Trace 与管理 API |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |
-| [polymer-inverse-design-and-property-prediction-demo-plan.md](polymer-inverse-design-and-property-prediction-demo-plan.md) | 基于 Polymer-Agent 参考评估的自然语言目标逆向设计、性质预测与候选结构 demo 三阶段计划 |
-| [multi-site-collaborative-optimization-fedbo-pilot-plan.md](multi-site-collaborative-optimization-fedbo-pilot-plan.md) | 多站点协同实验优化与联邦贝叶斯 FedBO 试点：参考解读、产品边界、架构预案与分阶段落地计划 |
 
 ## 部署、工具链与治理
 
