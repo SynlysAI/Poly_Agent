@@ -194,9 +194,6 @@ async function submitFeedback() {
   margin-top: 12px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
-  background: var(--el-fill-color-lighter);
-  border-radius: 8px;
-  padding: 8px 12px;
 }
 
 .fb-submitter b {
