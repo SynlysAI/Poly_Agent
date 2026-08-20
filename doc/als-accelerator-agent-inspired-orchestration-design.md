@@ -1,4 +1,4 @@
-# PolyAgent 借鉴 ALS Accelerator Assistant「大装置 Agent」的编排与受限执行设计
+# 大装置 Agent 编排与受限执行设计（ALS 范式）
 
 日期：2026-08-20
 状态：架构设计建议 / 待评审
