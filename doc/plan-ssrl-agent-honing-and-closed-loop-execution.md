@@ -12,7 +12,7 @@
 - 配套代码 `refer/大装置agent/ssrl/llm4xray-v0.0.0/`：MCP server、虚拟束线仿真器、长短提示词
 - PolyAgent 总览：`README.md`
 - ResearchEngine 技术方案：`doc/research-engine-and-auto-research-design.md`
-- 同源 ALS 借鉴设计：`doc/als-accelerator-agent-inspired-orchestration-design.md`（同为「大装置 Agent」参考系列，ALS 聚焦 Plan-first 编排与受限执行，本设计聚焦虚拟打磨与闭环执行，两者互补）
+- 同源 ALS 借鉴设计：`doc/plan-als-orchestration-and-bounded-execution.md`（同为「大装置 Agent」参考系列，ALS 聚焦 Plan-first 编排与受限执行，本设计聚焦虚拟打磨与闭环执行，两者互补）
 - 实验下发设计：`doc/experiment-dispatch.md`
 - LUI Runtime 与工具调用：`doc/research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md`
 
@@ -38,7 +38,7 @@ PolyAgent 已有的 ComputeEngine mock/fixture、adapter 契约、Gate 审批、
 
 ### 1.3 与 ALS 借鉴设计的分工
 
-同目录的 `als-accelerator-agent-inspired-orchestration-design.md` 聚焦「Plan-first 显式依赖计划 + 动态能力选择 + 受限执行 + 统一安全层」，回答的是**编排透明度与规模化**问题。本设计聚焦**方法论闭环与真实执行落地**：虚拟打磨、双层提示词、图像化观测、会话级持久与短期记忆、被动转发安全模式、工作流级鲁棒性基准。两者互补，不重叠——ALS 让 Gate 拥有可审查对象，本设计让 agent 在上真机前被系统化打磨并具备自适应能力。
+同目录的 `plan-als-orchestration-and-bounded-execution.md` 聚焦「Plan-first 显式依赖计划 + 动态能力选择 + 受限执行 + 统一安全层」，回答的是**编排透明度与规模化**问题。本设计聚焦**方法论闭环与真实执行落地**：虚拟打磨、双层提示词、图像化观测、会话级持久与短期记忆、被动转发安全模式、工作流级鲁棒性基准。两者互补，不重叠——ALS 让 Gate 拥有可审查对象，本设计让 agent 在上真机前被系统化打磨并具备自适应能力。
 
 ## 2. 设计目标与非目标
 
