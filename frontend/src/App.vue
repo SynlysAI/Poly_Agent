@@ -9,6 +9,7 @@ import {
 
 import { getAuthStatus, getApiErrorMessage, getCurrentUser } from './api/polyAgentApi'
 import { acceptPortalToken, authState, clearAuthSession, setAuthEnabled, setAuthSession } from './auth/authState'
+import FeedbackButton from './components/FeedbackButton.vue'
 import { formatAppDate } from './utils/datetime'
 
 const route = useRoute()
@@ -286,6 +287,7 @@ onBeforeUnmount(() => {
           <span class="header-date">{{ currentDate }}</span>
           <el-tag v-if="authState.authEnabled" type="success" effect="plain" size="small">已启用登录保护</el-tag>
           <el-tag v-if="currentUserRoleLabel" effect="plain" size="small">{{ currentUserRoleLabel }}</el-tag>
+          <FeedbackButton v-if="authState.authEnabled" />
           <el-avatar size="small">{{ currentUserAvatarText }}</el-avatar>
           <span style="font-weight:500">{{ currentUserDisplayName }}</span>
           <el-button v-if="authState.authEnabled" text class="logout-btn" @click="handleLogout">
