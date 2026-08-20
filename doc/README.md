@@ -51,6 +51,8 @@
 | [knowledge-base-rag-kg-upgrade-plan.md](knowledge-base-rag-kg-upgrade-plan.md) | 知识库内容、检索和界面增强计划 |
 | [platform-positioning-and-small-iteration-plan.md](platform-positioning-and-small-iteration-plan.md) | 平台定位、credit、低学习成本和小步优化方案 |
 | [internagents-inspired-product-optimization-design.md](internagents-inspired-product-optimization-design.md) | 借鉴 InternAgents 工作台模型的 PolyAgent 产品设计优化方案 |
+| [als-accelerator-agent-inspired-orchestration-design.md](als-accelerator-agent-inspired-orchestration-design.md) | 借鉴 ALS「大装置 Agent」范式的 PolyAgent 编排与受限执行设计：Plan-first 显式依赖计划、动态能力选择、只读/可写双模式、统一安全层、NL 驱动参数解析器 |
+| [ssrl-xray-agent-inspired-agent-honing-closed-loop-design.md](ssrl-xray-agent-inspired-agent-honing-closed-loop-design.md) | 借鉴 SSRL「AI X-ray Scientist」范式的 PolyAgent 智能体打磨与闭环执行设计：虚拟打磨环境、双层提示词、图像化观测、会话级持久与短期记忆、被动转发安全模式、工作流级鲁棒性基准 |
 
 ## 进度、计划与验收
 
