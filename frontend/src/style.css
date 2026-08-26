@@ -274,6 +274,11 @@ body {
   font-size: 14px;
 }
 
+/* 顶栏相邻按钮间距统一由 gap 控制（覆盖 Element Plus 相邻按钮默认 margin） */
+.header-right .el-button + .el-button {
+  margin-left: 0;
+}
+
 .collapse-btn {
   color: #2b4f82;
   font-size: 14px;
