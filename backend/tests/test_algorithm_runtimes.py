@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -78,3 +81,32 @@ def test_local_sandbox_runtime_timeout_kills_child(tmp_path: Path) -> None:
     assert error.error_type == "TimeoutExpired"
     assert "timed out" in error.message
     assert error.runtime["backend"] == "local_sandbox_runtime"
+
+
+def test_sandbox_shim_import_does_not_start_fastapi_app() -> None:
+    """验证导入 sandbox shim 不会触发 FastAPI 应用初始化。"""
+    project_root = Path(__file__).resolve().parents[2]
+    backend_root = project_root / "backend"
+    code = (
+        "import sys; "
+        "import app.services.algorithm_runtimes.sandbox_shim; "
+        "assert 'app.main' not in sys.modules"
+    )
+    env = {
+        **os.environ,
+        "APP_ENV": "test",
+        "STORAGE_BACKEND": "sqlite",
+        "PYTHONPATH": os.pathsep.join([str(backend_root), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
+    }
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
