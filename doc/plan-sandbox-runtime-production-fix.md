@@ -16,11 +16,14 @@
 - [x] 修复 `backend/app/__init__.py` 的应用导入副作用。
 - [x] 补充 sandbox shim 轻量导入回归测试。
 - [x] 运行本地相关测试。
-- [ ] 应用生产修复并重启 PM2 服务。
-- [ ] 线上验证垂类模型执行恢复。
+- [x] 应用生产修复并重启 PM2 服务。
+- [x] 线上验证垂类模型执行恢复。
 
 ## 状态记录
 
 - 2026-08-26：完成生产只读排查，确认根因为 `app/__init__.py` 导入 `app.main`、sandbox 环境过滤 `AUTH_SECRET` 与生产配置校验叠加。
 - 2026-08-26：已移除 `app/__init__.py` 的应用导入副作用，并新增独立进程回归测试；开始本地测试验证。
 - 2026-08-26：`backend/tests/test_algorithm_runtimes.py` 3 项测试通过，`backend/tests/test_electrolyte_formulation_package.py` 5 项测试通过；本地验证完成。
+- 2026-08-26：修复提交 `37afbef` 已推送 `develop`，合并提交 `79545d1` 已推送 `main`；生产仓库快进到 `79545d1`。
+- 2026-08-26：生产 `poly-agent-backend` 与 `poly-agent-algorithm-worker` 已重启并保持 online，后端健康检查返回 MongoDB up。
+- 2026-08-26：线上服务级冒烟运行 `arun_41047afdb08a` 完成，返回 1 条预测，runtime 退出码 0，耗时约 3.0 秒。
