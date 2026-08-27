@@ -295,6 +295,14 @@ class Settings:
             os.getenv("AGENT_EXEC_MAX_OUTPUT_BYTES", str(10 * 1024 * 1024))
         )
         self.agent_exec_max_files: int = int(os.getenv("AGENT_EXEC_MAX_FILES", "20"))
+        self.agent_exec_codex_bin: str = os.getenv("AGENT_EXEC_CODEX_BIN", "codex").strip() or "codex"
+        self.agent_exec_codex_sandbox_mode: str = (
+            os.getenv("AGENT_EXEC_CODEX_SANDBOX_MODE", "read-only").strip() or "read-only"
+        )
+        self.agent_exec_codex_api_key: str = os.getenv(
+            "AGENT_EXEC_CODEX_API_KEY", os.getenv("CODEX_API_KEY", "")
+        )
+        self.agent_exec_codex_model: str = os.getenv("AGENT_EXEC_CODEX_MODEL", "").strip()
 
         # 统一认证（AI4MS）配置；认证库与业务库分离时显式配置 AUTH_MONGODB_URI。
         self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "").strip()

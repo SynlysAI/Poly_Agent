@@ -222,21 +222,21 @@ backend/app/api/v1/endpoints/agent_exec.py
 - [x] registry 初始化不探测外部二进制，不抛异常，不阻断 FastAPI 启动。
 - [x] 补充契约、默认禁用、未知 provider、未知 task_type 和缺省 unavailable 测试。
 
-### P15-B. Codex MVP 适配器
+### P15-B. Codex MVP 适配器 ✅
 
-- [ ] 新增 `backend/app/services/agent_exec_providers/codex.py`，复用现有报告 provider 的 JSON Schema 处理经验。
-- [ ] readiness 检查：
+- [x] 新增 `backend/app/services/agent_exec_providers/codex.py`，复用现有报告 provider 的 JSON Schema 处理经验。
+- [x] readiness 检查：
   - `codex` 二进制存在且可执行；
   - `AGENT_EXEC_ENABLED=true`；
   - 受限 / 只读 sandbox 参数可用；
   - API key 或本地模型配置满足要求；
   - `structured_file_task` 已声明。
-- [ ] 执行时使用 run 专属 workdir，只传入 prompt、输入文件和输出 Schema。
-- [ ] 明确使用 Codex CLI 的受限 sandbox 模式；无法确认 sandbox 能力时 readiness 返回 unavailable，不得降级为无沙箱执行。
-- [ ] 捕获二进制缺失、非零退出、超时、输出缺失、JSON Schema 不匹配和环境配置错误。
-- [ ] 返回结构化 `stdout_digest` / `stderr_digest`，不保存完整无限长日志。
-- [ ] 声明连接器元数据：`provider_id="codex"`、`display_name`、支持任务类型、sandbox 摘要、配置来源（脱敏）、attribution（“执行能力来自 Codex CLI”）。
-- [ ] 补充 mock subprocess 测试：成功、缺二进制、非零退出、超时、schema 失败、sandbox 参数不支持。
+- [x] 执行时使用 run 专属 workdir，只传入 prompt、输入文件和输出 Schema。
+- [x] 明确使用 Codex CLI 的受限 sandbox 模式；无法确认 sandbox 能力时 readiness 返回 unavailable，不得降级为无沙箱执行。
+- [x] 捕获二进制缺失、非零退出、超时、输出缺失、JSON Schema 不匹配和环境配置错误。
+- [x] 返回结构化 `stdout_digest` / `stderr_digest`，不保存完整无限长日志。
+- [x] 声明连接器元数据：`provider_id="codex"`、`display_name`、支持任务类型、sandbox 摘要、配置来源（脱敏）、attribution（“执行能力来自 Codex CLI”）。
+- [x] 补充 mock subprocess 测试：成功、缺二进制、非零退出、超时、schema 失败、sandbox 参数不支持。
 
 ### P15-C. 执行服务与安全边界
 
@@ -395,3 +395,4 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-19：从 Plan 12 拆分 `agent_exec` provider seam，新增独立工作计划；未修改业务代码。
 - 2026-08-27：修订计划，参考 Manus 连接器交互模式新增“Agent 连接器”产品视图与策略治理（P15-C/E/F/G 与契约 5.4、事件 6.1），并将全局能力入口拆分至 Plan 16；本次仅修改文档，未修改业务代码。
 - 2026-08-27：完成 P15-A，新增 agent_exec 契约 schema、provider Protocol/错误契约、registry 与默认关闭配置，补充契约测试并通过。
+- 2026-08-27：完成 P15-B，新增 Codex 受限 sandbox 适配器（readiness 不执行二进制）、结构化日志摘要与 mock subprocess 测试，P15-A/P15-B 共 16 项测试通过。
