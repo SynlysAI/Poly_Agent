@@ -413,6 +413,25 @@ class AgentExecServiceTest(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 404)
 
+    def test_lui_tool_default_hidden_and_gated_visibility(self) -> None:
+        fresh = AgentExecService(
+            registry=self.registry,
+            policy_service=AgentExecPolicyService(),
+            event_sink=lambda event: None,
+        )
+        self.assertIsNone(fresh.lui_tool(role="admin"))
+
+        tool = self.service.lui_tool(role="admin")
+        self.assertIsNotNone(tool)
+        self.assertEqual(tool.tool_id, "agent_exec:structured_file_task")
+        self.assertTrue(tool.requires_confirmation)
+        self.assertIn("input_files", tool.confirmation_fields)
+        self.assertIn("timeout_seconds", tool.confirmation_fields)
+
+        self.assertIsNone(self.service.lui_tool(role="user"))
+        self.provider.available = False
+        self.assertIsNone(self.service.lui_tool(role="admin"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,6 +23,7 @@ from app.schemas.agent_exec import (
     AgentExecArtifactData,
     AgentExecExecutionRequest,
     AgentExecInputFileData,
+    AgentExecLuiToolData,
     AgentExecRunData,
 )
 from app.services.agent_exec_policy_service import (
@@ -337,6 +338,41 @@ class AgentExecService:
             run 列表；持久化读取由仓储层补充。
         """
         return list(self._runs.values())
+
+    def lui_tool(self, *, role: str) -> AgentExecLuiToolData | None:
+        """返回 LUI 专用工具描述符；任一条件不满足即不暴露。
+
+        Args:
+            role: 当前用户角色。
+
+        Returns:
+            满足 readiness、policy、角色、任务类型与确认要求的工具描述符；
+            默认关闭时返回 None。
+        """
+        for provider in self._registry.list_providers():
+            policy = self._policy_service.get_policy(provider.provider_id)
+            if not policy.enabled:
+                continue
+            if role not in policy.allowed_roles:
+                continue
+            if "structured_file_task" not in policy.allowed_task_types:
+                continue
+            if "structured_file_task" not in provider.supported_task_types:
+                continue
+            readiness = provider.readiness()
+            if not readiness.available:
+                continue
+            return AgentExecLuiToolData(
+                provider_id=provider.provider_id,
+                provider_display_name=provider.display_name,
+                task_type="structured_file_task",
+                requires_confirmation=policy.requires_confirmation,
+                timeout_seconds=settings.agent_exec_timeout_seconds,
+                max_input_bytes=settings.agent_exec_max_input_bytes,
+                max_output_bytes=settings.agent_exec_max_output_bytes,
+                max_files=settings.agent_exec_max_files,
+            )
+        return None
 
     def _resolve_provider(
         self,

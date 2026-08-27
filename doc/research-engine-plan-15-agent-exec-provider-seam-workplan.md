@@ -277,23 +277,44 @@ backend/app/api/v1/endpoints/agent_exec.py
 - [x] `allowed_task_types` 不能超过 provider 声明范围，越界返回 400。
 - [x] 补充 API 测试：未登录、普通用户、管理员、provider 缺失、run 不存在、owner 越权、取消竞态和 policy 越界。
 
-### P15-F. LUI 接入：默认关闭与受控暴露
+### P15-F. LUI 接入：默认关闭与受控暴露 ✅
 
 将原“评估是否暴露”改为明确的默认关闭方案：
 
-- [ ] 默认不暴露给 `/dialogue`。
-- [ ] 仅当以下条件全部满足才暴露一个专用工具“外部 Agent 文件任务”：
+- [x] 默认不暴露给 `/dialogue`。
+- [x] 仅当以下条件全部满足才暴露一个专用工具“外部 Agent 文件任务”：
   - provider readiness 通过；
   - policy enabled；
   - 当前角色在 `allowed_roles`；
   - `structured_file_task` 已允许；
   - Plan 10 确认状态机可用。
-- [ ] LUI 调用必须展示并让用户确认：provider / connector、task_type、输入文件清单与大小、输出 Schema、超时与输出限制。
-- [ ] 模型不能自动授权；未确认、只读权限、Plan Mode 中均不可执行。
-- [ ] 不做通用任务编排画布，不做自由 Shell 或任意文件路径输入。
-- [ ] 评估报告服务是否从 Codex ReportProvider 迁移到 `agent_exec`；只有安全边界和输出契约一致时才迁移，否则保留双路径并说明理由。
-- [ ] 输出 PI / DSH 接入评估：只比较 readiness、沙箱、artifact、超时、审计和凭据边界，不引入 runtime 依赖。
-- [ ] 更新用户指南和来源矩阵，明确外部 provider 是可选能力，不宣称 PolyAgent 绑定或复制这些产品。
+- [x] LUI 调用必须展示并让用户确认：provider / connector、task_type、输入文件清单与大小、输出 Schema、超时与输出限制。
+- [x] 模型不能自动授权；未确认、只读权限、Plan Mode 中均不可执行。
+- [x] 不做通用任务编排画布，不做自由 Shell 或任意文件路径输入。
+- [x] 评估报告服务是否从 Codex ReportProvider 迁移到 `agent_exec`；只有安全边界和输出契约一致时才迁移，否则保留双路径并说明理由。
+- [x] 输出 PI / DSH 接入评估：只比较 readiness、沙箱、artifact、超时、审计和凭据边界，不引入 runtime 依赖。
+- [x] 更新用户指南和来源矩阵，明确外部 provider 是可选能力，不宣称 PolyAgent 绑定或复制这些产品。
+
+#### P15-F 评估结论（2026-08-27）
+
+**报告服务迁移决策：保留双路径。**
+
+- `report_providers/codex_exec.py` 输入是对话消息列表、输出是报告 JSON，没有显式输入文件清单与 artifact 目录，与 `agent_exec` 的显式文件输入/输出契约不一致。
+- 报告链路是核心能力，不能与默认关闭的连接器策略耦合；迁移会导致 provider 缺失时报告能力意外回退。
+- 结论：报告服务继续使用 ReportProviderRegistry；`agent_exec` 服务于显式文件任务。待 Plan 16 统一能力中心完成后再评估是否收敛安全语义。
+
+**PI / DSH 接入评估：本期不接入。**
+
+| 验收维度 | 要求 |
+| --- | --- |
+| readiness | 服务端注册 + 配置/二进制静态检查，不执行探测命令、不阻断启动 |
+| sandbox | 需证明与 Codex `--sandbox read-only` 等效的 OS 级/容器隔离；无法证明则 unavailable |
+| artifact | 显式输出目录，路径穿越、symlink、隐藏文件、可执行位、空文件、大小与数量扫描 |
+| timeout / cancel | 进程组终止、超时终态与服务端取消的稳定终态 |
+| audit | 完整生命周期事件 + assistant trace 镜像 + 策略快照 |
+| credentials | 最小环境变量/密钥引用，不继承数据库、对象存储与云厂商凭据 |
+
+未通过以上验收的 provider 不注册进 registry，不引入 Cordis、DSH TypeScript runtime 或 PI Agent 运行时依赖。
 
 ### P15-G. 前端最小连接器入口
 
@@ -399,3 +420,4 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-27：完成 P15-C，新增策略治理服务（固定校验顺序与确认状态机）、受限执行服务（allowlist、路径/symlink/大小边界、输出扫描、超时取消与稳定终态），42 项相关测试通过。
 - 2026-08-27：完成 P15-D，新增 agent_exec 双模存储与索引、统一 Audit/assistant 事件写入、策略更新审计、脱敏与 Plan 09 Trace agent_exec 步骤投影；存储/事件/Trace 测试与既有 Trace 回归通过。
 - 2026-08-27：完成 P15-E，新增管理员连接器卡片、策略更新、受控 run、run 详情/取消与质量摘要 API，覆盖 RBAC、策略越界、结构化错误与稳定终态测试。
+- 2026-08-27：完成 P15-F，LUI 默认不暴露外部 Agent 工具，新增全部条件满足才返回的 lui-tool 描述符与 API；完成报告双路径与 PI/DSH 接入评估，新增用户指南并更新来源矩阵与索引。

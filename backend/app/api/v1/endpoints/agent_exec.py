@@ -9,6 +9,7 @@ from app.infra.computation_repositories import AuditEventRepository
 from app.infra.agent_exec_repositories import AgentExecRunRepository
 from app.schemas.agent_exec import (
     AgentExecExecutionRequest,
+    AgentExecLuiToolData,
     AgentExecPolicyUpdateRequest,
     AgentExecProviderConnection,
     AgentExecProviderPolicy,
@@ -239,3 +240,15 @@ def quality_summary() -> ApiResponse[AgentExecQualitySummaryData]:
         ),
     )
     return ApiResponse(code=0, message="ok", data=summary)
+
+
+@router.get(
+    "/lui-tool",
+    response_model=ApiResponse[AgentExecLuiToolData | None],
+)
+def get_lui_tool(
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[AgentExecLuiToolData | None]:
+    """返回默认关闭的 LUI 外部 Agent 文件任务描述符。"""
+    role = str(current_user.get("role") or "admin") if current_user else "admin"
+    return ApiResponse(code=0, message="ok", data=service.lui_tool(role=role))

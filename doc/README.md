@@ -37,6 +37,7 @@
 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | 垂类算法包结构、打包、上传、测试和上线流程 |
 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | HTTP/FastAPI/MCP 远程接口模型的配置、测试、激活、调用和安全边界 |
 | [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | `/dialogue` Slash Command、会话控制、统一回放与来源说明 |
+| [agent-connector-user-guide.md](agent-connector-user-guide.md) | Agent 连接器的默认安全策略、管理员配置、LUI 暴露规则、安全边界与审计说明 |
 
 ## 产品与架构设计
 

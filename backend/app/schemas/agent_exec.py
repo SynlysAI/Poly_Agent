@@ -204,3 +204,28 @@ class AgentExecQualitySummaryData(BaseModel):
     total_input_bytes: int = 0
     total_output_bytes: int = 0
     avg_duration_ms: int | None = None
+
+
+class AgentExecLuiToolData(BaseModel):
+    """LUI 专用工具描述符，默认不暴露。"""
+
+    tool_id: str = "agent_exec:structured_file_task"
+    name: str = "外部 Agent 文件任务"
+    provider_id: str
+    provider_display_name: str
+    task_type: AgentExecTaskType
+    requires_confirmation: bool = True
+    confirmation_fields: list[str] = Field(
+        default_factory=lambda: [
+            "provider",
+            "task_type",
+            "input_files",
+            "output_schema",
+            "timeout_seconds",
+            "output_limits",
+        ]
+    )
+    timeout_seconds: int
+    max_input_bytes: int
+    max_output_bytes: int
+    max_files: int
