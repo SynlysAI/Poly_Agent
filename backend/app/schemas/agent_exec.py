@@ -167,3 +167,40 @@ class AgentExecPolicyUpdateRequest(BaseModel):
     allowed_task_types: list[str] | None = None
     allowed_roles: list[AgentExecRole] | None = None
     requires_confirmation: bool | None = None
+
+
+class AgentExecRunCreateRequest(BaseModel):
+    """管理员发起受控测试的 run 创建请求。"""
+
+    provider_id: str = Field(min_length=1)
+    task_type: AgentExecTaskType
+    prompt: str = Field(min_length=1)
+    input_files: list[AgentExecInputFileData] = Field(default_factory=list)
+    output_schema: dict[str, Any]
+    timeout_seconds: int = Field(gt=0)
+    confirmed: bool = False
+    chat_id: str = ""
+    assistant_tool_call_id: str = ""
+
+
+class AgentExecRunDetailData(BaseModel):
+    """管理员查看 run 的脱敏详情。"""
+
+    run: AgentExecRunData
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    policy_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentExecQualitySummaryData(BaseModel):
+    """连接器 run 质量摘要。"""
+
+    total_runs: int = 0
+    completed: int = 0
+    failed: int = 0
+    cancelled: int = 0
+    success_rate: float | None = None
+    unavailable_count: int = 0
+    timeout_count: int = 0
+    total_input_bytes: int = 0
+    total_output_bytes: int = 0
+    avg_duration_ms: int | None = None

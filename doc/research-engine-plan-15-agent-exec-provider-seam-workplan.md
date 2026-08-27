@@ -264,18 +264,18 @@ backend/app/api/v1/endpoints/agent_exec.py
 - [x] 事件内容脱敏：不记录 API key、完整环境变量、完整 prompt、hidden reasoning 和未授权用户数据。
 - [x] 补充存储、owner 校验、事件顺序、policy 更新审计、失败终态、取消终态、审计字段和 Trace 投影测试。
 
-### P15-E. 连接器管理 API 与最小可观测性
+### P15-E. 连接器管理 API 与最小可观测性 ✅
 
-- [ ] 新增 `backend/app/api/v1/endpoints/agent_exec.py` 并挂载到 v1 router。
-- [ ] `GET /agent-exec/providers`：返回管理员可见的连接器卡片、readiness、policy、task_type、attribution 和脱敏配置来源。
-- [ ] `PATCH /agent-exec/providers/{provider_id}/policy`：仅管理员更新 `enabled`、`allowed_task_types`、`allowed_roles`、`requires_confirmation`；不允许修改 secret、workdir 绝对路径、sandbox 参数或 provider 支持能力。
-- [ ] `POST /agent-exec/runs`：仅服务端内部调用和管理员受控测试；请求必须显式 task_type、provider_id、输入清单、输出 Schema 和超时，并受 policy 校验。
-- [ ] `GET /agent-exec/runs/{run_id}`：管理员查看脱敏 run 状态、事件、policy 判断摘要和 artifact manifest。
-- [ ] `POST /agent-exec/runs/{run_id}/cancel`：管理员取消未结束 run。
-- [ ] API 不返回 workdir 绝对路径、凭据、完整 prompt 或未脱敏环境。
-- [ ] 增加 run 成功率、unavailable、timeout、cancel、输入输出大小和耗时的质量摘要，先复用现有 metrics/quality 输出模式。
-- [ ] `allowed_task_types` 不能超过 provider 声明范围，越界返回 400。
-- [ ] 补充 API 测试：未登录、普通用户、管理员、provider 缺失、run 不存在、owner 越权、取消竞态和 policy 越界。
+- [x] 新增 `backend/app/api/v1/endpoints/agent_exec.py` 并挂载到 v1 router。
+- [x] `GET /agent-exec/providers`：返回管理员可见的连接器卡片、readiness、policy、task_type、attribution 和脱敏配置来源。
+- [x] `PATCH /agent-exec/providers/{provider_id}/policy`：仅管理员更新 `enabled`、`allowed_task_types`、`allowed_roles`、`requires_confirmation`；不允许修改 secret、workdir 绝对路径、sandbox 参数或 provider 支持能力。
+- [x] `POST /agent-exec/runs`：仅服务端内部调用和管理员受控测试；请求必须显式 task_type、provider_id、输入清单、输出 Schema 和超时，并受 policy 校验。
+- [x] `GET /agent-exec/runs/{run_id}`：管理员查看脱敏 run 状态、事件、policy 判断摘要和 artifact manifest。
+- [x] `POST /agent-exec/runs/{run_id}/cancel`：管理员取消未结束 run。
+- [x] API 不返回 workdir 绝对路径、凭据、完整 prompt 或未脱敏环境。
+- [x] 增加 run 成功率、unavailable、timeout、cancel、输入输出大小和耗时的质量摘要，先复用现有 metrics/quality 输出模式。
+- [x] `allowed_task_types` 不能超过 provider 声明范围，越界返回 400。
+- [x] 补充 API 测试：未登录、普通用户、管理员、provider 缺失、run 不存在、owner 越权、取消竞态和 policy 越界。
 
 ### P15-F. LUI 接入：默认关闭与受控暴露
 
@@ -398,3 +398,4 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-27：完成 P15-B，新增 Codex 受限 sandbox 适配器（readiness 不执行二进制）、结构化日志摘要与 mock subprocess 测试，P15-A/P15-B 共 16 项测试通过。
 - 2026-08-27：完成 P15-C，新增策略治理服务（固定校验顺序与确认状态机）、受限执行服务（allowlist、路径/symlink/大小边界、输出扫描、超时取消与稳定终态），42 项相关测试通过。
 - 2026-08-27：完成 P15-D，新增 agent_exec 双模存储与索引、统一 Audit/assistant 事件写入、策略更新审计、脱敏与 Plan 09 Trace agent_exec 步骤投影；存储/事件/Trace 测试与既有 Trace 回归通过。
+- 2026-08-27：完成 P15-E，新增管理员连接器卡片、策略更新、受控 run、run 详情/取消与质量摘要 API，覆盖 RBAC、策略越界、结构化错误与稳定终态测试。
