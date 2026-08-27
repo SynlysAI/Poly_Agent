@@ -126,6 +126,86 @@ class StageExecutionPlanTest(ComputationTestCase):
             "rejected",
         )
 
+    def test_regenerate_after_reject_preserves_history_without_retry(self) -> None:
+        """拒绝后可显式重生成计划，且保留历史、不改变失败终态。"""
+        started = self.orchestrator.start_research_run(
+            self.run.run_id,
+            actor_user_id="tester",
+            reason="启动重生成计划测试",
+        )
+        problem_stage = next(sr for sr in started.stage_runs if sr.stage_key == "PROBLEM_SPEC")
+        rejected = self.orchestrator.reject_stage(
+            self.run.run_id,
+            problem_stage.stage_run_id,
+            actor_user_id="tester",
+            reason="计划步骤粒度过粗",
+        )
+        rejected_problem = next(sr for sr in rejected.stage_runs if sr.stage_key == "PROBLEM_SPEC")
+        old_plan_id = rejected_problem.plan.plan_id
+
+        regenerated = self.orchestrator.regenerate_stage_plan(
+            self.run.run_id,
+            problem_stage.stage_run_id,
+            actor_user_id="tester",
+            reason="按最新问题定义补齐计划输入",
+        )
+        current_stage = next(
+            sr for sr in regenerated.stage_runs if sr.stage_key == "PROBLEM_SPEC"
+        )
+        history = current_stage.checkpoint_data["plan_history"]
+
+        self.assertEqual(regenerated.status, "failed")
+        self.assertEqual(current_stage.status, "failed")
+        self.assertEqual(current_stage.plan.review_status, "draft")
+        self.assertNotEqual(current_stage.plan.plan_id, old_plan_id)
+        self.assertEqual(history[0]["plan_id"], old_plan_id)
+        self.assertEqual(history[0]["review_status"], "rejected")
+        self.assertEqual(history[0]["rejected_reason"], "计划步骤粒度过粗")
+        self.assertEqual(current_stage.decisions[-1].decision, "rejected")
+
+        with self.assertRaises(HTTPException) as ctx:
+            self.orchestrator.regenerate_stage_plan(
+                self.run.run_id,
+                problem_stage.stage_run_id,
+                actor_user_id="tester",
+                reason="尝试重复重生成",
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_regenerate_stage_plan_api(self) -> None:
+        """重生成计划 API 返回新 draft 计划并保留拒绝历史。"""
+        started = self.orchestrator.start_research_run(
+            self.run.run_id,
+            actor_user_id="tester",
+            reason="启动重生成 API 测试",
+        )
+        problem_stage = next(sr for sr in started.stage_runs if sr.stage_key == "PROBLEM_SPEC")
+        self.orchestrator.reject_stage(
+            self.run.run_id,
+            problem_stage.stage_run_id,
+            actor_user_id="tester",
+            reason="原计划缺少安全约束",
+        )
+
+        response = self.client.post(
+            f"/api/v1/research-engine/research-runs/{self.run.run_id}"
+            f"/stages/{problem_stage.stage_run_id}/regenerate-plan",
+            json={
+                "stage_key": "PROBLEM_SPEC",
+                "reason": "补充安全约束后重新生成",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        current_stage = next(
+            sr for sr in data["stage_runs"] if sr["stage_key"] == "PROBLEM_SPEC"
+        )
+        self.assertEqual(data["status"], "failed")
+        self.assertEqual(current_stage["status"], "failed")
+        self.assertEqual(current_stage["plan"]["review_status"], "draft")
+        self.assertEqual(len(current_stage["checkpoint_data"]["plan_history"]), 1)
+
     def test_approve_blocks_plan_drift(self) -> None:
         """计划工具引用与实际执行漂移时禁止审批放行。"""
         started = self.orchestrator.start_research_run(

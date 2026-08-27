@@ -621,6 +621,7 @@ class ResearchEngineOrchestrator:
         stage_run: dict,
         actor_user_id: str,
         request_id: str | None = None,
+        previous_plan: dict | None = None,
     ) -> StageExecutionPlan:
         """基于阶段契约和实际上下文生成规则式执行计划。
 
@@ -629,6 +630,7 @@ class ResearchEngineOrchestrator:
             stage_run: 当前 StageRun 文档。
             actor_user_id: 操作人用户 ID。
             request_id: 请求追踪 ID。
+            previous_plan: 被替换的旧计划（可选）。
 
         Returns:
             已写入 StageRun 的执行计划。
@@ -672,7 +674,10 @@ class ResearchEngineOrchestrator:
             entity_id=stage_run["stage_run_id"],
             event_type="plan_generated",
             reason=f"阶段 '{stage_key}' 生成受限执行计划",
-            before={"has_plan": False},
+            before={
+                "has_plan": bool(previous_plan),
+                "plan_id": (previous_plan or {}).get("plan_id"),
+            },
             after={
                 "plan_id": plan.plan_id,
                 "review_status": plan.review_status,
@@ -1441,6 +1446,100 @@ class ResearchEngineOrchestrator:
         )
 
         self._save_checkpoint(research_run_id)
+        return self._doc_to_research_run(self._get_run_doc(research_run_id))
+
+    def regenerate_stage_plan(
+        self,
+        research_run_id: str,
+        stage_run_id: str,
+        *,
+        actor_user_id: str,
+        is_admin: bool = False,
+        reason: str,
+        request_id: str | None = None,
+    ) -> ResearchRun:
+        """在 Gate 拒绝后显式重生成计划，并保留拒绝历史。
+
+        该操作只生成新的 draft 计划，不改变 ResearchRun/StageRun 的 failed
+        终态，也不会自动重试工具调用；被拒绝的旧计划和决策快照写入
+        checkpoint_data.plan_history，供后续审查使用。
+
+        Args:
+            research_run_id: ResearchRun ID。
+            stage_run_id: StageRun ID。
+            actor_user_id: 操作人用户 ID。
+            is_admin: 是否为管理员。
+            reason: 重生成原因。
+            request_id: 请求追踪 ID。
+
+        Returns:
+            更新后的 ResearchRun。
+
+        Raises:
+            HTTPException: ResearchRun 不存在、StageRun 不存在或状态不允许重生成。
+        """
+        doc = self._get_run_doc(research_run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
+        stage_run = self._find_stage_run(doc, stage_run_id)
+        decisions = stage_run.get("decisions") or []
+        last_decision = decisions[-1] if decisions else {}
+        previous_plan = stage_run.get("plan") or {}
+
+        if (
+            stage_run.get("status") != "failed"
+            or last_decision.get("decision") != "rejected"
+            or previous_plan.get("review_status") != "rejected"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"StageRun '{stage_run_id}' 不允许重生成计划："
+                    "仅最近一次 Gate 决策为 rejected、且当前计划已拒绝的失败阶段可操作"
+                ),
+            )
+
+        plan_history = list(
+            stage_run.get("checkpoint_data", {}).get("plan_history") or []
+        )
+        plan_history.append({
+            **previous_plan,
+            "archived_reason": "gate_rejected",
+            "rejected_reason": last_decision.get("reason", ""),
+            "regeneration_reason": reason,
+            "plan_review": last_decision.get("plan_review") or {},
+        })
+        checkpoint_data = dict(stage_run.get("checkpoint_data") or {})
+        checkpoint_data["plan_history"] = plan_history
+        stage_run["checkpoint_data"] = checkpoint_data
+
+        new_plan = self._generate_stage_plan(
+            doc=doc,
+            stage_run=stage_run,
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+            previous_plan=previous_plan,
+        )
+
+        self._write_audit(
+            actor_user_id=actor_user_id,
+            entity_type="research_stage_run",
+            entity_id=stage_run_id,
+            event_type="plan_regenerated",
+            reason=reason,
+            before={
+                "status": stage_run.get("status"),
+                "plan_id": previous_plan.get("plan_id"),
+                "review_status": previous_plan.get("review_status"),
+            },
+            after={
+                "status": stage_run.get("status"),
+                "plan_id": new_plan.plan_id,
+                "review_status": new_plan.review_status,
+                "history_count": len(plan_history),
+            },
+            request_id=request_id,
+        )
+
         return self._doc_to_research_run(self._get_run_doc(research_run_id))
 
     # ------------------------------------------------------------------

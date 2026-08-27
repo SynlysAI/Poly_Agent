@@ -1918,6 +1918,24 @@ class StageApprovalRequest(BaseModel):
         return normalized
 
 
+class StagePlanRegenerateRequest(BaseModel):
+    """拒绝后重生成阶段执行计划的请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage_key: ResearchStageKey
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        """规范化重生成原因。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("重生成原因不能为空")
+        return normalized
+
+
 # =============================================================================
 # Traceability 追溯模型
 # =============================================================================

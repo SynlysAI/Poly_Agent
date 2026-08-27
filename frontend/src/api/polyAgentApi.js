@@ -1129,6 +1129,10 @@ export function rejectStage(runId, stageRunId, payload) {
   return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/reject`, payload).then(unwrapResponse)
 }
 
+export function regenerateStagePlan(runId, stageRunId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/regenerate-plan`, payload).then(unwrapResponse)
+}
+
 export function getResearchRunTraceability(runId) {
   return apiClient.get(`/research-engine/research-runs/${runId}/traceability`).then(unwrapResponse)
 }

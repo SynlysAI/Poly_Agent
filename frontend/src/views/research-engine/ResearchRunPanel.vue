@@ -17,6 +17,7 @@ import {
   listProblemSpecs,
   listResearchRuns,
   pauseResearchRun,
+  regenerateStagePlan,
   resumeResearchRun,
   startResearchRun,
 } from '../../api/polyAgentApi'
@@ -33,6 +34,7 @@ const selectedRunId = ref('')
 const currentRun = ref(null)
 const gateDialogVisible = ref(false)
 const gateStage = ref(null)
+const planRegeneratingStageId = ref('')
 const readiness = ref(null)
 const readinessLoading = ref(false)
 
@@ -130,6 +132,16 @@ function stageStatusTag(status) {
 function stageStatusLabel(status) {
   const map = { pending: '待执行', running: '执行中', blocked_approval: '等待审批', completed: '已完成', failed: '已失败' }
   return map[status] || status
+}
+
+function planReviewStatusLabel(status) {
+  const map = { draft: '草稿', approved: '已批准', rejected: '已拒绝', modified: '已调整' }
+  return map[status] || status
+}
+
+function planGeneratorLabel(value) {
+  const map = { rule: '规则生成', llm: '模型生成', hybrid: '混合生成' }
+  return map[value] || value
 }
 
 function readinessTag(status) {
@@ -409,6 +421,44 @@ function openGateReview(stage) {
   gateDialogVisible.value = true
 }
 
+function canRegenerateStagePlan(stage) {
+  const decisions = stage?.decisions || []
+  const lastDecision = decisions.length ? decisions[decisions.length - 1] : null
+  return Boolean(
+    stage?.status === 'failed'
+      && lastDecision?.decision === 'rejected'
+      && stage?.plan?.review_status === 'rejected',
+  )
+}
+
+async function handleRegenerateStagePlan(stage) {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '重生成会保留被拒绝的计划与决策历史，新计划仅进入草稿状态，不会自动重试执行。',
+      '重生成执行计划',
+      {
+        confirmButtonText: '生成新计划',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputValidator: (input) => Boolean(input?.trim()) || '原因不能为空',
+      },
+    )
+    planRegeneratingStageId.value = stage.stage_run_id
+    const data = await regenerateStagePlan(currentRun.value.run_id, stage.stage_run_id, {
+      stage_key: stage.stage_key,
+      reason: value.trim(),
+    })
+    currentRun.value = data
+    emit('research-run-updated', data)
+    ElMessage.success('已生成新的执行计划')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    planRegeneratingStageId.value = ''
+  }
+}
+
 function handleGateDecided(result) {
   gateDialogVisible.value = false
   if (result) {
@@ -629,9 +679,39 @@ onMounted(async () => {
                 <el-tag size="small" :type="stageStatusTag(stage.status)">{{ stageStatusLabel(stage.status) }}</el-tag>
               </div>
               <p class="stage-desc-hint">{{ stageDescriptions[stage.stage_key] || '该阶段的具体任务描述待补充' }}</p>
+              <div v-if="stage.plan" class="plan-card">
+                <div class="plan-card-header">
+                  <span class="plan-card-title">执行计划 · {{ stage.plan.plan_id }}</span>
+                  <el-tag size="small" :type="stage.plan.review_status === 'rejected' ? 'danger' : 'info'">
+                    {{ planReviewStatusLabel(stage.plan.review_status) }}
+                  </el-tag>
+                </div>
+                <span>
+                  {{ planGeneratorLabel(stage.plan.generated_by) }} · {{ stage.plan.steps?.length || 0 }} 个步骤
+                </span>
+                <details>
+                  <summary>查看计划详情</summary>
+                  <pre class="json-block">{{ JSON.stringify(stage.plan, null, 2) }}</pre>
+                </details>
+                <details v-if="stage.checkpoint_data?.plan_history?.length">
+                  <summary>历史被拒计划（{{ stage.checkpoint_data.plan_history.length }}）</summary>
+                  <pre class="json-block">{{ JSON.stringify(stage.checkpoint_data.plan_history, null, 2) }}</pre>
+                </details>
+              </div>
               <div v-if="stage.status === 'blocked_approval'" style="margin-top:4px">
                 <el-tooltip content="该阶段需要人工审批。点击「审批」按钮，选择批准或拒绝并填写原因。" placement="top">
                   <el-button type="warning" size="small" @click="openGateReview(stage)">审批</el-button>
+                </el-tooltip>
+              </div>
+              <div v-if="canRegenerateStagePlan(stage)" style="margin-top:4px">
+                <el-tooltip content="保留拒绝历史后生成新的草稿计划，本操作不会自动重试阶段。" placement="top">
+                  <el-button
+                    size="small"
+                    :loading="planRegeneratingStageId === stage.stage_run_id"
+                    @click="handleRegenerateStagePlan(stage)"
+                  >
+                    重生成计划
+                  </el-button>
                 </el-tooltip>
               </div>
               <div v-if="stage.decisions?.length" class="stage-decisions">
@@ -895,6 +975,53 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--app-ink-muted);
   line-height: 1.5;
+}
+
+.plan-card {
+  margin-top: 4px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #f8fbff;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  font-size: 12px;
+  color: var(--app-ink-muted);
+}
+
+.plan-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--app-ink-body);
+}
+
+.plan-card-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-card summary {
+  cursor: pointer;
+  color: var(--app-primary-active);
+}
+
+.plan-card .json-block {
+  margin: 6px 0 0;
+  padding: 10px;
+  background: #fff;
+  color: var(--app-ink-body);
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-sm);
+  font-family: var(--app-mono-font);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
 }
 
 .stage-decisions {
