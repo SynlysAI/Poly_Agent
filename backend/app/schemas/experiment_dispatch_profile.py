@@ -349,6 +349,60 @@ class DispatchEvaluationResult(BaseModel):
     is_valid: bool = False
 
 
+class AtomicIntent(BaseModel):
+    """从自然语言拆解出的单个原子下发意图。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent_id: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=1000)
+    target_path: str | None = Field(default=None, max_length=500)
+    value: Any = None
+    unit: str | None = Field(default=None, max_length=40)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    resolved: bool = False
+
+
+class NLDispatchProfileCandidate(BaseModel):
+    """自然语言与单个下发配置的匹配候选。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str = Field(min_length=1, max_length=100)
+    profile_version: str = Field(min_length=1, max_length=40)
+    score: float = Field(ge=0.0)
+    matched_paths: list[str] = Field(default_factory=list, max_length=500)
+
+
+class NLDispatchParseResult(BaseModel):
+    """自然语言下发参数解析结果，仅用于生成 manual_values 候选。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str | None = Field(default=None, max_length=120)
+    raw_text: str = Field(min_length=1, max_length=4000)
+    intents: list[AtomicIntent] = Field(default_factory=list, max_length=200)
+    unresolved: list[AtomicIntent] = Field(default_factory=list, max_length=200)
+    manual_values: dict[str, Any] = Field(default_factory=dict)
+    profile_id: str | None = Field(default=None, max_length=100)
+    profile_version: str | None = Field(default=None, max_length=40)
+    profile_candidates: list[NLDispatchProfileCandidate] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+
+
+class ExperimentDispatchNLParseRequest(BaseModel):
+    """自然语言下发参数解析请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=120)
+    natural_language: str = Field(min_length=1, max_length=4000)
+    profile_id: str | None = Field(default=None, max_length=100)
+    profile_version: str | None = Field(default=None, max_length=40)
+
+
 class ExperimentDispatchProfileCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -415,6 +469,8 @@ class ExperimentDispatchProfileEvaluationRequest(BaseModel):
     profile_id: str = Field(min_length=1, max_length=100)
     profile_version: str | None = Field(default=None, max_length=40)
     manual_values: dict[str, Any] = Field(default_factory=dict)
+    natural_language: str | None = Field(default=None, min_length=1, max_length=4000)
+    nl_parse: NLDispatchParseResult | None = None
 
 
 class ExperimentDispatchProfileSaveRequest(ExperimentDispatchProfileEvaluationRequest):
@@ -433,6 +489,7 @@ class ExperimentDispatchProfileEvaluation(BaseModel):
     result: DispatchEvaluationResult
     execution_access: ExecutionAccessRecord = Field(default_factory=ExecutionAccessRecord)
     preview_digest: str
+    nl_parse: NLDispatchParseResult | None = None
 
 
 class ExperimentDispatchCandidate(UtcDatetimeJsonModel):

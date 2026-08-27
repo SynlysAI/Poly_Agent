@@ -24,6 +24,7 @@ from app.infra.experiment_dispatch_profile_repositories import (
 from app.infra.experiment_dispatch_repositories import ExperimentDispatchRepository
 from app.infra.research_engine_repositories import AlgorithmRegistryRepository, AlgorithmRunRepository
 from app.schemas.experiment_dispatch_profile import (
+    ExperimentDispatchNLParseRequest,
     DispatchTargetDefinition,
     DispatchTargetListData,
     TargetSecurityPolicy,
@@ -36,6 +37,7 @@ from app.schemas.experiment_dispatch_profile import (
     ExperimentDispatchProfileListData,
     ExperimentDispatchProfileSaveRequest,
     ExperimentDispatchProfileUpdateRequest,
+    NLDispatchParseResult,
 )
 from app.schemas.execution_security import ExecutionAccessRecord, validate_execution_access
 from app.schemas.experiment_dispatch import (
@@ -48,6 +50,7 @@ from app.schemas.experiment_dispatch import (
 )
 from app.services.computation_service import ComputationService
 from app.services.experiment_dispatch_profile_engine import ExperimentDispatchProfileEngine, _MISSING
+from app.services.experiment_dispatch_nl_parser import NLDispatchParser
 from app.services.research_engine_access import ensure_research_engine_doc_access
 from app.services.speclabos_dispatch_service import SpecLabOSDispatchError, speclabos_dispatch_service
 
@@ -55,9 +58,16 @@ from app.services.speclabos_dispatch_service import SpecLabOSDispatchError, spec
 class ExperimentDispatchProfileService:
     """管理声明式下发配置；不包含任何实验领域逻辑。"""
 
-    def __init__(self, *, seed_enabled: bool = True, engine: ExperimentDispatchProfileEngine | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        seed_enabled: bool = True,
+        engine: ExperimentDispatchProfileEngine | None = None,
+        nl_parser: NLDispatchParser | None = None,
+    ) -> None:
         self.seed_enabled = seed_enabled
         self.engine = engine or ExperimentDispatchProfileEngine()
+        self.nl_parser = nl_parser or NLDispatchParser()
 
     def list(
         self,
@@ -207,6 +217,14 @@ class ExperimentDispatchProfileService:
             raise HTTPException(status_code=409, detail="只能试运行已发布配置或自己的草稿")
         if profile.source_contract.allowed_trigger_sources and run.get("trigger_source") not in profile.source_contract.allowed_trigger_sources:
             raise HTTPException(status_code=422, detail="运行来源不符合下发配置要求")
+        nl_parse = self._resolve_nl_parse(
+            request,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
+        effective_manual_values = dict(request.manual_values)
+        if nl_parse:
+            effective_manual_values = {**nl_parse.manual_values, **effective_manual_values}
         target = self._effective_target(profile)
         result = self.engine.evaluate(
             profile,
@@ -214,7 +232,7 @@ class ExperimentDispatchProfileService:
             input_snapshot=run.get("input_snapshot") or {},
             output_summary=run.get("output_summary") or {},
             run_metadata=self._run_metadata(run),
-            manual_values=request.manual_values,
+            manual_values=effective_manual_values,
         )
         profile_errors = self.validate_profile(profile, target)
         if profile_errors:
@@ -224,7 +242,9 @@ class ExperimentDispatchProfileService:
             "run": {"run_id": run.get("run_id"), "input": run.get("input_snapshot"), "output": run.get("output_summary")},
             "profile": profile.model_dump(mode="json"),
             "target": target.model_dump(mode="json"),
-            "manual_values": request.manual_values,
+            "manual_values": effective_manual_values,
+            "natural_language": request.natural_language,
+            "nl_parse": nl_parse.model_dump(mode="json") if nl_parse else None,
             "payload": result.payload,
         }
         digest = hashlib.sha256(json.dumps(digest_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -239,6 +259,18 @@ class ExperimentDispatchProfileService:
             target_version=target.version,
             actor_user_id=actor_user_id,
         )
+        if nl_parse:
+            self._audit_nl_evaluation(
+                nl_parse=nl_parse,
+                result=result,
+                run_id=request.run_id,
+                profile=profile,
+                target_id=target.target_id,
+                target_version=target.version,
+                effective_manual_values=effective_manual_values,
+                preview_digest=digest,
+                actor_user_id=actor_user_id,
+            )
         return ExperimentDispatchProfileEvaluation(
             run_id=request.run_id,
             algorithm_id=str(run.get("algorithm_id") or ""),
@@ -249,7 +281,71 @@ class ExperimentDispatchProfileService:
             result=result,
             execution_access=execution_access,
             preview_digest=digest,
+            nl_parse=nl_parse,
         )
+
+    def parse_natural_language(
+        self,
+        request: ExperimentDispatchNLParseRequest,
+        *,
+        actor_user_id: str,
+        is_admin: bool,
+    ) -> NLDispatchParseResult:
+        """解析自然语言参数并推荐兼容的下发配置。
+
+        Args:
+            request: 自然语言解析请求。
+            actor_user_id: 操作人 ID。
+            is_admin: 是否管理员。
+
+        Returns:
+            带有 manual_values 候选和候选 profile 评分的解析结果。
+        """
+        run = self._accessible_run(request.run_id, actor_user_id, is_admin)
+        if request.profile_id:
+            profiles = [
+                self.get(
+                    request.profile_id,
+                    request.profile_version,
+                    actor_user_id=actor_user_id,
+                    is_admin=is_admin,
+                )
+            ]
+        else:
+            listed = self.list(
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
+                page=1,
+                page_size=1000,
+            )
+            profiles = [
+                item for item in listed.items
+                if item.status == "published" or item.owner_id == actor_user_id
+            ]
+        compatible = [item for item in profiles if self._run_matches_profile(run, item)]
+        if not compatible:
+            raise HTTPException(status_code=422, detail="没有与当前 Run 兼容的下发配置")
+        targets = {
+            f"{item.target_id}@{item.target_version}": self._effective_target(item)
+            for item in compatible
+        }
+        try:
+            parsed = self.nl_parser.parse(request.natural_language, compatible, targets)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        parsed = parsed.model_copy(update={"run_id": request.run_id})
+        self._append_audit_event(
+            event_type="experiment_dispatch.nl_parsed",
+            entity_type="experiment_dispatch_profile",
+            entity_id=f"{parsed.profile_id}@{parsed.profile_version}",
+            related_run_id=request.run_id,
+            actor_user_id=actor_user_id,
+            metadata={
+                "raw_text": parsed.raw_text,
+                "parse_result": parsed.model_dump(mode="json"),
+            },
+        )
+        return parsed
 
     def list_candidates(
         self,
@@ -463,6 +559,130 @@ class ExperimentDispatchProfileService:
                     "created_at": utc_now(),
                 }
             )
+
+    def _resolve_nl_parse(
+        self,
+        request: ExperimentDispatchProfileEvaluationRequest,
+        *,
+        actor_user_id: str,
+        is_admin: bool,
+    ) -> NLDispatchParseResult | None:
+        """解析或校验 evaluation 请求携带的自然语言上下文。
+
+        Args:
+            request: 下发配置试运行请求。
+            run: 已通过访问校验的算法运行。
+            actor_user_id: 操作人 ID。
+            is_admin: 是否管理员。
+
+        Returns:
+            可用于追溯的解析结果；未使用自然语言时返回 None。
+        """
+        if not request.natural_language:
+            return None
+        if request.nl_parse:
+            parsed = request.nl_parse
+            if parsed.run_id and parsed.run_id != request.run_id:
+                raise HTTPException(status_code=409, detail="自然语言解析结果与当前 Run 不匹配")
+            if parsed.raw_text != request.natural_language:
+                raise HTTPException(status_code=409, detail="自然语言原文与解析结果不匹配")
+            if parsed.profile_id != request.profile_id:
+                raise HTTPException(status_code=409, detail="自然语言解析结果与下发配置不匹配")
+            if request.profile_version and parsed.profile_version != request.profile_version:
+                raise HTTPException(status_code=409, detail="自然语言解析结果与下发配置版本不匹配")
+        profile = self.get(
+            request.profile_id,
+            request.profile_version,
+            actor_user_id=actor_user_id,
+            is_admin=is_admin,
+        )
+        parsed = self.nl_parser.parse(
+            request.natural_language,
+            [profile],
+            {f"{profile.target_id}@{profile.target_version}": self._effective_target(profile)},
+        )
+        return parsed.model_copy(update={"run_id": request.run_id})
+
+    def _audit_nl_evaluation(
+        self,
+        *,
+        nl_parse: NLDispatchParseResult,
+        result,
+        run_id: str,
+        profile: ExperimentDispatchProfile,
+        target_id: str,
+        target_version: str,
+        effective_manual_values: dict[str, Any],
+        preview_digest: str,
+        actor_user_id: str,
+    ) -> None:
+        """记录自然语言解析进入安全预览后的完整审计事件。
+
+        Args:
+            nl_parse: 自然语言解析结果。
+            result: 声明式引擎评估结果。
+            run_id: 关联算法运行 ID。
+            profile: 下发配置。
+            target_id: 目标接口 ID。
+            target_version: 目标接口版本。
+            effective_manual_values: 合并用户显式输入后的 manual_values。
+            preview_digest: 安全预览摘要。
+            actor_user_id: 操作人 ID。
+        """
+        self._append_audit_event(
+            event_type="experiment_dispatch.nl_evaluated",
+            entity_type="experiment_dispatch_target",
+            entity_id=f"{target_id}@{target_version}",
+            related_run_id=run_id,
+            actor_user_id=actor_user_id,
+            metadata={
+                "profile_id": profile.profile_id,
+                "profile_version": profile.version,
+                "raw_text": nl_parse.raw_text,
+                "parse_result": nl_parse.model_dump(mode="json"),
+                "effective_manual_values": deepcopy(effective_manual_values),
+                "payload": deepcopy(result.payload),
+                "is_valid": result.is_valid,
+                "preview_digest": preview_digest,
+            },
+        )
+
+    @staticmethod
+    def _append_audit_event(
+        *,
+        event_type: str,
+        entity_type: str,
+        entity_id: str | None,
+        related_run_id: str | None,
+        actor_user_id: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        """写入实验下发统一审计事件。
+
+        Args:
+            event_type: 审计事件类型。
+            entity_type: 审计实体类型。
+            entity_id: 审计实体 ID。
+            related_run_id: 关联算法运行 ID。
+            actor_user_id: 操作人 ID。
+            metadata: 需要留痕的结构化元数据。
+        """
+        AuditEventRepository.append(
+            {
+                "event_id": f"audit_{uuid4().hex[:20]}",
+                "event_type": event_type,
+                "actor_user_id": actor_user_id,
+                "actor_role": "user",
+                "request_id": None,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "related_ids": {"run_id": related_run_id} if related_run_id else {},
+                "before": {},
+                "after": {},
+                "metadata": metadata,
+                "created_at": utc_now(),
+            }
+        )
 
     def validate_profile(self, profile: ExperimentDispatchProfile, target: DispatchTargetDefinition) -> list[str]:
         errors: list[str] = []
@@ -742,7 +962,7 @@ class ExperimentDispatchProfileService:
         if not directory.exists():
             return
         for path in sorted(directory.glob("*.json")):
-            if path.name.endswith(".security.json"):
+            if ".security" in path.suffixes:
                 continue
             try:
                 item = model_type.model_validate_json(path.read_text(encoding="utf-8"))
@@ -768,7 +988,11 @@ class ExperimentDispatchProfileService:
         """
         if not directory.exists():
             return
-        for path in sorted(directory.glob("*.security.json")):
+        security_paths = [
+            path for path in sorted(directory.glob("*.json"))
+            if ".security" in path.suffixes
+        ]
+        for path in security_paths:
             try:
                 policy = TargetSecurityPolicy.model_validate_json(path.read_text(encoding="utf-8"))
             except (OSError, ValidationError, ValueError) as exc:

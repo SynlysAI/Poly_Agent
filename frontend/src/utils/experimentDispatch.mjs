@@ -24,6 +24,43 @@ export function buildExperimentDispatchPayload(form, template) {
   }
 }
 
+/**
+ * 构建 profile 下发安全预览请求。
+ *
+ * @param {object} options 请求输入，包含 Run、profile、人工值与 NL 解析上下文。
+ * @returns {object} 可直接提交的 evaluation 请求。
+ */
+export function buildProfileEvaluationPayload(options) {
+  const profile = options.profile || {}
+  const payload = {
+    run_id: options.runId,
+    profile_id: profile.profile_id,
+    profile_version: profile.version,
+    manual_values: options.manualValues || {},
+  }
+  const naturalLanguage = String(options.naturalLanguage || '').trim()
+  if (naturalLanguage) {
+    payload.natural_language = naturalLanguage
+    if (options.nlParse) payload.nl_parse = options.nlParse
+  }
+  return payload
+}
+
+/**
+ * 构建确认 preview_digest 后的下发保存请求。
+ *
+ * @param {object} options 预览请求输入与预览摘要。
+ * @returns {object} 可直接提交的保存请求。
+ */
+export function buildProfileSavePayload(options) {
+  return {
+    ...buildProfileEvaluationPayload(options),
+    preview_digest: options.previewDigest,
+    experiment_name: String(options.experimentName || '').trim() || null,
+    experiment_notes: String(options.experimentNotes || '').trim() || null,
+  }
+}
+
 export function manifestParameterJson(manifest) {
   return JSON.stringify(manifest?.parameters || {}, null, 2)
 }

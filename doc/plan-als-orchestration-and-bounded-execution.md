@@ -2,7 +2,7 @@
 
 日期：2026-08-20
 评审日期：2026-08-27
-状态：已评审 / P1 后端核心已落地
+状态：已评审 / P2 已落地
 适用范围：ResearchEngine 编排器、产品内助手工具注入、计算适配器、实验下发与统一安全层
 
 前置与参考：
@@ -71,6 +71,28 @@
 
 - 2026-08-27：新增统一安全层与受限执行专项测试；下发引擎、下发服务、计算 MVP、计算服务、本地 Structure/xtb adapter 与 ResearchEngine adapter 相关回归 67 项通过。
 - 2026-08-27：完整后端测试运行 842 项通过、1 项跳过；21 项 DataCatalog/Report/KnowledgeBase API 失败为本机认证配置导致的 401 环境差异。显式关闭认证后复跑相关模块，73 项通过、4 项子测试通过，仅剩既有 WeKnora graph 降级语义用例失败，与 P1 改动无交集。
+
+### 0.5 P2 实施清单
+
+#### NL 驱动参数解析器
+
+- [x] 新增 `AtomicIntent` / `NLDispatchProfileCandidate` / `NLDispatchParseResult` 与解析请求契约。
+- [x] 新增 `NLDispatchParser`：支持中英文关键字段、显式 manual key、多 profile 推荐评分与常见温度/时间/体积单位归一。
+- [x] 解析层只读取声明为 `allow_override` 的映射字段，不猜测系统字段或上游算法输出；未匹配意图进入 `unresolved`，不静默填充。
+- [x] 新增 `POST /experiment-dispatch-nl-parses`，候选 profile 先经过访问权限与 Run 兼容性过滤。
+- [x] profile evaluation 接入 NL 上下文：解析值仅生成 `manual_values` 候选，用户显式输入优先；`preview_digest` 覆盖 NL 原文、解析结果、有效人工值与最终 payload。
+- [x] 解析与最终安全预览分别写入 `experiment_dispatch.nl_parsed` / `experiment_dispatch.nl_evaluated` 统一审计事件。
+- [x] NL 产出一律继续经过 contract 校验、transforms、branches 阻断与 `TargetSecurityPolicy` 校验，安全等级不降级。
+- [x] 实验方案转发台新增自然语言输入、解析回填、profile 推荐、未解析意图确认与解析结果提示；未确认前不能预览或下发。
+- [x] 修复 target 种子目录把 `.security.v1.json` 误按 target 契约加载的问题，独立安全策略可按版本命名稳定加载。
+
+#### P2 验证记录
+
+- 2026-08-27：新增 NL 解析专项测试 4 项，覆盖多 profile 推荐、单位归一、未解析意图保留、解析进入 evaluate、安全边界阻断、双审计与 preview_digest 确认保存链路。
+- 2026-08-27：下发 NL、引擎、配置服务、受限执行与 legacy dispatch 相关回归 31 项通过；前端 experiment-dispatch 工具测试与 Vite 生产构建通过。
+- 2026-08-27：来源标注 API 回归 2 项通过；实验下发公开来源牌仅保留 SpecLabOS 外部服务来源，不再展示 PolyAgent 自身卡片。
+- 2026-08-27：真实浏览器冒烟通过：PI Run 解析实验名称/备注，未匹配温度条件要求人工确认，确认后生成 SpecLabOS 只读预览，控制台无错误。
+- 2026-08-27：完整后端测试 849 项通过、1 项跳过；21 项 DataCatalog/Report/KnowledgeBase API 失败仍为本机认证配置导致的 401 环境差异。显式关闭认证后复跑相关模块，73 项通过，仅剩既有 WeKnora graph 降级语义用例失败，与 P2 改动无交集。
 
 ## 1. 背景与判断
 
@@ -491,9 +513,9 @@ class NLDispatchParseResult(BaseModel):
 - 落地 `AdapterContext.access_mode` 分级与 dispatch preview/create 对齐（4.3）。
 - 收益：安全从分散收敛为配置级统一；执行分级与现有确认机制对齐。
 
-### P2：NL 驱动参数解析器（体验升级，分阶段）
+### P2：NL 驱动参数解析器（体验升级，已落地）
 
-- 落地 `NLDispatchParser`，先支持单 profile 关键字段解析，再扩展多 profile 推荐（4.5）。
+- [x] 落地 `NLDispatchParser`，支持关键字段解析、单位归一与多 profile 推荐（4.5）。
 - 收益：从「手选 profile + 手填参数」走向「自然语言驱动」，安全不降级。
 
 ## 6. 验收标准

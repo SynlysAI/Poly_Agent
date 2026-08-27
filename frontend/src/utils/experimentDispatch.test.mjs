@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 
 import {
   autoMatchDispatchMappings,
+  buildProfileEvaluationPayload,
   buildExperimentDispatchPayload,
+  buildProfileSavePayload,
   flattenDispatchFields,
   manifestParameterJson,
   valueType,
@@ -32,6 +34,41 @@ assert.deepEqual(payload, {
   parameter_overrides: { temperature: 25 },
   variant_id: null,
 })
+
+const evaluationPayload = buildProfileEvaluationPayload({
+  runId: 'run-nl',
+  profile: { profile_id: 'pi', version: '1.0.0' },
+  manualValues: { '/temperature': 80 },
+  naturalLanguage: '反应温度 80℃；压力 5 MPa',
+  nlParse: { raw_text: '反应温度 80℃；压力 5 MPa' },
+})
+assert.deepEqual(evaluationPayload, {
+  run_id: 'run-nl',
+  profile_id: 'pi',
+  profile_version: '1.0.0',
+  manual_values: { '/temperature': 80 },
+  natural_language: '反应温度 80℃；压力 5 MPa',
+  nl_parse: { raw_text: '反应温度 80℃；压力 5 MPa' },
+})
+assert.deepEqual(
+  buildProfileSavePayload({
+    ...evaluationPayload,
+    runId: 'run-nl',
+    profile: { profile_id: 'pi', version: '1.0.0' },
+    manualValues: { '/temperature': 80 },
+    naturalLanguage: '反应温度 80℃；压力 5 MPa',
+    nlParse: { raw_text: '反应温度 80℃；压力 5 MPa' },
+    previewDigest: 'd'.repeat(64),
+    experimentName: 'PI 实验',
+    experimentNotes: '',
+  }),
+  {
+    ...evaluationPayload,
+    preview_digest: 'd'.repeat(64),
+    experiment_name: 'PI 实验',
+    experiment_notes: null,
+  },
+)
 assert.equal(manifestParameterJson({ parameters: { temperature: 25 } }), '{\n  "temperature": 25\n}')
 
 assert.equal(valueType(1.2), 'number')

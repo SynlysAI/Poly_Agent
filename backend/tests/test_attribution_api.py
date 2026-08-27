@@ -59,3 +59,12 @@ class TestAttributionApi:
         for source_name in ["PolySol", "PolyOmics", "PPPDB", "PolyID", "NanoMine"]:
             assert sources[source_name]["url"] is None
             assert sources[source_name]["logo_asset"] is None
+
+    def test_experiment_dispatch_attribution_exposes_external_source_only(self) -> None:
+        """实验下发公开来源牌只展示外部目标系统，不展示 PolyAgent 自身。"""
+        with TestClient(app) as client:
+            response = client.get("/api/v1/attributions/modules/experiment_dispatch")
+
+        assert response.status_code == 200, response.text
+        attributions = response.json()["data"]["attributions"]
+        assert [item["name"] for item in attributions] == ["SpecLabOS"]

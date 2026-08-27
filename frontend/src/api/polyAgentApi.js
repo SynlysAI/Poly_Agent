@@ -1013,6 +1013,10 @@ export function evaluateExperimentDispatchProfile(payload) {
   return apiClient.post('/experiment-dispatch-profile-evaluations', payload).then(unwrapResponse)
 }
 
+export function parseExperimentDispatchNaturalLanguage(payload) {
+  return apiClient.post('/experiment-dispatch-nl-parses', payload).then(unwrapResponse)
+}
+
 export function saveProfileExperimentDispatch(payload) {
   return apiClient.post('/experiment-dispatches', payload).then(unwrapResponse)
 }

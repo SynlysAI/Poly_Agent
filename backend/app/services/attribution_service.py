@@ -114,14 +114,6 @@ class AttributionService:
                         logo_alt="SpecLabOS",
                         visibility="prominent",
                     ),
-                    AttributionItem(
-                        name="声明式映射",
-                        role="implementation_source",
-                        organization="PolyAgent",
-                        description="以 JSON Pointer、受控转换和条件分支生成目标请求参数。",
-                        logo_alt="声明式映射",
-                        visibility="prominent",
-                    ),
                 ],
             ),
             ModuleAttribution(

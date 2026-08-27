@@ -16,15 +16,21 @@ import {
   listExperimentDispatchTargets,
   listExperimentDispatches,
   listIntegrationConfigs,
+  parseExperimentDispatchNaturalLanguage,
   saveProfileExperimentDispatch,
 } from '../api/polyAgentApi'
 import { formatApiDateTime } from '../utils/datetime'
+import {
+  buildProfileEvaluationPayload,
+  buildProfileSavePayload,
+} from '../utils/experimentDispatch'
 
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
 const candidatesLoading = ref(false)
 const previewLoading = ref(false)
+const nlLoading = ref(false)
 const saveLoading = ref(false)
 const historyLoading = ref(false)
 const profiles = ref([])
@@ -33,6 +39,8 @@ const algorithms = ref([])
 const candidates = ref([])
 const dispatches = ref([])
 const evaluation = ref(null)
+const nlParse = ref(null)
+const unresolvedConfirmed = ref(false)
 const detail = ref(null)
 const detailVisible = ref(false)
 const extraCollapse = ref([])
@@ -54,7 +62,14 @@ const filters = reactive({
   algorithm_id: '',
   keyword: '',
 })
-const form = reactive({ runId: String(route.query.run_id || ''), profileKey: '', experimentName: '', experimentNotes: '', manualValues: {} })
+const form = reactive({
+  runId: String(route.query.run_id || ''),
+  profileKey: '',
+  experimentName: '',
+  experimentNotes: '',
+  manualValues: {},
+  naturalLanguage: '',
+})
 
 const selectedProfile = computed(() => profiles.value.find((item) => `${item.profile_id}@${item.version}` === form.profileKey) || null)
 const selectedTarget = computed(() => selectedProfile.value ? targets.value.find((item) => item.target_id === selectedProfile.value.target_id && item.version === selectedProfile.value.target_version) : null)
@@ -74,6 +89,8 @@ const historyItems = computed(() => {
   return dispatches.value.filter((item) => [item.dispatch_id, item.run_id, item.experiment_name, item.profile_id, item.template_id].some((value) => String(value || '').toLowerCase().includes(keyword)))
 })
 const outputPayload = computed(() => evaluation.value?.result?.payload || {})
+const unresolvedIntents = computed(() => nlParse.value?.unresolved || [])
+const hasUnresolvedIntents = computed(() => unresolvedIntents.value.length > 0)
 const outputRows = computed(() => Object.entries(outputPayload.value).map(([key, value]) => ({ key, value })))
 const outputPreviewRows = computed(() => outputRows.value.slice(0, 5))
 const savedManifest = computed(() => evaluation.value?.saved_manifest || null)
@@ -94,8 +111,9 @@ function syncRoute() {
 
 function invalidatePreview() { evaluation.value = null }
 watch(() => form.runId, () => { invalidatePreview(); syncRoute() })
-watch(() => form.profileKey, () => { invalidatePreview(); form.manualValues = {} })
+watch(() => form.profileKey, () => { invalidatePreview(); form.manualValues = {}; nlParse.value = null; unresolvedConfirmed.value = false })
 watch(form.manualValues, invalidatePreview, { deep: true })
+watch(() => form.naturalLanguage, () => { invalidatePreview(); nlParse.value = null; unresolvedConfirmed.value = false })
 watch(() => [filters.algorithm_family, filters.algorithm_id, filters.keyword, form.profileKey], loadCandidates)
 watch(historyKeyword, loadHistory)
 
@@ -143,11 +161,85 @@ async function loadHistory() {
   } catch (error) { ElMessage.error(getApiErrorMessage(error)) } finally { historyLoading.value = false }
 }
 
+/**
+ * 构建当前界面的安全预览请求参数。
+ *
+ * @returns {object} profile evaluation API 请求体。
+ */
+function currentEvaluationOptions() {
+  return {
+    runId: form.runId,
+    profile: selectedProfile.value,
+    manualValues: form.manualValues,
+    naturalLanguage: form.naturalLanguage,
+    nlParse: nlParse.value,
+  }
+}
+
+/**
+ * 校验自然语言输入必须先完成解析和未解析意图确认。
+ *
+ * @returns {boolean} 是否允许继续预览或下发。
+ */
+function validateNaturalLanguageReady() {
+  if (form.naturalLanguage.trim() && !nlParse.value) {
+    ElMessage.warning('请先解析自然语言实验条件')
+    return false
+  }
+  if (hasUnresolvedIntents.value && !unresolvedConfirmed.value) {
+    ElMessage.warning('请先确认未解析的实验条件不会参与本次下发')
+    return false
+  }
+  return true
+}
+
+/**
+ * 调用自然语言解析服务并回填推荐配置与人工参数。
+ */
+async function parseNaturalLanguage() {
+  if (!form.runId) return ElMessage.warning('请先选择已完成 Run')
+  nlLoading.value = true
+  try {
+    const payload = {
+      run_id: form.runId,
+      natural_language: form.naturalLanguage.trim(),
+    }
+    if (selectedProfile.value) {
+      payload.profile_id = selectedProfile.value.profile_id
+      payload.profile_version = selectedProfile.value.version
+    }
+    const parsed = await parseExperimentDispatchNaturalLanguage(payload)
+    const profileKey = `${parsed.profile_id}@${parsed.profile_version}`
+    if (form.profileKey !== profileKey) form.profileKey = profileKey
+    form.manualValues = { ...(parsed.manual_values || {}) }
+    nlParse.value = parsed
+    unresolvedConfirmed.value = !parsed.unresolved?.length
+    if (!extraCollapse.value.includes('extra')) extraCollapse.value = [...extraCollapse.value, 'extra']
+    if (parsed.unresolved?.length) ElMessage.warning('存在未解析条件，请人工确认后再预览')
+    else ElMessage.success('自然语言条件已解析，可继续预览')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error))
+  } finally {
+    nlLoading.value = false
+  }
+}
+
+/**
+ * 记录用户对未解析自然语言意图的人工确认。
+ */
+function confirmUnresolvedIntents() {
+  unresolvedConfirmed.value = true
+  ElMessage.success('已确认未解析条件不会参与本次下发')
+}
+
 async function generatePreview() {
   if (!form.runId || !selectedProfile.value) return ElMessage.warning('请先选择已完成 Run 和下发配置')
+  if (!validateNaturalLanguageReady()) return
   previewLoading.value = true
   try {
-    evaluation.value = await evaluateExperimentDispatchProfile({ run_id: form.runId, profile_id: selectedProfile.value.profile_id, profile_version: selectedProfile.value.version, manual_values: form.manualValues })
+    const evaluationData = await evaluateExperimentDispatchProfile(buildProfileEvaluationPayload(currentEvaluationOptions()))
+    nlParse.value = evaluationData.nl_parse || nlParse.value
+    evaluation.value = evaluationData
     if (evaluation.value.result?.is_valid) ElMessage.success('预览已生成，可点击“一键解析并下发”')
     else ElMessage.warning('预览生成，但存在阻断校验问题')
   } catch (error) { ElMessage.error(getApiErrorMessage(error)) } finally { previewLoading.value = false }
@@ -155,15 +247,23 @@ async function generatePreview() {
 
 async function runDispatch() {
   if (!form.runId || !selectedProfile.value) return ElMessage.warning('请先选择已完成 Run 和下发配置')
+  if (!validateNaturalLanguageReady()) return
   saveLoading.value = true
   try {
-    const evaluationData = await evaluateExperimentDispatchProfile({ run_id: form.runId, profile_id: selectedProfile.value.profile_id, profile_version: selectedProfile.value.version, manual_values: form.manualValues })
+    const evaluationData = await evaluateExperimentDispatchProfile(buildProfileEvaluationPayload(currentEvaluationOptions()))
     evaluation.value = evaluationData
+    nlParse.value = evaluationData.nl_parse || nlParse.value
     if (!evaluationData.result?.is_valid) {
       ElMessage.warning('解析完成，但存在阻断校验问题，未保存')
       return
     }
-    const saved = await saveProfileExperimentDispatch({ run_id: form.runId, profile_id: selectedProfile.value.profile_id, profile_version: selectedProfile.value.version, manual_values: form.manualValues, preview_digest: evaluationData.preview_digest, experiment_name: form.experimentName || null, experiment_notes: form.experimentNotes || null })
+    const saved = await saveProfileExperimentDispatch(buildProfileSavePayload({
+      ...currentEvaluationOptions(),
+      nlParse: evaluationData.nl_parse || nlParse.value,
+      previewDigest: evaluationData.preview_digest,
+      experimentName: form.experimentName,
+      experimentNotes: form.experimentNotes,
+    }))
     await loadHistory()
     evaluation.value = { ...evaluationData, saved_manifest: saved }
     ElMessage.success(`已解析并下发，SpecLabOS 已接收：${saved.external_receipt?.dispatch_id || saved.dispatch_id}`)
@@ -282,6 +382,33 @@ onMounted(loadReference)
           <div class="panel-body">
             <el-select v-model="form.profileKey" filterable class="profile-select tour-step-profile" placeholder="选择兼容配置"><el-option v-for="item in profiles" :key="`${item.profile_id}@${item.version}`" :label="`${item.name} · v${item.version}`" :value="`${item.profile_id}@${item.version}`"><div class="profile-option"><strong>{{ item.name }}</strong><span>v{{ item.version }} · {{ item.status === 'published' ? '已发布' : '草稿' }}</span></div></el-option></el-select>
             <div v-if="selectedProfile" class="profile-summary"><div><strong>{{ selectedProfile.name }}</strong><p>{{ selectedProfile.description || '暂无说明' }}</p></div><div class="summary-tags"><el-tag size="small">v{{ selectedProfile.version }}</el-tag><el-tag size="small" :type="selectedProfile.visibility === 'public' ? 'success' : 'info'">{{ selectedProfile.visibility === 'public' ? '公开' : '私有' }}</el-tag><el-tag size="small" effect="plain">{{ selectedTarget?.name || selectedProfile.target_id }}</el-tag></div><p v-if="selectedProfile.notes" class="profile-notes">{{ selectedProfile.notes }}</p></div>
+            <div class="natural-language-block">
+              <div class="natural-language-header">
+                <div><strong>自然语言实验条件</strong><span>解析结果仅作为人工参数候选，仍需通过配置与安全校验</span></div>
+                <el-button size="small" type="primary" plain :loading="nlLoading" :disabled="!form.runId || !form.naturalLanguage.trim()" @click="parseNaturalLanguage">解析条件</el-button>
+              </div>
+              <el-input
+                v-model="form.naturalLanguage"
+                type="textarea"
+                :rows="3"
+                maxlength="4000"
+                show-word-limit
+                placeholder="例如：实验名称为 PI 高温验证；反应温度 80℃；备注：氮气保护"
+              />
+              <el-alert v-if="nlParse && !hasUnresolvedIntents" class="nl-result-alert" type="success" :closable="false" show-icon>
+                <template #title>已解析 {{ nlParse.intents?.length || 0 }} 个条件，并推荐 {{ nlParse.profile_id }}@{{ nlParse.profile_version }}</template>
+              </el-alert>
+              <el-alert v-else-if="hasUnresolvedIntents" class="nl-result-alert" type="warning" :closable="false" show-icon>
+                <template #title>以下 {{ unresolvedIntents.length }} 个条件未匹配到可覆盖字段</template>
+                <template #default>
+                  <ul class="unresolved-list">
+                    <li v-for="intent in unresolvedIntents" :key="intent.intent_id">{{ intent.description }}</li>
+                  </ul>
+                  <el-button v-if="!unresolvedConfirmed" size="small" type="warning" plain @click="confirmUnresolvedIntents">确认不参与本次下发</el-button>
+                  <p v-else class="unresolved-confirmed">已人工确认</p>
+                </template>
+              </el-alert>
+            </div>
             <el-collapse v-model="extraCollapse" class="extra-collapse">
               <el-collapse-item name="extra">
                 <template #title><span class="extra-title">附加信息（可选）</span><span class="extra-caption">实验名称 / 单次备注 / 人工补充</span></template>
@@ -405,6 +532,14 @@ onMounted(loadReference)
 .selection-summary,.profile-summary { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 12px; border:1px solid var(--app-border-soft); border-radius:var(--app-radius-sm); background:#f8fbff; color:var(--app-ink-body); }.selection-summary strong,.profile-summary strong { color:var(--app-ink); }.selection-summary code { margin-left:auto; }.run-option,.profile-option { display:flex; flex-direction:column; gap:2px; }.run-option span,.profile-option span { color:var(--app-ink-muted); font-size:12px; }
 .profile-select { width:100%; }.profile-summary { margin-top:12px; justify-content:space-between; }.profile-summary p { margin:5px 0 0; color:var(--app-ink-muted); font-size:12px; }.profile-notes { width:100%; padding-top:8px; border-top:1px solid var(--app-border-soft); }
 .summary-tags { display:flex; gap:6px; flex-wrap:wrap; }.form-grid,.manual-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.full-width { width:100%; }
+.natural-language-block { display:flex; flex-direction:column; gap:10px; margin-top:14px; padding:12px; border:1px solid var(--app-border-soft); border-radius:var(--app-radius-sm); background:#f8fbff; }
+.natural-language-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.natural-language-header div { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.natural-language-header strong { color:var(--app-ink); font-size:13px; }
+.natural-language-header span { color:var(--app-ink-muted); font-size:12px; line-height:1.5; }
+.nl-result-alert { margin-top:2px; }
+.unresolved-list { margin:6px 0 10px; padding-left:18px; color:var(--app-ink-body); font-size:12px; line-height:1.7; }
+.unresolved-confirmed { margin:8px 0 0; color:var(--app-ink-muted); font-size:12px; }
 
 /* ---- 第三步：操作与预览 ---- */
 .action-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -459,5 +594,5 @@ onMounted(loadReference)
 /* ---- 响应式 ---- */
 @media (max-width:1200px) { .cascade-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:900px) { .main-layout { grid-template-columns:1fr; }.main-layout.sidebar-docked { grid-template-columns:1fr; }.saved-sidebar { position:fixed; z-index:20; inset:72px 0 0 auto; width:min(360px,92vw); box-shadow:-8px 0 24px rgba(25,45,75,.16); }.saved-sidebar.docked { width:32px; box-shadow:none; }.preview-grid { grid-template-columns:1fr; } }
-@media (max-width:640px) { .page-heading,.action-row { align-items:stretch; flex-direction:column; }.heading-actions .el-button { flex:1; }.cascade-grid,.form-grid,.manual-grid { grid-template-columns:1fr; }.selection-summary code { margin-left:0; }.guide-bar { flex-wrap:wrap; row-gap:10px; }.guide-actions { width:100%; }.guide-actions .el-button { flex:1; }.guide-steps { grid-template-columns:1fr; }.action-buttons { width:100%; flex-direction:column; }.action-buttons .el-button { width:100%; margin-left:0; } }
+@media (max-width:640px) { .page-heading,.action-row { align-items:stretch; flex-direction:column; }.heading-actions .el-button { flex:1; }.cascade-grid,.form-grid,.manual-grid { grid-template-columns:1fr; }.selection-summary code { margin-left:0; }.natural-language-header { align-items:stretch; flex-direction:column; }.natural-language-header .el-button { width:100%; }.guide-bar { flex-wrap:wrap; row-gap:10px; }.guide-actions { width:100%; }.guide-actions .el-button { flex:1; }.guide-steps { grid-template-columns:1fr; }.action-buttons { width:100%; flex-direction:column; }.action-buttons .el-button { width:100%; margin-left:0; } }
 </style>
