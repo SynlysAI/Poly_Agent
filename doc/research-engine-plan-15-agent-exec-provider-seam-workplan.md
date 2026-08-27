@@ -1,8 +1,8 @@
 # Plan 15：受控外部 Agent 执行 Provider Seam 与 Agent 连接器治理工作计划
 
-> 状态：已完成（P15-A–P15-G 已落地并通过专项与回归测试）
+> 状态：MVP 已完成（P15-A–P15-G 已落地并通过专项与回归测试）；2026-08-28 复核新增 P15-H 生产化收口（未开始）
 >
-> 日期：2026-08-19（初稿）；2026-08-27（修订：新增 Agent 连接器治理，统一能力入口拆分至 Plan 16）
+> 日期：2026-08-19（初稿）；2026-08-27（修订：新增 Agent 连接器治理，统一能力入口拆分至 Plan 16）；2026-08-28（复核：补齐配置 / API / 数据生命周期契约，新增 P15-H）
 >
 > 前置文档：
 > - [research-engine-plan-09-lui-execution-trace.md](research-engine-plan-09-lui-execution-trace.md)
@@ -13,6 +13,8 @@
 > 拆分说明：本计划承接 Plan 12 的 `agent_exec` 外部执行 provider seam；Plan 12 只保留“材料研发领域工作台、通用 harness 可替换但不绑定”的产品定位。
 >
 > 修订说明（2026-08-27）：参考 Manus 的连接器交互模式，把 Codex 这类受控外部 Agent 在产品语义上呈现为“Agent 连接器”，补齐连接器卡片、调用策略、角色限制、确认执行、readiness、run 管理和审计；明确“参考 Manus 的连接器交互模式，但不复制其市场、浏览器连接器或插件生态”。全局“连接器 + Skill + Agent + 权限管理”大入口的范围超过本计划外部执行安全内核，拆分至 [Plan 16：统一能力中心与权限治理](research-engine-plan-16-capability-center-and-permission-governance-workplan.md)。
+>
+> 复核说明（2026-08-28）：对照后端实现、专项测试、前端纯函数测试、用户指南与来源矩阵复核本计划。P15-A–P15-G 的安全内核、默认关闭行为和回归结论保持有效；同时确认存在 workdir 数据保留、重启恢复、并发配额、取消终态竞态、审计失败降级、Mongo 索引接线、CLI 版本记录等生产化缺口，统一纳入 P15-H 跟踪，不回滚已验收内容。
 
 ## 1. 摘要
 
@@ -115,7 +117,7 @@ class AgentExecProvider(Protocol):
 
 ### 5.3 安全不变量
 
-- 默认关闭：未配置 `AGENT_EXEC_ENABLED=true` 时 registry 为空且 API 返回 unavailable。
+- 默认关闭：未配置 `AGENT_EXEC_ENABLED=true` 时 provider 持续返回 unavailable，LUI 不暴露工具，管理 API 只展示不可用状态与原因。
 - 独立 workdir：每次 run 使用 `AGENT_EXEC_WORKDIR_ROOT/{run_id}`，不复用报告临时目录。
 - 输入 allowlist：只复制调用方显式声明的文件；解析 symlink 后仍必须在受管目录内。
 - 输出边界：provider 输出、artifact 和日志必须留在 run workdir，路径穿越直接失败。
@@ -149,6 +151,27 @@ class AgentExecProvider(Protocol):
   - `agent_exec.policy.updated`
   - `agent_exec.policy.rejected`
   - 保留原 `agent_exec.*` 生命周期事件。
+
+### 5.5 配置基线（MVP）
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `AGENT_EXEC_ENABLED` | `false` | 全局开关；关闭时 provider readiness 返回 unavailable，LUI 不暴露工具，管理 API 只展示不可用状态与原因 |
+| `AGENT_EXEC_WORKDIR_ROOT` | runtime 下 `agent_exec` | run 专属 workdir 根目录；run 目录以服务端 `run_id` 命名并使用 `0700` 权限 |
+| `AGENT_EXEC_TIMEOUT_SECONDS` | `600` | 单 run 全局超时上限；实际生效值取请求超时与全局上限的较小值 |
+| `AGENT_EXEC_MAX_INPUT_BYTES` | `10 MiB` | 同时约束单文件与总输入大小 |
+| `AGENT_EXEC_MAX_OUTPUT_BYTES` | `10 MiB` | 约束输出总大小 |
+| `AGENT_EXEC_MAX_FILES` | `20` | 同时约束输入文件数与输出 artifact 数 |
+| `AGENT_EXEC_CODEX_BIN` | `codex` | Codex CLI 二进制名称或路径，仅做静态存在性与可执行位检查 |
+| `AGENT_EXEC_CODEX_SANDBOX_MODE` | `read-only` | MVP 仅允许 `read-only`，其他模式 readiness 直接 unavailable |
+| `AGENT_EXEC_CODEX_API_KEY` | 空 | 只允许环境变量 / 密钥引用；缺省可回退读取既有 `CODEX_API_KEY`，不得进入前端或审计 |
+| `AGENT_EXEC_CODEX_MODEL` | 空 | 可选模型配置；与 API key 共同构成凭证判断 |
+
+配置约束：
+
+- secret 只允许通过环境变量或密钥引用注入；连接器卡片与 run 详情只展示脱敏 `config_source` 摘要。
+- 数值与路径配置目前依赖 Python 类型转换，缺少统一范围校验；非法值可能在配置加载阶段抛错。配置健壮化纳入 P15-H。
+- 生产环境必须启用统一认证；本地免认证 demo 模式下，后端按 `system / admin` 语义处理操作者，不能作为多用户生产配置。
 
 ## 6. 目标架构
 
@@ -196,6 +219,38 @@ backend/app/api/v1/endpoints/agent_exec.py
 | `agent_exec.cancelled` | 用户或系统取消 |
 
 事件 payload 不记录完整 prompt、hidden reasoning、凭据和未脱敏环境变量。
+
+### 6.2 API 与错误契约（MVP）
+
+| API | 权限 | 语义 |
+| --- | --- | --- |
+| `GET /agent-exec/providers` | admin | 返回连接器卡片、readiness、policy、支持任务类型、sandbox 摘要、脱敏配置来源与 attribution |
+| `PATCH /agent-exec/providers/{provider_id}/policy` | admin | 仅更新 `enabled`、`allowed_task_types`、`allowed_roles`、`requires_confirmation`，并写策略变更审计 |
+| `POST /agent-exec/runs` | admin | 发起受控测试 run；请求必须显式 provider、task_type、prompt、输入清单、输出 Schema 与超时 |
+| `GET /agent-exec/runs/{run_id}` | admin | 返回脱敏 run 权威状态、生命周期事件、policy 摘要和 artifact manifest |
+| `POST /agent-exec/runs/{run_id}/cancel` | admin | 取消未结束 run；已终态 run 原样返回 |
+| `GET /agent-exec/quality` | admin | 返回成功率、失败 / 取消 / unavailable / timeout 计数、输入输出字节数与平均耗时摘要 |
+| `GET /agent-exec/lui-tool` | 登录用户 | 全部暴露条件满足时返回 LUI 工具描述符，否则返回 `null` |
+
+稳定错误码按校验阶段分组：
+
+| 阶段 | reason_code | 语义 / HTTP |
+| --- | --- | --- |
+| provider 解析 | `provider_not_registered` | provider 未注册，400 / 404 |
+| 策略 | `role_not_allowed`、`provider_disabled`、`plan_mode_blocked`、`read_only_blocked`、`confirmation_required` | 403 |
+| 策略 | `task_type_not_supported`、`task_type_not_allowed`、`task_types_empty`、`roles_empty` | 400 |
+| readiness | `agent_exec_disabled`、`sandbox_mode_unsupported`、`codex_binary_missing`、`codex_binary_not_executable`、`credentials_missing` | 聚合为 `provider_unavailable`，503 |
+| 输入 | `too_many_input_files`、`input_name_invalid`、`input_name_duplicate`、`input_source_not_found`、`input_symlink_rejected`、`input_hardlink_rejected`、`input_not_a_file`、`input_outside_managed_root`、`input_empty`、`input_too_large`、`input_total_too_large`、`input_hash_mismatch` | 400 |
+| 输出 | `output_path_invalid`、`output_symlink_rejected`、`output_hidden_rejected`、`output_escape_rejected`、`output_executable_rejected`、`output_empty_rejected`、`output_too_many_files`、`output_too_large` | run failed |
+| provider 执行 | `codex_spawn_failed`、`codex_nonzero_exit`、`output_missing`、`schema_mismatch`、`timeout`、`cancelled` | run failed / cancelled |
+| run 查询 | `run_not_found` | 404 |
+
+### 6.3 存储与数据生命周期（MVP 边界）
+
+- 权威状态：`agent_exec_runs`；输出清单：`agent_exec_artifacts`；策略：`agent_exec_provider_policies`；跨模块审计：`audit_events`；带 `chat_id` 时镜像到 `assistant_events`。
+- workdir 布局：`result.json`、`output.schema.json` 与显式 `artifacts/` 目录；run 目录 `0700`，执行结束后移除产物可执行位，违规输出删除整个 `artifacts/` 目录。
+- 当前保留策略：run 终态后 workdir 不自动删除，输入、prompt 派生文件和输出会留在磁盘，需运维按安全策略手动清理；自动保留窗口、清理审计与磁盘加密要求纳入 P15-H。
+- 复核备注：仓储层已定义 Mongo `ensure_indexes`，但尚未接入 `BaseRepository._ensure_indexes_once` 首访钩子或启动初始化；生产 Mongo 索引实际创建与唯一约束验证纳入 P15-H。
 
 ## 7. 分阶段任务
 
@@ -255,7 +310,7 @@ backend/app/api/v1/endpoints/agent_exec.py
 ### P15-D. 存储、Audit 与 Trace 接入 ✅
 
 - [x] 新增 `backend/app/infra/agent_exec_repositories.py`，提供 Mongo / SQLite 双模 run、artifact、policy 和事件查询。
-- [x] 为 SQLite 初始化 `agent_exec_runs`、`agent_exec_artifacts`、`agent_exec_provider_policies` 及索引；Mongo 建立 run_id、provider_id、status、chat_id、created_by 和 created_at 索引。
+- [x] 为 SQLite 初始化 `agent_exec_runs`、`agent_exec_artifacts`、`agent_exec_provider_policies` 及索引；Mongo 建立 run_id、provider_id、status、chat_id、created_by 和 created_at 索引。（复核备注：仓储已定义 Mongo `ensure_indexes`，但未接入首访 / 启动钩子，实际索引创建待 P15-H 验证。）
 - [x] `agent_exec_provider_policies` 默认行为：无记录即视为 `enabled=false`、`allowed_roles=["admin"]`、`allowed_task_types=["structured_file_task"]`、`requires_confirmation=true`。
 - [x] 每次执行写入第 6.1 节事件，并调用 `AuditEventRepository.append` 记录跨模块审计。
 - [x] policy 更新写 `agent_exec.policy.updated`，记录 `updated_by`、变更前后摘要（不含 secret）。
@@ -325,7 +380,26 @@ backend/app/api/v1/endpoints/agent_exec.py
 - [x] 管理员可发起受控测试，表单仍走 `POST /agent-exec/runs`，不得绕过服务端 policy。
 - [x] 普通用户只能看到不可用原因或完全隐藏，不能看到 secret、workdir、完整 prompt 或环境变量。
 - [x] 前端不缓存 policy 本地副本作为执行依据，所有执行判定以后端为准。
-- [x] 补充前端测试：管理员可见卡片与 AttributionBanner、普通用户不可修改 policy、状态展示与后端一致。
+- [x] 补充前端测试：管理员可见卡片与 AttributionBanner、普通用户不可修改 policy、状态展示与后端一致。（复核备注：现有测试为 `agentConnectors` 纯函数测试；`ToolServicesView` 组件渲染与 E2E 待 P15-H。）
+
+### P15-H. 生产化收口：保留策略、恢复、并发与审计可靠性 ⏳
+
+2026-08-28 复核新增，未开始。本阶段不改变“默认关闭、admin-only、强制确认”的安全默认值，只补齐 MVP 之外的生产运行边界。
+
+边界说明：P15-H 不阻塞 Plan 16 的只读能力聚合；Plan 16 若要在生产开放受控调用，应至少等待本阶段的回滚 runbook、单实例约束和终态竞态加固完成。
+
+- [ ] 数据保留与清理：为 run workdir 增加保留窗口 / 数量上限配置，启动与周期任务清理终态 run 目录；清理动作写审计；明确磁盘加密、备份与敏感输入输出销毁要求，并补清理测试。
+- [ ] 重启恢复：服务启动时把持久化非终态 run 标记为 failed / `restart_recovered`（或引入 orphan 状态），补齐事件与回放测试；在部署文档明确当前单实例约束。
+- [ ] 多实例部署：active run 与取消状态支持跨进程（存储条件更新或分布式锁），或显式限制单 worker；补多实例行为说明与测试。
+- [ ] 并发与资源配额：新增最大并发 run、排队或 429 语义、每用户限流；评估 CPU / 内存 / IO 或容器级隔离，补并发压力边界测试。
+- [ ] 终态竞态加固：终态写入改为条件更新 / CAS，补充“取消后 provider 成功返回”竞态测试，确保 `cancelled` 不被 `completed` 覆盖。
+- [ ] 审计可靠性：`requested` / `started` 事件写入失败时 run 标记 `audit_error` 并告警；审计事件记录真实 `actor_role`；补事件写入失败与恢复测试。
+- [ ] Mongo 索引接线：把 `ensure_indexes` 接入仓储首访钩子或启动初始化，增加部署期索引验证；SQLite 与 Mongo 行为一致性测试。
+- [ ] readiness 版本与出口验证：记录二进制路径 / 摘要与预期版本配置，提供管理员显式探测入口（与无副作用 readiness 分离）；验证所用 Codex 版本在 `read-only` sandbox 下的文件与网络出口行为并固化版本要求。
+- [ ] 配置健壮性：数值、路径、布尔配置增加类型与范围校验；非法配置返回结构化诊断，且不破坏“默认关闭可启动”的承诺。
+- [ ] 输入 TOCTOU 加固：校验后基于已打开文件描述符复制（如 `O_NOFOLLOW`），复制后复核 inode、大小与哈希，压缩来源被替换的窗口。
+- [ ] 可观测性：新增 `GET /agent-exec/runs` 分页与 provider / status / 时间过滤；质量摘要支持时间窗与 provider 维度，消除固定 1000 条采样的统计偏差；为失败率、超时和 `audit_error` 增加告警。
+- [ ] 测试与文档收口：补 `ToolServicesView` 组件测试与 E2E、显式开关的真实 Codex CLI 集成测试；同步用户指南与运维 runbook（取消竞态边界、保留策略、上线检查清单）。
 
 ## 8. 测试计划
 
@@ -370,7 +444,7 @@ conda run -n poly_agent python -m pytest \
 ### 8.3 前端与 E2E
 
 - P15-A–P15-F 不修改前端时仅需 `cd frontend && npm run build`。
-- P15-G 新增连接器区域后，补充 `ToolServicesView` 相关前端测试。
+- P15-G 新增连接器区域后，已补充 `agentConnectors` 纯函数测试；`ToolServicesView` 组件渲染与 E2E 待 P15-H。
 - E2E 覆盖：provider unavailable 不影响 `/dialogue`；管理员可见 Codex 卡片与 AttributionBanner；普通用户不能修改 policy；授权、确认、执行、失败、取消和 Trace 回放；LUI 默认不可见，满足全部条件后仍须显式确认才执行。
 
 ## 9. 兼容与迁移策略
@@ -384,21 +458,35 @@ conda run -n poly_agent python -m pytest \
 - 事件类型进入 Plan 09/10 Trace 白名单时保持向后兼容；历史无 `agent_exec.*` 事件的回放结果不变。
 - Plan 16 只读消费 `GET /agent-exec/providers`，不依赖 Plan 15 前端实现，可在 provider policy API 稳定后独立启动。
 
+### 9.1 运维与回滚 runbook（MVP）
+
+- 回滚方式：将 `AGENT_EXEC_ENABLED` 设为 `false`，并把目标 provider policy `enabled` 设为 `false`；无需数据迁移，既有 run、artifact manifest 与审计保留用于追溯。
+- 上线前置检查：生产启用统一认证；为 `AGENT_EXEC_WORKDIR_ROOT` 规划独立磁盘、权限、加密与备份策略；确认 Codex CLI 二进制来源与版本；先用最小输入发起一次受控测试 run，再放开策略。
+- 运行监控：关注 `/agent-exec/quality` 中失败率、timeout、unavailable 计数与平均耗时；发现异常时先禁用 policy，再排查 readiness 与审计事件。
+- 当前运维边界：终态 run workdir 不会自动清理；服务重启后非终态 run 不会自动恢复；取消语义依赖当前进程内存状态。以上限制的收口见 P15-H。
+
 ## 10. 风险与规避
 
 | 风险 | 影响 | 规避 |
 | --- | --- | --- |
-| Codex CLI sandbox 参数变化 | 适配器误以为受控但实际可越界 | readiness 显式探测并版本记录；不支持时 unavailable，一票否决 |
+| Codex CLI sandbox 参数或网络出口行为变化 | 适配器误以为受控但实际可越界或外发数据 | MVP 仅允许 `read-only` 模式并做静态校验，不支持时 unavailable；版本记录、显式探测与出口验证纳入 P15-H |
 | 文件 allowlist 来源过大 | 外部 provider 获得过多项目数据 | 只允许服务端受管 artifact / 临时上传，并做大小、数量和来源校验 |
 | 输出隐藏路径或 symlink | artifact 逃逸 workdir | realpath + allowlist + 归档扫描；发现即 failed 并清理 |
 | 与报告 provider 双路径混淆 | 同一外部能力出现两套安全语义 | P15-F 明确保留或迁移决策，并写入来源矩阵 |
-| 事件写入失败但进程已执行 | 审计缺失 | requested/started 事件先落库；后续事件失败时 run 标记 audit_error 并告警 |
+| 事件写入失败但进程已执行 | 审计缺失或 run 状态中断 | MVP 依赖统一 Audit 仓储的既有兜底；`audit_error` 标记、告警与事件写入失败测试纳入 P15-H |
 | 未来 PI / DSH 接入过快 | 引入不受控 runtime | 只做接口评估；未通过 sandbox/readiness/audit 验收不注册 provider |
 | 策略误配导致越权执行 | 普通用户触发未授权外部执行 | 默认 admin-only + 强制确认 + 固定校验顺序；policy 变更写审计；前端不作为执行依据 |
 | 前端泄漏敏感配置 | secret / workdir / 完整 prompt 暴露 | API 只返回脱敏摘要；普通用户隐藏或仅看不可用原因；前端不缓存 policy 作为执行判定 |
 | 连接器视图被误解为插件市场 | 用户期望动态安装任意连接器 | 目录仅服务端代码注册；明确非目标写入文档与来源矩阵 |
+| workdir 长期残留 | 输入、prompt 派生文件与输出滞留磁盘 | MVP 由运维手动清理；保留窗口、审计化清理与加密要求纳入 P15-H |
+| 服务重启或多实例部署 | 非终态 run 悬挂、跨进程取消失效 | MVP 明确单实例约束；启动恢复与跨实例状态收口纳入 P15-H |
+| 并发 run 过多 | CPU、内存、磁盘或外部配额耗尽 | MVP 依赖单 run 超时与文件大小限制；并发上限、排队与资源隔离纳入 P15-H |
+| 取消与完成竞态 | `cancelled` 终态被迟到成功结果覆盖 | 现有测试覆盖“取消后 provider 抛出取消”的路径；补齐取消后成功返回的 CAS 测试纳入 P15-H |
+| Mongo 索引未接线 | 查询退化或唯一约束缺失 | P15-H 接入仓储首访 / 启动初始化，并增加部署验证 |
 
 ## 11. 完成定义
+
+### 11.1 MVP 完成定义（P15-A–P15-G）
 
 - [x] 默认关闭时应用可启动，`/dialogue`、ResearchEngine、报告和算法工具回归不回退。
 - [x] provider readiness、执行、超时、取消、失败和 unavailable 均有结构化语义和测试。
@@ -410,6 +498,20 @@ conda run -n poly_agent python -m pytest \
 - [x] Codex MVP 不暴露通用 Shell、任意文件读写、任意网络和项目根目录。
 - [x] LUI 默认不可见；满足全部条件后仍须显式确认才执行。
 - [x] 文档、用户指南、来源矩阵和 `doc/README.md` 索引同步更新。
+
+### 11.2 生产化追加验收（P15-H，未完成）
+
+- [ ] 终态 run workdir 能按配置自动保留、清理并写审计；清理策略与加密要求有文档说明。
+- [ ] 服务重启后非终态 run 进入稳定恢复终态；单实例 / 多实例约束有明确部署说明。
+- [ ] 并发 run、排队或限流、每用户配额与资源隔离策略落地并有测试。
+- [ ] 取消后迟到的成功结果不能覆盖 `cancelled`；终态条件更新有竞态测试。
+- [ ] 审计写入失败可观测，run 能标记 `audit_error`，告警与恢复路径有测试。
+- [ ] Mongo 索引随仓储首访或启动创建，并有部署验证方法。
+- [ ] readiness 能记录版本 / 摘要，管理员显式探测与 sandbox 出口验证方案落地。
+- [ ] 非法配置不会破坏默认关闭启动，并返回结构化诊断。
+- [ ] 输入复制消除校验与复制之间的 TOCTOU 窗口，并有替换攻击测试。
+- [ ] run 列表与质量摘要支持分页 / 过滤 / 时间窗，关键异常有告警。
+- [ ] `ToolServicesView` 组件测试、E2E 与真实 CLI 集成测试补齐，用户指南和运维 runbook 同步更新。
 
 ## 12. 状态记录
 
@@ -423,3 +525,4 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-27：完成 P15-F，LUI 默认不暴露外部 Agent 工具，新增全部条件满足才返回的 lui-tool 描述符与 API；完成报告双路径与 PI/DSH 接入评估，新增用户指南并更新来源矩阵与索引。
 - 2026-08-27：完成 P15-G，ToolServicesView 新增管理员可见的 Agent 连接器页签：Codex 卡片（readiness/原因/sandbox/配置来源/质量摘要 + AttributionBanner）、策略表单与受控测试入口；普通用户隐藏，前端测试与构建通过。
 - 2026-08-28：完成 P15-A–P15-G 收尾：专项测试 56 项（含 3 个子测试）与 Plan 8.2 回归 31 项全部通过；默认关闭配置下 FastAPI 应用导入与 agent-exec 路由挂载验证正常；完成定义全部勾选。
+- 2026-08-28：复核计划与实现 / 测试 / 用户指南 / 来源矩阵的一致性：新增 5.5 配置基线、6.2 API 与错误契约、6.3 存储与数据生命周期、9.1 运维与回滚 runbook；修正 Mongo 索引、前端测试范围、readiness 版本记录和 audit_error 的表述；新增未开始的 P15-H 与 11.2 生产化追加验收。复核证据覆盖 `backend/app/schemas/agent_exec.py`、`agent_exec_service.py`、`agent_exec_policy_service.py`、`agent_exec_repositories.py`、`agent_exec_providers/*`、`api/v1/endpoints/agent_exec.py`、`backend/tests/test_agent_exec_*`、`ToolServicesView.vue`、`agentConnectors.test.mjs`、`agent-connector-user-guide.md` 与来源矩阵。本次仅更新文档，未修改业务代码。
