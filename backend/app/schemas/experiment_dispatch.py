@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import UtcDatetimeJsonModel
+from app.schemas.execution_security import ExecutionAccessRecord
 
 
 JsonValueType = Literal["string", "number", "integer", "boolean", "object", "array", "any"]
@@ -177,6 +178,7 @@ class ExperimentDispatchManifest(UtcDatetimeJsonModel):
     template: ExperimentDispatchTemplateRef | None = None
     profile: ExperimentDispatchProfileRef | None = None
     target: ExperimentDispatchTargetRef | None = None
+    execution_access: ExecutionAccessRecord = Field(default_factory=ExecutionAccessRecord)
     experiment_name: str
     experiment_notes: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)

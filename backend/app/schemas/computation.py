@@ -33,8 +33,9 @@ ArtifactType = Literal[
     "image_png",
     "csv",
     "binary_file",
+    "dispatch_manifest_json",
 ]
-ArtifactOwnerType = Literal["computation_run", "algorithm_run"]
+ArtifactOwnerType = Literal["computation_run", "algorithm_run", "experiment_dispatch"]
 
 ALLOWED_METHODS = {
     "GFN2-XTB": "GFN2-xTB",

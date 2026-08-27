@@ -2,7 +2,7 @@
 
 日期：2026-08-20
 评审日期：2026-08-27
-状态：已评审 / P0 后端核心已落地
+状态：已评审 / P1 后端核心已落地
 适用范围：ResearchEngine 编排器、产品内助手工具注入、计算适配器、实验下发与统一安全层
 
 前置与参考：
@@ -50,6 +50,27 @@
 - 2026-08-27：新增 Plan-first 专项测试、能力相关性测试和助手 SSE 集成测试；针对性用例通过。
 - 2026-08-27：ResearchEngine 服务/API/E2E/Schema/适配器回归 303 项通过；本机环境导致的 WeKnora 未配置测试隔离问题已单独修复并通过。
 - 2026-08-27：助手工具编排、上下文装配、助手 API 与能力相关性回归 57 项通过；来源标注 API 回归通过。
+
+### 0.4 P1 实施清单
+
+#### 统一安全层
+
+- [x] 新增 `BoundaryLimit` / `FieldSecurityPolicy` / `TargetSecurityPolicy` 契约，支持写入白/黑名单、数值边界、枚举白名单与 error/warn 两档违规策略。
+- [x] `ExperimentDispatchProfileEngine._validate_target` 在类型校验后执行安全策略校验，并把安全命中写入结构化 `security_events`。
+- [x] 新增 SpecLabOS target 独立安全策略配置文件，并通过种子加载流程绑定到对应 target 契约。
+- [x] 安全校验事件写入统一审计链，覆盖 blocked 与 warning 两类事件。
+
+#### 只读/可写双模式
+
+- [x] `AdapterContext` 新增默认兼容的 `access_mode` 与预留 `sandbox_profile` 字段。
+- [x] 计算 worker 在登记 artifacts 前执行访问模式核验，`read_only` 下写入、持久化或外部下发声明会返回失败结果。
+- [x] 实验 dispatch preview 返回 `read_only` 执行快照；确认 `preview_digest` 后的保存/下发返回 `writable` 执行快照。
+- [x] 确认后的 `ExperimentDispatchManifest` 写入统一 artifact 链。
+
+#### P1 验证记录
+
+- 2026-08-27：新增统一安全层与受限执行专项测试；下发引擎、下发服务、计算 MVP、计算服务、本地 Structure/xtb adapter 与 ResearchEngine adapter 相关回归 67 项通过。
+- 2026-08-27：完整后端测试运行 842 项通过、1 项跳过；21 项 DataCatalog/Report/KnowledgeBase API 失败为本机认证配置导致的 401 环境差异。显式关闭认证后复跑相关模块，73 项通过、4 项子测试通过，仅剩既有 WeKnora graph 降级语义用例失败，与 P1 改动无交集。
 
 ## 1. 背景与判断
 

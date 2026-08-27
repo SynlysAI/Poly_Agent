@@ -13,8 +13,10 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app.computation_adapters.base import ArtifactSpec
 from app.core.config import settings
 from app.core.time import utc_now
+from app.infra.computation_repositories import AuditEventRepository
 from app.infra.experiment_dispatch_profile_repositories import (
     ExperimentDispatchProfileRepository,
     ExperimentDispatchTargetRepository,
@@ -24,6 +26,7 @@ from app.infra.research_engine_repositories import AlgorithmRegistryRepository, 
 from app.schemas.experiment_dispatch_profile import (
     DispatchTargetDefinition,
     DispatchTargetListData,
+    TargetSecurityPolicy,
     ExperimentDispatchCandidate,
     ExperimentDispatchCandidateListData,
     ExperimentDispatchProfile,
@@ -34,6 +37,7 @@ from app.schemas.experiment_dispatch_profile import (
     ExperimentDispatchProfileSaveRequest,
     ExperimentDispatchProfileUpdateRequest,
 )
+from app.schemas.execution_security import ExecutionAccessRecord, validate_execution_access
 from app.schemas.experiment_dispatch import (
     ExperimentDispatchExternalReceipt,
     ExperimentDispatchManifest,
@@ -42,6 +46,7 @@ from app.schemas.experiment_dispatch import (
     ExperimentDispatchSource,
     ExperimentDispatchTargetRef,
 )
+from app.services.computation_service import ComputationService
 from app.services.experiment_dispatch_profile_engine import ExperimentDispatchProfileEngine, _MISSING
 from app.services.research_engine_access import ensure_research_engine_doc_access
 from app.services.speclabos_dispatch_service import SpecLabOSDispatchError, speclabos_dispatch_service
@@ -223,6 +228,17 @@ class ExperimentDispatchProfileService:
             "payload": result.payload,
         }
         digest = hashlib.sha256(json.dumps(digest_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        execution_access = ExecutionAccessRecord(
+            access_mode="read_only",
+            operations=["query"],
+        )
+        self._audit_security_events(
+            evaluation_result=result,
+            run_id=request.run_id,
+            target_id=target.target_id,
+            target_version=target.version,
+            actor_user_id=actor_user_id,
+        )
         return ExperimentDispatchProfileEvaluation(
             run_id=request.run_id,
             algorithm_id=str(run.get("algorithm_id") or ""),
@@ -231,6 +247,7 @@ class ExperimentDispatchProfileService:
             target_id=target.target_id,
             target_version=target.version,
             result=result,
+            execution_access=execution_access,
             preview_digest=digest,
         )
 
@@ -302,6 +319,17 @@ class ExperimentDispatchProfileService:
         profile = self.get(request.profile_id, request.profile_version, actor_user_id=actor_user_id, is_admin=is_admin)
         target = self._effective_target(profile)
         created_at = utc_now()
+        execution_access = ExecutionAccessRecord(
+            access_mode="writable",
+            operations=["persist", "artifact_write", "external_dispatch"],
+            confirmed_preview_digest=evaluation.preview_digest,
+        )
+        validate_execution_access(
+            execution_access.access_mode,
+            persist_count=1,
+            artifact_write_count=1,
+            external_dispatch_count=1,
+        )
         manifest = ExperimentDispatchManifest(
             dispatch_id=f"edsp_{uuid4().hex[:14]}",
             status="prepared",
@@ -312,6 +340,7 @@ class ExperimentDispatchProfileService:
             ),
             profile=ExperimentDispatchProfileRef(profile_id=profile.profile_id, profile_version=profile.version),
             target=ExperimentDispatchTargetRef(target_id=target.target_id, target_version=target.version),
+            execution_access=execution_access,
             experiment_name=request.experiment_name or str(evaluation.result.payload.get("experiment_name") or profile.name),
             experiment_notes=request.experiment_notes,
             parameters=evaluation.result.payload,
@@ -344,12 +373,96 @@ class ExperimentDispatchProfileService:
             manifest.status = "failed"
             manifest.dispatch_error = str(exc)
             ExperimentDispatchRepository.save("dispatch_id", manifest.model_dump(mode="python"))
+            self._register_manifest_artifact(manifest)
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
         manifest.status = "accepted"
         manifest.external_receipt = ExperimentDispatchExternalReceipt(**receipt)
         ExperimentDispatchRepository.save("dispatch_id", manifest.model_dump(mode="python"))
+        self._register_manifest_artifact(manifest)
         return manifest
+
+    def _register_manifest_artifact(self, manifest: ExperimentDispatchManifest) -> None:
+        """将确认后的下发 manifest 写入统一 artifact 链。
+
+        Args:
+            manifest: 已通过 preview_digest 确认的实验下发清单。
+        """
+        artifact_dir = settings.outputs_root / "experiment_dispatches" / manifest.dispatch_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / "manifest.json"
+        artifact_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+        spec = ArtifactSpec(
+            step_key="dispatch",
+            artifact_type="dispatch_manifest_json",
+            name=f"{manifest.dispatch_id}.json",
+            path=artifact_path,
+            mime_type="application/json",
+            parser_name="experiment_dispatch",
+            parser_version="1.0.0",
+            metadata={
+                "access_mode": manifest.execution_access.access_mode,
+                "preview_digest": manifest.preview_digest,
+                "target_id": manifest.target.target_id if manifest.target else None,
+                "status": manifest.status,
+            },
+        )
+        ComputationService().register_owner_artifacts(
+            owner_type="experiment_dispatch",
+            owner_id=manifest.dispatch_id,
+            legacy_run_id=manifest.source.run_id,
+            created_by=manifest.created_by,
+            artifact_specs=[spec],
+            actor_worker_id="experiment-dispatch-worker",
+            created_at=manifest.created_at,
+        )
+
+    @staticmethod
+    def _audit_security_events(
+        *,
+        evaluation_result,
+        run_id: str,
+        target_id: str,
+        target_version: str,
+        actor_user_id: str,
+    ) -> None:
+        """把安全策略命中结果写入统一审计事件。
+
+        Args:
+            evaluation_result: profile 引擎评估结果。
+            run_id: 关联算法运行 ID。
+            target_id: 目标接口 ID。
+            target_version: 目标接口版本。
+            actor_user_id: 操作人 ID。
+        """
+        for event in evaluation_result.security_events:
+            AuditEventRepository.append(
+                {
+                    "event_id": f"audit_{uuid4().hex[:20]}",
+                    "event_type": (
+                        "experiment_dispatch.security_blocked"
+                        if event.severity == "error"
+                        else "experiment_dispatch.security_warning"
+                    ),
+                    "actor_user_id": actor_user_id,
+                    "actor_role": "user",
+                    "request_id": None,
+                    "entity_type": "experiment_dispatch_target",
+                    "entity_id": f"{target_id}@{target_version}",
+                    "related_ids": {"run_id": run_id},
+                    "before": {},
+                    "after": {},
+                    "metadata": {
+                        "event_type": event.event_type,
+                        "path": event.path,
+                        "severity": event.severity,
+                        "message": event.message,
+                        "policy_version": event.policy_version,
+                        "audit_level": event.audit_level,
+                    },
+                    "created_at": utc_now(),
+                }
+            )
 
     def validate_profile(self, profile: ExperimentDispatchProfile, target: DispatchTargetDefinition) -> list[str]:
         errors: list[str] = []
@@ -612,6 +725,10 @@ class ExperimentDispatchProfileService:
             "target_key",
             lambda item: f"{item.target_id}@{item.version}",
         )
+        self._load_target_security_policies(
+            settings.backend_root / "config" / "experiment_dispatch_targets",
+            ExperimentDispatchTargetRepository,
+        )
         self._load_seed_directory(
             settings.backend_root / "config" / "experiment_dispatch_profiles",
             ExperimentDispatchProfile,
@@ -625,6 +742,8 @@ class ExperimentDispatchProfileService:
         if not directory.exists():
             return
         for path in sorted(directory.glob("*.json")):
+            if path.name.endswith(".security.json"):
+                continue
             try:
                 item = model_type.model_validate_json(path.read_text(encoding="utf-8"))
             except (OSError, ValidationError, ValueError) as exc:
@@ -635,6 +754,31 @@ class ExperimentDispatchProfileService:
             payload = item.model_dump(mode="python")
             payload[key_field] = key
             repository.save(key_field, payload)
+
+    @staticmethod
+    def _load_target_security_policies(directory: Path, repository) -> None:
+        """加载独立 target 安全策略并绑定到对应 target 契约。
+
+        Args:
+            directory: target 与安全策略配置目录。
+            repository: target 契约仓储。
+
+        Raises:
+            RuntimeError: 安全策略格式非法或找不到对应 target。
+        """
+        if not directory.exists():
+            return
+        for path in sorted(directory.glob("*.security.json")):
+            try:
+                policy = TargetSecurityPolicy.model_validate_json(path.read_text(encoding="utf-8"))
+            except (OSError, ValidationError, ValueError) as exc:
+                raise RuntimeError(f"实验下发安全策略 {path.name} 无法加载: {exc}") from exc
+            target_key = f"{policy.target_id}@{policy.version}"
+            target_doc = repository.find_one({"target_key": target_key})
+            if not target_doc:
+                raise RuntimeError(f"实验下发安全策略 {path.name} 找不到 target {target_key}")
+            target_doc["security_policy"] = policy.model_dump(mode="python")
+            repository.save("target_key", target_doc)
 
 
 experiment_dispatch_profile_service = ExperimentDispatchProfileService()

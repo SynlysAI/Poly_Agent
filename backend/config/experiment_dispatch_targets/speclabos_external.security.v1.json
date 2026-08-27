@@ -1,0 +1,60 @@
+{
+  "schema_version": "experiment_dispatch_target_security.v1",
+  "target_id": "speclabos_external_experiment",
+  "version": "1.0.0",
+  "default_write_allowed": true,
+  "field_policies": [
+    {
+      "path": "/source_system",
+      "write_allowed": true,
+      "allowed_values": ["polyagent"],
+      "violation_policy": "error",
+      "audit_level": "default"
+    },
+    {
+      "path": "/conditions/0/temperature_c",
+      "write_allowed": true,
+      "boundary": {
+        "min": 20,
+        "max": 250,
+        "min_inclusive": true,
+        "max_inclusive": true,
+        "message": "SpecLabOS 实验温度必须在 20-250 摄氏度范围内"
+      },
+      "violation_policy": "error",
+      "audit_level": "default"
+    },
+    {
+      "path": "/conditions/0/reaction_time_h",
+      "write_allowed": true,
+      "boundary": {
+        "min": 0.1,
+        "max": 72,
+        "min_inclusive": true,
+        "max_inclusive": true,
+        "message": "SpecLabOS 反应时间必须在 0.1-72 小时范围内"
+      },
+      "violation_policy": "error",
+      "audit_level": "default"
+    },
+    {
+      "path": "/conditions/0/solvent_volume_ml",
+      "write_allowed": true,
+      "boundary": {
+        "min": 0,
+        "max": 1000,
+        "min_inclusive": true,
+        "max_inclusive": true,
+        "message": "SpecLabOS 溶剂体积必须在 0-1000 毫升范围内"
+      },
+      "violation_policy": "error",
+      "audit_level": "default"
+    },
+    {
+      "path": "/extra_metadata/debug_token",
+      "write_allowed": false,
+      "violation_policy": "error",
+      "audit_level": "default"
+    }
+  ]
+}

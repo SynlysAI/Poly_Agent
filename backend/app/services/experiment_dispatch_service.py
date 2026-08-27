@@ -27,6 +27,7 @@ from app.schemas.experiment_dispatch import (
     ExperimentTemplateDefinition,
     ExperimentTemplateListData,
 )
+from app.schemas.execution_security import ExecutionAccessRecord, validate_execution_access
 from app.services.research_engine_access import ensure_research_engine_doc_access
 
 
@@ -123,6 +124,7 @@ class ExperimentDispatchService:
         actor_user_id: str,
         is_admin: bool = False,
     ) -> ExperimentDispatchManifest:
+        validate_execution_access("writable", persist_count=1)
         manifest = self._build_manifest(
             run_id,
             request,
@@ -238,9 +240,14 @@ class ExperimentDispatchService:
         variant, selection = self._select_variant(template, context, request)
         experiment_name = request.experiment_name or template.name
         created_at = utc_now()
+        execution_access = ExecutionAccessRecord(
+            access_mode="read_only" if not persist else "writable",
+            operations=["query"] if not persist else ["persist"],
+        )
         return ExperimentDispatchManifest(
             dispatch_id=f"edsp_{uuid4().hex[:14]}" if persist else f"preview_{uuid4().hex[:12]}",
             status="prepared" if persist else "preview",
+            execution_access=execution_access,
             source=ExperimentDispatchSource(
                 run_id=run_id,
                 algorithm_id=str(run.get("algorithm_id") or ""),

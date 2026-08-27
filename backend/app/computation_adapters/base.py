@@ -9,6 +9,7 @@ from typing import Literal, Protocol
 
 from app.schemas.computation import ComputationRun
 from app.schemas.computation import ComputationStep
+from app.schemas.execution_security import ExecutionAccessMode, validate_execution_access
 
 
 AdapterTerminalStatus = Literal["completed", "failed"]
@@ -37,6 +38,8 @@ class AdapterContext:
     workdir: Path
     started_at: datetime
     timeout_seconds: int
+    access_mode: ExecutionAccessMode = "writable"
+    sandbox_profile: str | None = None
 
 
 @dataclass
@@ -107,3 +110,28 @@ def build_steps(
             break
     return steps
 
+
+def validate_adapter_access(
+    context: AdapterContext,
+    *,
+    artifact_write_count: int = 0,
+    external_dispatch_count: int = 0,
+    persist_count: int = 0,
+) -> None:
+    """校验 adapter 运行结果是否违反当前访问模式。
+
+    Args:
+        context: adapter 运行上下文。
+        artifact_write_count: adapter 声明或产出的可写制品数量。
+        external_dispatch_count: adapter 声明的外部下发次数。
+        persist_count: adapter 声明的持久化记录数量。
+
+    Raises:
+        ValueError: read_only 模式尝试写入制品、持久化或外部下发。
+    """
+    validate_execution_access(
+        context.access_mode,
+        artifact_write_count=artifact_write_count,
+        external_dispatch_count=external_dispatch_count,
+        persist_count=persist_count,
+    )

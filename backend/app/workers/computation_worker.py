@@ -16,6 +16,7 @@ from app.computation_adapters.base import AdapterContext
 from app.computation_adapters.base import AdapterRunResult
 from app.computation_adapters.base import ArtifactSpec
 from app.computation_adapters.base import build_steps
+from app.computation_adapters.base import validate_adapter_access
 from app.computation_adapters.registry import get_adapter
 from app.core.config import settings
 from app.infra.computation_repositories import ComputationRunRepository, utc_now
@@ -67,6 +68,22 @@ class ComputationWorker:
             self.service.heartbeat_run(running.run_id, worker_id=self.worker_id, now=utc_now())
             adapter_result = validation_result or adapter.run(context)
             self.service.heartbeat_run(running.run_id, worker_id=self.worker_id, now=utc_now())
+            try:
+                validate_adapter_access(
+                    context,
+                    artifact_write_count=len(adapter_result.artifact_specs),
+                    external_dispatch_count=self._declared_count(adapter_result, "external_dispatch_count"),
+                    persist_count=self._declared_count(adapter_result, "persist_count"),
+                )
+            except ValueError as exc:
+                adapter_result = self._build_access_failure(context, adapter.step_labels, str(exc))
+                finished = self.service.finish_acquired_run(
+                    running,
+                    worker_id=self.worker_id,
+                    now=utc_now(),
+                    adapter_result=adapter_result,
+                )
+                return WorkerResult(claimed=True, run_id=finished.run_id, status=finished.status)
             adapter_result.artifact_specs = adapter.collect_artifacts(context, adapter_result)
             adapter_result.result_summary = adapter.parse_result(context, adapter_result)
         except Exception as exc:
@@ -85,6 +102,42 @@ class ComputationWorker:
                 actor_user_id=finished.created_by,
             )
         return WorkerResult(claimed=True, run_id=finished.run_id, status=finished.status)
+
+    @staticmethod
+    def _declared_count(result: AdapterRunResult, key: str) -> int:
+        """读取 adapter 在 result_summary 中声明受限操作数量。"""
+        try:
+            value = int(result.result_summary.get(key, 0))
+        except (TypeError, ValueError):
+            return 0
+        return max(value, 0)
+
+    @staticmethod
+    def _build_access_failure(
+        context: AdapterContext,
+        step_labels: dict[str, str],
+        message: str,
+    ) -> AdapterRunResult:
+        """构建不落盘的访问模式违规失败结果。"""
+        now = utc_now()
+        failed_step_key = next(iter(step_labels), "ADAPTER_RUN")
+        return AdapterRunResult(
+            status="failed",
+            steps=build_steps(
+                step_labels or {failed_step_key: "Adapter execution"},
+                status="failed",
+                started_at=context.started_at,
+                finished_at=now,
+                failed_step_key=failed_step_key,
+                error_message=message,
+            ),
+            result_summary={"access_mode": context.access_mode},
+            error={
+                "error_code": "ADAPTER_ACCESS_DENIED",
+                "message": message,
+                "retryable": False,
+            },
+        )
 
     def _build_unhandled_failure(
         self,

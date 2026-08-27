@@ -12,3 +12,6 @@ refer/
 backend/config/*
 !backend/config/experiment_templates/
 !backend/config/experiment_templates/*.json
+!backend/config/experiment_dispatch_targets/
+backend/config/experiment_dispatch_targets/*
+!backend/config/experiment_dispatch_targets/*.security.*.json
