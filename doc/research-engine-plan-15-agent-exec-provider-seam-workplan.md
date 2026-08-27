@@ -1,6 +1,6 @@
 # Plan 15：受控外部 Agent 执行 Provider Seam 与 Agent 连接器治理工作计划
 
-> 状态：待评审 / 未开始
+> 状态：已完成（P15-A–P15-G 已落地并通过专项与回归测试）
 >
 > 日期：2026-08-19（初稿）；2026-08-27（修订：新增 Agent 连接器治理，统一能力入口拆分至 Plan 16）
 >
@@ -400,16 +400,16 @@ conda run -n poly_agent python -m pytest \
 
 ## 11. 完成定义
 
-- [ ] 默认关闭时应用可启动，`/dialogue`、ResearchEngine、报告和算法工具回归不回退。
-- [ ] provider readiness、执行、超时、取消、失败和 unavailable 均有结构化语义和测试。
-- [ ] 输入输出始终限定在 run 专属 workdir，路径、大小、文件数和 symlink 测试通过。
-- [ ] 连接器策略默认关闭、默认 admin-only、默认强制确认，且策略变更写审计、run 记录 policy 快照。
-- [ ] Audit / assistant event / Trace 可完整回放一次成功、失败、取消、provider 缺失和 policy 拒绝场景。
-- [ ] 连接器管理 API 只对管理员开放，并返回脱敏信息；`allowed_task_types` 越界被拒绝。
-- [ ] 前端管理员可看到 Codex 卡片和 AttributionBanner；普通用户不能修改 policy，看不到 secret / workdir / 完整 prompt。
-- [ ] Codex MVP 不暴露通用 Shell、任意文件读写、任意网络和项目根目录。
-- [ ] LUI 默认不可见；满足全部条件后仍须显式确认才执行。
-- [ ] 文档、用户指南、来源矩阵和 `doc/README.md` 索引同步更新。
+- [x] 默认关闭时应用可启动，`/dialogue`、ResearchEngine、报告和算法工具回归不回退。
+- [x] provider readiness、执行、超时、取消、失败和 unavailable 均有结构化语义和测试。
+- [x] 输入输出始终限定在 run 专属 workdir，路径、大小、文件数和 symlink 测试通过。
+- [x] 连接器策略默认关闭、默认 admin-only、默认强制确认，且策略变更写审计、run 记录 policy 快照。
+- [x] Audit / assistant event / Trace 可完整回放一次成功、失败、取消、provider 缺失和 policy 拒绝场景。
+- [x] 连接器管理 API 只对管理员开放，并返回脱敏信息；`allowed_task_types` 越界被拒绝。
+- [x] 前端管理员可看到 Codex 卡片和 AttributionBanner；普通用户不能修改 policy，看不到 secret / workdir / 完整 prompt。
+- [x] Codex MVP 不暴露通用 Shell、任意文件读写、任意网络和项目根目录。
+- [x] LUI 默认不可见；满足全部条件后仍须显式确认才执行。
+- [x] 文档、用户指南、来源矩阵和 `doc/README.md` 索引同步更新。
 
 ## 12. 状态记录
 
@@ -422,3 +422,4 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-27：完成 P15-E，新增管理员连接器卡片、策略更新、受控 run、run 详情/取消与质量摘要 API，覆盖 RBAC、策略越界、结构化错误与稳定终态测试。
 - 2026-08-27：完成 P15-F，LUI 默认不暴露外部 Agent 工具，新增全部条件满足才返回的 lui-tool 描述符与 API；完成报告双路径与 PI/DSH 接入评估，新增用户指南并更新来源矩阵与索引。
 - 2026-08-27：完成 P15-G，ToolServicesView 新增管理员可见的 Agent 连接器页签：Codex 卡片（readiness/原因/sandbox/配置来源/质量摘要 + AttributionBanner）、策略表单与受控测试入口；普通用户隐藏，前端测试与构建通过。
+- 2026-08-28：完成 P15-A–P15-G 收尾：专项测试 56 项（含 3 个子测试）与 Plan 8.2 回归 31 项全部通过；默认关闭配置下 FastAPI 应用导入与 agent-exec 路由挂载验证正常；完成定义全部勾选。
