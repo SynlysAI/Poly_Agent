@@ -4,7 +4,7 @@
 
 | 模块 | 页面入口 | 参考框架/方法 | 开发者/机构 | Logo 资产策略 | 引用链接 | 实现边界 |
 |------|----------|---------------|-------------|----------------|----------|----------|
-| ResearchEngine | `/research-engine` | ChemOS 2.0 自驱实验室编排思想 | University of Toronto / Aspuru-Guzik Group；PolyAgent | 无授权图片时使用文字来源牌 | https://github.com/malcolmsimgithub/ChemOS2.0 | 不声明直接复制 ChemOS 代码；ProblemSpec、Workflow、Gate、追溯为本项目实现 |
+| ResearchEngine | `/research-engine` | ChemOS 2.0 自驱实验室编排思想；ALS Accelerator Assistant / OSPREY 的 Plan-first、动态能力选择与受限执行范式 | University of Toronto / Aspuru-Guzik Group；Lawrence Berkeley National Laboratory / Advanced Light Source；PolyAgent | 无授权图片时使用文字来源牌 | https://github.com/malcolmsimgithub/ChemOS2.0；https://arxiv.org/abs/2509.17255 | 不声明直接复制 ChemOS 或 ALS/OSPREY 代码；ProblemSpec、Workflow、Gate、StageExecutionPlan、能力筛选与追溯为本项目适配实现 |
 | 湿实验优化 | `/optimization` | ALchemist；ChemOS 2.0 | NatLabRockies / NREL / NLR；PolyAgent | 无授权图片时使用文字来源牌 | https://github.com/NatLabRockies/ALchemist | Alchemist 提供主动学习/BO 方法来源；Campaign planner 为本地实现 |
 | Alchemist 工具 | `/optimization/alchemist` | ALchemist 实验设计、GP、采集优化 | NatLabRockies / NREL / NLR | 无授权图片时使用文字来源牌 | https://github.com/NatLabRockies/ALchemist | PolyAgent 负责中文工作台、认证、会话和平台集成 |
 | 实验方案转发台 | `/optimization/experiment-dispatch` | SpecLabOS 参数化实验执行参考；ChASM 指令集模板 | SpecLabOS；实验执行模板提供方 | 未确认 Logo 时使用文字来源牌 | — | 本期仅生成和保存实验清单，不声明已执行真实设备 |

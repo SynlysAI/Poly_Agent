@@ -249,6 +249,10 @@ class Settings:
             1,
             min(3, int(os.getenv("ASSISTANT_MAX_PARALLEL_TOOL_CALLS", "1"))),
         )
+        self.assistant_tool_schema_token_budget: int = max(
+            0,
+            int(os.getenv("ASSISTANT_TOOL_SCHEMA_TOKEN_BUDGET", "6000")),
+        )
         self.assistant_runtime_asset_ttl_seconds: int = int(
             os.getenv("ASSISTANT_RUNTIME_ASSET_TTL_SECONDS", "86400")
         )

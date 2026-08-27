@@ -1621,6 +1621,16 @@ class AlgorithmRunListData(BaseModel):
 # =============================================================================
 
 
+class StagePlanPolicy(BaseModel):
+    """阶段执行计划的生成策略。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    require_plan: bool = False
+    generation_mode: Literal["rule", "llm", "hybrid"] = "rule"
+    block_on_drift: bool = True
+
+
 class StageGate(BaseModel):
     """阶段门禁定义。
 
@@ -1637,6 +1647,59 @@ class StageGate(BaseModel):
     retry_policy: dict = Field(default_factory=dict)
     rollback_target: ResearchStageKey | None = None
     artifact_policy: dict = Field(default_factory=dict)
+    plan_policy: StagePlanPolicy | None = None
+
+
+class PlanDependency(BaseModel):
+    """执行计划步骤的显式输入依赖。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = Field(min_length=1, max_length=120)
+    source_kind: Literal["algorithm_run", "stage_output", "problem_spec", "manual"]
+    source_ref: str | None = Field(default=None, max_length=120)
+    source_path: str | None = Field(default=None, max_length=240)
+    required: bool = True
+
+
+class PlanStep(BaseModel):
+    """执行计划中的单个受限步骤。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_key: str = Field(min_length=1, max_length=160)
+    kind: Literal["computation", "knowledge", "llm", "dispatch", "manual_review"]
+    tool_ref: str | None = Field(default=None, max_length=160)
+    inputs: list[PlanDependency] = Field(default_factory=list)
+    expected_artifacts: list[str] = Field(default_factory=list)
+    triggers_dispatch: bool = False
+    safety_note: str | None = Field(default=None, max_length=1000)
+
+
+class StageExecutionPlan(BaseModel):
+    """某次 ResearchRun 在阶段执行前的可审查计划。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str = Field(min_length=1, max_length=80)
+    research_run_id: str = Field(min_length=1, max_length=80)
+    stage_key: ResearchStageKey
+    stage_run_id: str = Field(min_length=1, max_length=80)
+    steps: list[PlanStep] = Field(min_length=1)
+    data_sensitivity: Literal["public", "internal", "sensitive"] = "internal"
+    generated_at: datetime
+    generated_by: Literal["llm", "rule", "hybrid"]
+    review_status: Literal["draft", "approved", "rejected", "modified"] = "draft"
+
+    @model_validator(mode="after")
+    def validate_step_keys(self) -> "StageExecutionPlan":
+        """校验计划步骤键唯一，避免审查对象出现歧义。"""
+        step_keys = [step.step_key for step in self.steps]
+        if len(step_keys) != len(set(step_keys)):
+            raise ValueError("执行计划步骤 step_key 不能重复")
+        return self
+
+
 
 
 class StageGateDecision(BaseModel):
@@ -1649,6 +1712,7 @@ class StageGateDecision(BaseModel):
     actor_user_id: str
     reason: str = Field(min_length=1, max_length=1000)
     modified_candidates: list[dict] = Field(default_factory=list)
+    plan_review: dict = Field(default_factory=dict)
     decided_at: datetime
 
     @field_validator("reason")
@@ -1669,6 +1733,7 @@ class ResearchStageRun(BaseModel):
     stage_key: ResearchStageKey
     status: ResearchStageStatus = "pending"
     gate: StageGate | None = None
+    plan: StageExecutionPlan | None = None
     input_snapshot: dict = Field(default_factory=dict)
     output_summary: dict = Field(default_factory=dict)
     error: dict | None = None

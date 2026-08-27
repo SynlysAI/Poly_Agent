@@ -58,15 +58,26 @@ class AttributionService:
             logo_alt="NREL / NLR ALchemist",
             visibility="prominent",
         )
+        als_assistant = AttributionItem(
+            name="ALS Accelerator Assistant / OSPREY",
+            role="framework_reference",
+            organization="Lawrence Berkeley National Laboratory / Advanced Light Source",
+            description="大装置智能体 Plan-first 编排与受限执行范式参考。",
+            url="https://arxiv.org/abs/2509.17255",
+            citation_text="Agentic AI for Multi-Stage Physics Experiments at a Large-Scale Scientific User Facility.",
+            logo_alt="Lawrence Berkeley National Laboratory / Advanced Light Source",
+            visibility="prominent",
+        )
         return [
             ModuleAttribution(
                 module_id="research_engine",
                 title="ResearchEngine 研发引擎",
                 page_path="/research-engine",
-                summary="研发编排参考 ChemOS 2.0。",
+                summary="研发编排参考 ChemOS 2.0 与 ALS Accelerator Assistant。",
                 implementation_boundary="页面仅展示主要方法来源；完整引用见项目文档。",
                 attributions=[
                     chemos,
+                    als_assistant,
                 ],
             ),
             ModuleAttribution(

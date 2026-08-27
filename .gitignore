@@ -1,6 +1,7 @@
 node_modules/
 dist/
 __pycache__/
+.codex-tmp/
 .runtime/
 *.pyc
 .env

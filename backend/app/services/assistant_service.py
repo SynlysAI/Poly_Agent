@@ -34,6 +34,7 @@ from app.schemas.assistant import AssistantChatResponse
 from app.schemas.assistant import AssistantReference
 from app.schemas.assistant import AssistantRetrievalStatus
 from app.schemas.agent_tools import AgentTool, AssistantToolCall, AssistantToolCallCreate
+from app.schemas.capabilities import CapabilityRelevanceAssessment
 from app.services.agent_tool_service import agent_tool_service
 from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID, classify_provider_error
 from app.services.assistant_presets import (
@@ -52,6 +53,7 @@ from app.services.assistant_tool_contract import (
 )
 from app.services.assistant_tool_service import assistant_tool_call_service
 from app.services.assistant_session_control import control_state
+from app.services.capability_relevance_service import CapabilityRelevanceService
 from app.services.integration_status_service import IntegrationStatusService
 from app.services.knowledge_service import KnowledgeService
 from app.services.llm_model_service import LLMModelService
@@ -1374,6 +1376,7 @@ class AssistantService:
         self.answer_synthesizer = AssistantAnswerSynthesizer()
         self.llm_model_service = LLMModelService()
         self.context_assembler = AssistantContextAssembler()
+        self.capability_relevance_service = CapabilityRelevanceService()
 
     # ── 算法工具编排 ──
 
@@ -1512,6 +1515,7 @@ class AssistantService:
         llm_route: dict,
         assembly: ContextAssembly,
         selected_tool_ids: list[str],
+        capability_relevance: CapabilityRelevanceAssessment | None = None,
     ) -> dict:
         """构造工具调用的可续答来源快照。
 
@@ -1520,6 +1524,7 @@ class AssistantService:
             llm_route: 当前解析后的模型路由。
             assembly: 工具提案请求的上下文装配结果。
             selected_tool_ids: 用户已选择的算法工具。
+            capability_relevance: 能力相关性评估结果。
 
         Returns:
             不包含消息正文与凭据的安全上下文快照。
@@ -1544,6 +1549,17 @@ class AssistantService:
             ),
             "route_snapshot": self._safe_llm_route(llm_route),
             "context_manifest_digest": assembly.digest,
+            "capability_relevance": (
+                {
+                    "selection_mode": capability_relevance.selection_mode,
+                    "selected_capability_ids": capability_relevance.selected_capability_ids,
+                    "omitted_capability_ids": capability_relevance.omitted_capability_ids,
+                    "token_budget_used": capability_relevance.token_budget_used,
+                    "token_budget_limit": capability_relevance.token_budget_limit,
+                }
+                if capability_relevance
+                else {}
+            ),
         }
 
     @staticmethod
@@ -1638,6 +1654,47 @@ class AssistantService:
             for item in outcome.results
         ]
 
+    def _select_relevant_tools(
+        self,
+        request: AssistantChatRequest,
+        current_user: dict | None,
+    ) -> tuple[list[str], list[AgentTool], CapabilityRelevanceAssessment | None]:
+        """按任务相关性筛选自动选择工具，并保留用户显式选择。
+
+        Args:
+            request: 当前助手请求。
+            current_user: 当前用户上下文。
+
+        Returns:
+            (筛选后的工具 ID, 实际注入工具, 相关性评估结果)。
+        """
+        requested_ids = [
+            str(item)
+            for item in (request.context.get("selected_tool_ids") or [])
+            if isinstance(item, str) and item.startswith("algorithm:")
+        ]
+        if not requested_ids:
+            return [], [], None
+        _candidate_tools, name_map = self._build_function_tools(requested_ids, current_user)
+        candidate_tools = list(name_map.values())
+        auto_ids = {
+            str(item)
+            for item in (request.context.get("auto_selected_tool_ids") or [])
+            if isinstance(item, str)
+        }
+        protected_ids = [tool_id for tool_id in requested_ids if tool_id not in auto_ids]
+        assessment, selected_tools = self.capability_relevance_service.assess(
+            task_summary=self._latest_user_text(request.messages),
+            tools=candidate_tools,
+            protected_tool_ids=protected_ids,
+            token_budget_limit=int(getattr(
+                settings,
+                "assistant_tool_schema_token_budget",
+                6000,
+            )),
+        )
+        return [tool.tool_id for tool in selected_tools], selected_tools, assessment
+
     def _resolve_selected_tools(
         self,
         selected_tool_ids: list[str],
@@ -1673,7 +1730,10 @@ class AssistantService:
         Returns:
             (事件列表, pending 调用, 无工具调用时的直接回答, 已构建的 function schema, context 事件)
         """
-        selected_tool_ids = request.context.get("selected_tool_ids") or []
+        selected_tool_ids, _selected_tools, capability_relevance = self._select_relevant_tools(
+            request,
+            current_user,
+        )
         tools, name_map = self._build_function_tools(selected_tool_ids, current_user)
         if not tools:
             return [], [], None, [], None
@@ -1694,6 +1754,7 @@ class AssistantService:
             llm_route=llm_route,
             assembly=assembly,
             selected_tool_ids=selected_tool_ids,
+            capability_relevance=capability_relevance,
         )
         context_event = self._context_event(
             request=request,
@@ -1702,6 +1763,8 @@ class AssistantService:
             assembly=assembly,
             tools=selected_tools,
         )
+        if capability_relevance:
+            context_event["capability_relevance"] = capability_relevance.model_dump(mode="json")
         facts["context"] = self._context_metadata(assembly)
         if "tool_calling" not in (llm_route.get("capabilities") or []):
             logger.warning(
@@ -1755,6 +1818,10 @@ class AssistantService:
         proposal_error: str | None = None
         usage_emitted_for_call = False
         call_budget = max_parallel_tool_calls if max_parallel_tool_calls > 1 else 1
+        relevance_by_tool = {
+            item.capability_id: item
+            for item in (capability_relevance.items if capability_relevance else [])
+        }
         for call in tool_calls[:call_budget]:
             function = getattr(call, "function", None)
             if function is None:
@@ -1780,6 +1847,7 @@ class AssistantService:
                 ),
             }
             proposal_usage = message_metadata.get("usage")
+            relevance_item = relevance_by_tool.get(tool.tool_id)
             try:
                 created = assistant_tool_call_service.create(
                     AssistantToolCallCreate(
@@ -1798,8 +1866,14 @@ class AssistantService:
                         proposal_route=self._safe_llm_route(llm_route),
                         proposal_usage=proposal_usage,
                         schema_digest=tool.schema_digest,
-                        selection_reason=f"根据当前 prompt 与已选算法的能力描述匹配：{tool.tool_id}",
-                        selection_confidence=0.5,
+                        selection_reason=(
+                            relevance_item.reason
+                            if relevance_item
+                            else f"根据当前 prompt 与已选算法的能力描述匹配：{tool.tool_id}"
+                        ),
+                        selection_confidence=(
+                            relevance_item.confidence if relevance_item else 0.5
+                        ),
                         source_context=call_source_context,
                     ),
                     current_user,
@@ -2217,7 +2291,15 @@ class AssistantService:
             elif selected_ids:
                 yield {"type": "status", "stage": "tools", "message": "正在分析算法工具调用..."}
                 yield {"type": "context.assembly.started", "request_kind": "tool_proposal"}
-                selected_tools = self._resolve_selected_tools(selected_ids, current_user)
+                _relevance_filtered_ids, selected_tools, capability_relevance = self._select_relevant_tools(
+                    request,
+                    current_user,
+                )
+                if capability_relevance:
+                    yield {
+                        "type": "tool.relevance.assessed",
+                        **capability_relevance.model_dump(mode="json"),
+                    }
                 if selected_tools:
                     yield {
                         "type": "tool.catalog.resolved",

@@ -478,6 +478,54 @@ class AssistantToolOrchestrationApiTest(ComputationTestCase):
         self.assertIn("tool-calling-model", str(persisted["source_context"]["route_snapshot"]))
         self.assertTrue(persisted["source_context"]["context_manifest_digest"])
 
+    def test_stream_filters_auto_selected_tools_and_preserves_manual_selection(self) -> None:
+        """自动选择的无关工具被裁剪，用户显式选择仍完整注入。"""
+        chat_id, message_id = self._chat_and_message()
+        captured: dict = {}
+
+        def fake_chat_message(messages, **kwargs):
+            captured["tools"] = kwargs.get("tools")
+            return self._fake_message(content="已保留显式工具。")
+
+        with patch("app.core.llm_client.chat_message", side_effect=fake_chat_message), patch(
+            "app.services.assistant_service.AssistantWebSearchService.search",
+            side_effect=self._no_web_search,
+        ):
+            events = self._stream_events(
+                {
+                    "messages": [{"role": "user", "content": "预测 CCO 的属性"}],
+                    "context": {
+                        "mode": "qa",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "run_id": "asrun-relevance-stream",
+                        "selected_tool_ids": [
+                            "algorithm:vertical-tool",
+                            "algorithm:list-tool",
+                        ],
+                        "auto_selected_tool_ids": ["algorithm:list-tool"],
+                    },
+                }
+            )
+
+        captured_tool_ids = [
+            tool["function"]["name"].removeprefix("algorithm_")
+            for tool in captured["tools"]
+        ]
+        self.assertEqual(len(captured_tool_ids), 1)
+        self.assertIn("vertical-tool", captured_tool_ids[0])
+        self.assertNotIn("list-tool", captured_tool_ids[0])
+        catalog_event = next(event for event in events if event.get("type") == "tool.catalog.resolved")
+        self.assertEqual(
+            [item["tool_id"] for item in catalog_event["tools"]],
+            ["algorithm:vertical-tool"],
+        )
+        context_event = next(event for event in events if event.get("type") == "context.assembled")
+        relevance = context_event["capability_relevance"]
+        self.assertEqual(relevance["selection_mode"], "dynamic_with_explicit_priority")
+        self.assertIn("algorithm:vertical-tool", relevance["selected_capability_ids"])
+        self.assertIn("algorithm:list-tool", relevance["omitted_capability_ids"])
+
     def test_json_schema_maps_bare_list_and_dict(self) -> None:
         tool = agent_tool_service.resolve_callable(
             "list-tool",

@@ -1,7 +1,8 @@
 # 大装置 Agent 编排与受限执行设计（ALS 范式）
 
 日期：2026-08-20
-状态：架构设计建议 / 待评审
+评审日期：2026-08-27
+状态：已评审 / P0 后端核心已落地
 适用范围：ResearchEngine 编排器、产品内助手工具注入、计算适配器、实验下发与统一安全层
 
 前置与参考：
@@ -11,6 +12,44 @@
 - ResearchEngine 技术方案：`doc/research-engine-and-auto-research-design.md`
 - 实验下发设计：`doc/experiment-dispatch.md`
 - 借鉴分析原文：ALS「大装置 Agent」对 Poly Agent 设计的借鉴分析（本设计依据其优先级建议展开高、中优先级五项）
+
+## 0. 评审记录与 P0 实施状态
+
+### 0.1 评审结论
+
+- **总体通过**：Plan-first 与动态能力选择确实是当前 ResearchEngine 规模化的优先补齐项，且可以完全叠加在既有 Stage/Gate、算法目录和审计链路上，不引入任意脚本执行通道。
+- **时序修正**：`RECOMMENDATION_ASK` 的既有语义是“先产出候选，再让人审批候选”。因此 P0 落地为「调用工具前生成计划 → 按计划执行受管工具 → 携带计划与核验结果进入 blocked_approval」，而不是在产出候选前直接阻断。
+- **选择策略修正**：动态能力筛选必须保留「用户显式选择优先」；P0 先对前端自动选择候选做确定性规则评估、schema token 预算裁剪和事件留痕，few-shot LLM 二元分类作为后续灰度增强，避免首次落地引入额外模型失败面。
+- **兼容策略**：`ResearchStageRun.plan`、`StageGate.plan_policy` 与 `StageGateDecision.plan_review` 均为可选字段，旧数据可继续反序列化；新生成的 StageRun 默认启用规则式计划。
+
+### 0.2 P0 实施清单
+
+#### Plan-first 显式依赖计划
+
+- [x] 新增 `PlanDependency` / `PlanStep` / `StageExecutionPlan` / `StagePlanPolicy` 契约，并挂到 `ResearchStageRun.plan`。
+- [x] 默认 StageContract 启用 `require_plan=true`、`generation_mode=rule`、`block_on_drift=true`。
+- [x] `_advance_stages` 在任何阶段工具调用前生成计划，写入 `plan_generated` 审计事件。
+- [x] `_run_stage_algorithm` 回写实际输入快照；阶段执行后记录工具、输入与制品覆盖的「计划 vs 实际」核验结果。
+- [x] `approve_stage` / `reject_stage` 返回并持久化计划审查结果，审批决策携带 `plan_review`；受管工具步骤发生 `mismatched` 时按 `block_on_drift` 阻断审批。
+- [x] 覆盖 Gate 阻塞计划、审批核验、工具阶段一致性和拒绝留痕测试。
+- [ ] 提供拒绝后的显式「重生成计划」API 与前端操作（当前保留 rejected 计划和决策历史，不自动重试）。
+
+#### 动态能力选择
+
+- [x] 新增 `CapabilityRelevanceItem` / `CapabilityRelevanceAssessment` 契约。
+- [x] 新增 `CapabilityRelevanceService`：中英文轻量分词、泛化词降权、领域词匹配、置信度排序。
+- [x] 用户显式 `selected_tool_ids` 受保护；仅自动选择候选按相关性筛选。
+- [x] 按 `estimate_native_tool_schema_tokens` 做原生 schema 预算裁剪，预算由 `ASSISTANT_TOOL_SCHEMA_TOKEN_BUDGET` 配置。
+- [x] 助手事件流写入 `tool.relevance.assessed` 与 `context.assembled.capability_relevance`。
+- [x] 工具调用 `source_context` 保存筛选模式、注入/裁剪清单和 token 预算摘要。
+- [x] 覆盖相关性、显式优先、预算裁剪和 SSE 工具注入回归测试。
+- [ ] 将规则分类升级为可灰度的 few-shot LLM 二元分类，并增加线上准确率回放指标。
+
+### 0.3 验证记录
+
+- 2026-08-27：新增 Plan-first 专项测试、能力相关性测试和助手 SSE 集成测试；针对性用例通过。
+- 2026-08-27：ResearchEngine 服务/API/E2E/Schema/适配器回归 303 项通过；本机环境导致的 WeKnora 未配置测试隔离问题已单独修复并通过。
+- 2026-08-27：助手工具编排、上下文装配、助手 API 与能力相关性回归 57 项通过；来源标注 API 回归通过。
 
 ## 1. 背景与判断
 
