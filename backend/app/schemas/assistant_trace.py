@@ -29,6 +29,7 @@ AssistantTraceStepType = Literal[
     "approval",
     "export",
     "feedback",
+    "agent_exec",
     "error",
     "final",
 ]

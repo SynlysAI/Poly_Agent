@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from app.core.time import utc_now
+from app.infra.agent_exec_repositories import AgentExecAuditWriter
 from app.schemas.agent_exec import (
     AgentExecExecutionRequest,
     AgentExecPolicyUpdateRequest,
@@ -123,6 +124,12 @@ class AgentExecPolicyService:
             self._saver(updated)
         else:
             self._memory_policies[provider.provider_id] = updated
+        AgentExecAuditWriter.write_policy_updated(
+            provider_id=provider.provider_id,
+            before=current,
+            after=updated,
+            updated_by=updated_by,
+        )
         return current, updated
 
     def check_request_policy(

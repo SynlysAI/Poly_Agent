@@ -252,17 +252,17 @@ backend/app/api/v1/endpoints/agent_exec.py
 - [x] provider unavailable 时不创建外部进程，返回结构化 unavailable，并允许调用方继续既有本地路径。
 - [x] 补充边界测试：allowlist、路径穿越、symlink、大小、文件数、超时、取消、输出逃逸、输出超限、unavailable 和 policy 拒绝。
 
-### P15-D. 存储、Audit 与 Trace 接入
+### P15-D. 存储、Audit 与 Trace 接入 ✅
 
-- [ ] 新增 `backend/app/infra/agent_exec_repositories.py`，提供 Mongo / SQLite 双模 run、artifact、policy 和事件查询。
-- [ ] 为 SQLite 初始化 `agent_exec_runs`、`agent_exec_artifacts`、`agent_exec_provider_policies` 及索引；Mongo 建立 run_id、provider_id、status、chat_id、created_by 和 created_at 索引。
-- [ ] `agent_exec_provider_policies` 默认行为：无记录即视为 `enabled=false`、`allowed_roles=["admin"]`、`allowed_task_types=["structured_file_task"]`、`requires_confirmation=true`。
-- [ ] 每次执行写入第 6.1 节事件，并调用 `AuditEventRepository.append` 记录跨模块审计。
-- [ ] policy 更新写 `agent_exec.policy.updated`，记录 `updated_by`、变更前后摘要（不含 secret）。
-- [ ] 带 `chat_id` / `assistant_tool_call_id` 的调用写入现有 `assistant_events`，事件 metadata 记录 run_id、provider_id、task_type、policy 快照和 source。
-- [ ] 扩展 Plan 09 Trace 投影可识别 `agent_exec.*` 事件，但不复制 Trace 存储或新建前端事实源。
-- [ ] 事件内容脱敏：不记录 API key、完整环境变量、完整 prompt、hidden reasoning 和未授权用户数据。
-- [ ] 补充存储、owner 校验、事件顺序、policy 更新审计、失败终态、取消终态、审计字段和 Trace 投影测试。
+- [x] 新增 `backend/app/infra/agent_exec_repositories.py`，提供 Mongo / SQLite 双模 run、artifact、policy 和事件查询。
+- [x] 为 SQLite 初始化 `agent_exec_runs`、`agent_exec_artifacts`、`agent_exec_provider_policies` 及索引；Mongo 建立 run_id、provider_id、status、chat_id、created_by 和 created_at 索引。
+- [x] `agent_exec_provider_policies` 默认行为：无记录即视为 `enabled=false`、`allowed_roles=["admin"]`、`allowed_task_types=["structured_file_task"]`、`requires_confirmation=true`。
+- [x] 每次执行写入第 6.1 节事件，并调用 `AuditEventRepository.append` 记录跨模块审计。
+- [x] policy 更新写 `agent_exec.policy.updated`，记录 `updated_by`、变更前后摘要（不含 secret）。
+- [x] 带 `chat_id` / `assistant_tool_call_id` 的调用写入现有 `assistant_events`，事件 metadata 记录 run_id、provider_id、task_type、policy 快照和 source。
+- [x] 扩展 Plan 09 Trace 投影可识别 `agent_exec.*` 事件，但不复制 Trace 存储或新建前端事实源。
+- [x] 事件内容脱敏：不记录 API key、完整环境变量、完整 prompt、hidden reasoning 和未授权用户数据。
+- [x] 补充存储、owner 校验、事件顺序、policy 更新审计、失败终态、取消终态、审计字段和 Trace 投影测试。
 
 ### P15-E. 连接器管理 API 与最小可观测性
 
@@ -397,3 +397,4 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-27：完成 P15-A，新增 agent_exec 契约 schema、provider Protocol/错误契约、registry 与默认关闭配置，补充契约测试并通过。
 - 2026-08-27：完成 P15-B，新增 Codex 受限 sandbox 适配器（readiness 不执行二进制）、结构化日志摘要与 mock subprocess 测试，P15-A/P15-B 共 16 项测试通过。
 - 2026-08-27：完成 P15-C，新增策略治理服务（固定校验顺序与确认状态机）、受限执行服务（allowlist、路径/symlink/大小边界、输出扫描、超时取消与稳定终态），42 项相关测试通过。
+- 2026-08-27：完成 P15-D，新增 agent_exec 双模存储与索引、统一 Audit/assistant 事件写入、策略更新审计、脱敏与 Plan 09 Trace agent_exec 步骤投影；存储/事件/Trace 测试与既有 Trace 回归通过。

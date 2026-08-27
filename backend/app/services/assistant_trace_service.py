@@ -787,6 +787,48 @@ class AssistantTraceProjectionService:
                     details={"result_summary": {"references": len(data.get("references") or [])}},
                 )
 
+            if event_type.startswith("agent_exec."):
+                agent_run_id = str(data.get("run_id") or event_id)
+                provider_id = str(data.get("provider_id") or "")
+                step_status = "running"
+                summary = "外部 Agent 文件任务已受理"
+                if event_type == "agent_exec.provider_ready":
+                    summary = "外部 Agent 连接器已就绪"
+                elif event_type == "agent_exec.started":
+                    summary = "外部 Agent 正在受限 workdir 内执行"
+                elif event_type == "agent_exec.completed":
+                    step_status = "success"
+                    summary = "外部 Agent 任务已完成"
+                elif event_type in {
+                    "agent_exec.failed",
+                    "agent_exec.cancelled",
+                    "agent_exec.policy.rejected",
+                    "agent_exec.provider_unavailable",
+                }:
+                    step_status = "failed"
+                    summary = (
+                        self._safe_text(data.get("message"), 180)
+                        or self._safe_text(data.get("error_message"), 180)
+                        or "外部 Agent 任务未执行成功"
+                    )
+                self._upsert(
+                    accumulator,
+                    step_id=f"agent_exec:{agent_run_id}",
+                    step_type="agent_exec",
+                    title="外部 Agent 文件任务",
+                    summary=summary,
+                    status=step_status,
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        command_id=data.get("command_id"),
+                        result_summary={"provider_id": provider_id},
+                    ),
+                    started_at=None if step_status in {"success", "failed"} else timestamp,
+                    ended_at=timestamp if step_status in {"success", "failed"} else None,
+                )
+
             if event_type == "llm.request.started":
                 request_id = str(data.get("request_id") or event_id)
                 llm_started.add(request_id)

@@ -13,6 +13,12 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.time import utc_now
+from app.infra.agent_exec_repositories import (
+    AgentExecArtifactRepository,
+    AgentExecAuditWriter,
+    AgentExecProviderPolicyRepository,
+    AgentExecRunRepository,
+)
 from app.schemas.agent_exec import (
     AgentExecArtifactData,
     AgentExecExecutionRequest,
@@ -109,10 +115,13 @@ class AgentExecService:
             artifact_resolver: 受管输入对象解析回调。
         """
         self._registry = registry or build_default_agent_exec_registry()
-        self._policy_service = policy_service or AgentExecPolicyService()
-        self._event_sink = event_sink or (lambda event: None)
-        self._run_persister = run_persister
-        self._run_reader = run_reader
+        self._policy_service = policy_service or AgentExecPolicyService(
+            policy_loader=AgentExecProviderPolicyRepository.get_policy,
+            policy_saver=AgentExecProviderPolicyRepository.save_policy,
+        )
+        self._event_sink = event_sink or AgentExecAuditWriter.write_event
+        self._run_persister = run_persister or self._persist_run
+        self._run_reader = run_reader or AgentExecRunRepository.get_run
         self._artifact_resolver = artifact_resolver or self._default_artifact_resolver
         self._runs: dict[str, AgentExecRunData] = {}
         self._active_runs: dict[str, threading.Event] = {}
@@ -826,6 +835,17 @@ class AgentExecService:
                 "created_at": utc_now(),
             }
         )
+
+    @staticmethod
+    def _persist_run(run: AgentExecRunData) -> None:
+        """把 run 与 artifact 清单写入双模存储。
+
+        Args:
+            run: 当前 run。
+        """
+        AgentExecRunRepository.save_run(run)
+        if run.artifacts:
+            AgentExecArtifactRepository.save_artifacts(run.run_id, run.artifacts)
 
     @staticmethod
     def _sha256(path: Path) -> str:
