@@ -1,8 +1,8 @@
-# Plan 15：受控外部 Agent 执行 Provider Seam 工作计划
+# Plan 15：受控外部 Agent 执行 Provider Seam 与 Agent 连接器治理工作计划
 
 > 状态：待评审 / 未开始
 >
-> 日期：2026-08-19
+> 日期：2026-08-19（初稿）；2026-08-27（修订：新增 Agent 连接器治理，统一能力入口拆分至 Plan 16）
 >
 > 前置文档：
 > - [research-engine-plan-09-lui-execution-trace.md](research-engine-plan-09-lui-execution-trace.md)
@@ -11,10 +11,12 @@
 > - [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md)
 >
 > 拆分说明：本计划承接 Plan 12 的 `agent_exec` 外部执行 provider seam；Plan 12 只保留“材料研发领域工作台、通用 harness 可替换但不绑定”的产品定位。
+>
+> 修订说明（2026-08-27）：参考 Manus 的连接器交互模式，把 Codex 这类受控外部 Agent 在产品语义上呈现为“Agent 连接器”，补齐连接器卡片、调用策略、角色限制、确认执行、readiness、run 管理和审计；明确“参考 Manus 的连接器交互模式，但不复制其市场、浏览器连接器或插件生态”。全局“连接器 + Skill + Agent + 权限管理”大入口的范围超过本计划外部执行安全内核，拆分至 [Plan 16：统一能力中心与权限治理](research-engine-plan-16-capability-center-and-permission-governance-workplan.md)。
 
 ## 1. 摘要
 
-PolyAgent 不自研或引入通用 agent harness，而是为 Codex / PI / DSH 这类外部执行能力提供统一的受控 provider seam。该 seam 只允许处理显式声明输入、输出和授权范围的文件型任务，不允许暴露通用 Shell、任意文件读写、任意网络访问或插件市场。
+PolyAgent 不自研或引入通用 agent harness，而是为 Codex / PI / DSH 这类外部执行能力提供统一的受控 provider seam。该 seam 只允许处理显式声明输入、输出和授权范围的文件型任务，不允许暴露通用 Shell、任意文件读写、任意网络访问或插件市场。在产品侧，该 seam 以“Agent 连接器”视图呈现：每个受控外部 Agent 是一张连接器卡片，附带 readiness、调用策略、角色限制、确认要求和来源标注。
 
 目标链路：
 
@@ -24,7 +26,7 @@ PolyAgent 不自研或引入通用 agent harness，而是为 Codex / PI / DSH �
                    → audit / trace / 结果回填 → provider 缺失时走既有兜底
 ```
 
-MVP 只实现 provider 契约、执行服务、Codex 适配器和后端管理接口；PI / DSH 仅保留接口兼容评估，不在本期接入。
+MVP 只实现 provider 契约、连接器策略治理、执行服务、Codex 适配器和后端管理接口；PI / DSH 仅保留接口兼容评估，不在本期接入。
 
 ## 2. 目标与非目标
 
@@ -35,7 +37,9 @@ MVP 只实现 provider 契约、执行服务、Codex 适配器和后端管理接
 - 实现独立执行服务：输入 allowlist、路径边界、大小限制、输出扫描、超时、取消和失败兜底。
 - 将执行请求、readiness、开始、结束、取消、失败和 artifact 清单写入现有 Audit；带会话上下文时进入 Plan 09/10 Trace。
 - 以 Codex 作为首个受控适配器，仅支持显式输入文件和结构化输出，不暴露通用工具面。
-- 提供管理员 readiness / run 查询 API，先不做普通用户直连入口。
+- 新增“Agent 连接器”产品视图：连接器卡片展示 readiness、支持任务类型、sandbox 摘要、来源标注；管理员可配置调用策略，普通用户受策略限制。
+- 提供连接器策略治理：默认关闭、默认 admin-only、默认强制确认，策略持久化并写入审计。
+- 提供管理员 readiness / run 查询与策略管理 API，并在现有 `/tools` 增加最小连接器入口（不做全局大入口）。
 
 ### 2.2 非目标
 
@@ -43,7 +47,10 @@ MVP 只实现 provider 契约、执行服务、Codex 适配器和后端管理接
 - 不引入 Cordis、DSH TypeScript runtime 或 PI Agent 运行时依赖。
 - 不允许外部 provider 访问项目根目录、数据库、凭据、SSH 配置或未列入 allowlist 的文件。
 - 不把 provider 失败自动升级为任意本地命令执行；失败只能返回结构化错误或回退到既有服务路径。
-- 不在本期实现 PI / DSH 适配器、前端任务编排界面和多租户配额。
+- 不在本期实现 PI / DSH 适配器、多租户配额。
+- 不做类似 Manus 图 1 的全局“连接器 + Skill + Agent + 权限管理”大入口；该入口横跨外部服务集成、算法工具、报告 Skill、LLM Provider 与用户管理，拆分至 Plan 16。
+- 不做客户端动态注册连接器、上传插件、声明任意网络访问能力或插件市场。
+- 不把 `agent_exec` 并入现有 `IntegrationServiceKey` 字面量；两者健康检查、凭据边界和调用语义不同，Plan 16 后续只做聚合展示，不合并事实源。
 - 不替代现有 ReportProviderRegistry 的报告生成链路；报告场景仅在边界一致时评估复用。
 
 ## 3. 当前基线
@@ -52,13 +59,32 @@ MVP 只实现 provider 契约、执行服务、Codex 适配器和后端管理接
 | --- | --- | --- |
 | Codex 报告生成 | `report_providers/codex_exec.py` 可用 `codex exec --json` 生成结构化报告，并已有超时、临时目录和 JSON Schema 校验 | 只服务报告，不提供通用 `agent_exec` 契约、readiness API、输入 allowlist 或 run 状态 |
 | Provider 缺省 | ReportProviderRegistry 按请求实例化，provider 缺失不阻断应用启动 | 尚无 `agent_exec` 的统一 unavailable 语义 |
-| 权限与确认 | Plan 10 已有 Permission Mode、Plan Mode、Goal / Todo 和审批状态 | `agent_exec` 尚未接入这些控制面 |
+| 权限与确认 | Plan 10 已有 Permission Mode、Plan Mode、Goal / Todo 和审批状态 | `agent_exec` 尚未接入这些控制面；尚无连接器策略治理 |
 | Trace / Audit | Plan 09/10 已有 append-only 事件、Trace 投影与 AuditEventRepository | 外部执行 run 尚无事件契约和回放 |
 | 安全边界 | 报告 provider 使用临时目录和环境变量过滤 | 尚无任务级 workdir、输入输出扫描、大小限制和取消语义 |
+| 连接器视图 | 现有 `/tools`（`ToolServicesView.vue`）已集成外部服务、LLM 模型与算法工具 | 尚无“Agent 连接器”区域与策略治理 UI |
+| 来源标注 | `AttributionService` 与来源矩阵已覆盖主要模块 | 尚未登记 Codex 作为外部执行 provider 的来源与边界 |
 
-## 4. Provider 契约
+## 4. 概念与边界
 
-### 4.1 核心接口
+### 4.1 Agent 连接器视图语义
+
+- 保留 `AgentExecProvider` 作为后端执行适配器语义；新增产品侧“Agent 连接器”视图语义。
+- MVP 中 `connector_id = provider_id`，首个连接器仅为 `codex`。
+- 连接器目录由服务端配置和代码注册，禁止客户端动态注册连接器、上传插件或声明任意网络访问能力。
+- 不把 `agent_exec` 并入现有 `IntegrationServiceKey` 字面量；两者健康检查、凭据边界和调用语义不同。Plan 16 后续只做聚合展示，不合并事实源。
+- 参考 Manus 的连接器交互模式（卡片化展示、调用策略、确认执行），但不复制其插件市场、浏览器连接器或任意 OAuth 连接器安装生态。
+
+### 4.2 与 Plan 16 的边界
+
+- Plan 15 交付受控 Agent 连接器的执行安全内核与连接器管理 API。
+- Plan 16 把现有 `/tools` 升级为能力中心，聚合展示连接器、Skill、算法工具与 LLM Provider，并在 `/admin` 补齐用户与邀请码管理 UI。
+- Plan 16 只读消费 Plan 15 的 `GET /agent-exec/providers`，不代理写操作，不重建第二套 provider、policy 或 trace 事实源。
+- Plan 16 可在 Plan 15 的 provider policy API 稳定后启动，但不阻塞 Plan 15 的 P15-A 到 P15-F。
+
+## 5. Provider 契约与策略模型
+
+### 5.1 核心接口
 
 新增 `AgentExecProvider` Protocol：
 
@@ -77,7 +103,7 @@ class AgentExecProvider(Protocol):
         """在受限 workdir 中执行显式文件型任务并返回结构化结果。"""
 ```
 
-### 4.2 任务类型
+### 5.2 任务类型
 
 | task_type | 输入 | 输出 | MVP |
 | --- | --- | --- | --- |
@@ -87,7 +113,7 @@ class AgentExecProvider(Protocol):
 
 任务类型必须在注册表中显式声明；未知类型直接拒绝，不做自由文本能力推断。
 
-### 4.3 安全不变量
+### 5.3 安全不变量
 
 - 默认关闭：未配置 `AGENT_EXEC_ENABLED=true` 时 registry 为空且 API 返回 unavailable。
 - 独立 workdir：每次 run 使用 `AGENT_EXEC_WORKDIR_ROOT/{run_id}`，不复用报告临时目录。
@@ -98,36 +124,69 @@ class AgentExecProvider(Protocol):
 - 审计优先：无论成功失败，都记录 provider、task_type、input manifest、workdir、耗时、输出清单、错误码和 actor。
 - 缺省 fallback：provider 不可用时不阻断应用启动；调用方收到结构化 unavailable，并可继续走既有非外部 Agent 路径。
 
-## 5. 目标架构
+### 5.4 连接器治理契约
+
+在 `agent_exec` schema 中新增连接器治理契约：
+
+- `AgentExecProviderPolicy`
+  - `provider_id`
+  - `enabled: bool = false`
+  - `allowed_task_types: list[str]`，默认仅 `structured_file_task`
+  - `allowed_roles: list[Literal["admin", "user"]]`，默认 `["admin"]`
+  - `requires_confirmation: bool = true`
+  - `updated_by` / `updated_at`
+- `AgentExecProviderConnection`
+  - provider 元数据、display name、readiness、配置来源、支持任务类型、sandbox 摘要、unavailable 原因、policy、attribution。
+- 策略持久化到 `agent_exec_provider_policies`，兼容 SQLite 与 Mongo。
+- 服务端调用校验顺序固定为：
+  1. 用户角色在 `allowed_roles`
+  2. provider policy enabled
+  3. task_type 在 provider 支持列表和 policy allowlist
+  4. provider readiness 通过
+  5. Plan 10 Permission Mode / Plan Mode / 确认状态机通过
+  6. 输入 allowlist 与资源限制通过
+- 新增审计事件：
+  - `agent_exec.policy.updated`
+  - `agent_exec.policy.rejected`
+  - 保留原 `agent_exec.*` 生命周期事件。
+
+## 6. 目标架构
 
 ```text
 backend/app/schemas/agent_exec.py
   ├─ readiness / request / run / event / artifact schema
+  └─ AgentExecProviderPolicy / AgentExecProviderConnection
 
 backend/app/services/agent_exec_providers/
   ├─ base.py        # Protocol、错误与结果契约
   ├─ registry.py    # provider 注册、readiness 聚合、缺省 fallback
-  └─ codex.py       # Codex MVP 适配器
+  └─ codex.py       # Codex MVP 适配器（含连接器元数据与 attribution）
 
 backend/app/services/agent_exec_service.py
   ├─ 创建 run 与独立 workdir
+  ├─ policy 校验（角色 / enabled / task_type / readiness / 确认 / allowlist）
   ├─ 复制 allowlist 输入并扫描输出
   ├─ 调 provider、处理超时/取消/失败
   └─ 写 Audit，携带 chat/tool 上下文时写 assistant event
 
+backend/app/services/agent_exec_policy_service.py
+  └─ 策略读取、更新、校验与 policy 快照
+
 backend/app/infra/agent_exec_repositories.py
-  └─ run / artifact / event 的 Mongo 与 SQLite 双模存储
+  └─ run / artifact / event / policy 的 Mongo 与 SQLite 双模存储
 
 backend/app/api/v1/endpoints/agent_exec.py
-  └─ 管理员 readiness、run 查询与取消 API
+  └─ 管理员连接器卡片、policy 更新、run 查询与取消 API
 ```
 
-### 5.1 事件模型
+### 6.1 事件模型
 
 `agent_exec_runs` 保存权威状态，`audit_events` 保存跨模块审计事实；带 `chat_id` 的调用同步写入现有 `assistant_events`，由 Plan 09/10 Trace 投影消费，不新增第二套 Trace。
 
 | event_type | 时机 |
 | --- | --- |
+| `agent_exec.policy.updated` | 管理员更新 provider policy 后 |
+| `agent_exec.policy.rejected` | 调用被 policy 校验拒绝时（记录拒绝原因摘要，不含敏感输入） |
 | `agent_exec.requested` | 请求通过基础校验后 |
 | `agent_exec.provider_ready` | readiness 通过 |
 | `agent_exec.provider_unavailable` | provider 缺失、禁用或配置无效 |
@@ -138,7 +197,7 @@ backend/app/api/v1/endpoints/agent_exec.py
 
 事件 payload 不记录完整 prompt、hidden reasoning、凭据和未脱敏环境变量。
 
-## 6. 分阶段任务
+## 7. 分阶段任务
 
 ### P15-A. 契约、配置与 registry
 
@@ -149,6 +208,8 @@ backend/app/api/v1/endpoints/agent_exec.py
   - `AgentExecProviderResult`
   - `AgentExecRunData`
   - `AgentExecArtifactData`
+  - `AgentExecProviderPolicy`（默认 `enabled=false`、`allowed_roles=["admin"]`、`allowed_task_types=["structured_file_task"]`、`requires_confirmation=true`）
+  - `AgentExecProviderConnection`（provider 元数据、readiness、配置来源、sandbox 摘要、policy、attribution）
 - [ ] 新增 `backend/app/services/agent_exec_providers/base.py`，定义 Protocol、错误类型和结构化 unavailable 结果。
 - [ ] 新增 `backend/app/services/agent_exec_providers/registry.py`，支持按 provider_id / task_type 解析，并聚合 readiness。
 - [ ] 在 `backend/app/core/config.py` 增加：
@@ -174,58 +235,87 @@ backend/app/api/v1/endpoints/agent_exec.py
 - [ ] 明确使用 Codex CLI 的受限 sandbox 模式；无法确认 sandbox 能力时 readiness 返回 unavailable，不得降级为无沙箱执行。
 - [ ] 捕获二进制缺失、非零退出、超时、输出缺失、JSON Schema 不匹配和环境配置错误。
 - [ ] 返回结构化 `stdout_digest` / `stderr_digest`，不保存完整无限长日志。
+- [ ] 声明连接器元数据：`provider_id="codex"`、`display_name`、支持任务类型、sandbox 摘要、配置来源（脱敏）、attribution（“执行能力来自 Codex CLI”）。
 - [ ] 补充 mock subprocess 测试：成功、缺二进制、非零退出、超时、schema 失败、sandbox 参数不支持。
 
 ### P15-C. 执行服务与安全边界
 
 - [ ] 新增 `backend/app/services/agent_exec_service.py`，统一创建 run、准备输入、调用 provider、校验输出和清理状态。
+- [ ] 新增 `backend/app/services/agent_exec_policy_service.py`，实现策略读取、更新、校验顺序（角色 → enabled → task_type → readiness → 确认 → allowlist）与 policy 快照。
 - [ ] run_id 使用服务端生成，禁止客户端指定或路径拼接。
+- [ ] 调用前按 5.4 节固定顺序做 policy 校验；任一步骤不通过返回结构化 unavailable / 403 / 400，并写 `agent_exec.policy.rejected`。
 - [ ] 输入文件必须来自服务端受管 artifact / 临时上传目录，逐个记录 path、size、sha256 和来源对象 ID。
 - [ ] 复制前解析 symlink 与 realpath，拒绝 workdir 外路径、目录逃逸、硬链接语义不确定的文件和超过限额的输入。
 - [ ] provider 输出只允许 JSON 结果文件和显式 artifact 目录；扫描路径穿越、symlink、隐藏文件、可执行位、空文件和总大小。
 - [ ] 超时后终止进程，run 标记 failed / timeout，保留脱敏事件与有限日志，清理可执行产物。
 - [ ] 支持服务端取消；已结束后取消返回稳定终态，不产生竞态覆盖。
 - [ ] provider unavailable 时不创建外部进程，返回结构化 unavailable，并允许调用方继续既有本地路径。
-- [ ] 补充边界测试：allowlist、路径穿越、symlink、大小、文件数、超时、取消、输出逃逸、输出超限和 unavailable。
+- [ ] 补充边界测试：allowlist、路径穿越、symlink、大小、文件数、超时、取消、输出逃逸、输出超限、unavailable 和 policy 拒绝。
 
 ### P15-D. 存储、Audit 与 Trace 接入
 
-- [ ] 新增 `backend/app/infra/agent_exec_repositories.py`，提供 Mongo / SQLite 双模 run、artifact 和事件查询。
-- [ ] 为 SQLite 初始化对应表和索引；Mongo 建立 run_id、provider_id、status、chat_id、created_by 和 created_at 索引。
-- [ ] 每次执行写入第 5.1 节事件，并调用 `AuditEventRepository.append` 记录跨模块审计。
-- [ ] 带 `chat_id` / `assistant_tool_call_id` 的调用写入现有 `assistant_events`，事件 metadata 记录 run_id、provider_id、task_type 和 source。
+- [ ] 新增 `backend/app/infra/agent_exec_repositories.py`，提供 Mongo / SQLite 双模 run、artifact、policy 和事件查询。
+- [ ] 为 SQLite 初始化 `agent_exec_runs`、`agent_exec_artifacts`、`agent_exec_provider_policies` 及索引；Mongo 建立 run_id、provider_id、status、chat_id、created_by 和 created_at 索引。
+- [ ] `agent_exec_provider_policies` 默认行为：无记录即视为 `enabled=false`、`allowed_roles=["admin"]`、`allowed_task_types=["structured_file_task"]`、`requires_confirmation=true`。
+- [ ] 每次执行写入第 6.1 节事件，并调用 `AuditEventRepository.append` 记录跨模块审计。
+- [ ] policy 更新写 `agent_exec.policy.updated`，记录 `updated_by`、变更前后摘要（不含 secret）。
+- [ ] 带 `chat_id` / `assistant_tool_call_id` 的调用写入现有 `assistant_events`，事件 metadata 记录 run_id、provider_id、task_type、policy 快照和 source。
 - [ ] 扩展 Plan 09 Trace 投影可识别 `agent_exec.*` 事件，但不复制 Trace 存储或新建前端事实源。
 - [ ] 事件内容脱敏：不记录 API key、完整环境变量、完整 prompt、hidden reasoning 和未授权用户数据。
-- [ ] 补充存储、owner 校验、事件顺序、失败终态、取消终态、审计字段和 Trace 投影测试。
+- [ ] 补充存储、owner 校验、事件顺序、policy 更新审计、失败终态、取消终态、审计字段和 Trace 投影测试。
 
-### P15-E. 管理 API 与最小可观测性
+### P15-E. 连接器管理 API 与最小可观测性
 
 - [ ] 新增 `backend/app/api/v1/endpoints/agent_exec.py` 并挂载到 v1 router。
-- [ ] `GET /agent-exec/providers`：管理员查看 provider readiness、配置来源、支持 task_type 和 unavailable 原因。
-- [ ] `POST /agent-exec/runs`：仅服务端内部调用和管理员受控测试；请求必须显式 task_type、provider_id、输入清单、输出 Schema 和超时。
-- [ ] `GET /agent-exec/runs/{run_id}`：管理员查看脱敏 run 状态、事件和 artifact manifest。
+- [ ] `GET /agent-exec/providers`：返回管理员可见的连接器卡片、readiness、policy、task_type、attribution 和脱敏配置来源。
+- [ ] `PATCH /agent-exec/providers/{provider_id}/policy`：仅管理员更新 `enabled`、`allowed_task_types`、`allowed_roles`、`requires_confirmation`；不允许修改 secret、workdir 绝对路径、sandbox 参数或 provider 支持能力。
+- [ ] `POST /agent-exec/runs`：仅服务端内部调用和管理员受控测试；请求必须显式 task_type、provider_id、输入清单、输出 Schema 和超时，并受 policy 校验。
+- [ ] `GET /agent-exec/runs/{run_id}`：管理员查看脱敏 run 状态、事件、policy 判断摘要和 artifact manifest。
 - [ ] `POST /agent-exec/runs/{run_id}/cancel`：管理员取消未结束 run。
 - [ ] API 不返回 workdir 绝对路径、凭据、完整 prompt 或未脱敏环境。
 - [ ] 增加 run 成功率、unavailable、timeout、cancel、输入输出大小和耗时的质量摘要，先复用现有 metrics/quality 输出模式。
-- [ ] 补充 API 测试：未登录、普通用户、管理员、provider 缺失、run 不存在、owner 越权和取消竞态。
+- [ ] `allowed_task_types` 不能超过 provider 声明范围，越界返回 400。
+- [ ] 补充 API 测试：未登录、普通用户、管理员、provider 缺失、run 不存在、owner 越权、取消竞态和 policy 越界。
 
-### P15-F. LUI 与报告链路接入评估
+### P15-F. LUI 接入：默认关闭与受控暴露
 
-- [ ] 在 P15-A–P15-E 完成后，评估 `/dialogue` 是否以显式确认的专用工具形式暴露 `structured_file_task`。
-- [ ] 若暴露给 LUI，必须复用 Plan 10 Permission Mode、Plan Mode、确认状态机和审批，不允许模型自动授权。
+将原“评估是否暴露”改为明确的默认关闭方案：
+
+- [ ] 默认不暴露给 `/dialogue`。
+- [ ] 仅当以下条件全部满足才暴露一个专用工具“外部 Agent 文件任务”：
+  - provider readiness 通过；
+  - policy enabled；
+  - 当前角色在 `allowed_roles`；
+  - `structured_file_task` 已允许；
+  - Plan 10 确认状态机可用。
+- [ ] LUI 调用必须展示并让用户确认：provider / connector、task_type、输入文件清单与大小、输出 Schema、超时与输出限制。
+- [ ] 模型不能自动授权；未确认、只读权限、Plan Mode 中均不可执行。
+- [ ] 不做通用任务编排画布，不做自由 Shell 或任意文件路径输入。
 - [ ] 评估报告服务是否从 Codex ReportProvider 迁移到 `agent_exec`；只有安全边界和输出契约一致时才迁移，否则保留双路径并说明理由。
 - [ ] 输出 PI / DSH 接入评估：只比较 readiness、沙箱、artifact、超时、审计和凭据边界，不引入 runtime 依赖。
 - [ ] 更新用户指南和来源矩阵，明确外部 provider 是可选能力，不宣称 PolyAgent 绑定或复制这些产品。
 
-## 7. 测试计划
+### P15-G. 前端最小连接器入口
 
-### 7.1 后端单元与 API 测试
+在现有 `ToolServicesView.vue` 增加“Agent 连接器”区域，不做全局大入口：
+
+- [ ] 展示 Codex 卡片：readiness / disabled / unavailable 状态与原因、支持 task_type、sandbox 与输入输出限制与超时摘要、最近 run 成功率与耗时摘要、“执行能力来自 Codex CLI”的 AttributionBanner。
+- [ ] 管理员可修改：启用 / 禁用、允许角色、允许任务类型、是否强制确认；表单走 `PATCH /agent-exec/providers/{provider_id}/policy`。
+- [ ] 管理员可发起受控测试，表单仍走 `POST /agent-exec/runs`，不得绕过服务端 policy。
+- [ ] 普通用户只能看到不可用原因或完全隐藏，不能看到 secret、workdir、完整 prompt 或环境变量。
+- [ ] 前端不缓存 policy 本地副本作为执行依据，所有执行判定以后端为准。
+- [ ] 补充前端测试：管理员可见卡片与 AttributionBanner、普通用户不可修改 policy、状态展示与后端一致。
+
+## 8. 测试计划
+
+### 8.1 后端单元与 API 测试
 
 ```bash
 conda run -n poly_agent python -m pytest \
   backend/tests/test_agent_exec_contract.py \
   backend/tests/test_agent_exec_codex_provider.py \
   backend/tests/test_agent_exec_service.py \
+  backend/tests/test_agent_exec_policy.py \
   backend/tests/test_agent_exec_events.py \
   backend/tests/test_agent_exec_api.py -q
 ```
@@ -236,10 +326,16 @@ conda run -n poly_agent python -m pytest \
 - readiness 不产生副作用、不执行外部二进制。
 - workdir、allowlist、路径、symlink、文件数、大小、超时和取消。
 - JSON Schema、输出 artifact、日志摘要和错误终态。
-- Audit / assistant event 顺序、owner 权限、脱敏和 Trace 投影。
+- policy 默认禁用、默认 admin-only、默认仅 `structured_file_task`。
+- 未知 provider、未知 task_type、角色不允许、policy disabled、readiness failed 均返回结构化 unavailable / 403 / 400。
+- policy 更新仅 admin 可用，普通用户和未登录用户被拒绝。
+- `allowed_task_types` 不能超过 provider 声明范围。
+- policy 变更写 Audit，run 记录 policy 快照。
+- Audit / assistant event 顺序、owner 权限、脱敏和 Trace 投影（policy rejected、requested、started、completed / failed / cancelled 可回放）。
+- 连接器 API 不泄漏 secret、workdir、完整 prompt 和未脱敏环境。
 - 管理 API 的 RBAC、错误响应和稳定终态。
 
-### 7.2 回归测试
+### 8.2 回归测试
 
 ```bash
 conda run -n poly_agent python -m pytest \
@@ -250,21 +346,24 @@ conda run -n poly_agent python -m pytest \
   backend/tests/test_assistant_trace_projection.py -q
 ```
 
-### 7.3 前端与 E2E
+### 8.3 前端与 E2E
 
-- P15-A–P15-E 不修改前端时仅需 `cd frontend && npm run build`。
-- P15-F 若新增 LUI 入口，补充命令/工具目录测试，并执行相关 `assistant` 前端测试。
-- E2E 覆盖：provider unavailable 不影响 `/dialogue`；授权、确认、执行、失败、取消和 Trace 回放。
+- P15-A–P15-F 不修改前端时仅需 `cd frontend && npm run build`。
+- P15-G 新增连接器区域后，补充 `ToolServicesView` 相关前端测试。
+- E2E 覆盖：provider unavailable 不影响 `/dialogue`；管理员可见 Codex 卡片与 AttributionBanner；普通用户不能修改 policy；授权、确认、执行、失败、取消和 Trace 回放；LUI 默认不可见，满足全部条件后仍须显式确认才执行。
 
-## 8. 兼容与迁移策略
+## 9. 兼容与迁移策略
 
 - 保持现有 `report_providers/codex_exec.py` 不变，直到 P15-F 证明迁移安全。
 - 新配置默认关闭，不影响已有部署。
+- 连接器默认关闭、默认 admin-only、默认强制确认。
+- secret 只允许环境变量或密钥引用，不允许进入前端或配置摘要。
 - 首版 API 仅管理员可访问，避免普通用户直接触发外部执行。
 - 存储迁移必须兼容 SQLite demo 模式与 Mongo 部署模式。
 - 事件类型进入 Plan 09/10 Trace 白名单时保持向后兼容；历史无 `agent_exec.*` 事件的回放结果不变。
+- Plan 16 只读消费 `GET /agent-exec/providers`，不依赖 Plan 15 前端实现，可在 provider policy API 稳定后独立启动。
 
-## 9. 风险与规避
+## 10. 风险与规避
 
 | 风险 | 影响 | 规避 |
 | --- | --- | --- |
@@ -274,17 +373,24 @@ conda run -n poly_agent python -m pytest \
 | 与报告 provider 双路径混淆 | 同一外部能力出现两套安全语义 | P15-F 明确保留或迁移决策，并写入来源矩阵 |
 | 事件写入失败但进程已执行 | 审计缺失 | requested/started 事件先落库；后续事件失败时 run 标记 audit_error 并告警 |
 | 未来 PI / DSH 接入过快 | 引入不受控 runtime | 只做接口评估；未通过 sandbox/readiness/audit 验收不注册 provider |
+| 策略误配导致越权执行 | 普通用户触发未授权外部执行 | 默认 admin-only + 强制确认 + 固定校验顺序；policy 变更写审计；前端不作为执行依据 |
+| 前端泄漏敏感配置 | secret / workdir / 完整 prompt 暴露 | API 只返回脱敏摘要；普通用户隐藏或仅看不可用原因；前端不缓存 policy 作为执行判定 |
+| 连接器视图被误解为插件市场 | 用户期望动态安装任意连接器 | 目录仅服务端代码注册；明确非目标写入文档与来源矩阵 |
 
-## 10. 完成定义
+## 11. 完成定义
 
 - [ ] 默认关闭时应用可启动，`/dialogue`、ResearchEngine、报告和算法工具回归不回退。
 - [ ] provider readiness、执行、超时、取消、失败和 unavailable 均有结构化语义和测试。
 - [ ] 输入输出始终限定在 run 专属 workdir，路径、大小、文件数和 symlink 测试通过。
-- [ ] Audit / assistant event / Trace 可完整回放一次成功、失败、取消和 provider 缺失场景。
-- [ ] 管理 API 只对管理员开放，并返回脱敏信息。
+- [ ] 连接器策略默认关闭、默认 admin-only、默认强制确认，且策略变更写审计、run 记录 policy 快照。
+- [ ] Audit / assistant event / Trace 可完整回放一次成功、失败、取消、provider 缺失和 policy 拒绝场景。
+- [ ] 连接器管理 API 只对管理员开放，并返回脱敏信息；`allowed_task_types` 越界被拒绝。
+- [ ] 前端管理员可看到 Codex 卡片和 AttributionBanner；普通用户不能修改 policy，看不到 secret / workdir / 完整 prompt。
 - [ ] Codex MVP 不暴露通用 Shell、任意文件读写、任意网络和项目根目录。
+- [ ] LUI 默认不可见；满足全部条件后仍须显式确认才执行。
 - [ ] 文档、用户指南、来源矩阵和 `doc/README.md` 索引同步更新。
 
-## 11. 状态记录
+## 12. 状态记录
 
 - 2026-08-19：从 Plan 12 拆分 `agent_exec` provider seam，新增独立工作计划；未修改业务代码。
+- 2026-08-27：修订计划，参考 Manus 连接器交互模式新增“Agent 连接器”产品视图与策略治理（P15-C/E/F/G 与契约 5.4、事件 6.1），并将全局能力入口拆分至 Plan 16；本次仅修改文档，未修改业务代码。
