@@ -238,19 +238,19 @@ backend/app/api/v1/endpoints/agent_exec.py
 - [x] 声明连接器元数据：`provider_id="codex"`、`display_name`、支持任务类型、sandbox 摘要、配置来源（脱敏）、attribution（“执行能力来自 Codex CLI”）。
 - [x] 补充 mock subprocess 测试：成功、缺二进制、非零退出、超时、schema 失败、sandbox 参数不支持。
 
-### P15-C. 执行服务与安全边界
+### P15-C. 执行服务与安全边界 ✅
 
-- [ ] 新增 `backend/app/services/agent_exec_service.py`，统一创建 run、准备输入、调用 provider、校验输出和清理状态。
-- [ ] 新增 `backend/app/services/agent_exec_policy_service.py`，实现策略读取、更新、校验顺序（角色 → enabled → task_type → readiness → 确认 → allowlist）与 policy 快照。
-- [ ] run_id 使用服务端生成，禁止客户端指定或路径拼接。
-- [ ] 调用前按 5.4 节固定顺序做 policy 校验；任一步骤不通过返回结构化 unavailable / 403 / 400，并写 `agent_exec.policy.rejected`。
-- [ ] 输入文件必须来自服务端受管 artifact / 临时上传目录，逐个记录 path、size、sha256 和来源对象 ID。
-- [ ] 复制前解析 symlink 与 realpath，拒绝 workdir 外路径、目录逃逸、硬链接语义不确定的文件和超过限额的输入。
-- [ ] provider 输出只允许 JSON 结果文件和显式 artifact 目录；扫描路径穿越、symlink、隐藏文件、可执行位、空文件和总大小。
-- [ ] 超时后终止进程，run 标记 failed / timeout，保留脱敏事件与有限日志，清理可执行产物。
-- [ ] 支持服务端取消；已结束后取消返回稳定终态，不产生竞态覆盖。
-- [ ] provider unavailable 时不创建外部进程，返回结构化 unavailable，并允许调用方继续既有本地路径。
-- [ ] 补充边界测试：allowlist、路径穿越、symlink、大小、文件数、超时、取消、输出逃逸、输出超限、unavailable 和 policy 拒绝。
+- [x] 新增 `backend/app/services/agent_exec_service.py`，统一创建 run、准备输入、调用 provider、校验输出和清理状态。
+- [x] 新增 `backend/app/services/agent_exec_policy_service.py`，实现策略读取、更新、校验顺序（角色 → enabled → task_type → readiness → 确认 → allowlist）与 policy 快照。
+- [x] run_id 使用服务端生成，禁止客户端指定或路径拼接。
+- [x] 调用前按 5.4 节固定顺序做 policy 校验；任一步骤不通过返回结构化 unavailable / 403 / 400，并写 `agent_exec.policy.rejected`。
+- [x] 输入文件必须来自服务端受管 artifact / 临时上传目录，逐个记录 path、size、sha256 和来源对象 ID。
+- [x] 复制前解析 symlink 与 realpath，拒绝 workdir 外路径、目录逃逸、硬链接语义不确定的文件和超过限额的输入。
+- [x] provider 输出只允许 JSON 结果文件和显式 artifact 目录；扫描路径穿越、symlink、隐藏文件、可执行位、空文件和总大小。
+- [x] 超时后终止进程，run 标记 failed / timeout，保留脱敏事件与有限日志，清理可执行产物。
+- [x] 支持服务端取消；已结束后取消返回稳定终态，不产生竞态覆盖。
+- [x] provider unavailable 时不创建外部进程，返回结构化 unavailable，并允许调用方继续既有本地路径。
+- [x] 补充边界测试：allowlist、路径穿越、symlink、大小、文件数、超时、取消、输出逃逸、输出超限、unavailable 和 policy 拒绝。
 
 ### P15-D. 存储、Audit 与 Trace 接入
 
@@ -396,3 +396,4 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-27：修订计划，参考 Manus 连接器交互模式新增“Agent 连接器”产品视图与策略治理（P15-C/E/F/G 与契约 5.4、事件 6.1），并将全局能力入口拆分至 Plan 16；本次仅修改文档，未修改业务代码。
 - 2026-08-27：完成 P15-A，新增 agent_exec 契约 schema、provider Protocol/错误契约、registry 与默认关闭配置，补充契约测试并通过。
 - 2026-08-27：完成 P15-B，新增 Codex 受限 sandbox 适配器（readiness 不执行二进制）、结构化日志摘要与 mock subprocess 测试，P15-A/P15-B 共 16 项测试通过。
+- 2026-08-27：完成 P15-C，新增策略治理服务（固定校验顺序与确认状态机）、受限执行服务（allowlist、路径/symlink/大小边界、输出扫描、超时取消与稳定终态），42 项相关测试通过。

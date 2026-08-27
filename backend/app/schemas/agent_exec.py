@@ -82,6 +82,8 @@ class AgentExecExecutionRequest(BaseModel):
     actor_user_id: str = Field(min_length=1)
     actor_role: AgentExecRole
     confirmed: bool = False
+    plan_mode: bool = False
+    permission_mode: Literal["read_only", "workspace_write", "full_access"] = "workspace_write"
     chat_id: str = ""
     assistant_tool_call_id: str = ""
 
@@ -137,6 +139,7 @@ class AgentExecRunData(BaseModel):
     policy_snapshot: AgentExecProviderPolicy
     input_files: list[AgentExecInputFileData] = Field(default_factory=list)
     artifacts: list[AgentExecArtifactData] = Field(default_factory=list)
+    output: dict[str, Any] | None = None
     error_code: str = ""
     error_message: str = ""
     chat_id: str = ""

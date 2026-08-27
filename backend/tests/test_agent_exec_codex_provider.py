@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -16,6 +17,56 @@ from app.core.config import settings
 from app.schemas.agent_exec import AgentExecTaskRequest
 from app.services.agent_exec_providers.base import AgentExecProviderError
 from app.services.agent_exec_providers.codex import CodexAgentExecProvider
+
+
+class FakeProcess:
+    """模拟 codex 子进程的可控行为。"""
+
+    def __init__(self, command, *, cwd, mode, payload=None):
+        """初始化模拟进程。
+
+        Args:
+            command: 命令行。
+            cwd: 工作目录。
+            mode: ok / nonzero / timeout / missing / cancel。
+            payload: ok 模式写出的 JSON 内容。
+        """
+        self.command = command
+        self.cwd = cwd
+        self.mode = mode
+        self.payload = payload
+        self.returncode = 0
+        self.pid = 12345
+        self.terminated = False
+
+    def communicate(self, timeout=None):
+        """模拟进程输出。"""
+        if self.mode in {"timeout", "cancel"} and not self.terminated:
+            raise subprocess.TimeoutExpired(self.command, timeout=timeout or 0)
+        if self.mode == "timeout":
+            return ("", "process timed out")
+        if self.mode == "ok":
+            output = Path(self.cwd) / "result.json"
+            output.write_text(json.dumps(self.payload), encoding="utf-8")
+            return ("done", "")
+        if self.mode == "nonzero":
+            self.returncode = 2
+            return ("", "boom")
+        return ("", "")
+
+    def wait(self, timeout=None):
+        """等待进程结束。"""
+        return self.returncode
+
+    def terminate(self):
+        """模拟 SIGTERM。"""
+        self.terminated = True
+        self.returncode = -15
+
+    def kill(self):
+        """模拟 SIGKILL。"""
+        self.terminated = True
+        self.returncode = -9
 
 
 OUTPUT_SCHEMA = {
@@ -118,101 +169,123 @@ class CodexProviderTest(unittest.TestCase):
         which_mock.assert_called_once_with("codex")
 
     def test_execute_success_uses_read_only_sandbox(self) -> None:
-        provider = CodexAgentExecProvider()
-        calls: list[dict] = []
+        captured: dict = {}
 
-        def runner(command, **kwargs):
-            """记录命令并把结构化结果写入 workdir。"""
-            calls.append({"command": command, **kwargs})
-            output = Path(kwargs["cwd"]) / "result.json"
-            output.write_text(
-                json.dumps({"summary": "ok"}), encoding="utf-8"
+        def factory(command, **kwargs):
+            """记录命令并返回成功进程。"""
+            captured["command"] = command
+            captured.update(kwargs)
+            return FakeProcess(
+                command,
+                cwd=kwargs["cwd"],
+                mode="ok",
+                payload={"summary": "ok"},
             )
-            return subprocess.CompletedProcess(command, 0, stdout="done", stderr="")
 
+        provider = CodexAgentExecProvider(process_factory=factory)
         with patch(
             "app.services.agent_exec_providers.codex.shutil.which",
             return_value="/usr/local/bin/codex",
         ):
-            result = self._execute(provider, runner)
+            result = self._execute(provider)
 
         self.assertTrue(result.success)
         self.assertEqual(result.output, {"summary": "ok"})
-        command = calls[0]["command"]
+        command = captured["command"]
         self.assertIn("--sandbox", command)
         self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
+        env_keys = set(captured.get("env", {}))
+        self.assertLessEqual(
+            env_keys,
+            {"PATH", "HOME", "LANG", "LC_ALL", "TERM", "CODEX_API_KEY"},
+        )
 
     def test_execute_nonzero_exit(self) -> None:
-        provider = CodexAgentExecProvider()
-
-        def runner(command, **kwargs):
-            """模拟非零退出。"""
-            return subprocess.CompletedProcess(command, 2, stdout="", stderr="boom")
-
+        provider = CodexAgentExecProvider(
+            process_factory=lambda command, **kwargs: FakeProcess(
+                command, cwd=kwargs["cwd"], mode="nonzero"
+            )
+        )
         with patch(
             "app.services.agent_exec_providers.codex.shutil.which",
             return_value="/usr/local/bin/codex",
         ):
             with self.assertRaises(AgentExecProviderError) as ctx:
-                self._execute(provider, runner)
+                self._execute(provider)
         self.assertEqual(ctx.exception.code, "codex_nonzero_exit")
         self.assertIn("boom", ctx.exception.message)
 
     def test_execute_timeout(self) -> None:
-        provider = CodexAgentExecProvider()
-
-        def runner(command, **kwargs):
-            """模拟超时。"""
-            raise subprocess.TimeoutExpired(command, timeout=kwargs["timeout"])
-
+        provider = CodexAgentExecProvider(
+            process_factory=lambda command, **kwargs: FakeProcess(
+                command, cwd=kwargs["cwd"], mode="timeout"
+            )
+        )
         with patch(
             "app.services.agent_exec_providers.codex.shutil.which",
             return_value="/usr/local/bin/codex",
         ):
             with self.assertRaises(AgentExecProviderError) as ctx:
-                self._execute(provider, runner)
+                self._execute(provider, timeout_seconds=0.2)
         self.assertEqual(ctx.exception.code, "timeout")
 
-    def test_execute_output_missing(self) -> None:
-        provider = CodexAgentExecProvider()
-
-        def runner(command, **kwargs):
-            """模拟成功退出但没有输出文件。"""
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
+    def test_execute_cancelled(self) -> None:
+        provider = CodexAgentExecProvider(
+            process_factory=lambda command, **kwargs: FakeProcess(
+                command, cwd=kwargs["cwd"], mode="cancel"
+            )
+        )
         with patch(
             "app.services.agent_exec_providers.codex.shutil.which",
             return_value="/usr/local/bin/codex",
         ):
             with self.assertRaises(AgentExecProviderError) as ctx:
-                self._execute(provider, runner)
+                provider.execute(
+                    task=_task(),
+                    workdir=Path(tempfile.mkdtemp()),
+                    timeout_seconds=5,
+                    should_cancel=lambda: True,
+                )
+        self.assertEqual(ctx.exception.code, "cancelled")
+
+    def test_execute_output_missing(self) -> None:
+        provider = CodexAgentExecProvider(
+            process_factory=lambda command, **kwargs: FakeProcess(
+                command, cwd=kwargs["cwd"], mode="missing"
+            )
+        )
+        with patch(
+            "app.services.agent_exec_providers.codex.shutil.which",
+            return_value="/usr/local/bin/codex",
+        ):
+            with self.assertRaises(AgentExecProviderError) as ctx:
+                self._execute(provider)
         self.assertEqual(ctx.exception.code, "output_missing")
 
     def test_execute_schema_mismatch(self) -> None:
-        provider = CodexAgentExecProvider()
-
-        def runner(command, **kwargs):
-            """模拟输出缺少必填字段。"""
-            output = Path(kwargs["cwd"]) / "result.json"
-            output.write_text(json.dumps({"other": 1}), encoding="utf-8")
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
+        provider = CodexAgentExecProvider(
+            process_factory=lambda command, **kwargs: FakeProcess(
+                command, cwd=kwargs["cwd"], mode="ok", payload={"other": 1}
+            )
+        )
         with patch(
             "app.services.agent_exec_providers.codex.shutil.which",
             return_value="/usr/local/bin/codex",
         ):
             with self.assertRaises(AgentExecProviderError) as ctx:
-                self._execute(provider, runner)
+                self._execute(provider)
         self.assertEqual(ctx.exception.code, "schema_mismatch")
 
-    def _execute(self, provider, runner):
-        """在临时 workdir 内执行 provider 并返回结果。"""
-        import tempfile
+    def _execute(self, provider, timeout_seconds: float = 5):
+        """在临时 workdir 内执行 provider 并返回结果。
 
-        provider._command_runner = runner
+        Args:
+            provider: 被测适配器。
+            timeout_seconds: 测试用超时秒数。
+        """
         with tempfile.TemporaryDirectory() as tmp:
             return provider.execute(
-                task=_task(), workdir=Path(tmp), timeout_seconds=5
+                task=_task(), workdir=Path(tmp), timeout_seconds=timeout_seconds
             )
 
 

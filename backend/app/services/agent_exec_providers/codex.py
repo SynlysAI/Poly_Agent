@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
+import time
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -36,14 +38,14 @@ class CodexAgentExecProvider:
     def __init__(
         self,
         *,
-        command_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+        process_factory: Callable[..., subprocess.Popen[str]] | None = None,
     ) -> None:
         """初始化适配器。
 
         Args:
-            command_runner: 可注入的命令执行器，测试时用于 mock subprocess。
+            process_factory: 可注入的进程工厂，测试时用于 mock subprocess.Popen。
         """
-        self._command_runner = command_runner or subprocess.run
+        self._process_factory = process_factory or subprocess.Popen
 
     def sandbox_summary(self) -> str:
         """返回连接器卡片展示的 sandbox 摘要。"""
@@ -120,6 +122,7 @@ class CodexAgentExecProvider:
         task: AgentExecTaskRequest,
         workdir: Path,
         timeout_seconds: int,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> AgentExecProviderResult:
         """在受限 workdir 内执行 Codex 文件任务。
 
@@ -127,6 +130,7 @@ class CodexAgentExecProvider:
             task: 显式任务与输入清单。
             workdir: run 专属受限工作目录。
             timeout_seconds: 执行超时秒数。
+            should_cancel: 服务端取消检查回调。
 
         Returns:
             结构化 provider 结果。
@@ -168,36 +172,33 @@ class CodexAgentExecProvider:
             env["CODEX_API_KEY"] = settings.agent_exec_codex_api_key
 
         try:
-            completed = self._command_runner(
+            completed = self._run_process(
                 command,
-                cwd=str(workdir),
+                workdir=workdir,
                 env=env,
-                text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
-                check=False,
+                timeout_seconds=timeout_seconds,
+                should_cancel=should_cancel,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise AgentExecProviderError(
-                "timeout", f"codex exec 超过 {timeout_seconds}s 超时"
-            ) from exc
+        except AgentExecProviderError:
+            raise
         except OSError as exc:
             raise AgentExecProviderError(
                 "codex_spawn_failed", f"codex exec 启动失败：{exc}"
             ) from exc
 
-        if completed.returncode != 0:
+        stdout_text, stderr_text, returncode = completed
+        if returncode != 0:
             raise AgentExecProviderError(
                 "codex_nonzero_exit",
                 (
-                    f"codex exec 退出码 {completed.returncode}："
-                    f"{self._digest(completed.stderr)}"
+                    f"codex exec 退出码 {returncode}："
+                    f"{self._digest(stderr_text)}"
                 ),
             )
         if not output_path.is_file():
             raise AgentExecProviderError(
                 "output_missing",
-                f"codex exec 未写出期望的结果文件：{self._digest(completed.stderr)}",
+                f"codex exec 未写出期望的结果文件：{self._digest(stderr_text)}",
             )
         try:
             output = parse_json_payload(
@@ -213,9 +214,81 @@ class CodexAgentExecProvider:
             provider_id=self.provider_id,
             success=True,
             output=output,
-            stdout_digest=self._digest(completed.stdout),
-            stderr_digest=self._digest(completed.stderr),
+            stdout_digest=self._digest(stdout_text),
+            stderr_digest=self._digest(stderr_text),
         )
+
+    def _run_process(
+        self,
+        command: list[str],
+        *,
+        workdir: Path,
+        env: dict[str, str],
+        timeout_seconds: int,
+        should_cancel: Callable[[], bool] | None,
+    ) -> tuple[str, str, int]:
+        """启动受限 codex 进程并处理超时与取消。
+
+        Args:
+            command: 完整命令行。
+            workdir: run 专属 workdir。
+            env: 最小化环境变量。
+            timeout_seconds: 超时秒数。
+            should_cancel: 服务端取消检查回调。
+
+        Returns:
+            (stdout, stderr, returncode) 元组。
+
+        Raises:
+            AgentExecProviderError: 超时或被服务端取消。
+        """
+        process = self._process_factory(
+            command,
+            cwd=str(workdir),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                stdout, stderr = process.communicate(timeout=0.1)
+                return stdout or "", stderr or "", process.returncode
+            except subprocess.TimeoutExpired:
+                pass
+            if should_cancel is not None and should_cancel():
+                self._terminate(process)
+                stdout, stderr = process.communicate()
+                raise AgentExecProviderError(
+                    "cancelled", "codex exec 已被服务端取消"
+                )
+            if time.monotonic() >= deadline:
+                self._terminate(process)
+                stdout, stderr = process.communicate()
+                raise AgentExecProviderError(
+                    "timeout", f"codex exec 超过 {timeout_seconds}s 超时"
+                )
+
+    @staticmethod
+    def _terminate(process: subprocess.Popen[str]) -> None:
+        """终止进程组，先 SIGTERM 后 SIGKILL。
+
+        Args:
+            process: 正在运行的 codex 进程。
+        """
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                process.kill()
 
     @staticmethod
     def _has_credentials() -> bool:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 from typing import Protocol, runtime_checkable
 
 from app.schemas.agent_exec import (
@@ -56,6 +57,7 @@ class AgentExecProvider(Protocol):
         task: AgentExecTaskRequest,
         workdir: Path,
         timeout_seconds: int,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> AgentExecProviderResult:
         """在受限 workdir 内执行文件型任务。
 
@@ -63,6 +65,7 @@ class AgentExecProvider(Protocol):
             task: 显式任务与输入清单。
             workdir: run 专属受限工作目录。
             timeout_seconds: 执行超时秒数。
+            should_cancel: 服务端取消检查回调。
 
         Returns:
             结构化 provider 结果；失败时抛出 AgentExecProviderError。
