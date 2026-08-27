@@ -199,9 +199,9 @@ backend/app/api/v1/endpoints/agent_exec.py
 
 ## 7. 分阶段任务
 
-### P15-A. 契约、配置与 registry
+### P15-A. 契约、配置与 registry ✅
 
-- [ ] 新增 `backend/app/schemas/agent_exec.py`：
+- [x] 新增 `backend/app/schemas/agent_exec.py`：
   - `AgentExecProviderReadiness`
   - `AgentExecTaskRequest`
   - `AgentExecExecutionRequest`
@@ -210,17 +210,17 @@ backend/app/api/v1/endpoints/agent_exec.py
   - `AgentExecArtifactData`
   - `AgentExecProviderPolicy`（默认 `enabled=false`、`allowed_roles=["admin"]`、`allowed_task_types=["structured_file_task"]`、`requires_confirmation=true`）
   - `AgentExecProviderConnection`（provider 元数据、readiness、配置来源、sandbox 摘要、policy、attribution）
-- [ ] 新增 `backend/app/services/agent_exec_providers/base.py`，定义 Protocol、错误类型和结构化 unavailable 结果。
-- [ ] 新增 `backend/app/services/agent_exec_providers/registry.py`，支持按 provider_id / task_type 解析，并聚合 readiness。
-- [ ] 在 `backend/app/core/config.py` 增加：
+- [x] 新增 `backend/app/services/agent_exec_providers/base.py`，定义 Protocol、错误类型和结构化 unavailable 结果。
+- [x] 新增 `backend/app/services/agent_exec_providers/registry.py`，支持按 provider_id / task_type 解析，并聚合 readiness。
+- [x] 在 `backend/app/core/config.py` 增加：
   - `AGENT_EXEC_ENABLED`，默认 `false`
   - `AGENT_EXEC_WORKDIR_ROOT`，默认 runtime 下 `agent_exec`
   - `AGENT_EXEC_TIMEOUT_SECONDS`
   - `AGENT_EXEC_MAX_INPUT_BYTES`
   - `AGENT_EXEC_MAX_OUTPUT_BYTES`
   - `AGENT_EXEC_MAX_FILES`
-- [ ] registry 初始化不探测外部二进制，不抛异常，不阻断 FastAPI 启动。
-- [ ] 补充契约、默认禁用、未知 provider、未知 task_type 和缺省 unavailable 测试。
+- [x] registry 初始化不探测外部二进制，不抛异常，不阻断 FastAPI 启动。
+- [x] 补充契约、默认禁用、未知 provider、未知 task_type 和缺省 unavailable 测试。
 
 ### P15-B. Codex MVP 适配器
 
@@ -394,3 +394,4 @@ conda run -n poly_agent python -m pytest \
 
 - 2026-08-19：从 Plan 12 拆分 `agent_exec` provider seam，新增独立工作计划；未修改业务代码。
 - 2026-08-27：修订计划，参考 Manus 连接器交互模式新增“Agent 连接器”产品视图与策略治理（P15-C/E/F/G 与契约 5.4、事件 6.1），并将全局能力入口拆分至 Plan 16；本次仅修改文档，未修改业务代码。
+- 2026-08-27：完成 P15-A，新增 agent_exec 契约 schema、provider Protocol/错误契约、registry 与默认关闭配置，补充契约测试并通过。

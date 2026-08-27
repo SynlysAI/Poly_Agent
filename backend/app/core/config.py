@@ -277,6 +277,25 @@ class Settings:
             "on",
         }
 
+        # 受控外部 Agent 执行（agent_exec）配置，默认关闭
+        self.agent_exec_enabled: bool = os.getenv("AGENT_EXEC_ENABLED", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.agent_exec_workdir_root: Path = self._resolve_project_path(
+            os.getenv("AGENT_EXEC_WORKDIR_ROOT", str(self.runtime_root / "agent_exec"))
+        )
+        self.agent_exec_timeout_seconds: int = int(os.getenv("AGENT_EXEC_TIMEOUT_SECONDS", "600"))
+        self.agent_exec_max_input_bytes: int = int(
+            os.getenv("AGENT_EXEC_MAX_INPUT_BYTES", str(10 * 1024 * 1024))
+        )
+        self.agent_exec_max_output_bytes: int = int(
+            os.getenv("AGENT_EXEC_MAX_OUTPUT_BYTES", str(10 * 1024 * 1024))
+        )
+        self.agent_exec_max_files: int = int(os.getenv("AGENT_EXEC_MAX_FILES", "20"))
+
         # 统一认证（AI4MS）配置；认证库与业务库分离时显式配置 AUTH_MONGODB_URI。
         self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "").strip()
         self.auth_database: str = os.getenv("AUTH_MONGODB_DATABASE", "ai4ms")
