@@ -1437,6 +1437,24 @@ export function syncAgentTools() {
   return apiClient.post('/agent-tools/sync').then(unwrapResponse)
 }
 
+// ── Agent 连接器（受控外部 Agent 执行）API ──
+
+export function getAgentExecProviders() {
+  return apiClient.get('/agent-exec/providers').then(unwrapResponse)
+}
+
+export function updateAgentExecPolicy(providerId, payload) {
+  return apiClient.patch(`/agent-exec/providers/${encodeURIComponent(providerId)}/policy`, payload).then(unwrapResponse)
+}
+
+export function createAgentExecRun(payload) {
+  return apiClient.post('/agent-exec/runs', payload).then(unwrapResponse)
+}
+
+export function getAgentExecQuality() {
+  return apiClient.get('/agent-exec/quality').then(unwrapResponse)
+}
+
 export function createAssistantToolCall(payload) {
   return apiClient.post('/assistant/tool-calls', payload).then(unwrapResponse)
 }

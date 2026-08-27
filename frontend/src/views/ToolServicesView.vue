@@ -8,11 +8,21 @@ import {
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 import AttributionBadges from '../components/attribution/AttributionBadges.vue'
 import { authState } from '../auth/authState'
+import {
+  buildPolicyPayload,
+  buildTestRunPayload,
+  connectorStatus,
+  formatQualitySummary,
+  normalizePolicyForm,
+} from '../utils/agentConnectors'
 
 import {
   checkLlmModels,
   checkIntegrationConfig,
+  createAgentExecRun,
   getAlgorithm,
+  getAgentExecProviders,
+  getAgentExecQuality,
   getAssistantQualityMetrics,
   getApiErrorMessage,
   getIntegrationStatus,
@@ -23,6 +33,7 @@ import {
   listAlgorithms,
   listIntegrationConfigs,
   syncAgentTools,
+  updateAgentExecPolicy,
   updateAgentToolPolicy,
   updateLlmRouting,
   upsertIntegrationConfig,
@@ -69,7 +80,7 @@ const llmRouteForm = reactive({ qa: '', deep: '', report: '' })
 
 function normalizeTab(value) {
   const tab = Array.isArray(value) ? value[0] : value
-  return ['status', 'algorithms', 'agent-tools', 'configs', 'llm-models'].includes(tab) ? tab : 'status'
+  return ['status', 'algorithms', 'agent-tools', 'agent-connectors', 'configs', 'llm-models'].includes(tab) ? tab : 'status'
 }
 
 const isAdmin = computed(() => authState.role === 'admin' || !authState.authEnabled)
@@ -247,6 +258,108 @@ async function runAgentToolSync() {
     ElMessage.error(`一致性检查失败：${getApiErrorMessage(error)}`)
   } finally {
     syncingAgentTools.value = false
+  }
+}
+
+// ── Agent 连接器（受控外部 Agent 执行）──
+const agentConnectors = ref([])
+const agentConnectorLoading = ref(false)
+const agentConnectorError = ref('')
+const agentConnectorQuality = ref(null)
+const agentConnectorSaving = ref('')
+const agentConnectorPolicyForms = ref({})
+const testRunVisible = ref(false)
+const testRunCard = ref(null)
+const testRunLoading = ref(false)
+const testRunResult = ref(null)
+const testRunForm = reactive({
+  prompt: '',
+  timeoutSeconds: 60,
+  confirmed: false,
+})
+
+const connectorQualityText = computed(() => formatQualitySummary(agentConnectorQuality.value))
+
+const agentConnectorAttributions = [
+  {
+    key: 'codex-cli',
+    name: 'Codex CLI',
+    organization: 'OpenAI',
+    role: 'implementation_source',
+    visibility: 'prominent',
+    url: 'https://github.com/openai/codex',
+  },
+]
+
+async function loadAgentConnectors() {
+  if (!isAdmin.value) return
+  agentConnectorLoading.value = true
+  agentConnectorError.value = ''
+  try {
+    const [providers, quality] = await Promise.allSettled([
+      getAgentExecProviders(),
+      getAgentExecQuality(),
+    ])
+    if (providers.status === 'fulfilled') {
+      agentConnectors.value = providers.value || []
+      agentConnectorPolicyForms.value = Object.fromEntries(
+        agentConnectors.value.map((card) => [card.provider_id, normalizePolicyForm(card)]),
+      )
+    } else {
+      agentConnectors.value = []
+      agentConnectorError.value = `连接器目录加载失败：${getApiErrorMessage(providers.reason)}`
+    }
+    agentConnectorQuality.value = quality.status === 'fulfilled' ? quality.value : null
+  } finally {
+    agentConnectorLoading.value = false
+  }
+}
+
+async function saveConnectorPolicy(card) {
+  const form = agentConnectorPolicyForms.value[card.provider_id]
+  if (!form) return
+  agentConnectorSaving.value = `${card.provider_id}:policy`
+  try {
+    const updated = await updateAgentExecPolicy(card.provider_id, buildPolicyPayload(form))
+    const index = agentConnectors.value.findIndex((item) => item.provider_id === card.provider_id)
+    if (index >= 0) agentConnectors.value.splice(index, 1, { ...card, policy: updated })
+    agentConnectorPolicyForms.value = {
+      ...agentConnectorPolicyForms.value,
+      [card.provider_id]: normalizePolicyForm({ ...card, policy: updated }),
+    }
+    ElMessage.success('连接器策略已更新')
+  } catch (error) {
+    ElMessage.error(`策略更新失败：${getApiErrorMessage(error)}`)
+  } finally {
+    agentConnectorSaving.value = ''
+  }
+}
+
+function openTestRun(card) {
+  testRunCard.value = card
+  testRunResult.value = null
+  testRunForm.prompt = ''
+  testRunForm.timeoutSeconds = 60
+  testRunForm.confirmed = false
+  testRunVisible.value = true
+}
+
+async function submitTestRun() {
+  if (!testRunCard.value) return
+  testRunLoading.value = true
+  try {
+    const payload = buildTestRunPayload({
+      providerId: testRunCard.value.provider_id,
+      prompt: testRunForm.prompt,
+      timeoutSeconds: testRunForm.timeoutSeconds,
+      confirmed: testRunForm.confirmed,
+    })
+    testRunResult.value = await createAgentExecRun(payload)
+    ElMessage.success(`测试 run 已结束：${testRunResult.value.status}`)
+  } catch (error) {
+    ElMessage.error(`测试 run 失败：${getApiErrorMessage(error)}`)
+  } finally {
+    testRunLoading.value = false
   }
 }
 
@@ -778,6 +891,7 @@ onMounted(() => {
   loadAll()
   loadAlgos()
   loadAgentToolItems()
+  loadAgentConnectors()
   loadLlmModels({ quiet: true })
   loadLlmExtras({ quiet: true })
 })
@@ -794,6 +908,7 @@ watch(activeTab, (tab) => {
   if (tab === 'status') delete query.tab
   else query.tab = tab
   if (JSON.stringify(query) !== JSON.stringify(route.query)) router.replace({ query })
+  if (tab === 'agent-connectors' && !agentConnectorLoading.value) loadAgentConnectors()
 })
 </script>
 
@@ -1023,6 +1138,106 @@ watch(activeTab, (tab) => {
               </el-table-column>
             </el-table>
             <el-empty v-if="!visibleAgentTools.length && !agentToolLoading" description="暂无算法工具" />
+          </div>
+        </section>
+      </el-tab-pane>
+
+      <el-tab-pane v-if="isAdmin" label="Agent 连接器" name="agent-connectors">
+        <section class="tools-section">
+          <div class="section-heading">
+            <div>
+              <h2>Agent 连接器</h2>
+              <p class="section-description">受控外部 Agent 文件任务：默认关闭、仅显式输入输出、强制确认执行；执行判定以后端为准。</p>
+            </div>
+            <span>最近成功率 {{ connectorQualityText.successRate }} · 平均耗时 {{ connectorQualityText.duration }}</span>
+          </div>
+          <el-alert
+            v-if="agentConnectorError"
+            :title="agentConnectorError"
+            type="warning"
+            :closable="false"
+            class="connector-alert"
+          />
+          <div v-loading="agentConnectorLoading" class="connector-list">
+            <article v-for="card in agentConnectors" :key="card.provider_id" class="connector-card">
+              <header class="connector-card-head">
+                <div>
+                  <strong>{{ card.display_name }}</strong>
+                  <small>{{ card.provider_id }}</small>
+                </div>
+                <el-tag :type="connectorStatus(card).tag">{{ connectorStatus(card).label }}</el-tag>
+              </header>
+              <p v-if="connectorStatus(card).reason" class="connector-reason">
+                {{ connectorStatus(card).reason }}
+              </p>
+              <dl class="connector-meta">
+                <div>
+                  <dt>支持任务</dt>
+                  <dd>{{ (card.supported_task_types || []).join('、') || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Sandbox</dt>
+                  <dd>{{ card.sandbox_summary || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>配置来源</dt>
+                  <dd>{{ card.config_source || '-' }}</dd>
+                </div>
+              </dl>
+              <AttributionBanner
+                label="执行能力来自"
+                :attributions="agentConnectorAttributions"
+                compact
+                embedded
+              />
+              <div class="connector-policy">
+                <h4>调用策略</h4>
+                <el-form label-width="92px" label-position="left" class="connector-policy-form">
+                  <el-form-item label="启用">
+                    <el-switch v-model="agentConnectorPolicyForms[card.provider_id].enabled" />
+                  </el-form-item>
+                  <el-form-item label="允许角色">
+                    <el-select v-model="agentConnectorPolicyForms[card.provider_id].allowed_roles" multiple>
+                      <el-option label="管理员" value="admin" />
+                      <el-option label="用户" value="user" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="任务类型">
+                    <el-select
+                      v-model="agentConnectorPolicyForms[card.provider_id].allowed_task_types"
+                      multiple
+                    >
+                      <el-option
+                        v-for="taskType in card.supported_task_types || []"
+                        :key="taskType"
+                        :label="taskType"
+                        :value="taskType"
+                      />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="强制确认">
+                    <el-switch v-model="agentConnectorPolicyForms[card.provider_id].requires_confirmation" />
+                  </el-form-item>
+                </el-form>
+                <div class="connector-actions">
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :loading="agentConnectorSaving === `${card.provider_id}:policy`"
+                    @click="saveConnectorPolicy(card)"
+                  >
+                    保存策略
+                  </el-button>
+                  <el-button size="small" :disabled="connectorStatus(card).kind !== 'ready'" @click="openTestRun(card)">
+                    受控测试
+                  </el-button>
+                </div>
+              </div>
+            </article>
+            <el-empty
+              v-if="!agentConnectors.length && !agentConnectorLoading"
+              description="暂无已注册连接器"
+            />
           </div>
         </section>
       </el-tab-pane>
@@ -1273,6 +1488,46 @@ watch(activeTab, (tab) => {
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="saveConfig">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="testRunVisible"
+      :title="`受控测试：${testRunCard?.display_name || ''}`"
+      width="560px"
+    >
+      <el-alert
+        type="info"
+        :closable="false"
+        class="connector-alert"
+        title="测试仍走服务端 policy 校验；请确认连接器、任务类型、输入清单、输出 Schema、超时与输出限制。"
+      />
+      <el-form label-position="top">
+        <el-form-item label="任务说明">
+          <el-input
+            v-model="testRunForm.prompt"
+            type="textarea"
+            :rows="4"
+            placeholder="例如：总结当前输入文件的主要结论"
+          />
+        </el-form-item>
+        <el-form-item label="超时（秒）">
+          <el-input-number v-model="testRunForm.timeoutSeconds" :min="1" :max="3600" />
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="testRunForm.confirmed">
+            我已确认本次外部 Agent 文件任务的输入、输出和限制
+          </el-checkbox>
+        </el-form-item>
+      </el-form>
+      <el-descriptions v-if="testRunResult" :column="1" border size="small" class="connector-result">
+        <el-descriptions-item label="Run ID">{{ testRunResult.run_id }}</el-descriptions-item>
+        <el-descriptions-item label="状态">{{ testRunResult.status }}</el-descriptions-item>
+        <el-descriptions-item label="错误">{{ testRunResult.error_code || '-' }}</el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="testRunVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="testRunLoading" @click="submitTestRun">执行测试</el-button>
       </template>
     </el-dialog>
 
@@ -1652,6 +1907,92 @@ watch(activeTab, (tab) => {
 
 .config-alert {
   margin-bottom: 12px;
+}
+
+.connector-alert {
+  margin-bottom: 12px;
+}
+
+.connector-list {
+  display: grid;
+  gap: 14px;
+}
+
+.connector-card {
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.connector-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connector-card-head strong {
+  display: block;
+  color: var(--app-ink);
+  font-size: 15px;
+}
+
+.connector-card-head small {
+  display: block;
+  margin-top: 2px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.connector-reason {
+  margin: 8px 0 0;
+  color: #b45309;
+  font-size: 13px;
+}
+
+.connector-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.connector-meta dt {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.connector-meta dd {
+  margin: 2px 0 0;
+  color: var(--app-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connector-policy {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.connector-policy h4 {
+  margin: 0 0 8px;
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.connector-policy-form {
+  max-width: 460px;
+}
+
+.connector-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.connector-result {
+  margin-top: 12px;
 }
 
 .config-summary-line {

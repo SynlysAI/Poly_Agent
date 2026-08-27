@@ -316,16 +316,16 @@ backend/app/api/v1/endpoints/agent_exec.py
 
 未通过以上验收的 provider 不注册进 registry，不引入 Cordis、DSH TypeScript runtime 或 PI Agent 运行时依赖。
 
-### P15-G. 前端最小连接器入口
+### P15-G. 前端最小连接器入口 ✅
 
 在现有 `ToolServicesView.vue` 增加“Agent 连接器”区域，不做全局大入口：
 
-- [ ] 展示 Codex 卡片：readiness / disabled / unavailable 状态与原因、支持 task_type、sandbox 与输入输出限制与超时摘要、最近 run 成功率与耗时摘要、“执行能力来自 Codex CLI”的 AttributionBanner。
-- [ ] 管理员可修改：启用 / 禁用、允许角色、允许任务类型、是否强制确认；表单走 `PATCH /agent-exec/providers/{provider_id}/policy`。
-- [ ] 管理员可发起受控测试，表单仍走 `POST /agent-exec/runs`，不得绕过服务端 policy。
-- [ ] 普通用户只能看到不可用原因或完全隐藏，不能看到 secret、workdir、完整 prompt 或环境变量。
-- [ ] 前端不缓存 policy 本地副本作为执行依据，所有执行判定以后端为准。
-- [ ] 补充前端测试：管理员可见卡片与 AttributionBanner、普通用户不可修改 policy、状态展示与后端一致。
+- [x] 展示 Codex 卡片：readiness / disabled / unavailable 状态与原因、支持 task_type、sandbox 与输入输出限制与超时摘要、最近 run 成功率与耗时摘要、“执行能力来自 Codex CLI”的 AttributionBanner。
+- [x] 管理员可修改：启用 / 禁用、允许角色、允许任务类型、是否强制确认；表单走 `PATCH /agent-exec/providers/{provider_id}/policy`。
+- [x] 管理员可发起受控测试，表单仍走 `POST /agent-exec/runs`，不得绕过服务端 policy。
+- [x] 普通用户只能看到不可用原因或完全隐藏，不能看到 secret、workdir、完整 prompt 或环境变量。
+- [x] 前端不缓存 policy 本地副本作为执行依据，所有执行判定以后端为准。
+- [x] 补充前端测试：管理员可见卡片与 AttributionBanner、普通用户不可修改 policy、状态展示与后端一致。
 
 ## 8. 测试计划
 
@@ -421,3 +421,4 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-27：完成 P15-D，新增 agent_exec 双模存储与索引、统一 Audit/assistant 事件写入、策略更新审计、脱敏与 Plan 09 Trace agent_exec 步骤投影；存储/事件/Trace 测试与既有 Trace 回归通过。
 - 2026-08-27：完成 P15-E，新增管理员连接器卡片、策略更新、受控 run、run 详情/取消与质量摘要 API，覆盖 RBAC、策略越界、结构化错误与稳定终态测试。
 - 2026-08-27：完成 P15-F，LUI 默认不暴露外部 Agent 工具，新增全部条件满足才返回的 lui-tool 描述符与 API；完成报告双路径与 PI/DSH 接入评估，新增用户指南并更新来源矩阵与索引。
+- 2026-08-27：完成 P15-G，ToolServicesView 新增管理员可见的 Agent 连接器页签：Codex 卡片（readiness/原因/sandbox/配置来源/质量摘要 + AttributionBanner）、策略表单与受控测试入口；普通用户隐藏，前端测试与构建通过。

@@ -25,6 +25,7 @@
     "test:assistant-tool-auto-select": "node src/utils/assistantToolAutoSelect.test.mjs",
     "test:slash-commands": "node src/utils/slashCommands.test.mjs",
     "test:command-catalog": "node src/utils/commandCatalog.test.mjs",
+    "test:agent-connectors": "node src/utils/agentConnectors.test.mjs",
     "test:api-timeout": "node src/utils/apiTimeout.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
