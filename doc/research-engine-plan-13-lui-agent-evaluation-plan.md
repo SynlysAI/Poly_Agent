@@ -1,6 +1,6 @@
 # Plan 13：LUI Agent 评估与八项指标体系工作计划
 
-> 状态：已评审 / Phase 0–4 已完成，Phase 5 实施中
+> 状态：已评审 / Phase 0–5 全部完成
 >
 > 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）
 >
@@ -535,9 +535,9 @@ Phase 2 验证记录（2026-08-28）：
 
 ### Phase 5：生产采样与持续观测
 
-- [ ] 从生产 run/tool/event 抽样生成无 Ground Truth 的运行指标：M6、M7、M8 和链路侧 M2 候选。
-- [ ] 用匿名化样本人工标注小批次，补充真实分布覆盖率。
-- [ ] 每两周或每次大版本发布前刷新 baseline，发现成功率、幻觉、延迟或成本异常。
+- [x] 从生产 run/tool/event 抽样生成无 Ground Truth 的运行指标：M6、M7、M8 和链路侧 M2 候选。（`scripts/sample_lui_production_metrics.py` + `evaluation/lui/production.py`；默认 dry-run、只读聚合、不自动连接生产库、不写生产数据；支持 NDJSON 导出快照与显式 `--from-db` 只读模式）
+- [x] 用匿名化样本人工标注小批次，补充真实分布覆盖率。（`--label-sample N --label-output PATH` 导出匿名化 run 投影：run_key 短哈希 + 状态 + 时长/用量 + 日期桶，不含用户、内容、参数与精确时间）
+- [x] 每两周或每次大版本发布前刷新 baseline，发现成功率、幻觉、延迟或成本异常。（README 固化观测节奏：导出快照 → 采样聚合 → 人工标注 → 与上期对比 → 必要时递增数据集版本并刷新基线；回归门禁 `make test-lui-eval` 持续生效）
 
 ## 9. 测试与验证命令
 
@@ -553,6 +553,9 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --data
 
 # 回归门禁（离线 fixture 快速集 + 基线对比）
 make test-lui-eval
+
+# 生产采样（默认 dry-run、只读、匿名化）
+PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_metrics.py --export-dir exports/prod-<date>
 ```
 
 ## 10. 验收标准
@@ -589,3 +592,4 @@ make test-lui-eval
 - 2026-08-28：完成 Phase 0–2（口径冻结与 Golden Set、可观测性补齐、M1–M8 评测器）并按阶段提交。
 - 2026-08-28：完成 Phase 3 试运行与人工校准：37 条确定性任务跑通；M4/M5 分层抽检 12 条、不一致率 0%；修复 M6/M7 无阈值误计失败口径；首份 smoke 基线入库。Phase 4–5 接续实施。
 - 2026-08-28：完成 Phase 4 回归集成与门禁：`make test-lui-eval` 接入 check-all；基线对比门禁覆盖通过率/覆盖率/版本一致性；管理员评测报告页上线（/admin/lui-evaluation），与链路侧质量指标互补。Phase 5 接续实施。
+- 2026-08-28：完成 Phase 5 生产采样与持续观测：新增默认 dry-run 的只读采样脚本（NDJSON 快照 / 显式只读 DB）、匿名化聚合（M6/M7/M8 候选 + 链路侧 M2 候选）与人工标注样本导出；双周/发布前观测流程写入 README。计划全部完成。

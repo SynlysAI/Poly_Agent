@@ -77,6 +77,35 @@ make test-lui-eval
 该页展示受控基线的 M1–M8 任务级结果质量，与「工具服务」中的
 LUI 调用质量（生产链路侧）互为补充，不重复统计。
 
+## 生产采样与持续观测
+
+```bash
+# 默认 dry-run：不指定数据源时只输出说明，不连接任何存储
+PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_metrics.py
+
+# 推荐：从生产导出的 NDJSON 快照聚合（runs/tool_calls/events）
+PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_metrics.py \
+  --export-dir exports/prod-<date> \
+  --output backend/evaluation/lui/reports/production-sample.json
+
+# 显式连接当前配置数据库（只读，不写生产数据）
+PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_metrics.py \
+  --from-db --since 2026-08-14T00:00:00+08:00 --limit 5000
+
+# 导出匿名化人工标注小批次
+PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_metrics.py \
+  --export-dir exports/prod-<date> --label-sample 50 \
+  --label-output backend/evaluation/lui/reports/production-labels.json
+```
+
+- 输出为无 Ground Truth 的运行指标：M6 延迟、M7 成本、M8 人工兜底
+  候选与链路侧 M2 候选；候选值需人工标注确认后才计入正式口径。
+- 所有投影均匿名化：不含用户 ID、chat/message 内容、raw_arguments
+  与精确时间（时间仅保留日期桶）。
+- 每两周或每次大版本发布前：导出快照 → 跑采样 → 人工标注小批次 →
+  与上一期对比成功率、幻觉、延迟、成本与兜底候选 → 必要时刷新
+  Golden Set 基线（递增数据集版本）。
+
 ## Golden 任务标注规范
 
 1. 每条任务必须有稳定 `id`（`LUI-<桶前缀>-<序号>`）、`category`、`difficulty`、`mode` 与 `messages`。
