@@ -51,6 +51,22 @@ INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
     "agent_tool_policies": [
         ("algorithm_id", [("algorithm_id", 1)]),
     ],
+    "agent_exec_runs": [
+        ("run_id_unique", [("run_id", 1)]),
+        (
+            "provider_status_created",
+            [("provider_id", 1), ("status", 1), ("created_at", -1)],
+        ),
+        ("chat_created", [("chat_id", 1), ("created_at", -1)]),
+        ("owner_created", [("created_by", 1), ("created_at", -1)]),
+    ],
+    "agent_exec_artifacts": [
+        ("run_path_unique", [("run_id", 1), ("path", 1)]),
+        ("run_id", [("run_id", 1)]),
+    ],
+    "agent_exec_provider_policies": [
+        ("provider_id_unique", [("provider_id", 1)]),
+    ],
     "assistant_tool_calls": [
         ("call_id", [("call_id", 1)]),
         ("owner_chat_updated", [("created_by", 1), ("chat_id", 1), ("updated_at", -1)]),
@@ -78,6 +94,12 @@ INDEXES: dict[str, list[tuple[str, list[tuple[str, int]]]]] = {
     ],
 }
 
+UNIQUE_INDEX_NAMES = {
+    "agent_exec_runs.run_id_unique",
+    "agent_exec_artifacts.run_path_unique",
+    "agent_exec_provider_policies.provider_id_unique",
+}
+
 
 def main() -> None:
     if not settings.uses_mongodb:
@@ -87,7 +109,12 @@ def main() -> None:
     for collection_name, specs in INDEXES.items():
         collection = database[collection_name]
         for index_name, keys in specs:
-            collection.create_index(keys, name=index_name, background=True)
+            collection.create_index(
+                keys,
+                name=index_name,
+                background=True,
+                unique=index_name in UNIQUE_INDEX_NAMES,
+            )
             print(f"created index {collection_name}.{index_name}")
 
 

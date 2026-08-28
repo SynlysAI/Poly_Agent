@@ -143,6 +143,7 @@ class AgentExecRunData(BaseModel):
     output: dict[str, Any] | None = None
     error_code: str = ""
     error_message: str = ""
+    audit_error: bool = False
     chat_id: str = ""
     assistant_tool_call_id: str = ""
 
@@ -192,6 +193,15 @@ class AgentExecRunDetailData(BaseModel):
     policy_summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentExecRunListData(BaseModel):
+    """管理员 run 分页列表。"""
+
+    items: list[AgentExecRunData] = Field(default_factory=list)
+    total: int = Field(default=0, ge=0)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1)
+
+
 class AgentExecQualitySummaryData(BaseModel):
     """连接器 run 质量摘要。"""
 
@@ -202,6 +212,7 @@ class AgentExecQualitySummaryData(BaseModel):
     success_rate: float | None = None
     unavailable_count: int = 0
     timeout_count: int = 0
+    audit_error_count: int = 0
     total_input_bytes: int = 0
     total_output_bytes: int = 0
     avg_duration_ms: int | None = None

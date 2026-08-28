@@ -20,9 +20,10 @@ Agent 连接器用于把 Codex CLI 这类外部执行能力接入 PolyAgent，�
    - `AGENT_EXEC_ENABLED=true`
    - `AGENT_EXEC_CODEX_API_KEY`（或已有 `CODEX_API_KEY`），或配置 `AGENT_EXEC_CODEX_MODEL` 使用本地模型
    - 可选：`AGENT_EXEC_TIMEOUT_SECONDS`、`AGENT_EXEC_MAX_INPUT_BYTES`、`AGENT_EXEC_MAX_OUTPUT_BYTES`、`AGENT_EXEC_MAX_FILES`
+   - 可选：`AGENT_EXEC_MAX_CONCURRENCY`、`AGENT_EXEC_MAX_ACTIVE_RUNS_PER_USER`；超过限制时返回 429，不会排队堆积请求
 2. 进入 `/tools` 的“Agent 连接器”区域查看 Codex 卡片与 readiness 状态。
 3. 启用连接器策略，按需调整允许角色、任务类型与确认要求；策略变更会写入审计。
-4. 需要验证时可发起受控测试 run；run 状态、事件与 artifact 清单可在详情中查看。
+4. 需要验证时可发起受控测试 run；run 状态、事件与 artifact 清单可在详情中查看，`GET /agent-exec/runs` 支持按 provider、状态和会话分页筛选。
 5. 配置完成后可在 `/capabilities` 查看最终能力可见性；配置仍以 `/tools` 为唯一事实源。
 
 ## 3.1 普通用户开放流程
@@ -31,7 +32,7 @@ Agent 连接器用于把 Codex CLI 这类外部执行能力接入 PolyAgent，�
 2. 将 `allowed_roles` 显式加入 `user`；仅改 `requires_confirmation=false` 不会开放普通用户。
 3. 普通用户进入 `/capabilities`，仅会看到该连接器；readiness 不满足时仍显示不可用。
 4. 普通用户发起任务时必须每次勾选确认。即使策略关闭确认要求，服务端仍强制 `confirmed=true`。
-5. run 详情、取消和质量汇总仍仅管理员可访问；普通 run 的 actor role、policy snapshot、事件与 trace 可被管理员追溯。
+5. run 详情、列表、取消和质量汇总仍仅管理员可访问；普通用户响应会隐藏 policy 更新者，普通 run 的 actor role、policy snapshot、事件与 trace 仍可被管理员追溯。
 
 ## 4. LUI 暴露规则（默认关闭）
 
@@ -48,14 +49,14 @@ Agent 连接器用于把 Codex CLI 这类外部执行能力接入 PolyAgent，�
 ## 5. 安全边界
 
 - 每次 run 使用服务端生成的 run_id 和独立受限 workdir。
-- 输入只能来自服务端受管上传 / artifact 目录，逐个记录大小、sha256 与来源对象；symlink、硬链接、路径逃逸与超限输入会被拒绝。
-- 输出只允许 JSON 结果文件与显式 `artifacts/` 目录；symlink、隐藏文件、可执行位、空文件、数量或总大小超限都会失败并清理。
+- 输入只能来自服务端受管上传 / artifact 目录，基于不跟随 symlink 的文件描述符完成大小、sha256 与复制校验；symlink、硬链接、路径逃逸、大小 / 声明不符与超限输入会被拒绝。
+- 输出只允许 JSON 结果文件与显式 `artifacts/` 目录；symlink、硬链接、隐藏文件、可执行位、空文件、数量或总大小超限都会失败并清理。
 - Codex CLI 固定使用 `--sandbox read-only`，无法确认 sandbox 能力时连接器保持 unavailable，不会降级为无沙箱执行。
-- 超时会终止进程；服务端取消返回稳定终态，不产生竞态覆盖。
+- 超时会终止进程；服务端取消返回稳定终态，取消后迟到的成功结果不能覆盖 `cancelled`。
 
 ## 6. 审计与追溯
 
-每次请求、readiness、开始、完成、失败、取消和策略变更都会写入统一审计；带会话上下文时同步进入 Plan 09/10 Trace，可在会话回放中查看“外部 Agent 文件任务”步骤。事件不记录完整 prompt、凭据、环境变量或 hidden reasoning。
+每次请求、readiness、开始、完成、失败、取消和策略变更都会写入统一审计；带会话上下文时同步进入 Plan 09/10 Trace，可在会话回放中查看“外部 Agent 文件任务”步骤。事件不记录完整 prompt、凭据、环境变量或 hidden reasoning。审计写入失败时 run 会标记 `audit_error` 并记录结构化错误日志，质量摘要提供计数。
 
 ## 7. 来源标注
 

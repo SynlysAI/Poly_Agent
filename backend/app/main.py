@@ -106,6 +106,8 @@ def _map_http_error(status_code: int) -> tuple[int, str]:
         return 40401, "resource not found"
     if status_code == 409:
         return 40901, "conflict"
+    if status_code == 429:
+        return 42901, "too many requests"
     if status_code == 422:
         return 42201, "validation failed"
     if status_code == 502:
@@ -146,6 +148,16 @@ async def app_lifespan(app: FastAPI):
         app_logger.info("LUI 热路径 MongoDB 索引检查完成")
     except Exception:
         app_logger.exception("LUI 热路径 MongoDB 索引初始化失败")
+
+    try:
+        from app.infra.agent_exec_repositories import (
+            ensure_agent_exec_repository_indexes,
+        )
+
+        ensure_agent_exec_repository_indexes()
+        app_logger.info("agent_exec MongoDB 索引检查完成")
+    except Exception:
+        app_logger.exception("agent_exec MongoDB 索引初始化失败")
 
     async def stale_reaper_loop() -> None:
         logger_reaper.info(

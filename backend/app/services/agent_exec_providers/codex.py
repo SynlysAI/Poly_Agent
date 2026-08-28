@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import signal
 import shutil
+import stat
 import time
 import subprocess
 from pathlib import Path
@@ -195,16 +197,11 @@ class CodexAgentExecProvider:
                     f"{self._digest(stderr_text)}"
                 ),
             )
-        if not output_path.is_file():
-            raise AgentExecProviderError(
-                "output_missing",
-                f"codex exec 未写出期望的结果文件：{self._digest(stderr_text)}",
-            )
         try:
-            output = parse_json_payload(
-                output_path.read_text(encoding="utf-8"),
-                schema=task.output_schema,
-            )
+            output_text = self._read_output_text(output_path)
+            output = parse_json_payload(output_text, schema=task.output_schema)
+        except AgentExecProviderError:
+            raise
         except Exception as exc:
             raise AgentExecProviderError(
                 "schema_mismatch", f"输出不符合 JSON Schema：{exc}"
@@ -217,6 +214,70 @@ class CodexAgentExecProvider:
             stdout_digest=self._digest(stdout_text),
             stderr_digest=self._digest(stderr_text),
         )
+
+    @staticmethod
+    def _read_output_text(output_path: Path) -> str:
+        """以不跟随 symlink 的文件描述符读取受限结果文件。
+
+        Args:
+            output_path: run workdir 内的结果文件。
+
+        Returns:
+            UTF-8 结果文本。
+
+        Raises:
+            AgentExecProviderError: 结果缺失、为 symlink、非普通文件或超过输出限额。
+        """
+        flags = (
+            os.O_RDONLY
+            | os.O_NONBLOCK
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            file_fd = os.open(output_path, flags)
+        except OSError as exc:
+            reason_code = (
+                "output_path_invalid"
+                if exc.errno == getattr(errno, "ELOOP", -1)
+                else "output_missing"
+            )
+            raise AgentExecProviderError(
+                reason_code, f"codex exec 结果文件不可读：{exc}"
+            ) from exc
+        try:
+            file_stat = os.fstat(file_fd)
+            if (
+                not stat.S_ISREG(file_stat.st_mode)
+                or file_stat.st_nlink > 1
+                or file_stat.st_mode & 0o111
+                or file_stat.st_size > settings.agent_exec_max_output_bytes
+            ):
+                raise AgentExecProviderError(
+                    "output_path_invalid", "codex exec 结果文件违反输出边界"
+                )
+            with os.fdopen(file_fd, "rb", closefd=False) as handle:
+                payload = handle.read()
+            if len(payload) != file_stat.st_size:
+                raise AgentExecProviderError(
+                    "output_path_invalid", "codex exec 结果文件在读取期间发生变化"
+                )
+            final_stat = os.fstat(file_fd)
+            if (
+                final_stat.st_size != file_stat.st_size
+                or final_stat.st_nlink != file_stat.st_nlink
+            ):
+                raise AgentExecProviderError(
+                    "output_path_invalid", "codex exec 结果文件在读取期间发生变化"
+                )
+            try:
+                return payload.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise AgentExecProviderError(
+                    "output_path_invalid", "codex exec 结果文件不是有效 UTF-8"
+                ) from exc
+        finally:
+            os.close(file_fd)
 
     def _run_process(
         self,

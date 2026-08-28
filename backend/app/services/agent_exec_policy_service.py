@@ -206,6 +206,12 @@ class AgentExecPolicyService:
                 reason_code="read_only_blocked",
                 message="只读权限下不允许执行外部 Agent 任务",
             )
+        if request.permission_mode != "workspace_write":
+            raise AgentExecPolicyRejected(
+                status_code=400,
+                reason_code="permission_mode_unsupported",
+                message="外部 Agent 连接器仅允许 workspace_write 受限执行语义",
+            )
         if request.actor_role == "user" and not request.confirmed:
             raise AgentExecPolicyRejected(
                 status_code=403,

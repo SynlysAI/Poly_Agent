@@ -196,6 +196,19 @@ class AgentExecApiTest(ComputationTestCase):
                 [item["provider_id"] for item in response.json()["data"]],
                 [self.provider_id],
             )
+            user_card = response.json()["data"][0]
+            self.assertEqual(user_card["policy"]["updated_by"], "")
+            self.assertIsNone(user_card["policy"]["updated_at"])
+
+            response = self.client.get(
+                "/api/v1/agent-exec/providers", headers=self._admin_headers()
+            )
+            admin_card = next(
+                item
+                for item in response.json()["data"]
+                if item["provider_id"] == self.provider_id
+            )
+            self.assertEqual(admin_card["policy"]["updated_by"], "admin_api")
 
     def test_policy_update_admin_only_and_scope_validation(self) -> None:
         settings.auth_enabled = True
@@ -285,6 +298,8 @@ class AgentExecApiTest(ComputationTestCase):
             run = created.json()["data"]
             self.assertEqual(run["created_by"], "user_api")
             self.assertEqual(run["actor_role"], "user")
+            self.assertEqual(run["policy_snapshot"]["updated_by"], "")
+            self.assertIsNone(run["policy_snapshot"]["updated_at"])
             self.runs[run["run_id"]] = run
 
             detail = self.client.get(
@@ -389,6 +404,42 @@ class AgentExecApiTest(ComputationTestCase):
             summary = response.json()["data"]
             self.assertIn("success_rate", summary)
             self.assertIn("timeout_count", summary)
+            self.assertIn("audit_error_count", summary)
+
+    def test_run_list_admin_only_with_filters(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            self._enable_policy()
+            created = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(),
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            run = created.json()["data"]
+
+            response = self.client.get(
+                "/api/v1/agent-exec/runs",
+                params={"provider_id": self.provider_id, "status": "completed", "page": 1},
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()["data"]
+            self.assertGreaterEqual(data["total"], 1)
+            self.assertIn(run["run_id"], [item["run_id"] for item in data["items"]])
+
+            invalid = self.client.get(
+                "/api/v1/agent-exec/runs",
+                params={"status": "unknown"},
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(invalid.status_code, 400)
+
+            forbidden = self.client.get(
+                "/api/v1/agent-exec/runs",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(forbidden.status_code, 403)
 
 
 if __name__ == "__main__":

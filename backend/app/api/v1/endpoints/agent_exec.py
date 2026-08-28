@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import get_current_user, require_admin
 from app.infra.computation_repositories import AuditEventRepository
@@ -17,6 +17,7 @@ from app.schemas.agent_exec import (
     AgentExecRunCreateRequest,
     AgentExecRunData,
     AgentExecRunDetailData,
+    AgentExecRunListData,
     AgentExecTaskRequest,
 )
 from app.schemas.common import ApiResponse
@@ -47,11 +48,16 @@ def _actor(current_user: dict[str, str] | None) -> tuple[str, str]:
     )
 
 
-def _provider_connection(provider) -> AgentExecProviderConnection:
+def _provider_connection(
+    provider,
+    *,
+    include_policy_actor: bool = True,
+) -> AgentExecProviderConnection:
     """把 provider 组装为脱敏连接器卡片。
 
     Args:
         provider: provider 实例。
+        include_policy_actor: 是否返回策略更新者与更新时间。
 
     Returns:
         连接器卡片数据。
@@ -71,8 +77,46 @@ def _provider_connection(provider) -> AgentExecProviderConnection:
         ),
         attribution=getattr(provider, "attribution", ""),
         readiness=provider.readiness(),
-        policy=service.policy_service.get_policy(provider.provider_id),
+        policy=_policy_for_view(
+            service.policy_service.get_policy(provider.provider_id),
+            include_actor=include_policy_actor,
+        ),
     )
+
+
+def _policy_for_view(
+    policy: AgentExecProviderPolicy,
+    *,
+    include_actor: bool,
+) -> AgentExecProviderPolicy:
+    """按视角脱敏策略治理者信息。
+
+    Args:
+        policy: 服务端权威策略。
+        include_actor: 当前视角是否允许查看策略更新者。
+
+    Returns:
+        普通用户视角会清空 updated_by / updated_at，其他视角原样返回。
+    """
+    if include_actor:
+        return policy
+    return policy.model_copy(update={"updated_by": "", "updated_at": None})
+
+
+def _run_for_view(run: AgentExecRunData, *, is_admin: bool) -> AgentExecRunData:
+    """按视角脱敏 run 内的策略治理者信息。
+
+    Args:
+        run: 服务端权威 run 状态。
+        is_admin: 当前视角是否为管理员。
+
+    Returns:
+        普通用户视角的脱敏 run 响应。
+    """
+    if is_admin:
+        return run
+    policy = _policy_for_view(run.policy_snapshot, include_actor=False)
+    return run.model_copy(update={"policy_snapshot": policy})
 
 
 @router.get(
@@ -97,7 +141,7 @@ def list_providers(
         policy = service.policy_service.get_policy(item.provider_id)
         if not is_admin and not (policy.enabled and role in policy.allowed_roles):
             continue
-        data.append(_provider_connection(item))
+        data.append(_provider_connection(item, include_policy_actor=is_admin))
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -166,7 +210,66 @@ def create_run(
             status_code=exc.status_code,
             detail={"reason_code": exc.reason_code, "message": exc.message},
         ) from exc
-    return ApiResponse(code=0, message="ok", data=run)
+    _, role = _actor(current_user)
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=_run_for_view(run, is_admin=role == "admin"),
+    )
+
+
+@router.get(
+    "/runs",
+    response_model=ApiResponse[AgentExecRunListData],
+    dependencies=[Depends(require_admin)],
+)
+def list_runs(
+    provider_id: str | None = Query(default=None, min_length=1, max_length=120),
+    status: str | None = Query(default=None, min_length=1, max_length=32),
+    chat_id: str | None = Query(default=None, min_length=1, max_length=120),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> ApiResponse[AgentExecRunListData]:
+    """管理员分页查看 run 状态。
+
+    Args:
+        provider_id: provider 过滤条件。
+        status: run 状态过滤条件。
+        chat_id: 会话过滤条件。
+        page: 页码。
+        page_size: 每页数量。
+
+    Returns:
+        run 分页列表。
+    """
+    if status is not None and status not in {
+        "requested",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason_code": "status_invalid", "message": "run 状态无效"},
+        )
+    items, total = AgentExecRunRepository.list_runs(
+        provider_id=provider_id,
+        status=status,
+        chat_id=chat_id,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=AgentExecRunListData(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+        ),
+    )
 
 
 @router.get(
@@ -246,6 +349,7 @@ def quality_summary() -> ApiResponse[AgentExecQualitySummaryData]:
             1 for item in runs if item.error_code == "provider_unavailable"
         ),
         timeout_count=sum(1 for item in runs if item.error_code == "timeout"),
+        audit_error_count=sum(1 for item in runs if item.audit_error),
         total_input_bytes=sum(
             item.size_bytes for run in runs for item in run.input_files
         ),

@@ -262,6 +262,18 @@ class CodexProviderTest(unittest.TestCase):
                 self._execute(provider)
         self.assertEqual(ctx.exception.code, "output_missing")
 
+    def test_result_symlink_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.json"
+            target.write_text("{}", encoding="utf-8")
+            output = Path(tmp) / "result.json"
+            output.symlink_to(target)
+
+            with self.assertRaises(AgentExecProviderError) as ctx:
+                CodexAgentExecProvider._read_output_text(output)
+
+        self.assertEqual(ctx.exception.code, "output_path_invalid")
+
     def test_execute_schema_mismatch(self) -> None:
         provider = CodexAgentExecProvider(
             process_factory=lambda command, **kwargs: FakeProcess(

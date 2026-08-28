@@ -295,6 +295,12 @@ class Settings:
             os.getenv("AGENT_EXEC_MAX_OUTPUT_BYTES", str(10 * 1024 * 1024))
         )
         self.agent_exec_max_files: int = int(os.getenv("AGENT_EXEC_MAX_FILES", "20"))
+        self.agent_exec_max_concurrency: int = int(
+            os.getenv("AGENT_EXEC_MAX_CONCURRENCY", "2")
+        )
+        self.agent_exec_max_active_runs_per_user: int = int(
+            os.getenv("AGENT_EXEC_MAX_ACTIVE_RUNS_PER_USER", "1")
+        )
         self.agent_exec_codex_bin: str = os.getenv("AGENT_EXEC_CODEX_BIN", "codex").strip() or "codex"
         self.agent_exec_codex_sandbox_mode: str = (
             os.getenv("AGENT_EXEC_CODEX_SANDBOX_MODE", "read-only").strip() or "read-only"

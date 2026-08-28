@@ -1,6 +1,6 @@
 # Plan 16：Agent 能力中心与权限治理工作计划
 
-> 状态：已完成 / 全量验证通过
+> 状态：已完成 / 全量验证通过；2026-08-28 补充普通用户响应脱敏复核
 >
 > 日期：2026-08-28
 >
@@ -308,6 +308,13 @@ PolyAgent 的可调用能力目前分散在多个模块：外部服务集成、�
 - [x] 全部通过后更新本计划复选框、状态记录和完成定义。
 - [x] 按阶段创建独立提交；推送前同步远端，最后 fast-forward 推送 `develop`。
 
+### P16-G. 权限响应脱敏补强
+
+- [x] `GET /agent-exec/providers` 在普通用户视角清空 policy 的 `updated_by` 与 `updated_at`，避免泄漏管理员操作者身份。
+- [x] `POST /agent-exec/runs` 在普通用户响应中对 `policy_snapshot` 做同样脱敏；服务端权威状态与审计仍保留完整事实。
+- [x] 管理员视角保留策略更新者，便于治理追溯；能力中心目录继续只输出策略摘要，不输出策略更新者。
+- [x] 补充 API 测试，同时覆盖 admin/user 两种视角、授权连接器调用与响应脱敏。
+
 ## 9. 测试计划
 
 ### 9.1 后端专项
@@ -391,6 +398,7 @@ make test-backend
 - [x] `/capabilities` 独立页面可用，与 `/tools` 不共享配置视图，不出现配置表单。
 - [x] `/tools` 保留 6 个现有 tab，增加 admin 守卫与能力中心引导，配置功能不回退。
 - [x] 默认策略下 user 看不到连接器；显式授权后可见，未确认不能调用。
+- [x] user 视角的 provider policy 与 run policy snapshot 不泄漏策略更新者；admin 视角保留完整治理事实。
 - [x] provider/run 管理边界清晰：providers/runs 面向认证用户，policy/detail/cancel/quality 仍 admin-only。
 - [x] Skill 页面只显示服务端 allowlist，不出现本地 `.codex/skills` 扫描结果。
 - [x] `/admin` 用户与邀请码管理可用；admin 可操作，user 被拒绝。
@@ -400,6 +408,7 @@ make test-backend
 
 ## 13. 状态记录
 
+- 2026-08-28（P16-G）：复核发现普通用户可见的 provider policy 与 run policy snapshot 会携带 `updated_by` / `updated_at`，虽不含 secret，但会暴露内部管理员标识。已在 API 响应层按角色脱敏，管理员事实源与审计不受影响；相关 agent_exec API 测试通过。Plan 15 同步新增管理员 run 分页接口，用于治理侧定位异常执行。完整后端回归 952 项通过 / 1 项跳过；能力中心前端纯函数测试与 Vite 生产构建通过。
 - 2026-08-28（P16-F）：完成全量收尾：`make test-backend` 通过（942 passed / 1 skipped）；前端 24 个 `test:*` 脚本与 production build 通过；本地 5200/5201 服务健康；`make test-e2e` 同时通过既有 dialogue E2E 和新增 capability/admin E2E，覆盖 admin/user 目录视角、默认连接器隐藏、`/tools` 与 `/admin` 回退、6 个配置 tab、响应式与 console。修复测试环境认证隔离、WeKnora 图谱失败语义、整页恢复后的角色守卫和算法自动续答恢复，并留存浏览器截图。
 - 2026-08-28（P16-E）：注册 `capability_center` 结构化来源，能力中心顶部与卡片覆盖算法来源、Codex CLI、报告 Skill provider、OpenAI-compatible、Ollama 和 Custom HTTP；更新来源矩阵、能力中心用户指南、Agent 连接器指南与 `doc/README.md`，明确不做插件市场、浏览器连接器、任意 OAuth 安装或本地 Skill 动态加载。来源 API 测试、能力中心前端测试和 production build 通过。
 - 2026-08-28（P16-D）：admin 用户列表补充创建、更新与最近登录时间；`/admin` 新增用户与邀请码管理区，支持确认后启用/禁用非管理员、创建 user 邀请码和禁用邀请码；新增 API 权限与前端纯函数测试，并修复本地双模存储用户/邀请码列表读取。专项测试与 production build 通过。

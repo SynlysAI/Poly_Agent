@@ -32,12 +32,24 @@ from app.schemas.agent_exec import (
 SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(api[_-]?key|access[_-]?key|token|password|secret|authorization|prompt)"
 )
+_agent_exec_run_indexes_ensured = False
+_agent_exec_artifact_indexes_ensured = False
+_agent_exec_policy_indexes_ensured = False
 
 
 class AgentExecRunRepository(BaseRepository):
     """agent_exec run 权威状态仓储。"""
 
     collection_name = "agent_exec_runs"
+
+    @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保 run 索引只在当前进程内创建一次。"""
+        global _agent_exec_run_indexes_ensured
+        if _agent_exec_run_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _agent_exec_run_indexes_ensured = True
 
     @classmethod
     def _collection(cls):
@@ -133,6 +145,15 @@ class AgentExecArtifactRepository(BaseRepository):
     collection_name = "agent_exec_artifacts"
 
     @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保 artifact 索引只在当前进程内创建一次。"""
+        global _agent_exec_artifact_indexes_ensured
+        if _agent_exec_artifact_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _agent_exec_artifact_indexes_ensured = True
+
+    @classmethod
     def _collection(cls):
         return get_agent_exec_artifacts_collection()
 
@@ -220,6 +241,15 @@ class AgentExecProviderPolicyRepository(BaseRepository):
     collection_name = "agent_exec_provider_policies"
 
     @classmethod
+    def _ensure_indexes_once(cls) -> None:
+        """确保策略索引只在当前进程内创建一次。"""
+        global _agent_exec_policy_indexes_ensured
+        if _agent_exec_policy_indexes_ensured:
+            return
+        cls.ensure_indexes()
+        _agent_exec_policy_indexes_ensured = True
+
+    @classmethod
     def _collection(cls):
         return get_agent_exec_provider_policies_collection()
 
@@ -256,6 +286,13 @@ class AgentExecProviderPolicyRepository(BaseRepository):
             policy: 策略对象。
         """
         cls.save("provider_id", policy.model_dump(mode="json"))
+
+
+def ensure_agent_exec_repository_indexes() -> None:
+    """初始化 agent_exec Mongo 索引，供启动脚本与运维检查复用。"""
+    AgentExecRunRepository.ensure_indexes()
+    AgentExecArtifactRepository.ensure_indexes()
+    AgentExecProviderPolicyRepository.ensure_indexes()
 
 
 class AgentExecAuditWriter:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import datetime
 import sys
 import tempfile
@@ -169,6 +170,34 @@ class AgentExecServiceTest(unittest.TestCase):
             ],
         )
 
+    def test_audit_write_failure_is_observable(self) -> None:
+        calls: list[dict] = []
+
+        def failing_first_sink(event: dict):
+            """首次审计写入失败，后续恢复。"""
+            if not calls:
+                calls.append(event)
+                raise RuntimeError("audit unavailable")
+            calls.append(event)
+
+        service = AgentExecService(
+            registry=self.registry,
+            policy_service=AgentExecPolicyService(),
+            event_sink=failing_first_sink,
+        )
+        service.policy_service.update_policy(
+            self.provider,
+            AgentExecPolicyUpdateRequest(enabled=True),
+            updated_by="admin-1",
+        )
+
+        with self.assertLogs("app.services.agent_exec_service", level="ERROR"):
+            run = service.execute(self._request())
+
+        self.assertEqual(run.status, "completed")
+        self.assertTrue(run.audit_error)
+        self.assertGreater(len(calls), 1)
+
     def test_role_policy_rejected(self) -> None:
         with self.assertRaises(AgentExecRequestError) as ctx:
             self.service.execute(self._request(actor_role="user"))
@@ -199,6 +228,11 @@ class AgentExecServiceTest(unittest.TestCase):
         with self.assertRaises(AgentExecRequestError) as ctx:
             self.service.execute(self._request(permission_mode="read_only"))
         self.assertEqual(ctx.exception.reason_code, "read_only_blocked")
+
+        with self.assertRaises(AgentExecRequestError) as ctx:
+            self.service.execute(self._request(permission_mode="full_access"))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.reason_code, "permission_mode_unsupported")
 
     def test_task_type_not_allowed(self) -> None:
         self.provider.supported_task_types = ("shell_task",)
@@ -262,6 +296,25 @@ class AgentExecServiceTest(unittest.TestCase):
 
         self.assertEqual(ctx.exception.reason_code, "input_hash_mismatch")
 
+    def test_input_replacement_after_validation_rejected(self) -> None:
+        item = self._input(b"expected")
+        original_validator = self.service._validate_source_file
+
+        def replace_after_validation(source, source_object_id):
+            """模拟校验通过后来源被替换。"""
+            resolved = original_validator(source, source_object_id)
+            source.write_bytes(b"attacker")
+            return resolved
+
+        self.service._validate_source_file = replace_after_validation
+        try:
+            with self.assertRaises(AgentExecRequestError) as ctx:
+                self.service.execute(self._request([item]))
+        finally:
+            self.service._validate_source_file = original_validator
+
+        self.assertEqual(ctx.exception.reason_code, "input_hash_mismatch")
+
     def test_input_too_large_and_too_many_files(self) -> None:
         big = self._input(b"x" * 2048, name="big.bin")
         with self.assertRaises(AgentExecRequestError) as ctx:
@@ -280,6 +333,23 @@ class AgentExecServiceTest(unittest.TestCase):
             self.service.execute(self._request([item]))
 
         self.assertEqual(ctx.exception.reason_code, "input_name_invalid")
+
+    def test_nested_managed_input_copied_safely(self) -> None:
+        nested_dir = settings.upload_root / "nested"
+        nested_dir.mkdir()
+        source = nested_dir / "input.txt"
+        source.write_bytes(b"nested")
+        item = AgentExecInputFileData(
+            name="input.txt",
+            size_bytes=6,
+            sha256=hashlib.sha256(b"nested").hexdigest(),
+            source_object_id="nested/input.txt",
+        )
+
+        run = self.service.execute(self._request([item]))
+
+        self.assertEqual(run.status, "completed")
+        self.assertEqual(run.input_files[0].sha256, item.sha256)
 
     def test_output_symlink_rejected(self) -> None:
         def handler(*, task, workdir, timeout_seconds, should_cancel=None):
@@ -322,6 +392,54 @@ class AgentExecServiceTest(unittest.TestCase):
                 run = self.service.execute(self._request())
                 self.assertEqual(run.status, "failed")
                 self.assertEqual(run.error_code, expected_code)
+
+    def test_output_hardlink_rejected(self) -> None:
+        def handler(*, task, workdir, timeout_seconds, should_cancel=None):
+            """写入指向受管目录的硬链接。"""
+            target = settings.upload_root / "hardlink-target.txt"
+            target.write_bytes(b"external")
+            artifacts = workdir / "artifacts"
+            artifacts.mkdir()
+            os.link(target, artifacts / "linked.txt")
+            return AgentExecProviderResult(
+                provider_id="fake", success=True, output={"summary": "ok"}
+            )
+
+        self.provider.execute_handler = handler
+        run = self.service.execute(self._request())
+
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.error_code, "output_hardlink_rejected")
+
+    def test_output_fifo_rejected(self) -> None:
+        def handler(*, task, workdir, timeout_seconds, should_cancel=None):
+            """写入非普通文件。"""
+            artifacts = workdir / "artifacts"
+            artifacts.mkdir()
+            os.mkfifo(artifacts / "pipe")
+            return AgentExecProviderResult(
+                provider_id="fake", success=True, output={"summary": "ok"}
+            )
+
+        self.provider.execute_handler = handler
+        run = self.service.execute(self._request())
+
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.error_code, "output_path_invalid")
+
+    def test_workdir_level_symlink_rejected(self) -> None:
+        def handler(*, task, workdir, timeout_seconds, should_cancel=None):
+            """在 artifacts 外创建 symlink。"""
+            (workdir / "escape").symlink_to(settings.upload_root)
+            return AgentExecProviderResult(
+                provider_id="fake", success=True, output={"summary": "ok"}
+            )
+
+        self.provider.execute_handler = handler
+        run = self.service.execute(self._request())
+
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.error_code, "output_symlink_rejected")
 
     def test_output_too_large_rejected(self) -> None:
         def handler(*, task, workdir, timeout_seconds, should_cancel=None):
@@ -406,6 +524,99 @@ class AgentExecServiceTest(unittest.TestCase):
         self.assertEqual(stable.status, "cancelled")
         event_types = [event["event_type"] for event in self.events]
         self.assertEqual(event_types.count("agent_exec.cancelled"), 1)
+
+    def test_late_provider_success_cannot_overwrite_cancelled(self) -> None:
+        release = threading.Event()
+
+        def handler(*, task, workdir, timeout_seconds, should_cancel=None):
+            """等待取消信号后仍返回成功，模拟迟到结果。"""
+            while should_cancel is not None and not should_cancel():
+                time.sleep(0.01)
+            release.set()
+            return AgentExecProviderResult(
+                provider_id="fake", success=True, output={"summary": "late"}
+            )
+
+        self.provider.execute_handler = handler
+        result: dict = {}
+        thread = threading.Thread(
+            target=lambda: result.__setitem__("run", self.service.execute(self._request()))
+        )
+        thread.start()
+        run_id = None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and run_id is None:
+            runs = self.service.list_runs()
+            if runs and runs[0].status == "running":
+                run_id = runs[0].run_id
+            time.sleep(0.01)
+        self.assertIsNotNone(run_id)
+
+        cancelled = self.service.cancel(run_id)
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertTrue(release.wait(timeout=5))
+        thread.join(timeout=5)
+
+        self.assertEqual(result["run"].status, "cancelled")
+        self.assertEqual(self.service.get_run(run_id).status, "cancelled")
+        self.assertNotIn("agent_exec.completed", [x["event_type"] for x in self.events])
+
+    def test_user_active_run_limit_and_global_concurrency(self) -> None:
+        limited = AgentExecService(
+            registry=self.registry,
+            policy_service=AgentExecPolicyService(),
+            event_sink=self.events.append,
+            max_concurrency=2,
+        )
+        limited.policy_service.update_policy(
+            self.provider,
+            AgentExecPolicyUpdateRequest(
+                enabled=True, allowed_roles=["admin", "user"]
+            ),
+            updated_by="admin-1",
+        )
+        release = threading.Event()
+
+        def handler(*, task, workdir, timeout_seconds, should_cancel=None):
+            """占用唯一执行槽位。"""
+            release.wait(timeout=5)
+            return AgentExecProviderResult(
+                provider_id="fake", success=True, output={"summary": "ok"}
+            )
+
+        limited.registry.get("fake").execute_handler = handler
+        thread = threading.Thread(
+            target=lambda: limited.execute(self._request(actor_user_id="admin-1"))
+        )
+        thread.start()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not limited.list_runs():
+            time.sleep(0.01)
+        self.assertTrue(limited.list_runs())
+
+        with self.assertRaises(AgentExecRequestError) as user_ctx:
+            limited.execute(self._request(actor_user_id="admin-1"))
+        self.assertEqual(user_ctx.exception.status_code, 429)
+        self.assertEqual(user_ctx.exception.reason_code, "user_active_run_limit")
+
+        second_thread = threading.Thread(
+            target=lambda: limited.execute(self._request(actor_user_id="admin-2"))
+        )
+        second_thread.start()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and len(limited.list_runs()) < 2:
+            time.sleep(0.01)
+        self.assertEqual(len(limited.list_runs()), 2)
+
+        with self.assertRaises(AgentExecRequestError) as global_ctx:
+            limited.execute(self._request(actor_user_id="admin-3"))
+        self.assertEqual(global_ctx.exception.status_code, 429)
+        self.assertEqual(global_ctx.exception.reason_code, "concurrency_limit")
+
+        release.set()
+        thread.join(timeout=5)
+        second_thread.join(timeout=5)
+        self.assertEqual({run.status for run in limited.list_runs()}, {"completed"})
 
     def test_cancel_missing_run(self) -> None:
         with self.assertRaises(AgentExecRequestError) as ctx:
