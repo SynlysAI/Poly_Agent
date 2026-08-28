@@ -27,9 +27,14 @@ from evaluation.lui.manual_review import (  # noqa: E402
     load_review_sheet,
     summarize_review,
     validate_sheet_completed,
+    validate_review_sheet_alignment,
 )
-from evaluation.lui.runner import load_dataset  # noqa: E402
-from evaluation.lui.runner import run_evaluation  # noqa: E402
+from evaluation.lui.runner import (  # noqa: E402
+    default_evaluation_id,
+    load_dataset,
+    run_evaluation,
+)
+from evaluation.lui.schemas import DATASET_VERSION  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -104,6 +109,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.manual_review:
         sheet = load_review_sheet(args.manual_review)
         validate_sheet_completed(sheet)
+        validate_review_sheet_alignment(
+            sheet,
+            evaluation_id=args.evaluation_id or default_evaluation_id(args.mode),
+            dataset_version=DATASET_VERSION,
+        )
         manual_review_summary = summarize_review(sheet)
     report, evaluations = run_evaluation(
         args.dataset,

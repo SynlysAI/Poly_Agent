@@ -163,6 +163,42 @@ class LuiProductionScriptTest(unittest.TestCase):
             self.assertEqual(calls, [])
             self.assertEqual(events, [])
 
+    def test_db_loader_does_not_let_latest_page_hide_historical_window(self) -> None:
+        """数据库只读采样应跨页跳过窗口后的最新数据。"""
+
+        class Repository:
+            """按 created_at 倒序模拟仓储分页。"""
+
+            def list_all(
+                self,
+                *,
+                page: int,
+                page_size: int,
+                sort_field: str,
+                reverse: bool,
+            ):
+                """返回一页模拟文档。"""
+                rows = sorted(
+                    [
+                        _run(run_id="latest", created_at="2026-09-01T00:00:00+00:00"),
+                        _run(run_id="in-window", created_at="2026-08-28T10:00:00+00:00"),
+                        _run(run_id="too-early", created_at="2026-08-01T00:00:00+00:00"),
+                    ],
+                    key=lambda item: item[sort_field],
+                    reverse=reverse,
+                )
+                start = (page - 1) * page_size
+                return rows[start : start + page_size], len(rows)
+
+        rows = self.script._load_window_from_repository(
+            Repository(),
+            since=self.script._parse_time("2026-08-14T00:00:00+00:00"),
+            until=self.script._parse_time("2026-08-28T23:59:59+00:00"),
+            limit=10,
+        )
+
+        self.assertEqual([row["run_id"] for row in rows], ["in-window"])
+
 
 if __name__ == "__main__":
     unittest.main()

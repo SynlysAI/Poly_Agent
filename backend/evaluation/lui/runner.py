@@ -72,6 +72,19 @@ def captured_facts(
     return ObservedFacts.model_validate(payload)
 
 
+def default_evaluation_id(mode: str) -> str:
+    """生成与模式和数据集版本绑定的默认评测批次 ID。
+
+    Args:
+        mode: 评测模式。
+
+    Returns:
+        可复现的评测批次 ID。
+    """
+    safe_mode = mode.replace("/", "-")
+    return f"lui-eval-{safe_mode}-{DATASET_VERSION}"
+
+
 def run_evaluation(
     dataset_dir: str | Path,
     *,
@@ -123,8 +136,7 @@ def run_evaluation(
         facts.task_id = task.id
         evaluations.append(evaluate_task(task, facts, judge=judge))
     if not evaluation_id:
-        safe_mode = mode.replace("/", "-")
-        evaluation_id = f"lui-eval-{safe_mode}-{DATASET_VERSION}"
+        evaluation_id = default_evaluation_id(mode)
     report = build_report(
         evaluations,
         mode=mode,

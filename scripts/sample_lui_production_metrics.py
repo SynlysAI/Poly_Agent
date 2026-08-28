@@ -149,6 +149,60 @@ def _within_window(
     return True
 
 
+def _load_window_from_repository(
+    repository: Any,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+    limit: int,
+    sort_field: str = "created_at",
+) -> list[dict[str, Any]]:
+    """按时间窗口从只读仓储读取样本。
+
+    仓储按时间倒序分页返回。这里不能先取第一页再过滤，否则历史窗口
+    会被最新数据遮挡；遇到早于 since 的记录可安全停止。
+
+    Args:
+        repository: 只读仓储对象，需提供 list_all 分页接口。
+        since: 窗口起始时间。
+        until: 窗口结束时间。
+        limit: 最大读取条数。
+        sort_field: 仓储排序时间字段。
+
+    Returns:
+        窗口内的原始文档列表。
+    """
+    safe_limit = max(0, limit)
+    if safe_limit == 0:
+        return []
+    output: list[dict[str, Any]] = []
+    page = 1
+    while len(output) < safe_limit:
+        rows, total = repository.list_all(
+            page=page,
+            page_size=safe_limit,
+            sort_field=sort_field,
+            reverse=True,
+        )
+        if not rows:
+            break
+        for row in rows:
+            timestamp = _doc_time(row)
+            if timestamp is None:
+                continue
+            if until is not None and timestamp > until:
+                continue
+            if since is not None and timestamp < since:
+                return output
+            output.append(row)
+            if len(output) >= safe_limit:
+                return output
+        if page * safe_limit >= total:
+            break
+        page += 1
+    return output
+
+
 def load_from_export(
     export_dir: str,
     *,
@@ -204,17 +258,25 @@ def load_from_db(
     )
 
     safe_limit = max(1, limit)
-    runs, _ = AssistantRunRepository.list_all(page=1, page_size=safe_limit)
-    calls, _ = AssistantToolCallRepository.list_all(page=1, page_size=safe_limit)
-    events, _ = AssistantEventRepository.list_all(
-        page=1,
-        page_size=safe_limit,
-        sort_field="seq",
-        reverse=False,
+    runs = _load_window_from_repository(
+        AssistantRunRepository,
+        since=since,
+        until=until,
+        limit=safe_limit,
     )
-    runs = [run for run in runs if _within_window(run, since, until)]
-    calls = [call for call in calls if _within_window(call, since, until)]
-    events = [event for event in events if _within_window(event, since, until)]
+    calls = _load_window_from_repository(
+        AssistantToolCallRepository,
+        since=since,
+        until=until,
+        limit=safe_limit,
+    )
+    events = _load_window_from_repository(
+        AssistantEventRepository,
+        since=since,
+        until=until,
+        limit=safe_limit,
+        sort_field="at",
+    )
     return runs, calls, events
 
 

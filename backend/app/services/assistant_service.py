@@ -2671,11 +2671,17 @@ class AssistantService:
             动态计算预算决策。
         """
         budget_context = dict(request.context or {})
-        if budget_context.get("session_state") is None:
-            chat_id = str(budget_context.get("chat_id") or "")
-            chat = AssistantChatRepository.find_one({"chat_id": chat_id}) if chat_id else None
-            if chat:
-                budget_context["session_state"] = control_state(chat).model_dump(mode="python")
+        # 会话控制状态只能来自服务端持久化会话，避免请求侧伪造 Plan Mode / 权限状态。
+        budget_context.pop("session_state", None)
+        chat_id = str(budget_context.get("chat_id") or "")
+        actor_id = self._tool_actor_context(current_user)[0]
+        chat = (
+            AssistantChatRepository.find_one({"chat_id": chat_id, "created_by": actor_id})
+            if chat_id
+            else None
+        )
+        if chat:
+            budget_context["session_state"] = control_state(chat).model_dump(mode="python")
         return self.assistant_budget_service.decide(
             text,
             preset_id=preset_id,
@@ -3073,6 +3079,29 @@ class AssistantService:
         )
 
     @staticmethod
+    def _retrieval_terms(query: str, *, limit: int) -> list[str]:
+        """提取英文标识符与中文二元词供混合检索使用。
+
+        Args:
+            query: 原始检索问题。
+            limit: 最多返回的词元数量。
+
+        Returns:
+            去重且保持出现顺序的检索词列表。
+        """
+        terms: list[str] = []
+        for match in re.finditer(
+            r"[A-Za-z][A-Za-z0-9_-]{1,}|[\u4e00-\u9fff]+",
+            query.lower(),
+        ):
+            token = match.group(0)
+            if token.isascii():
+                terms.append(token)
+                continue
+            terms.extend(token[index : index + 2] for index in range(len(token) - 1))
+        return list(dict.fromkeys(term for term in terms if term))[: max(0, limit)]
+
+    @staticmethod
     def _keyword_recall_query(query: str) -> str:
         """构造面向关键词召回的压缩查询。
 
@@ -3080,12 +3109,10 @@ class AssistantService:
             query: 原始语义检索 query。
 
         Returns:
-            优先保留英文标识符的短查询；无法压缩时返回空字符串。
+            由英文标识符与中文二元词组成的短查询。
         """
-        terms = re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}|[\u4e00-\u9fff]{2,}", query.lower())
-        english_terms = [term for term in terms if term.isascii()]
-        candidates = english_terms[:3] or terms[:3]
-        return " ".join(candidates) if candidates else ""
+        candidates = AssistantService._retrieval_terms(query, limit=6)
+        return " ".join(candidates)
 
     @staticmethod
     def _merge_knowledge_hits(
@@ -3131,8 +3158,8 @@ class AssistantService:
         Returns:
             按 rerank score 降序排列的候选，metadata 记录排序依据。
         """
-        terms = re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}|[\u4e00-\u9fff]{2,}", query.lower())
-        terms = list(dict.fromkeys(terms))[:12]
+        # 限制词元数量可避免长中文问题稀释少量高区分度命中的权重。
+        terms = AssistantService._retrieval_terms(query, limit=8)
         max_vector_score = max(
             (abs(float(getattr(hit, "score", 0) or 0)) for hit in hits),
             default=0.0,

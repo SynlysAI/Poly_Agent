@@ -11,6 +11,7 @@ from evaluation.lui.manual_review import (
     load_review_sheet,
     sample_review_items,
     summarize_review,
+    validate_review_sheet_alignment,
     validate_sheet_completed,
 )
 from evaluation.lui.runner import load_dataset, run_evaluation
@@ -99,6 +100,29 @@ class LuiManualReviewTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_sheet_completed(sheet)
 
+    def test_alignment_validation_rejects_stale_review_sheet(self) -> None:
+        """非当前评测批次或数据集版本的抽检表不得并入报告。"""
+        sheet = build_review_sheet(
+            self.tasks,
+            self.evaluations,
+            evaluation_id="old-evaluation",
+            dataset_version=self.report["dataset_version"],
+        )
+        with self.assertRaisesRegex(ValueError, "evaluation_id"):
+            validate_review_sheet_alignment(
+                sheet,
+                evaluation_id=self.report["evaluation_id"],
+                dataset_version=self.report["dataset_version"],
+            )
+        sheet.evaluation_id = self.report["evaluation_id"]
+        sheet.dataset_version = "old-dataset"
+        with self.assertRaisesRegex(ValueError, "dataset_version"):
+            validate_review_sheet_alignment(
+                sheet,
+                evaluation_id=self.report["evaluation_id"],
+                dataset_version=self.report["dataset_version"],
+            )
+
     def test_completed_baseline_review_record_is_valid(self) -> None:
         """入库的抽检记录应可解析、完整且不一致率为 0。"""
         record_path = (
@@ -106,6 +130,11 @@ class LuiManualReviewTest(unittest.TestCase):
         )
         sheet = load_review_sheet(record_path)
         validate_sheet_completed(sheet)
+        validate_review_sheet_alignment(
+            sheet,
+            evaluation_id=self.report["evaluation_id"],
+            dataset_version=self.report["dataset_version"],
+        )
         summary = summarize_review(sheet)
         for metric in ("m4", "m5"):
             row = summary["metrics"][metric]

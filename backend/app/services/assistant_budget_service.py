@@ -75,7 +75,6 @@ class AssistantBudgetService:
 
         release_mode = self._release_mode()
         rollout_eligible = release_mode == "enabled" and self._rollout_eligible(
-            context=context,
             preset_id=resolved_preset_id,
             current_user=current_user,
         )
@@ -402,17 +401,19 @@ class AssistantBudgetService:
     def _rollout_eligible(
         self,
         *,
-        context: Mapping[str, Any],
         preset_id: str,
         current_user: Mapping[str, Any] | None,
     ) -> bool:
-        """按允许用户与稳定哈希分组判断灰度资格。"""
-        actor_id = str(
-            (current_user or {}).get("user_id")
-            or context.get("created_by")
-            or context.get("user_id")
-            or ""
-        )
+        """按允许用户与用户级稳定哈希分组判断灰度资格。
+
+        Args:
+            preset_id: 当前科研 Preset ID，用于隔离不同策略的分组。
+            current_user: 服务端认证上下文；缺失时不进入灰度。
+
+        Returns:
+            是否具备预算路由灰度资格。
+        """
+        actor_id = str((current_user or {}).get("user_id") or "")
         allowed_users = set(getattr(settings, "assistant_budget_allowed_user_ids", []) or [])
         if actor_id and actor_id in allowed_users:
             return True
@@ -421,7 +422,9 @@ class AssistantBudgetService:
             return True
         if percent <= 0:
             return False
-        seed = f"{actor_id}|{context.get('chat_id') or ''}|{preset_id}"
+        if not actor_id:
+            return False
+        seed = f"{actor_id}|{preset_id}"
         bucket = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) % 100
         return bucket < percent
 

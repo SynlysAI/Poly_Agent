@@ -594,3 +594,4 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_
 - 2026-08-28：完成 Phase 4 回归集成与门禁：`make test-lui-eval` 接入 check-all；基线对比门禁覆盖通过率/覆盖率/版本一致性；管理员评测报告页上线（/admin/lui-evaluation），与链路侧质量指标互补。Phase 5 接续实施。
 - 2026-08-28：完成 Phase 5 生产采样与持续观测：新增默认 dry-run 的只读采样脚本（NDJSON 快照 / 显式只读 DB）、匿名化聚合（M6/M7/M8 候选 + 链路侧 M2 候选）与人工标注样本导出；双周/发布前观测流程写入 README。计划全部完成。
 - 2026-08-28：收尾验证通过，全部验收标准达成；计划状态改为已完成。后续变更须按 §1.1 追加评审记录并递增数据集版本。
+- 2026-08-29：评审加固：人工抽检表并入报告前必须校验 `evaluation_id` 与 `dataset_version`，防止过期校准污染新基线；生产数据库只读采样按时间倒序跨页定位窗口，避免历史窗口被最新一页遮挡。新增对应回归测试。

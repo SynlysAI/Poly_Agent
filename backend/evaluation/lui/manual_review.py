@@ -267,6 +267,34 @@ def summarize_review(sheet: ReviewSheet) -> dict[str, Any]:
     return summary
 
 
+def validate_review_sheet_alignment(
+    sheet: ReviewSheet,
+    *,
+    evaluation_id: str,
+    dataset_version: str,
+) -> None:
+    """校验人工抽检表与当前评测批次严格对齐。
+
+    Args:
+        sheet: 待并入当前报告的人工抽检表。
+        evaluation_id: 当前评测批次 ID。
+        dataset_version: 当前 Golden Set 版本。
+
+    Raises:
+        ValueError: 抽检表属于其他评测批次或数据集版本。
+    """
+    mismatches = [
+        f"{field}: review={review_value!r}, current={current_value!r}"
+        for field, review_value, current_value in (
+            ("evaluation_id", sheet.evaluation_id, evaluation_id),
+            ("dataset_version", sheet.dataset_version, dataset_version),
+        )
+        if review_value != current_value
+    ]
+    if mismatches:
+        raise ValueError("manual review sheet mismatch: " + "; ".join(mismatches))
+
+
 def validate_sheet_completed(sheet: ReviewSheet) -> None:
     """校验抽检表所有记录均已填写人工结论。
 

@@ -15,6 +15,7 @@ except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 from app.core.config import settings
+from app.infra.research_engine_repositories import AssistantChatRepository
 from app.schemas.assistant import AssistantChatRequest
 from app.schemas.knowledge import KnowledgeHit
 from app.services.assistant_budget_service import assistant_budget_service
@@ -101,6 +102,60 @@ class AssistantDynamicBudgetTest(ComputationTestCase):
 
         self.assertEqual(decision.release_mode, "shadow")
         self.assertEqual(decision.effective_model_purpose, "qa")
+
+    def test_rollout_identity_is_server_owned_and_stable_per_user(self) -> None:
+        current_user = {"user_id": "budget-user"}
+        contexts = [
+            {"chat_id": "chat-a", "created_by": "allowed-user"},
+            {"chat_id": "chat-b", "created_by": "allowed-user"},
+        ]
+        with patch.object(
+            settings,
+            "assistant_budget_allowed_user_ids",
+            ["allowed-user"],
+        ), patch.object(
+            settings,
+            "assistant_budget_mode",
+            "enabled",
+        ), patch.object(settings, "assistant_budget_rollout_percent", 10):
+            decisions = [
+                assistant_budget_service.decide(
+                    "请比较两种方法并综合多来源证据",
+                    preset_id="research_qa",
+                    context=context,
+                    current_user=current_user,
+                )
+                for context in contexts
+            ]
+
+        self.assertTrue(all(item.rollout_eligible for item in decisions))
+        self.assertEqual(len({item.effective_model_tier for item in decisions}), 1)
+
+        spoofed_actor = {"user_id": "user-c"}
+        with patch.object(
+            settings,
+            "assistant_budget_allowed_user_ids",
+            ["allowed-user"],
+        ), patch.object(
+            settings,
+            "assistant_budget_mode",
+            "enabled",
+        ), patch.object(settings, "assistant_budget_rollout_percent", 10):
+            context_controlled = assistant_budget_service.decide(
+                "请比较两种方法并综合多来源证据",
+                preset_id="research_qa",
+                context={"created_by": "allowed-user", "chat_id": "chat-c"},
+                current_user=spoofed_actor,
+            )
+            anonymous = assistant_budget_service.decide(
+                "请比较两种方法并综合多来源证据",
+                preset_id="research_qa",
+                context={"created_by": "allowed-user", "chat_id": "chat-c"},
+                current_user=None,
+            )
+
+        self.assertFalse(context_controlled.rollout_eligible)
+        self.assertFalse(anonymous.rollout_eligible)
 
     def test_enabled_mode_upgrades_complex_query_and_keeps_user_model_override(self) -> None:
         with patch.object(settings, "assistant_budget_mode", "enabled"), patch.object(
@@ -229,6 +284,72 @@ class AssistantDynamicBudgetTest(ComputationTestCase):
         self.assertFalse(outcome.rerank_applied)
         self.assertEqual(outcome.fallback_reason, "keyword_recall_failed")
         self.assertEqual([item.source_id for item in outcome.results], ["doc-vector"])
+
+    def test_hybrid_retrieval_supports_chinese_bigram_matching(self) -> None:
+        service = AssistantService()
+        vector_hits = [
+            KnowledgeHit(
+                title="英文结果",
+                snippet="language model",
+                source_id="doc-vector",
+                score=0.90,
+            ),
+            KnowledgeHit(
+                title="中文结果",
+                snippet="聚酰胺 结构 性能",
+                source_id="doc-chinese",
+                score=0.20,
+            ),
+        ]
+        ranked = service._lexical_rerank_hits("聚酰胺的结构与性能对比", vector_hits)
+
+        self.assertEqual(
+            service._keyword_recall_query("聚酰胺结构性能"),
+            "聚酰 酰胺 胺结 结构 构性 性能",
+        )
+        self.assertEqual(ranked[0].source_id, "doc-chinese")
+        self.assertGreater(
+            ranked[0].metadata["rerank_score"],
+            ranked[1].metadata["rerank_score"],
+        )
+
+    def test_budget_session_state_comes_from_owned_chat_only(self) -> None:
+        """请求侧不能伪造控制状态，也不能读取他人会话控制状态。"""
+        service = AssistantService()
+        request = AssistantChatRequest.model_validate(
+            {
+                "messages": [{"role": "user", "content": "执行算法"}],
+                "context": {
+                    "chat_id": "chat-other",
+                    "session_state": {
+                        "plan_mode": False,
+                        "permission_mode": "full_access",
+                    },
+                },
+            }
+        )
+        persisted_chat = {
+            "chat_id": "chat-other",
+            "plan_mode": True,
+            "permission_mode": "read_only",
+        }
+        with patch.object(
+            AssistantChatRepository,
+            "find_one",
+            return_value=persisted_chat,
+        ) as find_one:
+            decision = service._build_budget_decision(
+                "执行算法",
+                request=request,
+                preset_id="research_deep",
+                current_user={"user_id": "user-a"},
+            )
+
+        find_one.assert_called_once_with(
+            {"chat_id": "chat-other", "created_by": "user-a"}
+        )
+        self.assertTrue(decision.classification.plan_mode)
+        self.assertEqual(decision.classification.permission_mode, "read_only")
 
     def test_llm_route_uses_budget_purpose_and_remains_user_selected(self) -> None:
         service = AssistantService()

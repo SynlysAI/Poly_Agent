@@ -224,3 +224,4 @@ High-risk → Planning + Verification + Human
 - 2026-08-19：从 Plan 11 迁入动态计算预算目标架构、Model Router、RAG 检索分层、Agent 执行分级、落地边界与 P11-A–P11-E 行动框架（重编号为 P14-A–P14-E），并补充当前基线、依赖风险与验收标准；未修改业务代码。
 - 2026-08-28：完成 P14-A–P14-E。新增 `AssistantPreset` 策略契约、确定性 Query Classifier、保守 Model Router、Hybrid + deterministic rerank、执行安全兜底、`budget.decision` Trace、质量看板、shadow / 灰度 / 回滚配置、5 类回放样本与用户指南；默认 `ASSISTANT_BUDGET_MODE=shadow`、`ASSISTANT_BUDGET_ROLLOUT_PERCENT=0`，不改变线上默认模型与检索行为。
 - 2026-08-28：验证通过：后端全量 1010 passed / 1 skipped；前端 `vite build` 通过；Plan 13 smoke 基线门禁 PASS（37 条任务，任务成功率 100%）。新增 `test_assistant_dynamic_budget.py` 覆盖契约、影子 / 灰度、用户覆盖、高风险不降档、异常回退、混合检索降级、Trace 隐私与看板。
+- 2026-08-29：评审加固：灰度身份只信任服务端认证上下文，按用户级稳定哈希分组，未认证请求不进入百分比灰度；预算决策读取会话控制状态时校验会话归属并忽略请求侧伪造状态；Hybrid 检索分词支持中文二元词，提升中文查询召回与重排效果。新增对应回归测试。
