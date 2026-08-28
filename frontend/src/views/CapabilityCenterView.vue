@@ -373,9 +373,9 @@ onMounted(loadCatalog)
 <style scoped>
 /* —— Manus 风格：两侧留白、简洁高级 —— */
 .capability-view {
-  max-width: 1160px;
+  max-width: 1360px;
   margin: 0 auto;
-  padding: 24px 56px 48px;
+  padding: 24px 34px 48px;
   display: grid;
   gap: 28px;
 }
@@ -586,7 +586,7 @@ onMounted(loadCatalog)
 /* 响应式：随屏宽收窄两侧留白 */
 @media (max-width: 1280px) {
   .capability-view {
-    padding-inline: 40px;
+    padding-inline: 24px;
   }
 }
 
@@ -599,13 +599,13 @@ onMounted(loadCatalog)
 
 @media (max-width: 900px) {
   .capability-view {
-    padding-inline: 24px;
+    padding-inline: 14px;
   }
 }
 
 @media (max-width: 700px) {
   .capability-view {
-    padding: 16px 16px 32px;
+    padding: 16px 10px 32px;
     gap: 22px;
   }
 
