@@ -21,6 +21,9 @@ class AdminUserListItem(BaseModel):
     organization: str | None = Field(default=None, description="单位")
     role: UserRole = Field(description="角色")
     status: UserStatus = Field(description="状态")
+    created_at: datetime = Field(description="创建时间")
+    updated_at: datetime = Field(description="更新时间")
+    last_login_at: datetime | None = Field(default=None, description="最近登录时间")
 
 
 class AdminUserListData(BaseModel):

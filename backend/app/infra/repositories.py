@@ -57,8 +57,7 @@ class UserRepository(BaseRepository):
     @classmethod
     def list_all(cls) -> list[UserRecord]:
         """查询全部用户列表。"""
-        items, _ = BaseRepository.list_all(
-            cls,
+        items, _ = super().list_all(
             {},
             sort_field="created_at",
             page=1,
@@ -176,8 +175,7 @@ class InviteCodeRepository(BaseRepository):
     @classmethod
     def list_all(cls) -> list[InviteCodeRecord]:
         """查询全部邀请码列表。"""
-        items, _ = BaseRepository.list_all(
-            cls,
+        items, _ = super().list_all(
             {},
             sort_field="created_at",
             page=1,
