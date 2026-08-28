@@ -21,6 +21,13 @@ if str(PYTHON_PATH) not in sys.path:
     sys.path.insert(0, str(PYTHON_PATH))
 
 from evaluation.lui.report import save_baseline, write_report  # noqa: E402
+from evaluation.lui.manual_review import (  # noqa: E402
+    build_review_sheet,
+    load_review_sheet,
+    summarize_review,
+    validate_sheet_completed,
+)
+from evaluation.lui.runner import load_dataset  # noqa: E402
 from evaluation.lui.runner import run_evaluation  # noqa: E402
 
 
@@ -58,6 +65,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="评测批次 ID；缺省按模式与数据集版本生成",
     )
+    parser.add_argument(
+        "--export-review-sheet",
+        default=None,
+        help="可选：按 20%% 分层抽样导出 M4/M5 人工抽检表 JSON",
+    )
+    parser.add_argument(
+        "--manual-review",
+        default=None,
+        help="可选：读取已完成的人工抽检表并汇入报告 manual_review 字段",
+    )
+    parser.add_argument(
+        "--reviewer",
+        default="",
+        help="抽检人名称；仅 --export-review-sheet 时写入抽检表",
+    )
     return parser
 
 
@@ -71,12 +93,34 @@ def main(argv: list[str] | None = None) -> int:
         进程退出码；存在失败任务时返回 1。
     """
     args = build_parser().parse_args(argv)
+    manual_review_summary = None
+    if args.manual_review:
+        sheet = load_review_sheet(args.manual_review)
+        validate_sheet_completed(sheet)
+        manual_review_summary = summarize_review(sheet)
     report, evaluations = run_evaluation(
         args.dataset,
         mode=args.mode,
         facts_dir=args.facts_dir,
         evaluation_id=args.evaluation_id,
+        manual_review_summary=manual_review_summary,
     )
+    if args.export_review_sheet:
+        tasks = load_dataset(args.dataset)
+        sheet = build_review_sheet(
+            tasks,
+            evaluations,
+            evaluation_id=report["evaluation_id"],
+            dataset_version=report["dataset_version"],
+            generated_at=report["generated_at"],
+            reviewer=args.reviewer,
+        )
+        Path(args.export_review_sheet).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.export_review_sheet).write_text(
+            sheet.model_dump_json(indent=2), encoding="utf-8"
+        )
+        print(f"review_sheet: {args.export_review_sheet}")
+        print(f"review_items: {len(sheet.items)}")
     paths = write_report(report, evaluations, args.report_dir)
     if args.baseline:
         paths["baseline"] = save_baseline(report, args.baseline)

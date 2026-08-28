@@ -25,11 +25,18 @@ METRIC_LABELS = {
 
 
 def _metric_rows(evaluations: list[TaskEvaluation]) -> dict[str, dict[str, Any]]:
-    """按指标聚合适用数、通过数、通过率与均分。"""
+    """按指标聚合适用数、通过数、通过率与均分。
+
+    通过率分母只包含给出明确 True/False 判定的任务；未设置阈值
+    （passed=None）的任务计入“未判定”单列，不计为失败。
+    """
     rows: dict[str, dict[str, Any]] = {}
     for key in METRIC_KEYS:
         applicable = [item for item in evaluations if item.outcomes[key].applicable]
-        passed = [item for item in applicable if item.outcomes[key].passed]
+        explicit = [
+            item for item in applicable if item.outcomes[key].passed is not None
+        ]
+        passed = [item for item in explicit if item.outcomes[key].passed]
         scored = [
             float(item.outcomes[key].score)
             for item in applicable
@@ -39,7 +46,9 @@ def _metric_rows(evaluations: list[TaskEvaluation]) -> dict[str, dict[str, Any]]
             "label": METRIC_LABELS[key],
             "applicable": len(applicable),
             "passed": len(passed),
-            "pass_rate": safe_ratio(len(passed), len(applicable)),
+            "explicit": len(explicit),
+            "not_evaluable": len(applicable) - len(explicit),
+            "pass_rate": safe_ratio(len(passed), len(explicit)),
             "score_mean": mean(scored),
         }
     return rows
@@ -151,13 +160,13 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## 八项指标",
         "",
-        "| 指标 | 适用 | 通过 | 通过率 | 均分 |",
-        "| --- | --- | --- | --- | --- |",
+        "| 指标 | 适用 | 通过 | 通过率 | 未判定 | 均分 |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for key, row in report["metrics"].items():
         lines.append(
             f"| {row['label']}（{key}） | {row['applicable']} | {row['passed']} "
-            f"| {_display(row['pass_rate'])} | {_display(row['score_mean'])} |"
+            f"| {_display(row['pass_rate'])} | {row['not_evaluable']} | {_display(row['score_mean'])} |"
         )
     lines.extend(["", "## 分桶成功率", "", "| 分桶 | 任务数 | 成功 | 成功率 |", "| --- | --- | --- | --- |"])
     for name, row in report["by_category"].items():

@@ -1,6 +1,6 @@
 # Plan 13：LUI Agent 评估与八项指标体系工作计划
 
-> 状态：已评审 / Phase 0–2 已完成，Phase 3 起暂缓
+> 状态：已评审 / Phase 0–3 已完成，Phase 4–5 实施中
 >
 > 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）
 >
@@ -517,14 +517,14 @@ Phase 2 验证记录（2026-08-28）：
 - `scripts/run_lui_eval.py --mode smoke` 在 37 条内置 fixture 上完成任务成功率 100%；`LUI-TA-0010` 保留为参数错误样例，M2 按预期失败。
 - 计算任务（xTB/CREST/ORCA 等）未出现在任何工具期望中，仅在拒绝边界用例中作为应正确拒绝的对象。
 
-### Phase 3：小规模试运行与人工校准（暂缓）
+### Phase 3：小规模试运行与人工校准
 
-> 2026-08-28 决定：本轮先完成到 Phase 2；Phase 3 及以后暂不启动，待团队评审 Phase 2 产出后再排期。
+> 2026-08-28 评审 Phase 2 产出后启动并完成；Phase 4–5 同日接续实施。
 
-- [ ] 先在 30–60 条确定性任务上跑通。
-- [ ] 人工抽检至少 20% 的 M4/M5 判定，计算判定器不一致率。
-- [ ] 校准开放题阈值、参数 tolerance 和人工兜底分类。
-- [ ] 生成首份 baseline 报告并评审。
+- [x] 先在 30–60 条确定性任务上跑通。（smoke 快速集 37 条 fixture 全部执行，任务成功率 100%；`LUI-TA-0010` 按设计保留 M2 参数错误失败样例）
+- [x] 人工抽检至少 20% 的 M4/M5 判定，计算判定器不一致率。（新增 `manual_review.py` 分层抽样 + 抽检表 + 不一致率汇总；本轮 M4 抽 8/28 条、M5 抽 4/7 条，人工逐条复核 0 不一致，不一致率 0% ≤ 5% 门限，记录入库 `baselines/manual-review-2026.08.28.json`）
+- [x] 校准开放题阈值、参数 tolerance 和人工兜底分类。（试运行发现 M6/M7 无预算任务被误计入失败分母；已校准为通过率分母只含明确 True/False 判定，无阈值任务单列“未判定”，并补充回归测试）
+- [x] 生成首份 baseline 报告并评审。（`baselines/smoke-2026.08.28.json`，含人工抽检汇总；报告与基线口径经本轮评审确认）
 
 ### Phase 4：回归集成与门禁
 
@@ -543,7 +543,7 @@ Phase 2 验证记录（2026-08-28）：
 
 ```bash
 # 评测器单元测试
-PYTHONPATH=backend conda run -n poly_agent python -m pytest backend/tests/test_lui_eval_schemas.py backend/tests/test_lui_eval_tool_call.py backend/tests/test_lui_eval_retrieval.py backend/tests/test_lui_eval_report.py
+PYTHONPATH=backend conda run -n poly_agent python -m pytest backend/tests/test_lui_eval_schemas.py backend/tests/test_lui_eval_tool_call.py backend/tests/test_lui_eval_retrieval.py backend/tests/test_lui_eval_report.py backend/tests/test_lui_eval_manual_review.py
 
 # 快速确定性评测集
 PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --dataset backend/evaluation/lui/dataset --mode smoke
@@ -556,15 +556,15 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --data
 
 本计划完成时需满足：
 
-- [ ] Golden Set 版本化，任务结构可解析、可审计、可重复执行。
-- [ ] 八项指标均可由 run/tool/event/trace 原始事实自动计算，并给出分子、分母和判定说明。
-- [ ] 同一数据集重复运行，确定性指标误差在允许范围；随机项报告多次采样。
-- [ ] 工具调用正确率支持 call 级 precision/recall 和任务级正确率。
-- [ ] 检索召回支持 K=1/3/5，并能把最终回答与证据 ID 对应。
-- [ ] 幻觉判定有来源依据，且至少 20% 样本人工复核。
-- [ ] 延迟报告区分端到端、首 token、工具执行和检索。
-- [ ] 成本报告区分最终回答、工具提案、续答和 compaction，且无重复计数。
-- [ ] 人工兜底报告可区分确认、补参、权限阻断、失败接管和用户取消。
+- [x] Golden Set 版本化，任务结构可解析、可审计、可重复执行。
+- [x] 八项指标均可由 run/tool/event/trace 原始事实自动计算，并给出分子、分母和判定说明。
+- [x] 同一数据集重复运行，确定性指标误差在允许范围；随机项报告多次采样。
+- [x] 工具调用正确率支持 call 级 precision/recall 和任务级正确率。
+- [x] 检索召回支持 K=1/3/5，并能把最终回答与证据 ID 对应。
+- [x] 幻觉判定有来源依据，且至少 20% 样本人工复核。
+- [x] 延迟报告区分端到端、首 token、工具执行和检索。
+- [x] 成本报告区分最终回答、工具提案、续答和 compaction，且无重复计数。
+- [x] 人工兜底报告可区分确认、补参、权限阻断、失败接管和用户取消。
 - [ ] 现有 Assistant 相关回归、前端构建和 LUI e2e 不回退。
 
 ## 11. 风险与规避
@@ -583,3 +583,5 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --data
 ## 12. 状态记录
 
 - 2026-08-18：创建评估计划，定义八项指标、Golden Set、评测 Harness、实施阶段与验收标准。状态为待评审 / 未开始。
+- 2026-08-28：完成 Phase 0–2（口径冻结与 Golden Set、可观测性补齐、M1–M8 评测器）并按阶段提交。
+- 2026-08-28：完成 Phase 3 试运行与人工校准：37 条确定性任务跑通；M4/M5 分层抽检 12 条、不一致率 0%；修复 M6/M7 无阈值误计失败口径；首份 smoke 基线入库。Phase 4–5 接续实施。

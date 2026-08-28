@@ -15,3 +15,4 @@ backend/config/*
 !backend/config/experiment_dispatch_targets/
 backend/config/experiment_dispatch_targets/*
 !backend/config/experiment_dispatch_targets/*.security.*.json
+backend/evaluation/lui/reports/

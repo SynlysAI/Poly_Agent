@@ -80,6 +80,7 @@ def run_evaluation(
     judge: AnswerJudge | None = None,
     evaluation_id: str | None = None,
     metadata: dict[str, Any] | None = None,
+    manual_review_summary: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[TaskEvaluation]]:
     """执行离线评测并构建报告。
 
@@ -90,6 +91,7 @@ def run_evaluation(
         judge: 可选 LLM-as-judge。
         evaluation_id: 评测批次 ID；缺省自动生成。
         metadata: 附加元信息。
+        manual_review_summary: 人工抽检汇总；非空时并入报告。
 
     Returns:
         (报告字典, 任务级判定列表) 二元组。
@@ -132,6 +134,7 @@ def run_evaluation(
         missing_facts=missing,
         metadata={
             "facts_source": facts_source,
+            "manual_review": manual_review_summary,
             **(metadata or {}),
         },
     )

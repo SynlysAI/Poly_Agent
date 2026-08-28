@@ -36,6 +36,30 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
   --report-dir backend/evaluation/lui/reports
 ```
 
+## 人工抽检工作流
+
+```bash
+# 1. 评测并导出 ≥20% 分层抽样抽检表（M4/M5）
+PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
+  --dataset backend/evaluation/lui/dataset --mode smoke \
+  --report-dir backend/evaluation/lui/reports \
+  --export-review-sheet backend/evaluation/lui/reports/manual-review-sheet.json \
+  --reviewer "抽检人"
+
+# 2. 人工逐条补齐 agree / reason_category / comment 后另存
+#    （不一致必须归类：task_ambiguous / judge_false_positive / judge_false_negative）
+
+# 3. 将完成的抽检记录汇入报告与基线
+PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
+  --dataset backend/evaluation/lui/dataset --mode smoke \
+  --report-dir backend/evaluation/lui/reports \
+  --manual-review backend/evaluation/lui/baselines/manual-review-2026.08.28.json \
+  --baseline backend/evaluation/lui/baselines/smoke-2026.08.28.json
+```
+
+抽检结论会写入报告 `metadata.manual_review`；分类型不一致率超过 5%
+时 `within_limit=false`，该指标判定器不可上线。
+
 ## Golden 任务标注规范
 
 1. 每条任务必须有稳定 `id`（`LUI-<桶前缀>-<序号>`）、`category`、`difficulty`、`mode` 与 `messages`。
@@ -71,3 +95,5 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
 - `report.md`：人类可读总结，按指标 / 分桶 / 模式拆解。
 - `cases/*.md`：失败、幻觉与人工兜底样例。
 - `baseline.json`：受控基线，入库 `baselines/`，后续回归对比使用。
+- 指标通过率分母只含明确 True/False 判定；未设置阈值（如 fixture 模式下
+  M6/M7 预算）的任务计入“未判定”单列，不视为失败。

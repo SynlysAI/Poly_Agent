@@ -31,6 +31,15 @@ class LuiEvalReportTest(unittest.TestCase):
         self.assertIn("qa", self.report["by_mode"])
         self.assertIn("deep", self.report["by_mode"])
 
+    def test_metric_pass_rate_excludes_unthresholded_outcomes(self) -> None:
+        """无阈值指标不得计入失败分母；应单列为未判定。"""
+        m6 = self.report["metrics"]["m6"]
+        m7 = self.report["metrics"]["m7"]
+        self.assertEqual(m6["not_evaluable"], m6["applicable"])
+        self.assertIsNone(m6["pass_rate"])
+        self.assertEqual(m7["not_evaluable"], m7["applicable"])
+        self.assertIsNone(m7["pass_rate"])
+
     def test_markdown_renders_metric_tables(self) -> None:
         """Markdown 应包含指标表与分桶表。"""
         markdown = render_markdown(self.report)

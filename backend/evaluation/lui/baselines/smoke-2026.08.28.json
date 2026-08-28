@@ -1,0 +1,185 @@
+{
+  "evaluation_id": "lui-eval-smoke-2026.08.28",
+  "dataset_version": "2026.08.28",
+  "mode": "smoke",
+  "generated_at": "2026-08-28T13:43:03.677673+00:00",
+  "summary": {
+    "evaluated_tasks": 37,
+    "successful_tasks": 37,
+    "task_success_rate": 1.0,
+    "skipped_tasks": [
+      "LUI-FR-0003",
+      "LUI-FR-0006",
+      "LUI-FR-0009",
+      "LUI-KR-0002",
+      "LUI-KR-0004",
+      "LUI-KR-0006",
+      "LUI-KR-0007",
+      "LUI-KR-0008",
+      "LUI-KR-0010",
+      "LUI-MT-0002",
+      "LUI-MT-0003",
+      "LUI-MT-0005",
+      "LUI-MT-0007",
+      "LUI-MT-0008",
+      "LUI-MT-0010",
+      "LUI-PF-0002",
+      "LUI-PF-0004",
+      "LUI-PF-0006",
+      "LUI-PF-0008",
+      "LUI-PF-0009",
+      "LUI-PF-0010",
+      "LUI-RB-0002",
+      "LUI-RB-0003",
+      "LUI-RB-0005",
+      "LUI-RB-0006",
+      "LUI-RB-0008",
+      "LUI-RB-0010",
+      "LUI-TA-0002",
+      "LUI-TA-0003",
+      "LUI-TA-0005",
+      "LUI-TA-0007",
+      "LUI-TA-0009",
+      "LUI-TS-0002",
+      "LUI-TS-0004",
+      "LUI-TS-0006",
+      "LUI-TS-0008",
+      "LUI-TS-0010",
+      "LUI-WR-0002",
+      "LUI-WR-0004",
+      "LUI-WR-0006",
+      "LUI-WR-0007",
+      "LUI-WR-0009",
+      "LUI-WR-0010"
+    ],
+    "missing_facts": []
+  },
+  "metrics": {
+    "m1": {
+      "label": "任务成功率",
+      "applicable": 37,
+      "passed": 37,
+      "explicit": 37,
+      "not_evaluable": 0,
+      "pass_rate": 1.0,
+      "score_mean": 0.918919
+    },
+    "m2": {
+      "label": "工具调用正确率",
+      "applicable": 14,
+      "passed": 13,
+      "explicit": 14,
+      "not_evaluable": 0,
+      "pass_rate": 0.928571,
+      "score_mean": 1.0
+    },
+    "m3": {
+      "label": "检索召回 Recall@K",
+      "applicable": 9,
+      "passed": 9,
+      "explicit": 9,
+      "not_evaluable": 0,
+      "pass_rate": 1.0,
+      "score_mean": 1.0
+    },
+    "m4": {
+      "label": "最终回答准确率",
+      "applicable": 28,
+      "passed": 28,
+      "explicit": 28,
+      "not_evaluable": 0,
+      "pass_rate": 1.0,
+      "score_mean": 1.0
+    },
+    "m5": {
+      "label": "幻觉率",
+      "applicable": 7,
+      "passed": 7,
+      "explicit": 7,
+      "not_evaluable": 0,
+      "pass_rate": 1.0,
+      "score_mean": 1.0
+    },
+    "m6": {
+      "label": "P50/P95 延迟",
+      "applicable": 37,
+      "passed": 0,
+      "explicit": 0,
+      "not_evaluable": 37,
+      "pass_rate": null,
+      "score_mean": null
+    },
+    "m7": {
+      "label": "推理成本",
+      "applicable": 37,
+      "passed": 0,
+      "explicit": 0,
+      "not_evaluable": 37,
+      "pass_rate": null,
+      "score_mean": null
+    },
+    "m8": {
+      "label": "人工兜底比例",
+      "applicable": 37,
+      "passed": 37,
+      "explicit": 37,
+      "not_evaluable": 0,
+      "pass_rate": 1.0,
+      "score_mean": 1.0
+    }
+  },
+  "by_category": {
+    "failure_recovery": {
+      "tasks": 7,
+      "success": 7,
+      "success_rate": 1.0
+    },
+    "knowledge_retrieval": {
+      "tasks": 4,
+      "success": 4,
+      "success_rate": 1.0
+    },
+    "multi_turn": {
+      "tasks": 4,
+      "success": 4,
+      "success_rate": 1.0
+    },
+    "project_fact": {
+      "tasks": 4,
+      "success": 4,
+      "success_rate": 1.0
+    },
+    "refusal_boundary": {
+      "tasks": 4,
+      "success": 4,
+      "success_rate": 1.0
+    },
+    "tool_argument": {
+      "tasks": 5,
+      "success": 5,
+      "success_rate": 1.0
+    },
+    "tool_selection": {
+      "tasks": 5,
+      "success": 5,
+      "success_rate": 1.0
+    },
+    "web_retrieval": {
+      "tasks": 4,
+      "success": 4,
+      "success_rate": 1.0
+    }
+  },
+  "by_mode": {
+    "deep": {
+      "tasks": 4,
+      "success": 4,
+      "success_rate": 1.0
+    },
+    "qa": {
+      "tasks": 33,
+      "success": 33,
+      "success_rate": 1.0
+    }
+  }
+}
