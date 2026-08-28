@@ -634,6 +634,13 @@ export function getAssistantQualityMetrics() {
   return apiClient.get('/assistant/quality-metrics/summary').then(unwrapResponse)
 }
 
+/** LUI Agent 任务级评测基线（M1–M8） */
+export function getLuiEvaluationSummary(mode = 'smoke') {
+  return apiClient
+    .get('/assistant/lui-evaluation/summary', { params: { mode } })
+    .then(unwrapResponse)
+}
+
 // ── ResearchEngine API ──
 
 // ── ProblemSpec ──

@@ -7,7 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evaluation.lui.report import build_report, render_markdown, save_baseline, write_report
+from evaluation.lui.report import (
+    build_report,
+    compare_baseline,
+    render_markdown,
+    save_baseline,
+    write_report,
+)
 from evaluation.lui.runner import run_evaluation
 
 
@@ -70,6 +76,48 @@ class LuiEvalReportTest(unittest.TestCase):
             self.assertIn("by_category", baseline)
             self.assertNotIn("tasks", baseline)
             self.assertNotIn("failures", baseline)
+
+    def test_compare_baseline_detects_pass_rate_regression(self) -> None:
+        """通过率下降或覆盖率下降应判定为回归。"""
+        baseline = {
+            "dataset_version": self.report["dataset_version"],
+            "summary": {"evaluated_tasks": self.report["summary"]["evaluated_tasks"]},
+            "metrics": json.loads(json.dumps(self.report["metrics"])),
+        }
+        ok = compare_baseline(self.report, baseline)
+        self.assertTrue(ok["ok"])
+        regressed = json.loads(json.dumps(self.report))
+        regressed["metrics"]["m4"]["pass_rate"] = 0.875
+        failed = compare_baseline(regressed, baseline)
+        self.assertFalse(failed["ok"])
+        self.assertIn("m4", failed["regressions"])
+        shrunk = json.loads(json.dumps(self.report))
+        shrunk["summary"]["evaluated_tasks"] = 30
+        coverage = compare_baseline(shrunk, baseline)
+        self.assertFalse(coverage["ok"])
+
+    def test_compare_baseline_rejects_version_mismatch(self) -> None:
+        """数据集版本不一致时基线不可比。"""
+        result = compare_baseline(
+            self.report,
+            {"dataset_version": "1999.01.01", "summary": {}, "metrics": {}},
+        )
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["comparable"])
+
+    def test_compare_baseline_skips_unthresholded_metrics(self) -> None:
+        """基线未判定的指标不参与回归门禁。"""
+        baseline = {
+            "dataset_version": self.report["dataset_version"],
+            "summary": {"evaluated_tasks": 37},
+            "metrics": {key: {"pass_rate": None} for key in self.report["metrics"]},
+        }
+        result = compare_baseline(self.report, baseline)
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["metrics"]["m6"]["status"],
+            "skipped",
+        )
 
 
 if __name__ == "__main__":

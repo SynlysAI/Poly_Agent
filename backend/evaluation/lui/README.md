@@ -60,6 +60,23 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
 抽检结论会写入报告 `metadata.manual_review`；分类型不一致率超过 5%
 时 `within_limit=false`，该指标判定器不可上线。
 
+## 回归门禁
+
+```bash
+# 独立命令：离线 fixture 快速集 + 受控基线对比（不调用真实模型）
+make test-lui-eval
+```
+
+- 通过率出现下降或评测任务覆盖率缩水时，命令以退出码 2 失败；
+  数据集版本不一致视为基线不可比，同样判失败。
+- 基线未判定的指标（如 fixture 模式的 M6/M7 预算）不参与门禁。
+- LUI 相关 PR 至少运行 `make test-lui-eval`；发布前再运行完整集
+  （录制事实模式）并刷新基线。
+
+页面入口：管理员侧边栏「评测报告」（`/admin/lui-evaluation`）。
+该页展示受控基线的 M1–M8 任务级结果质量，与「工具服务」中的
+LUI 调用质量（生产链路侧）互为补充，不重复统计。
+
 ## Golden 任务标注规范
 
 1. 每条任务必须有稳定 `id`（`LUI-<桶前缀>-<序号>`）、`category`、`difficulty`、`mode` 与 `messages`。

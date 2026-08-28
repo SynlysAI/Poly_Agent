@@ -13,6 +13,7 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -20,7 +21,7 @@ PYTHON_PATH = Path(__file__).resolve().parents[1] / "backend"
 if str(PYTHON_PATH) not in sys.path:
     sys.path.insert(0, str(PYTHON_PATH))
 
-from evaluation.lui.report import save_baseline, write_report  # noqa: E402
+from evaluation.lui.report import compare_baseline, save_baseline, write_report  # noqa: E402
 from evaluation.lui.manual_review import (  # noqa: E402
     build_review_sheet,
     load_review_sheet,
@@ -61,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="可选：将基线写入指定 JSON 路径",
     )
     parser.add_argument(
+        "--check-baseline",
+        default=None,
+        help="可选：与受控基线对比，出现通过率或覆盖率回归时退出码为 2",
+    )
+    parser.add_argument(
         "--evaluation-id",
         default=None,
         help="评测批次 ID；缺省按模式与数据集版本生成",
@@ -94,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = build_parser().parse_args(argv)
     manual_review_summary = None
+    gate: dict | None = None
     if args.manual_review:
         sheet = load_review_sheet(args.manual_review)
         validate_sheet_completed(sheet)
@@ -122,6 +129,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"review_sheet: {args.export_review_sheet}")
         print(f"review_items: {len(sheet.items)}")
     paths = write_report(report, evaluations, args.report_dir)
+    if args.check_baseline:
+        baseline_payload = json.loads(
+            Path(args.check_baseline).read_text(encoding="utf-8")
+        )
+        gate = compare_baseline(report, baseline_payload)
+        print(f"baseline_gate: {'PASS' if gate['ok'] else 'FAIL'}")
+        print(f"baseline_gate_reason: {gate['reason']}")
     if args.baseline:
         paths["baseline"] = save_baseline(report, args.baseline)
     print(f"evaluation_id: {report['evaluation_id']}")
@@ -134,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.baseline:
         print(f"baseline: {paths['baseline']}")
     failed = sum(1 for item in evaluations if not item.success)
+    if gate is not None and not gate["ok"]:
+        return 2
     return 1 if failed else 0
 
 

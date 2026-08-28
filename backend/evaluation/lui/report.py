@@ -22,6 +22,7 @@ METRIC_LABELS = {
     "m7": "推理成本",
     "m8": "人工兜底比例",
 }
+BASELINE_PASS_RATE_TOLERANCE = 0.0
 
 
 def _metric_rows(evaluations: list[TaskEvaluation]) -> dict[str, dict[str, Any]]:
@@ -269,9 +270,99 @@ def save_baseline(report: dict[str, Any], path: str | Path) -> Path:
         "metrics": report["metrics"],
         "by_category": report["by_category"],
         "by_mode": report["by_mode"],
+        "metadata": report.get("metadata") or {},
     }
     baseline_path.write_text(
         json.dumps(baseline, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return baseline_path
+
+
+def compare_baseline(
+    report: dict[str, Any],
+    baseline: dict[str, Any],
+    *,
+    tolerance: float = BASELINE_PASS_RATE_TOLERANCE,
+) -> dict[str, Any]:
+    """对比当前报告与受控基线，输出回归门禁结论。
+
+    只对通过率类指标做回归判定（均为越高越好）；基线未判定的
+    指标跳过，当前未判定而基线可判定视为回归。数据集版本不一致
+    时不可比，直接判定失败。
+
+    Args:
+        report: 当前评测报告。
+        baseline: 受控基线。
+        tolerance: 允许的通过率下降幅度；默认 0 表示任何下降都算回归。
+
+    Returns:
+        含 ok、comparable、逐指标对比与回归说明的门禁结论。
+    """
+    if report.get("dataset_version") != baseline.get("dataset_version"):
+        return {
+            "ok": False,
+            "comparable": False,
+            "reason": (
+                "dataset version mismatch: "
+                f"current={report.get('dataset_version')} "
+                f"baseline={baseline.get('dataset_version')}"
+            ),
+            "metrics": {},
+        }
+    metric_results: dict[str, dict[str, Any]] = {}
+    regressions: list[str] = []
+    for key in METRIC_KEYS:
+        current = (report.get("metrics") or {}).get(key, {}).get("pass_rate")
+        base = (baseline.get("metrics") or {}).get(key, {}).get("pass_rate")
+        if base is None and current is None:
+            metric_results[key] = {"status": "skipped", "current": None, "baseline": None}
+            continue
+        if base is None:
+            metric_results[key] = {"status": "skipped", "current": current, "baseline": None}
+            continue
+        if current is None or current < base - tolerance:
+            metric_results[key] = {
+                "status": "regression",
+                "current": current,
+                "baseline": base,
+                "delta": None if current is None else round(current - base, 6),
+            }
+            regressions.append(key)
+        else:
+            metric_results[key] = {
+                "status": "improved_or_equal",
+                "current": current,
+                "baseline": base,
+                "delta": round(current - base, 6),
+            }
+    current_evaluated = (report.get("summary") or {}).get("evaluated_tasks", 0)
+    baseline_evaluated = (baseline.get("summary") or {}).get("evaluated_tasks", 0)
+    coverage_regression = current_evaluated < baseline_evaluated
+    return {
+        "ok": not regressions and not coverage_regression,
+        "comparable": True,
+        "tolerance": tolerance,
+        "evaluated_tasks": {
+            "current": current_evaluated,
+            "baseline": baseline_evaluated,
+            "status": "regression" if coverage_regression else "ok",
+        },
+        "metrics": metric_results,
+        "regressions": regressions,
+        "reason": (
+            "; ".join(
+                [
+                    *(f"{key} pass_rate regression" for key in regressions),
+                    *(
+                        [
+                            "evaluated task coverage regression"
+                            if coverage_regression
+                            else ""
+                        ]
+                    ),
+                ]
+            )
+            or "all metrics within baseline"
+        ),
+    }

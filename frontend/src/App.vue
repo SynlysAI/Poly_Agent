@@ -281,6 +281,10 @@ onBeforeUnmount(() => {
             <el-icon><SetUp /></el-icon>
             <span>系统管理</span>
           </el-menu-item>
+          <el-menu-item v-if="canAccessAdmin" index="/admin/lui-evaluation">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>评测报告</span>
+          </el-menu-item>
         </el-menu>
       </div>
       <div class="sidebar-version" :class="{ collapsed: sidebarCollapsed }">

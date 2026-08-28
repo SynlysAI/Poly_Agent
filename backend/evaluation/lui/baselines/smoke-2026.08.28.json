@@ -2,7 +2,7 @@
   "evaluation_id": "lui-eval-smoke-2026.08.28",
   "dataset_version": "2026.08.28",
   "mode": "smoke",
-  "generated_at": "2026-08-28T13:43:03.677673+00:00",
+  "generated_at": "2026-08-28T13:49:47.093362+00:00",
   "summary": {
     "evaluated_tasks": 37,
     "successful_tasks": 37,
@@ -180,6 +180,45 @@
       "tasks": 33,
       "success": 33,
       "success_rate": 1.0
+    }
+  },
+  "metadata": {
+    "facts_source": "fixture",
+    "manual_review": {
+      "evaluation_id": "lui-eval-smoke-2026.08.28",
+      "dataset_version": "2026.08.28",
+      "sample_ratio": 0.2,
+      "reviewer": "Plan13 校准评审",
+      "generated_at": "2026-08-28T13:42:25.905293+00:00",
+      "disagreement_rate_limit": 0.05,
+      "metrics": {
+        "m4": {
+          "sampled": 8,
+          "reviewed": 8,
+          "disagreements": 0,
+          "disagreement_rate": 0.0,
+          "within_limit": true,
+          "reasons": {
+            "任务歧义": 0,
+            "判定器误判": 0,
+            "判定器漏判": 0
+          },
+          "disagreement_task_ids": []
+        },
+        "m5": {
+          "sampled": 4,
+          "reviewed": 4,
+          "disagreements": 0,
+          "disagreement_rate": 0.0,
+          "within_limit": true,
+          "reasons": {
+            "任务歧义": 0,
+            "判定器误判": 0,
+            "判定器漏判": 0
+          },
+          "disagreement_task_ids": []
+        }
+      }
     }
   }
 }

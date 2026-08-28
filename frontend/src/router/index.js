@@ -29,6 +29,7 @@ const routes = [
   { path: '/tools/alchemist', component: view('AlchemistToolView'), meta: { section: '工具服务', title: '实验设计与优化' } },
   { path: '/research-engine', component: view('ResearchEngineView'), meta: { section: '研发引擎', title: 'ResearchEngine' } },
   { path: '/admin', component: view('DatabaseManagementView'), meta: { section: '系统管理', title: '系统管理', requiresRole: 'admin' } },
+  { path: '/admin/lui-evaluation', component: view('LuiEvaluationReportView'), meta: { section: '系统管理', title: 'LUI 评测报告', requiresRole: 'admin' } },
   { path: '/database', redirect: '/database/data-catalog' },
   { path: '/database/data-catalog', component: view('DataCatalogView'), meta: { section: '数据管理', title: '数据管理' } },
   { path: '/database/data-api', component: view('DataApiView'), meta: { section: '数据管理', title: '数据调用 API' } },

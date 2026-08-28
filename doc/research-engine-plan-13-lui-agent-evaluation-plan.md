@@ -1,6 +1,6 @@
 # Plan 13：LUI Agent 评估与八项指标体系工作计划
 
-> 状态：已评审 / Phase 0–3 已完成，Phase 4–5 实施中
+> 状态：已评审 / Phase 0–4 已完成，Phase 5 实施中
 >
 > 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）
 >
@@ -528,10 +528,10 @@ Phase 2 验证记录（2026-08-28）：
 
 ### Phase 4：回归集成与门禁
 
-- [ ] 将离线评测脚本接入 `make` 或独立命令，避免默认 `make test-backend` 每次跑真实模型。
-- [ ] 增加 schema、工具判定、检索判定、报告生成的单元测试。
-- [ ] 建立质量基线；后续 LUI 相关 PR 至少跑“确定性快速集”，发布前跑完整集。
-- [ ] 把 M1–M8 汇总到现有 Admin 面板或独立报告页，与 `assistant_quality_service` 做区分。
+- [x] 将离线评测脚本接入 `make` 或独立命令，避免默认 `make test-backend` 每次跑真实模型。（新增 `make test-lui-eval`：smoke 快速集 + 人工抽检记录 + 基线门禁；`make check-all` 纳入该命令，`test-backend` 不调用真实模型）
+- [x] 增加 schema、工具判定、检索判定、报告生成的单元测试。（Phase 2 已建 18 项；本轮补基线对比、人工抽检、基线服务与 API 共 13 项）
+- [x] 建立质量基线；后续 LUI 相关 PR 至少跑“确定性快速集”，发布前跑完整集。（`--check-baseline` 对通过率回归、覆盖率缩水、版本不一致判失败并返回退出码 2；PR 流程写入 README）
+- [x] 把 M1–M8 汇总到现有 Admin 面板或独立报告页，与 `assistant_quality_service` 做区分。（新增管理员页面 `/admin/lui-evaluation` 与 `GET /assistant/lui-evaluation/summary`，读取受控基线展示任务级 M1–M8、分桶/模式与人工抽检结论；页面文案明确与链路侧质量指标互补）
 
 ### Phase 5：生产采样与持续观测
 
@@ -550,6 +550,9 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --data
 
 # 完整评测并生成报告
 PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --dataset backend/evaluation/lui/dataset --mode full --report-dir reports/lui-eval
+
+# 回归门禁（离线 fixture 快速集 + 基线对比）
+make test-lui-eval
 ```
 
 ## 10. 验收标准
@@ -585,3 +588,4 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --data
 - 2026-08-18：创建评估计划，定义八项指标、Golden Set、评测 Harness、实施阶段与验收标准。状态为待评审 / 未开始。
 - 2026-08-28：完成 Phase 0–2（口径冻结与 Golden Set、可观测性补齐、M1–M8 评测器）并按阶段提交。
 - 2026-08-28：完成 Phase 3 试运行与人工校准：37 条确定性任务跑通；M4/M5 分层抽检 12 条、不一致率 0%；修复 M6/M7 无阈值误计失败口径；首份 smoke 基线入库。Phase 4–5 接续实施。
+- 2026-08-28：完成 Phase 4 回归集成与门禁：`make test-lui-eval` 接入 check-all；基线对比门禁覆盖通过率/覆盖率/版本一致性；管理员评测报告页上线（/admin/lui-evaluation），与链路侧质量指标互补。Phase 5 接续实施。
