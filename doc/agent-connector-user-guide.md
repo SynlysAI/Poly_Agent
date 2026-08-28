@@ -23,6 +23,15 @@ Agent 连接器用于把 Codex CLI 这类外部执行能力接入 PolyAgent，�
 2. 进入 `/tools` 的“Agent 连接器”区域查看 Codex 卡片与 readiness 状态。
 3. 启用连接器策略，按需调整允许角色、任务类型与确认要求；策略变更会写入审计。
 4. 需要验证时可发起受控测试 run；run 状态、事件与 artifact 清单可在详情中查看。
+5. 配置完成后可在 `/capabilities` 查看最终能力可见性；配置仍以 `/tools` 为唯一事实源。
+
+## 3.1 普通用户开放流程
+
+1. 管理员确认 provider readiness 通过，并在 `/tools?tab=agent-connectors` 启用连接器。
+2. 将 `allowed_roles` 显式加入 `user`；仅改 `requires_confirmation=false` 不会开放普通用户。
+3. 普通用户进入 `/capabilities`，仅会看到该连接器；readiness 不满足时仍显示不可用。
+4. 普通用户发起任务时必须每次勾选确认。即使策略关闭确认要求，服务端仍强制 `confirmed=true`。
+5. run 详情、取消和质量汇总仍仅管理员可访问；普通 run 的 actor role、policy snapshot、事件与 trace 可被管理员追溯。
 
 ## 4. LUI 暴露规则（默认关闭）
 
@@ -51,3 +60,9 @@ Agent 连接器用于把 Codex CLI 这类外部执行能力接入 PolyAgent，�
 ## 7. 来源标注
 
 连接器卡片展示“执行能力来自 Codex CLI”的来源标注。PolyAgent 负责策略治理、workdir、审计与追溯，不声明内置或复制 Codex；外部 provider 是可选能力，系统在 provider 缺失时继续走既有本地路径。
+
+## 8. 相关入口
+
+- 能力目录：`/capabilities`
+- 策略配置：`/tools?tab=agent-connectors`
+- 用户与邀请码治理：`/admin`

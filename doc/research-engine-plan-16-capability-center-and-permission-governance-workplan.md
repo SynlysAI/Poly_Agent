@@ -1,6 +1,6 @@
 # Plan 16：Agent 能力中心与权限治理工作计划
 
-> 状态：业务实现进行中（P16-A 至 P16-D 已完成）
+> 状态：业务实现进行中（P16-A 至 P16-E 已完成，待 P16-F 全量验证）
 >
 > 日期：2026-08-28
 >
@@ -293,11 +293,11 @@ PolyAgent 的可调用能力目前分散在多个模块：外部服务集成、�
 
 ### P16-E. 来源标注与文档同步
 
-- [ ] 在 `AttributionService` 注册 `capability_center`，使用结构化来源数据。
-- [ ] 页面来源牌覆盖算法工具、Codex、报告 Skill provider、OpenAI-compatible、Ollama 和 Custom HTTP。
-- [ ] 更新来源矩阵，明确能力中心只聚合展示，能力归属原模块。
-- [ ] 新增能力中心用户指南，更新 Agent 连接器指南、`doc/README.md` 和本计划。
-- [ ] 明确非目标：不做插件市场、浏览器连接器、任意 OAuth 安装或本地 Skill 动态加载。
+- [x] 在 `AttributionService` 注册 `capability_center`，使用结构化来源数据。
+- [x] 页面来源牌覆盖算法工具、Codex、报告 Skill provider、OpenAI-compatible、Ollama 和 Custom HTTP。
+- [x] 更新来源矩阵，明确能力中心只聚合展示，能力归属原模块。
+- [x] 新增能力中心用户指南，更新 Agent 连接器指南、`doc/README.md` 和本计划。
+- [x] 明确非目标：不做插件市场、浏览器连接器、任意 OAuth 安装或本地 Skill 动态加载。
 
 ### P16-F. 全量验证与收尾
 
@@ -400,6 +400,7 @@ make test-backend
 
 ## 13. 状态记录
 
+- 2026-08-28（P16-E）：注册 `capability_center` 结构化来源，能力中心顶部与卡片覆盖算法来源、Codex CLI、报告 Skill provider、OpenAI-compatible、Ollama 和 Custom HTTP；更新来源矩阵、能力中心用户指南、Agent 连接器指南与 `doc/README.md`，明确不做插件市场、浏览器连接器、任意 OAuth 安装或本地 Skill 动态加载。来源 API 测试、能力中心前端测试和 production build 通过。
 - 2026-08-28（P16-D）：admin 用户列表补充创建、更新与最近登录时间；`/admin` 新增用户与邀请码管理区，支持确认后启用/禁用非管理员、创建 user 邀请码和禁用邀请码；新增 API 权限与前端纯函数测试，并修复本地双模存储用户/邀请码列表读取。专项测试与 production build 通过。
 - 2026-08-28（P16-C）：新增 `/capabilities` 独立只读页面、全局导航与 API 封装；实现权限摘要和四个能力分组，卡片包含状态、原因、策略、调用方式、来源牌与配置跳转；外部连接器调用复用既有显式确认 payload 构建并直接调用 run API；`/tools` 收窄为管理员配置入口并保留 6 个 tab；新增 capabilityCenter 纯函数测试，production build 通过。
 - 2026-08-28（P16-B）：完成策略允许的普通用户连接器访问与调用：providers/runs 面向认证用户，默认策略仍拒绝普通用户；显式授权后可调用且服务端强制逐次确认；管理接口保持 admin-only，run 与 policy 审计记录真实 actor role。专项与 Plan 15 回归测试通过。

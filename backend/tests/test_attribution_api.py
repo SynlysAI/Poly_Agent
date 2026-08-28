@@ -68,3 +68,22 @@ class TestAttributionApi:
         assert response.status_code == 200, response.text
         attributions = response.json()["data"]["attributions"]
         assert [item["name"] for item in attributions] == ["SpecLabOS"]
+
+    def test_capability_center_attribution_covers_external_sources_only(self) -> None:
+        """能力中心来源牌覆盖原模块外部来源，不新增 PolyAgent 自身来源。"""
+        with TestClient(app) as client:
+            response = client.get("/api/v1/attributions/modules/capability_center")
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        sources = {item["name"]: item for item in data["attributions"]}
+        assert set(sources) == {
+            "ALchemist",
+            "Codex CLI",
+            "OpenAI-compatible provider",
+            "Ollama",
+            "Custom HTTP provider",
+        }
+        assert sources["ALchemist"]["organization"] == "NatLabRockies / NREL / NLR"
+        assert sources["Codex CLI"]["organization"] == "OpenAI"
+        assert all(item["visibility"] == "prominent" for item in sources.values())

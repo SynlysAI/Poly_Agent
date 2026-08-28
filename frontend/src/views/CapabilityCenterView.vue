@@ -5,7 +5,12 @@ import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 
 import AttributionBadges from '../components/attribution/AttributionBadges.vue'
-import { createAgentExecRun, getApiErrorMessage, getCapabilityCatalog } from '../api/polyAgentApi'
+import {
+  createAgentExecRun,
+  getApiErrorMessage,
+  getCapabilityCatalog,
+  getModuleAttribution,
+} from '../api/polyAgentApi'
 import {
   CAPABILITY_GROUP_ORDER,
   buildCapabilityConnectorPayload,
@@ -17,6 +22,7 @@ import {
 
 const router = useRouter()
 const rawCatalog = ref(null)
+const moduleAttribution = ref(null)
 const loading = ref(false)
 const loadError = ref('')
 const connectorDialogVisible = ref(false)
@@ -63,7 +69,19 @@ async function loadCatalog() {
   loading.value = true
   loadError.value = ''
   try {
-    rawCatalog.value = await getCapabilityCatalog()
+    const [catalogResult, attributionResult] = await Promise.allSettled([
+      getCapabilityCatalog(),
+      getModuleAttribution('capability_center'),
+    ])
+    if (catalogResult.status === 'fulfilled') {
+      rawCatalog.value = catalogResult.value
+    } else {
+      loadError.value = getApiErrorMessage(catalogResult.reason)
+      rawCatalog.value = null
+    }
+    moduleAttribution.value = (
+      attributionResult.status === 'fulfilled' ? attributionResult.value : null
+    )
   } catch (error) {
     loadError.value = getApiErrorMessage(error)
     rawCatalog.value = null
@@ -193,6 +211,18 @@ onMounted(loadCatalog)
       </div>
       <el-button type="primary" :icon="Refresh" :loading="loading" @click="loadCatalog">刷新目录</el-button>
     </header>
+
+    <section
+      v-if="moduleAttribution?.attributions?.length"
+      class="module-source"
+      aria-label="能力来源"
+    >
+      <span>能力来源</span>
+      <AttributionBadges
+        :attributions="moduleAttribution.attributions"
+        :limit="moduleAttribution.attributions.length"
+      />
+    </section>
 
     <el-alert
       v-if="loadError"
@@ -371,6 +401,23 @@ onMounted(loadCatalog)
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+}
+
+.module-source {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius);
+  background: #fff;
+}
+
+.module-source > span {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .permission-panel article,

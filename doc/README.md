@@ -12,6 +12,7 @@
 | 使用计算工作流 | [computation-workflows-user-guide.md](computation-workflows-user-guide.md) | [compute-engine-computation-progress-and-plan.md](compute-engine-computation-progress-and-plan.md) |
 | 使用实验优化 | [optimization-workflow-user-guide.md](optimization-workflow-user-guide.md) | [compute-engine-computation-product-design.md](compute-engine-computation-product-design.md) |
 | 使用 AutoResearch | [autoresearch-user-guide.md](autoresearch-user-guide.md) | [research-engine-progress-and-plan.md](research-engine-progress-and-plan.md) |
+| 查看与调用 Agent 能力 | [capability-center-user-guide.md](capability-center-user-guide.md) | [agent-connector-user-guide.md](agent-connector-user-guide.md) |
 | 上传垂类算法 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) |
 | 配置远程接口模型 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) |
 | 了解知识库服务 | [knowledge-base-rag-kg-product-design.md](knowledge-base-rag-kg-product-design.md) | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) |
@@ -38,6 +39,7 @@
 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | HTTP/FastAPI/MCP 远程接口模型的配置、测试、激活、调用和安全边界 |
 | [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | `/dialogue` Slash Command、会话控制、统一回放与来源说明 |
 | [agent-connector-user-guide.md](agent-connector-user-guide.md) | Agent 连接器的默认安全策略、管理员配置、LUI 暴露规则、安全边界与审计说明 |
+| [capability-center-user-guide.md](capability-center-user-guide.md) | `/capabilities` 能力目录的角色视角、四个能力分组、连接器确认、来源与治理边界 |
 
 ## 产品与架构设计
 
