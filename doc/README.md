@@ -37,7 +37,7 @@
 | [autoresearch-user-guide.md](autoresearch-user-guide.md) | ResearchEngine / AutoResearch 的任务创建、运行推进、Gate 审批和追溯查看 |
 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | 垂类算法包结构、打包、上传、测试和上线流程 |
 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | HTTP/FastAPI/MCP 远程接口模型的配置、测试、激活、调用和安全边界 |
-| [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | `/dialogue` Slash Command、会话控制、统一回放与来源说明 |
+| [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | `/dialogue` Slash Command、会话控制、动态计算预算、统一回放与来源说明 |
 | [agent-connector-user-guide.md](agent-connector-user-guide.md) | Agent 连接器的默认安全策略、管理员配置、LUI 暴露规则、安全边界与审计说明 |
 | [capability-center-user-guide.md](capability-center-user-guide.md) | `/capabilities` 能力目录的角色视角、四个能力分组、连接器确认、来源与治理边界 |
 
@@ -86,7 +86,7 @@
 | [research-engine-plan-11-lui-qa-deep-preset-positioning.md](research-engine-plan-11-lui-qa-deep-preset-positioning.md) | LUI 科研问答与深度思考 Preset 定位、差异与兼容基础 |
 | [research-engine-plan-12-product-positioning-evolution.md](research-engine-plan-12-product-positioning-evolution.md) | PI Agent / DSH / Codex 时代的产品定位、生态位与演进路线 |
 | [research-engine-plan-13-lui-agent-evaluation-plan.md](research-engine-plan-13-lui-agent-evaluation-plan.md) | LUI Agent 八项指标评估体系：任务成功、工具调用、检索召回、回答准确、幻觉、延迟、成本与人工兜底 |
-| [research-engine-plan-14-lui-dynamic-compute-budget-plan.md](research-engine-plan-14-lui-dynamic-compute-budget-plan.md) | LUI 动态计算预算：Query 分类、Model Router、RAG 分层、执行分级与灰度发布 |
+| [research-engine-plan-14-lui-dynamic-compute-budget-plan.md](research-engine-plan-14-lui-dynamic-compute-budget-plan.md) | LUI 动态计算预算已完成：Query 分类、Model Router、RAG 分层、执行分级、影子观测与灰度回滚；默认保持影子模式 |
 | [research-engine-plan-15-agent-exec-provider-seam-workplan.md](research-engine-plan-15-agent-exec-provider-seam-workplan.md) | 受控外部 Agent 执行 Provider Seam 与 Agent 连接器治理：readiness、独立 workdir、Codex MVP、连接器策略、Audit / Trace 与管理 API |
 | [research-engine-plan-16-capability-center-and-permission-governance-workplan.md](research-engine-plan-16-capability-center-and-permission-governance-workplan.md) | Agent 能力中心与权限治理：新建 `/capabilities` 独立入口（Agent 能力调用目录），`/tools` 收窄为配置中心，Skill allowlist 目录、`/admin` 用户与邀请码管理 UI |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |

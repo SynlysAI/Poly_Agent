@@ -245,6 +245,14 @@ class Settings:
         self.assistant_web_fetch_max_bytes: int = int(os.getenv("ASSISTANT_WEB_FETCH_MAX_BYTES", "400000"))
         self.assistant_web_blocked_domains: list[str] = self._parse_csv(os.getenv("ASSISTANT_WEB_BLOCKED_DOMAINS", ""))
         self.assistant_web_allowed_domains: list[str] = self._parse_csv(os.getenv("ASSISTANT_WEB_ALLOWED_DOMAINS", ""))
+        self.assistant_budget_mode: str = os.getenv("ASSISTANT_BUDGET_MODE", "shadow").strip().lower()
+        self.assistant_budget_rollout_percent: int = max(
+            0,
+            min(100, int(os.getenv("ASSISTANT_BUDGET_ROLLOUT_PERCENT", "0"))),
+        )
+        self.assistant_budget_allowed_user_ids: list[str] = self._parse_csv(
+            os.getenv("ASSISTANT_BUDGET_ALLOWED_USER_IDS", "")
+        )
         self.assistant_max_parallel_tool_calls: int = max(
             1,
             min(3, int(os.getenv("ASSISTANT_MAX_PARALLEL_TOOL_CALLS", "1"))),

@@ -64,6 +64,7 @@ class AssistantChatCreate(BaseModel):
 
     title: str | None = Field(default=None, max_length=200)
     model: dict[str, Any] = Field(default_factory=dict)
+    model_selection_origin: str = Field(default="chat", max_length=20)
     mode: str = Field(default="qa", max_length=40)
     preset_id: AssistantPresetId | None = Field(default=None, max_length=40)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=100)
@@ -78,6 +79,7 @@ class AssistantChatUpdate(BaseModel):
 
     title: str | None = Field(default=None, max_length=200)
     model: dict[str, Any] | None = None
+    model_selection_origin: str | None = Field(default=None, max_length=20)
     mode: str | None = Field(default=None, max_length=40)
     preset_id: AssistantPresetId | None = Field(default=None, max_length=40)
     knowledge_base_ids: list[str] | None = Field(default=None, max_length=100)

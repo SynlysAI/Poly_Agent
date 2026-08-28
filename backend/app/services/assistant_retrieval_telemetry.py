@@ -43,11 +43,14 @@ def knowledge_result_entries(outcome: Any, *, limit: int = 5) -> list[dict[str, 
         entry_id = str(getattr(item, "source_id", "") or getattr(item, "title", "") or "")
         if not entry_id:
             continue
+        metadata = dict(getattr(item, "metadata", None) or {})
         entries.append(
             {
                 "id": entry_id,
                 "rank": len(entries) + 1,
                 "score": getattr(item, "score", None),
+                "rerank_score": metadata.get("rerank_score"),
+                "retrieval_channels": metadata.get("retrieval_channels", []),
                 "snippet": _clip_text(getattr(item, "snippet", "")),
             }
         )
@@ -116,6 +119,10 @@ def retrieval_result_event(
     query_digest: str,
     status: str,
     entries: list[dict[str, Any]],
+    retrieval_tier: str = "vector",
+    rerank_applied: bool = False,
+    upgrade_reason: str | None = None,
+    fallback_reason: str | None = None,
 ) -> dict[str, Any]:
     """构建 retrieval.result 事件。
 
@@ -124,6 +131,10 @@ def retrieval_result_event(
         query_digest: 检索 query 摘要。
         status: 检索终态。
         entries: 已标记 used_in_answer 的稳定结果条目。
+        retrieval_tier: 本次实际检索档位。
+        rerank_applied: 是否应用确定性 rerank。
+        upgrade_reason: 升级到混合检索的原因。
+        fallback_reason: 混合检索或 rerank 的降级原因。
 
     Returns:
         可直接进入 LUI 事件流的字典。
@@ -134,4 +145,8 @@ def retrieval_result_event(
         "query_digest": query_digest,
         "status": status,
         "results": entries,
+        "retrieval_tier": retrieval_tier,
+        "rerank_applied": rerank_applied,
+        "upgrade_reason": upgrade_reason,
+        "fallback_reason": fallback_reason,
     }

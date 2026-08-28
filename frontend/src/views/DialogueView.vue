@@ -733,6 +733,26 @@ function requestCommandCatalog(options = {}) {
   void loadCommandCatalog(options)
 }
 
+/**
+ * 判断当前模型选择是否来自用户显式选择。
+ *
+ * Returns:
+ *   用户、URL 或已持久化手动选择返回 true；默认 route/fallback 不覆盖预算路由。
+ */
+function isExplicitModelSelection() {
+  return ['user', 'url', 'chat'].includes(modelSelectionOrigin.value)
+}
+
+/**
+ * 构建可持久化的模型选择。
+ *
+ * Returns:
+ *   显式选择返回 provider/model；默认路由选择返回空对象。
+ */
+function persistableModelContext() {
+  return isExplicitModelSelection() ? (selectedModelContext() || {}) : {}
+}
+
 function removeAgentTool(toolId) {
   manualSelectedToolIds.value = manualSelectedToolIds.value.filter((item) => item !== toolId)
   excludedAutoToolIds.value = [...new Set([...excludedAutoToolIds.value, toolId])]
@@ -741,7 +761,8 @@ function removeAgentTool(toolId) {
 
 function chatOptionsPayload() {
   return {
-    model: selectedModelContext() || {},
+    model: persistableModelContext(),
+    model_selection_origin: modelSelectionOrigin.value || 'route',
     mode: chatMode.value,
     knowledge_base_ids: selectedKnowledgeBaseIds.value,
     knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
@@ -947,6 +968,7 @@ async function loadChat(chatKey) {
         startToolCallStream(message, call)
       }
     }
+    modelSelectionOrigin.value = data.model_selection_origin || 'chat'
     selectDefaultModelForMode(data.model || {})
     scrollToBottom()
     await Promise.all([
@@ -1749,6 +1771,7 @@ function buildAssistantContext(extra = {}) {
     knowledge_base_id: selectedKnowledgeBases.value[0]?.system_id || '',
     knowledge_base_name: selectedKnowledgeBases.value[0]?.name || '',
     model: selectedModelContext(),
+    model_selection_origin: modelSelectionOrigin.value || 'route',
     chat_id: chatId.value,
     message_id: userMessageId.value,
     selected_tool_ids: selectedToolIds.value,

@@ -609,6 +609,35 @@ function qualityMetricType(metric) {
   return 'info'
 }
 
+/**
+ * 把预算分布字典转换为表格行。
+ *
+ * Args:
+ *   distribution: 后端返回的分类 / 档位分布字典。
+ *   label: 表格维度标签。
+ *
+ * Returns:
+ *   含维度、档位和样本数 的行列表。
+ */
+function budgetDistributionRows(distribution, label) {
+  return Object.entries(distribution || {}).map(([tier, count]) => ({
+    dimension: label,
+    tier,
+    count,
+  }))
+}
+
+/**构建动态计算预算四个维度的看板表格行。*/
+const budgetDashboardRows = computed(() => {
+  const budget = llmQualityMetrics.value?.budget || {}
+  return [
+    ...budgetDistributionRows(budget.classification_distribution, '分类'),
+    ...budgetDistributionRows(budget.model_tier_distribution, '模型'),
+    ...budgetDistributionRows(budget.retrieval_tier_distribution, '检索'),
+    ...budgetDistributionRows(budget.execution_tier_distribution, '执行'),
+  ]
+})
+
 function servicePrimaryDetail(row) {
   const details = row.details || {}
   if (details.path) return details.path
@@ -1302,6 +1331,31 @@ watch(activeTab, (tab) => {
                     <el-table-column prop="denominator" label="分母" width="80" align="right" />
                     <el-table-column prop="target" label="目标" min-width="150" />
                   </el-table>
+                </div>
+                <div v-if="budgetDashboardRows.length" class="llm-context-distribution">
+                  <div class="llm-routing-head">
+                    <div>
+                      <strong>动态计算预算观测</strong>
+                      <span>
+                        决策 {{ llmQualityMetrics.budget.total_decisions || 0 }} 条 ·
+                        用户覆盖 {{ ((llmQualityMetrics.budget.user_override_coverage || 0) * 100).toFixed(2) }}% ·
+                        回退 {{ ((llmQualityMetrics.budget.fallback_rate || 0) * 100).toFixed(2) }}%
+                      </span>
+                    </div>
+                  </div>
+                  <el-table :data="budgetDashboardRows" size="small" border>
+                    <el-table-column prop="dimension" label="维度" width="90" />
+                    <el-table-column prop="tier" label="档位" min-width="180">
+                      <template #default="{ row }">
+                        <code>{{ row.tier }}</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="count" label="样本数" width="100" align="right" />
+                  </el-table>
+                  <p class="llm-quality-note">
+                    发布门槛：{{ llmQualityMetrics.budget.release_gate?.reason }}。
+                    {{ llmQualityMetrics.budget.release_gate?.rollback }}。
+                  </p>
                 </div>
                 <div v-if="llmQualityMetrics.context_token_distribution?.sections?.length" class="llm-context-distribution">
                   <div class="llm-routing-head">

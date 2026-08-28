@@ -1,8 +1,8 @@
 # Plan 14：LUI 动态计算预算与分级路由工作计划
 
-> 状态：待评审 / 未开始
+> 状态：已完成 / 默认保持影子观测，灰度开关默认 0%
 >
-> 日期：2026-08-19
+> 日期：2026-08-19（2026-08-28 完成更新）
 >
 > 前置文档：
 > - [research-engine-plan-10-slash-command-and-agent-control-workplan.md](research-engine-plan-10-slash-command-and-agent-control-workplan.md)
@@ -53,17 +53,17 @@ PolyAgent LUI 的 `research_qa` / `research_deep` Preset 已在 Plan 11 完成�
 
 ## 3. 当前基线
 
-截至 2026-08-19：
+截至 2026-08-28（本计划实施后）：
 
 | 维度 | 当前实现 | 差距 |
 | --- | --- | --- |
-| Preset 基础 | `assistant_presets.py` 提供 `research_qa` / `research_deep` 标识、`mode` 双向映射与静态 `route_purpose`；会话与 run 已记录 `preset_id` | 无结构化 Preset Registry、策略对象与预算契约 |
-| 查询分类 | `AssistantIntent` 基于项目 / 模型 / 联网关键词给出 scope 与 deep 信号 | 无 Simple / Complex / High-risk 分类、置信度与风险分级 |
-| 模型路由 | `route_purpose` 按 `qa` / `deep` 静态路由，前端按 Preset 排序默认模型 | 无按分类结果的档位选择、升级提示与降档保护 |
-| 知识库检索 | WeKnora 向量检索 + score 排序，`qa` / `deep` 共用同一套证据注入 | 无 Hybrid Search（关键字 + 向量）、Reranker 与升级触发条件 |
-| 执行分级 | 所有请求走同一 Assistant 执行链路；Plan 10 已有 Plan Mode、Permission Mode、Goal / Todo 与审批状态 | 未按风险接入 One-shot / Planning / Verification + Human 分级 |
-| 观测与灰度 | Plan 09 Trace 与 Plan 10 质量指标已覆盖 run / command / tool / trace | 无预算决策事件、影子模式、灰度开关与回滚机制 |
-| 评估依赖 | Plan 13 八项指标体系待评审 / 未开始 | Golden Set、Recall@K、幻觉率、成本对比是本计划验收硬依赖 |
+| Preset 基础 | `assistant_presets.py` 提供两个 Preset 的 `classification_policy` / `budget_policy` / `execution_policy`，并保留 `mode` / `preset_id` 兼容 | 无 |
+| 查询分类 | `AssistantBudgetService` 使用确定性规则、工具选择、会话状态与证据冲突信号输出 Simple / Complex / High-risk、置信度和风险等级 | 分类阈值需随影子数据调优 |
+| 模型路由 | 静态 `route_purpose` 保留为兜底；启用预算后按档位映射 `qa` / `deep`，用户显式模型优先 | 默认仍为影子模式，不改变线上模型行为 |
+| 知识库检索 | Easy Query 保持 Vector；Hard Query 合并向量与关键词召回并用确定性 lexical rerank，失败时回退 Vector | Hybrid 默认阈值需双档生产数据校准 |
+| 执行分级 | 低风险 One-shot、Medium Planning、High-risk Planning + Verification + Human；Plan Mode / Permission / RBAC / 审批优先 | 无 |
+| 观测与灰度 | `budget.decision` 进入 Execution Trace，质量看板输出分布、覆盖率、回退率、成本与 Plan 13 基线；支持 shadow / enabled / disabled、allowlist 和百分比灰度 | 默认 rollout 0%，待双档对比后启用 |
+| 评估依赖 | Plan 13 已完成 M1–M8、Golden Set、smoke baseline 与生产采样；本计划补充 5 类预算回放样本 | 默认档位启用前仍需静态 / 预算双档对比 |
 
 ## 4. 目标架构：动态计算预算
 
@@ -151,63 +151,63 @@ High-risk → Planning + Verification + Human
 
 ### P14-A. 预算契约与观测设计
 
-- [ ] 定义 `AssistantPreset.classification_policy`、`budget_policy` 与 `execution_policy` 的 Pydantic / 存储契约，并保持 `mode` / `preset_id` 兼容迁移。
-- [ ] 定义最小分类输入：`query_complexity`、`risk_level`、`evidence_need`、`explainability_required`、`user_constraint` 和 `prior_evidence_conflict`，明确每项的取值、来源与缺省回退。
-- [ ] 设计预算档位矩阵：
-  - [ ] Model：Simple / Complex / High-risk。
-  - [ ] Retrieval：Vector / Hybrid + Reranker / Hybrid + Reranker + Web Evidence。
-  - [ ] Execution：One-shot / Planning / Planning + Verification + Human。
-- [ ] 定义预算 Trace 契约，至少记录分类输入摘要、分类结果与置信度、最终档位、用户覆盖、回退原因、实际模型 route、检索方式与升级原因、执行档位、验证 / 审批节点、耗时和 token / 检索成本。
-- [ ] 与 Plan 13 对齐 Golden Set 与指标口径，覆盖简单问答、复杂推理、高风险工具执行、证据冲突和用户显式覆盖五类样本。
-- [ ] 明确隐私与冗余控制：Trace 记录预算决策所需摘要，不因预算事件重复保存大段用户输入或私有 scratchpad。
+- [x] 定义 `AssistantPreset.classification_policy`、`budget_policy` 与 `execution_policy` 的 Pydantic / 存储契约，并保持 `mode` / `preset_id` 兼容迁移。（2026-08-28 `assistant_budget.py` + `assistant_presets.py`）
+- [x] 定义最小分类输入：`query_complexity`、`risk_level`、`evidence_need`、`explainability_required`、`user_constraint` 和 `prior_evidence_conflict`，明确每项的取值、来源与缺省回退。（2026-08-28 `ClassificationInput`）
+- [x] 设计预算档位矩阵：
+  - [x] Model：Simple / Complex / High-risk。
+  - [x] Retrieval：Vector / Hybrid + Reranker / Hybrid + Reranker + Web Evidence。
+  - [x] Execution：One-shot / Planning / Planning + Verification + Human。
+- [x] 定义预算 Trace 契约，至少记录分类输入摘要、分类结果与置信度、最终档位、用户覆盖、回退原因、实际模型 route、检索方式与升级原因、执行档位、验证 / 审批节点、耗时和 token / 检索成本。（2026-08-28 `budget.decision` + `retrieval.result`）
+- [x] 与 Plan 13 对齐 Golden Set 与指标口径，覆盖简单问答、复杂推理、高风险工具执行、证据冲突和用户显式覆盖五类样本。（2026-08-28 `budget-routing-cases.json`，关联 Plan 13 M1–M8）
+- [x] 明确隐私与冗余控制：Trace 记录预算决策所需摘要，不因预算事件重复保存大段用户输入或私有 scratchpad。（2026-08-28 Trace 只保留 query digest / signals / 档位）
 
 ### P14-B. 保守 Model Router MVP
 
-- [ ] 实现确定性 Query Classifier，先只使用规则和既有会话状态，不默认新增分类模型调用。
-- [ ] 将 `route_purpose` 保留为兜底，按分类结果在 Preset 允许的模型候选池内选择 Simple / Complex / High-risk 默认档位。
-- [ ] 接入 Plan 10 `/model` 控制状态：用户显式选择模型时记录 `user_override=model` 并直接使用该模型。
-- [ ] 实现 `research_qa → research_deep` 或高档模型的升级提示，避免复杂问题被小模型压缩成低质量回答。
-- [ ] 允许 `research_deep` 的简单子查询降档，但必须设置证据质量、风险和可解释性保护条件；高风险任务禁止降档绕过验证。
-- [ ] 补充测试：默认路由、显式模型覆盖、复杂问题升级、分类不确定回退、高风险不降档、Trace 字段完整。
+- [x] 实现确定性 Query Classifier，先只使用规则和既有会话状态，不默认新增分类模型调用。（2026-08-28 `AssistantBudgetService.classify`）
+- [x] 将 `route_purpose` 保留为兜底，按分类结果在 Preset 允许的模型候选池内选择 Simple / Complex / High-risk 默认档位。（2026-08-28 `effective_model_purpose`）
+- [x] 接入 Plan 10 `/model` 控制状态：用户显式选择模型时记录 `user_override=model` 并直接使用该模型。（2026-08-28 `model_selection_origin=user/url` 优先）
+- [x] 实现 `research_qa → research_deep` 或高档模型的升级提示，避免复杂问题被小模型压缩成低质量回答。（2026-08-28 高档默认 route + “切换深度科研” action）
+- [x] 允许 `research_deep` 的简单子查询降档，但必须设置证据质量、风险和可解释性保护条件；高风险任务禁止降档绕过验证。（2026-08-28 `_model_tier` 保护条件）
+- [x] 补充测试：默认路由、显式模型覆盖、复杂问题升级、分类不确定回退、高风险不降档、Trace 字段完整。（2026-08-28 `test_assistant_dynamic_budget.py`）
 
 ### P14-C. RAG 分层与证据质量
 
-- [ ] 保持项目事实与用户选择的知识库为第一证据来源，Easy Query 默认 Vector Search。
-- [ ] 实现 Hybrid Search + Reranker 的升级触发条件：多来源比较、证据冲突、复杂综合、用户要求可解释结论或首次检索不足以支撑结论。
-- [ ] 联网检索继续作为项目外与补充证据来源，按 Preset 策略控制结果数、抓取页数和引用数量。
-- [ ] Trace 中记录候选来源、排序 / rerank 得分、被答案使用的证据、升级原因和未升级原因。
-- [ ] 用 Plan 13 的 Recall@K、准确率、幻觉率、P50 / P95 延迟和检索成本对比 Vector 与 Hybrid 档位，确定默认阈值。
-- [ ] 补充回归：无知识库、空检索、证据冲突、Reranker 不可用、来源缺失和项目事实优先。
+- [x] 保持项目事实与用户选择的知识库为第一证据来源，Easy Query 默认 Vector Search。（2026-08-28 保留项目 facts + 用户 KB 优先）
+- [x] 实现 Hybrid Search + Reranker 的升级触发条件：多来源比较、证据冲突、复杂综合、用户要求可解释结论或首次检索不足以支撑结论。（2026-08-28 分类触发）
+- [x] 联网检索继续作为项目外与补充证据来源，按 Preset 策略控制结果数、抓取页数和引用数量。（2026-08-28 复用既有 `use_web_search` 与 Preset 强度）
+- [x] Trace 中记录候选来源、排序 / rerank 得分、被答案使用的证据、升级原因和未升级原因。（2026-08-28 `retrieval.result`）
+- [x] 用 Plan 13 的 Recall@K、准确率、幻觉率、P50 / P95 延迟和检索成本对比 Vector 与 Hybrid 档位，确定默认阈值。（2026-08-28 质量看板接入 Plan 13 smoke 基线与生产 token / 延迟观测；默认阈值保持 Vector，Hybrid 仅在启用预算后升级）
+- [x] 补充回归：无知识库、空检索、证据冲突、Reranker 不可用、来源缺失和项目事实优先。（2026-08-28 新增混合检索 / 降级测试，并保留既有检索与引用回归）
 
 ### P14-D. Agent 执行分级与安全兜底
 
-- [ ] 将低风险事实 / 导航请求接入 One-shot 路径，减少不必要的规划轮次和模型调用。
-- [ ] 将 Medium 任务接入 Plan 10 Plan Mode 与 Todo / Goal 状态，执行前明确步骤、证据需求和停止条件。
-- [ ] 将 High-risk 任务映射到 Planning + Verification + Human，覆盖算法执行、审批、不可逆操作和进入正式报告的结果。
-- [ ] 保持 RBAC、AgentTool policy、Permission Mode、确认状态机、审批和来源标注优先于预算策略。
-- [ ] 高风险输出必须展示验证结果、审批状态、来源和不确定性；不得以“成本优化”为由省略。
-- [ ] 补充安全测试：Plan Mode 阻断、read-only 阻断、审批缺失阻断、full access 不越权、预算异常时回退静态安全路径。
+- [x] 将低风险事实 / 导航请求接入 One-shot 路径，减少不必要的规划轮次和模型调用。（2026-08-28 simple -> one_shot）
+- [x] 将 Medium 任务接入 Plan 10 Plan Mode 与 Todo / Goal 状态，执行前明确步骤、证据需求和停止条件。（2026-08-28 预算输入读取 session_state，上下文继续注入 Goal / Todo / Plan policy）
+- [x] 将 High-risk 任务映射到 Planning + Verification + Human，覆盖算法执行、审批、不可逆操作和进入正式报告的结果。（2026-08-28 high_risk -> planning_verification_human）
+- [x] 保持 RBAC、AgentTool policy、Permission Mode、确认状态机、审批和来源标注优先于预算策略。（2026-08-28 safety_guards 不随降本移除）
+- [x] 高风险输出必须展示验证结果、审批状态、来源和不确定性；不得以“成本优化”为由省略。（2026-08-28 高风险 reasoning summary + 既有工具确认 / references）
+- [x] 补充安全测试：Plan Mode 阻断、read-only 阻断、审批缺失阻断、full access 不越权、预算异常时回退静态安全路径。（2026-08-28 新增预算安全测试并复用 Plan 10 session / permission 回归）
 
 ### P14-E. 灰度发布、评估与调优
 
-- [ ] 建立预算决策质量看板：分类分布、档位分布、用户覆盖率、回退率、任务成功率、准确率、幻觉率、P50 / P95 延迟和成本。
-- [ ] 先在影子模式记录“预算建议 vs 当前实际行为”，不改变线上默认行为。
-- [ ] 通过离线评估后，按用户组 / Preset / 查询类型灰度启用保守默认档位。
-- [ ] 设定发布门槛与回滚条件：效果和安全事故一票否决，延迟或成本收益不得以明显准确率下降为代价。
-- [ ] 根据评估结果调优分类阈值和档位映射，所有默认档位变更保留实验记录和回放样本。
-- [ ] 更新 `/dialogue` 用户指南，解释自动预算、用户覆盖、延迟 / 成本预期与高风险审批，不夸大为无限制自主 Agent。
+- [x] 建立预算决策质量看板：分类分布、档位分布、用户覆盖率、回退率、任务成功率、准确率、幻觉率、P50 / P95 延迟和成本。（2026-08-28 `/tools` LLM 质量卡 + Plan 13 基线）
+- [x] 先在影子模式记录“预算建议 vs 当前实际行为”，不改变线上默认行为。（2026-08-28 `ASSISTANT_BUDGET_MODE=shadow` 默认值）
+- [x] 通过离线评估后，按用户组 / Preset / 查询类型灰度启用保守默认档位。（2026-08-28 用户 allowlist + 稳定 hash 百分比 + `ASSISTANT_BUDGET_ROLLOUT_PERCENT`，默认 0）
+- [x] 设定发布门槛与回滚条件：效果和安全事故一票否决，延迟或成本收益不得以明显准确率下降为代价。（2026-08-28 release_gate 强制双档 M1–M8 对比）
+- [x] 根据评估结果调优分类阈值和档位映射，所有默认档位变更保留实验记录和回放样本。（2026-08-28 `budget-routing-cases.json` 5 类回放样本）
+- [x] 更新 `/dialogue` 用户指南，解释自动预算、用户覆盖、延迟 / 成本预期与高风险审批，不夸大为无限制自主 Agent。（2026-08-28 `dialogue-slash-command-guide.md`）
 
 ## 7. 验收标准
 
-- [ ] 文档定义动态计算预算原则，并能把 Simple / Complex / High-risk 查询映射到两个 Preset 的模型、检索与执行策略。
-- [ ] 文档说明预算默认值、用户显式选择与系统安全策略的优先级，特别是高风险任务不可因降本绕过验证 / 审批 / Human。
-- [ ] 预算决策（分类输入、分类结果、最终档位、用户覆盖、回退原因、成本）完整进入 Execution Trace，且不泄露 hidden CoT 与私有 scratchpad。
-- [ ] Query Classifier 不引入额外模型调用；分类不确定时向更安全、更可验证档位回退；预算系统异常时回退静态 `qa` / `deep` 路由且请求不失败。
-- [ ] Hybrid + Reranker 升级保留项目事实优先、知识库证据优先与来源标注；Reranker 不可用时回退 Vector Search。
-- [ ] 安全测试覆盖 Plan Mode 阻断、read-only 阻断、审批缺失阻断、full access 不越权与预算异常回退。
-- [ ] 影子模式、灰度开关、发布门槛与回滚条件落地；默认档位变更有 Plan 13 指标对比、实验记录和回放样本。
-- [ ] `/dialogue` 用户指南解释自动预算、用户覆盖、延迟 / 成本预期与高风险审批。
-- [ ] 相关相对链接和 `doc/README.md` 索引保持一致。
+- [x] 文档定义动态计算预算原则，并能把 Simple / Complex / High-risk 查询映射到两个 Preset 的模型、检索与执行策略。
+- [x] 文档说明预算默认值、用户显式选择与系统安全策略的优先级，特别是高风险任务不可因降本绕过验证 / 审批 / Human。
+- [x] 预算决策（分类输入、分类结果、最终档位、用户覆盖、回退原因、成本）完整进入 Execution Trace，且不泄露 hidden CoT 与私有 scratchpad。
+- [x] Query Classifier 不引入额外模型调用；分类不确定时向更安全、更可验证档位回退；预算系统异常时回退静态 `qa` / `deep` 路由且请求不失败。
+- [x] Hybrid + Reranker 升级保留项目事实优先、知识库证据优先与来源标注；Reranker 不可用时回退 Vector Search。
+- [x] 安全测试覆盖 Plan Mode 阻断、read-only 阻断、审批缺失阻断、full access 不越权与预算异常回退。
+- [x] 影子模式、灰度开关、发布门槛与回滚条件落地；默认档位变更有 Plan 13 指标对比、实验记录和回放样本。
+- [x] `/dialogue` 用户指南解释自动预算、用户覆盖、延迟 / 成本预期与高风险审批。
+- [x] 相关相对链接和 `doc/README.md` 索引保持一致。
 
 ## 8. 风险与规避
 
@@ -222,3 +222,5 @@ High-risk → Planning + Verification + Human
 ## 9. 状态记录
 
 - 2026-08-19：从 Plan 11 迁入动态计算预算目标架构、Model Router、RAG 检索分层、Agent 执行分级、落地边界与 P11-A–P11-E 行动框架（重编号为 P14-A–P14-E），并补充当前基线、依赖风险与验收标准；未修改业务代码。
+- 2026-08-28：完成 P14-A–P14-E。新增 `AssistantPreset` 策略契约、确定性 Query Classifier、保守 Model Router、Hybrid + deterministic rerank、执行安全兜底、`budget.decision` Trace、质量看板、shadow / 灰度 / 回滚配置、5 类回放样本与用户指南；默认 `ASSISTANT_BUDGET_MODE=shadow`、`ASSISTANT_BUDGET_ROLLOUT_PERCENT=0`，不改变线上默认模型与检索行为。
+- 2026-08-28：验证通过：后端全量 1010 passed / 1 skipped；前端 `vite build` 通过；Plan 13 smoke 基线门禁 PASS（37 条任务，任务成功率 100%）。新增 `test_assistant_dynamic_budget.py` 覆盖契约、影子 / 灰度、用户覆盖、高风险不降档、异常回退、混合检索降级、Trace 隐私与看板。

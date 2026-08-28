@@ -33,9 +33,11 @@ from app.schemas.assistant import AssistantChatRequest
 from app.schemas.assistant import AssistantChatResponse
 from app.schemas.assistant import AssistantReference
 from app.schemas.assistant import AssistantRetrievalStatus
+from app.schemas.assistant_budget import AssistantBudgetDecision
 from app.schemas.agent_tools import AgentTool, AssistantToolCall, AssistantToolCallCreate
 from app.schemas.capabilities import CapabilityRelevanceAssessment
 from app.services.agent_tool_service import agent_tool_service
+from app.services.assistant_budget_service import assistant_budget_service
 from app.services.assistant_provider_errors import TOOL_ARGUMENTS_INVALID, classify_provider_error
 from app.services.assistant_presets import (
     assistant_route_purpose,
@@ -196,6 +198,11 @@ class KnowledgeOutcome:
     error: str | None = None
     system_ids: list[str] = field(default_factory=list)
     system_names: list[str] = field(default_factory=list)
+    retrieval_tier: str = "vector"
+    rerank_applied: bool = False
+    upgrade_reason: str | None = None
+    fallback_reason: str | None = None
+    candidate_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -1375,6 +1382,7 @@ class AssistantService:
 
     def __init__(self) -> None:
         self.intent_router = AssistantIntentRouter()
+        self.assistant_budget_service = assistant_budget_service
         self.project_service = ProjectGroundingService()
         self.search_query_builder = AssistantSearchQueryBuilder()
         self.web_service = AssistantWebSearchService()
@@ -2009,12 +2017,28 @@ class AssistantService:
         )
         intent = self.intent_router.route(user_text, mode=mode)
         intent = self._apply_web_search_preference(intent, request.context.get("use_web_search"))
+        budget_decision = self._build_budget_decision(
+            user_text,
+            request=request,
+            preset_id=preset_id,
+            current_user=current_user,
+        )
         facts = self.project_service.build_facts(intent=intent)
         project_refs = self.project_service.build_project_references(user_text)
         actions = self.project_service.build_actions(user_text)
+        actions = self._budget_upgrade_actions(actions, budget_decision=budget_decision)
         suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
-        llm_route = self._resolve_llm_route(mode=mode, request=request, preset_id=preset_id)
-        knowledge_outcome = self._retrieve_knowledge(user_text, request)
+        llm_route = self._resolve_llm_route(
+            mode=mode,
+            request=request,
+            preset_id=preset_id,
+            budget_decision=budget_decision,
+        )
+        knowledge_outcome = self._retrieve_knowledge(
+            user_text,
+            request,
+            budget_decision=budget_decision,
+        )
 
         if mode == "model":
             response_facts = self._build_response_facts(
@@ -2087,6 +2111,7 @@ class AssistantService:
                 return AssistantChatResponse(
                     content="已根据你的请求生成算法调用，请确认参数后执行。",
                     tool_calls=calls,
+                    reasoning_summary=self._budget_reasoning_summary(budget_decision),
                     actions=actions,
                     references=references,
                     suggested_questions=suggested_questions,
@@ -2147,6 +2172,11 @@ class AssistantService:
                 retrieval_status = "searched"
             if knowledge_outcome and knowledge_outcome.status == "searched":
                 retrieval_status = "searched"
+        if budget_decision.effective_execution_tier == "planning_verification_human":
+            reasoning_summary = [
+                *self._budget_reasoning_summary(budget_decision),
+                *reasoning_summary,
+            ]
 
         return AssistantChatResponse(
             content=content,
@@ -2171,13 +2201,25 @@ class AssistantService:
             )
             intent = self.intent_router.route(user_text, mode=mode)
             intent = self._apply_web_search_preference(intent, request.context.get("use_web_search"))
+            budget_decision = self._build_budget_decision(
+                user_text,
+                request=request,
+                preset_id=preset_id,
+                current_user=current_user,
+            )
 
             yield {"type": "status", "stage": "facts", "message": "正在收集项目事实..."}
             facts = self.project_service.build_facts(intent=intent)
             project_refs = self.project_service.build_project_references(user_text)
             actions = self.project_service.build_actions(user_text)
+            actions = self._budget_upgrade_actions(actions, budget_decision=budget_decision)
             suggested_questions = self.project_service.build_suggested_questions(user_text, intent)
-            llm_route = self._resolve_llm_route(mode=mode, request=request, preset_id=preset_id)
+            llm_route = self._resolve_llm_route(
+                mode=mode,
+                request=request,
+                preset_id=preset_id,
+                budget_decision=budget_decision,
+            )
             logger.info(
                 "assistant stream llm route resolved: purpose=%s provider_id=%s model_id=%s",
                 llm_route.get("purpose"),
@@ -2185,6 +2227,7 @@ class AssistantService:
                 llm_route.get("model_id"),
             )
             yield {"type": "route.resolved", "route": self._safe_llm_route(llm_route)}
+            yield self._budget_trace_event(budget_decision, route=llm_route)
 
             if mode == "model":
                 response_facts = self._build_response_facts(
@@ -2223,7 +2266,11 @@ class AssistantService:
                     "source": "knowledge",
                     "query_digest": self._short_digest(user_text),
                 }
-            knowledge_outcome = self._retrieve_knowledge(user_text, request)
+            knowledge_outcome = self._retrieve_knowledge(
+                user_text,
+                request,
+                budget_decision=budget_decision,
+            )
             if knowledge_outcome:
                 yield {
                     "type": "evidence",
@@ -2258,6 +2305,10 @@ class AssistantService:
                     query_digest=self._short_digest(user_text),
                     status=knowledge_outcome.status,
                     entries=knowledge_entries,
+                    retrieval_tier=knowledge_outcome.retrieval_tier,
+                    rerank_applied=knowledge_outcome.rerank_applied,
+                    upgrade_reason=knowledge_outcome.upgrade_reason,
+                    fallback_reason=knowledge_outcome.fallback_reason,
                 )
             if web_outcome:
                 yield {
@@ -2363,6 +2414,7 @@ class AssistantService:
                         "data": AssistantChatResponse(
                             content="已根据你的请求生成算法调用，请确认参数后执行。",
                             tool_calls=calls,
+                            reasoning_summary=self._budget_reasoning_summary(budget_decision),
                             actions=actions,
                             references=references,
                             suggested_questions=suggested_questions,
@@ -2430,6 +2482,9 @@ class AssistantService:
             if intent.deep:
                 for item in reasoning_summary:
                     yield {"type": "reasoning_summary_delta", "item": item}
+            elif budget_decision.effective_execution_tier == "planning_verification_human":
+                for item in self._budget_reasoning_summary(budget_decision):
+                    yield {"type": "reasoning_summary_delta", "item": item}
 
             yield {"type": "status", "stage": "generation", "message": "正在生成回答..."}
             chunks: list[str] = []
@@ -2454,12 +2509,22 @@ class AssistantService:
                 yield {"type": "answer_delta", "delta": content}
                 answer_mode = "fallback"
                 reasoning_summary = []
+            if budget_decision.effective_execution_tier == "planning_verification_human":
+                reasoning_summary = [
+                    *self._budget_reasoning_summary(budget_decision),
+                    *reasoning_summary,
+                ]
 
             yield {
                 "type": "final",
                 "data": AssistantChatResponse(
                     content=content,
-                    reasoning_summary=reasoning_summary if intent.deep else [],
+                    reasoning_summary=(
+                        reasoning_summary
+                        if intent.deep
+                        or budget_decision.effective_execution_tier == "planning_verification_human"
+                        else []
+                    ),
                     actions=actions,
                     references=references,
                     suggested_questions=suggested_questions,
@@ -2505,6 +2570,11 @@ class AssistantService:
                 "query": knowledge_outcome.query,
                 "result_count": len(knowledge_outcome.results),
                 "error": knowledge_outcome.error,
+                "retrieval_tier": knowledge_outcome.retrieval_tier,
+                "rerank_applied": knowledge_outcome.rerank_applied,
+                "upgrade_reason": knowledge_outcome.upgrade_reason,
+                "fallback_reason": knowledge_outcome.fallback_reason,
+                "candidate_count": knowledge_outcome.candidate_count,
                 "results": [
                     {
                         "title": item.title,
@@ -2581,22 +2651,113 @@ class AssistantService:
             }
         return response_facts
 
+    def _build_budget_decision(
+        self,
+        text: str,
+        *,
+        request: AssistantChatRequest,
+        preset_id: str,
+        current_user: dict | None,
+    ) -> AssistantBudgetDecision:
+        """构建带会话控制状态的预算决策。
+
+        Args:
+            text: 用户最新问题。
+            request: 当前对话请求。
+            preset_id: 权威科研 Preset ID。
+            current_user: 当前用户上下文。
+
+        Returns:
+            动态计算预算决策。
+        """
+        budget_context = dict(request.context or {})
+        if budget_context.get("session_state") is None:
+            chat_id = str(budget_context.get("chat_id") or "")
+            chat = AssistantChatRepository.find_one({"chat_id": chat_id}) if chat_id else None
+            if chat:
+                budget_context["session_state"] = control_state(chat).model_dump(mode="python")
+        return self.assistant_budget_service.decide(
+            text,
+            preset_id=preset_id,
+            context=budget_context,
+            current_user=current_user,
+        )
+
+    @staticmethod
+    def _budget_upgrade_actions(
+        actions: list[AssistantAction],
+        *,
+        budget_decision: AssistantBudgetDecision,
+    ) -> list[AssistantAction]:
+        """为 QA Preset 的复杂问题追加深度模式入口。
+
+        Args:
+            actions: 项目事实生成的默认动作。
+            budget_decision: 当前预算决策。
+
+        Returns:
+            追加升级建议后的动作列表。
+        """
+        if budget_decision.preset_id != "research_qa":
+            return actions
+        if budget_decision.recommended_model_tier == "simple":
+            return actions
+        return actions + [
+            AssistantAction(
+                label="切换深度科研",
+                type="route",
+                target="/dialogue?mode=deep",
+                description="当前问题需要更强的推理、混合检索或验证档位。",
+            )
+        ]
+
+    @staticmethod
+    def _budget_reasoning_summary(
+        budget_decision: AssistantBudgetDecision,
+    ) -> list[str]:
+        """生成不含 hidden CoT 的高层执行说明。
+
+        Args:
+            budget_decision: 当前预算决策。
+
+        Returns:
+            面向用户展示的执行档位与安全节点摘要。
+        """
+        if budget_decision.effective_execution_tier == "planning_verification_human":
+            return [
+                "该任务按高风险档位执行：先规划证据与验证步骤，再等待人工确认。",
+                "执行结果需保留来源、验证状态和不确定性说明。",
+            ]
+        if budget_decision.effective_execution_tier == "planning":
+            return ["该任务按规划档位执行：先明确证据需求、检查步骤和停止条件。"]
+        return []
+
     def _resolve_llm_route(
         self,
         *,
         mode: str,
         request: AssistantChatRequest,
         preset_id: str | None = None,
+        budget_decision: AssistantBudgetDecision | None = None,
     ) -> dict:
         resolved_preset_id, _compatibility_mode = resolve_assistant_runtime(
             preset_id or (request.context or {}).get("preset_id"),
             (request.context or {}).get("mode") or mode,
         )
-        purpose = assistant_route_purpose(resolved_preset_id)
+        fallback_purpose = assistant_route_purpose(resolved_preset_id)
+        purpose = (
+            budget_decision.effective_model_purpose
+            if budget_decision is not None
+            else fallback_purpose
+        )
         requested_model = (request.context or {}).get("model")
         requested_provider_id, requested_model_id = self._requested_model_identifiers(requested_model)
         if (requested_provider_id or requested_model_id) and not (requested_provider_id and requested_model_id):
             raise ValueError("所选 LLM 模型不可用：providerId 和 modelId 必须同时提供")
+        model_is_user_override = (
+            budget_decision is None or "model" in budget_decision.user_overrides
+        )
+        route_requested_model = requested_model if model_is_user_override else None
         requires_tool_calling = bool((request.context or {}).get("selected_tool_ids"))
         try:
             resolve_method = (
@@ -2606,27 +2767,57 @@ class AssistantService:
             )
             return resolve_method(
                 purpose=purpose,
-                requested_model=requested_model,
-            ) | {"preset_id": resolved_preset_id}
+                requested_model=route_requested_model,
+            ) | self._budget_route_fields(
+                preset_id=resolved_preset_id,
+                budget_decision=budget_decision,
+            )
         except Exception as exc:
             if self._has_requested_model(requested_model):
                 detail = getattr(exc, "detail", None) or str(exc)
                 raise ValueError(f"所选 LLM 模型不可用：{detail}") from exc
             logger.warning("assistant llm route unavailable: %s", exc)
             try:
-                return self.llm_model_service.resolve_default_route(purpose=purpose) | {
-                    "preset_id": resolved_preset_id
-                }
+                return self.llm_model_service.resolve_default_route(purpose=purpose) | self._budget_route_fields(
+                    preset_id=resolved_preset_id,
+                    budget_decision=budget_decision,
+                )
             except Exception as fallback_exc:
                 logger.warning("assistant llm default route unavailable: %s", fallback_exc)
                 return {
                     "purpose": purpose,
-                    "preset_id": resolved_preset_id,
+                    **self._budget_route_fields(
+                        preset_id=resolved_preset_id,
+                        budget_decision=budget_decision,
+                    ),
                     "provider_id": None,
                     "model_id": settings.llm_model or None,
                     "capabilities": [],
                     "reasoning_model_available": False,
                 }
+
+    @staticmethod
+    def _budget_route_fields(
+        *,
+        preset_id: str,
+        budget_decision: AssistantBudgetDecision | None,
+    ) -> dict:
+        """构建路由中的预算附加字段。
+
+        Args:
+            preset_id: 权威科研 Preset ID。
+            budget_decision: 当前预算决策；缺省时保持静态路由兼容。
+
+        Returns:
+            可安全持久化的路由附加字段。
+        """
+        if budget_decision is None:
+            return {"preset_id": preset_id}
+        return {
+            "preset_id": preset_id,
+            "model_tier": budget_decision.effective_model_tier,
+            "budget": budget_decision.model_dump(mode="python"),
+        }
 
     def _has_requested_model(self, requested_model) -> bool:
         provider_id, model_id = self._requested_model_identifiers(requested_model)
@@ -2657,6 +2848,75 @@ class AssistantService:
             "context_window": route.get("context_window"),
             "max_output_tokens": route.get("max_output_tokens"),
             "reasoning_model_available": bool(route.get("reasoning_model_available")),
+            "model_tier": route.get("model_tier"),
+            "budget": route.get("budget"),
+        }
+
+    @staticmethod
+    def _budget_trace_event(
+        budget_decision: AssistantBudgetDecision,
+        *,
+        route: dict | None = None,
+    ) -> dict:
+        """构建可持久化的预算决策事件。
+
+        Args:
+            budget_decision: 当前预算决策。
+            route: 已解析的安全模型路由。
+
+        Returns:
+            只含分类摘要、最终档位、覆盖、回退与成本估算的事件。
+        """
+        payload = budget_decision.model_dump(mode="python")
+        safe_route = route or {}
+        classification = dict(payload["classification"])
+        input_summary = {
+            key: classification.pop(key)
+            for key in (
+                "query_digest",
+                "query_complexity",
+                "risk_level",
+                "evidence_need",
+                "explainability_required",
+                "user_constraint",
+                "prior_evidence_conflict",
+                "selected_tool_count",
+                "plan_mode",
+                "permission_mode",
+                "signals",
+            )
+        }
+        return {
+            "type": "budget.decision",
+            "preset_id": payload["preset_id"],
+            "release_mode": payload["release_mode"],
+            "rollout_eligible": payload["rollout_eligible"],
+            "classification": {
+                "input_summary": input_summary,
+                "category": classification.get("category"),
+                "confidence": classification.get("confidence"),
+                "fallback_reason": classification.get("fallback_reason"),
+            },
+            "recommended": {
+                "model_tier": payload["recommended_model_tier"],
+                "model_purpose": payload["recommended_model_purpose"],
+                "retrieval_tier": payload["recommended_retrieval_tier"],
+                "execution_tier": payload["recommended_execution_tier"],
+            },
+            "effective_model_tier": payload["effective_model_tier"],
+            "effective_retrieval_tier": payload["effective_retrieval_tier"],
+            "effective_execution_tier": payload["effective_execution_tier"],
+            "user_overrides": payload["user_overrides"],
+            "safety_guards": payload["safety_guards"],
+            "fallback_reason": payload["fallback_reason"],
+            "decision_duration_ms": payload["decision_duration_ms"],
+            "cost": payload["cost"],
+            "route": {
+                "provider_id": safe_route.get("provider_id"),
+                "model_id": safe_route.get("model_id"),
+                "purpose": safe_route.get("purpose"),
+                "route_reason": safe_route.get("route_reason"),
+            },
         }
 
     def _web_references(self, outcome: SearchOutcome | None) -> list[AssistantReference]:
@@ -2682,12 +2942,18 @@ class AssistantService:
             for index, item in enumerate(outcome.results[:3])
         ]
 
-    def _retrieve_knowledge(self, query: str, request: AssistantChatRequest) -> KnowledgeOutcome | None:
-        """按前端选择从 WeKnora 检索知识库证据。
+    def _retrieve_knowledge(
+        self,
+        query: str,
+        request: AssistantChatRequest,
+        budget_decision: AssistantBudgetDecision | None = None,
+    ) -> KnowledgeOutcome | None:
+        """按前端选择和预算档位检索知识库证据。
 
         Args:
             query: 用户最新问题。
             request: 当前对话请求。
+            budget_decision: 动态计算预算决策；缺省时保持 Vector Search。
 
         Returns:
             检索结果；未启用知识库时返回 ``None``。
@@ -2715,7 +2981,46 @@ class AssistantService:
                 system_names=system_names,
             )
         try:
-            hits = self.knowledge_service.search_hits_many(system_ids, normalized_query, limit=5)
+            retrieval_tier = (
+                budget_decision.effective_retrieval_tier
+                if budget_decision is not None
+                else "vector"
+            )
+            hybrid_required = retrieval_tier.startswith("hybrid")
+            hits = self.knowledge_service.search_hits_many(
+                system_ids,
+                normalized_query,
+                limit=8 if hybrid_required else 5,
+            )
+            candidate_count = len(hits)
+            rerank_applied = False
+            fallback_reason: str | None = None
+            upgrade_reason = (
+                "complex_or_high_risk_evidence_requirement"
+                if hybrid_required
+                else None
+            )
+            if hybrid_required:
+                keyword_query = self._keyword_recall_query(normalized_query)
+                if keyword_query and keyword_query != normalized_query:
+                    try:
+                        keyword_hits = self.knowledge_service.search_hits_many(
+                            system_ids,
+                            keyword_query,
+                            limit=8,
+                        )
+                        hits = self._merge_knowledge_hits(hits, keyword_hits)
+                        candidate_count = len(hits)
+                    except Exception as keyword_exc:
+                        logger.warning("assistant keyword recall failed: %s", keyword_exc)
+                        fallback_reason = "keyword_recall_failed"
+                if hits and fallback_reason is None:
+                    try:
+                        hits = self._lexical_rerank_hits(normalized_query, hits)
+                        rerank_applied = True
+                    except Exception as rerank_exc:
+                        logger.warning("assistant lexical rerank failed: %s", rerank_exc)
+                        fallback_reason = "reranker_unavailable"
         except Exception as exc:
             logger.warning("assistant knowledge retrieval failed: %s", exc)
             return KnowledgeOutcome(
@@ -2728,6 +3033,17 @@ class AssistantService:
                 error=f"{type(exc).__name__}: {exc}",
                 system_ids=system_ids,
                 system_names=system_names,
+                retrieval_tier=(
+                    budget_decision.effective_retrieval_tier
+                    if budget_decision is not None
+                    else "vector"
+                ),
+                upgrade_reason=(
+                    "complex_or_high_risk_evidence_requirement"
+                    if budget_decision is not None
+                    and budget_decision.effective_retrieval_tier.startswith("hybrid")
+                    else None
+                ),
             )
         results = [
             KnowledgeEvidence(
@@ -2749,7 +3065,103 @@ class AssistantService:
             results=results,
             system_ids=system_ids,
             system_names=system_names,
+            retrieval_tier=retrieval_tier,
+            rerank_applied=rerank_applied,
+            upgrade_reason=upgrade_reason,
+            fallback_reason=fallback_reason,
+            candidate_count=candidate_count,
         )
+
+    @staticmethod
+    def _keyword_recall_query(query: str) -> str:
+        """构造面向关键词召回的压缩查询。
+
+        Args:
+            query: 原始语义检索 query。
+
+        Returns:
+            优先保留英文标识符的短查询；无法压缩时返回空字符串。
+        """
+        terms = re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}|[\u4e00-\u9fff]{2,}", query.lower())
+        english_terms = [term for term in terms if term.isascii()]
+        candidates = english_terms[:3] or terms[:3]
+        return " ".join(candidates) if candidates else ""
+
+    @staticmethod
+    def _merge_knowledge_hits(
+        vector_hits: list,
+        keyword_hits: list,
+    ) -> list:
+        """合并向量与关键词召回结果并记录来源通道。
+
+        Args:
+            vector_hits: 语义检索命中。
+            keyword_hits: 关键词检索命中。
+
+        Returns:
+            按 source_id 去重后的候选列表。
+        """
+        merged: dict[str, tuple[object, set[str]]] = {}
+        for channel, hits in (("vector", vector_hits), ("keyword", keyword_hits)):
+            for hit in hits:
+                key = str(getattr(hit, "source_id", "") or getattr(hit, "title", "") or "")
+                if not key:
+                    continue
+                if key not in merged:
+                    merged[key] = (hit, {channel})
+                else:
+                    merged[key][1].add(channel)
+        output: list[object] = []
+        for hit, channels in merged.values():
+            metadata = dict(getattr(hit, "metadata", None) or {})
+            metadata["retrieval_channels"] = sorted(channels)
+            if hasattr(hit, "model_copy"):
+                hit = hit.model_copy(update={"metadata": metadata})
+            output.append(hit)
+        return output
+
+    @staticmethod
+    def _lexical_rerank_hits(query: str, hits: list) -> list:
+        """用确定性词面重合度融合向量得分并重排候选。
+
+        Args:
+            query: 用户检索问题。
+            hits: 向量与关键词召回合并后的候选。
+
+        Returns:
+            按 rerank score 降序排列的候选，metadata 记录排序依据。
+        """
+        terms = re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}|[\u4e00-\u9fff]{2,}", query.lower())
+        terms = list(dict.fromkeys(terms))[:12]
+        max_vector_score = max(
+            (abs(float(getattr(hit, "score", 0) or 0)) for hit in hits),
+            default=0.0,
+        ) or 1.0
+        ranked: list[tuple[float, object, dict]] = []
+        for hit in hits:
+            title = str(getattr(hit, "title", "") or "").lower()
+            snippet = str(getattr(hit, "snippet", "") or "").lower()
+            matched = sum(1 for term in terms if term in title or term in snippet)
+            lexical_score = matched / len(terms) if terms else 0.0
+            vector_score = min(
+                1.0,
+                abs(float(getattr(hit, "score", 0) or 0)) / max_vector_score,
+            )
+            title_bonus = 0.05 if any(term in title for term in terms) else 0.0
+            rerank_score = min(1.0, 0.75 * lexical_score + 0.25 * vector_score + title_bonus)
+            ranked.append((rerank_score, hit, {
+                "rerank_score": round(rerank_score, 6),
+                "vector_score": getattr(hit, "score", None),
+                "lexical_match_count": matched,
+            }))
+        ranked.sort(key=lambda item: (-item[0], str(getattr(item[1], "source_id", ""))))
+        output: list[object] = []
+        for _score, hit, rank_metadata in ranked:
+            metadata = dict(getattr(hit, "metadata", None) or {}) | rank_metadata
+            if hasattr(hit, "model_copy"):
+                hit = hit.model_copy(update={"metadata": metadata})
+            output.append(hit)
+        return output
 
     def _knowledge_references(self, outcome: KnowledgeOutcome | None) -> list[AssistantReference]:
         """将 WeKnora 命中转换为工作台引用入口。

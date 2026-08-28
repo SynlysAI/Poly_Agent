@@ -595,6 +595,45 @@ class AssistantTraceProjectionService:
                     details=self._event_details(event, command_id=data.get("command_id")),
                 )
 
+            if event_type.startswith("budget."):
+                classification = dict(data.get("classification") or {})
+                safe_classification = {
+                    "category": classification.get("category"),
+                    "confidence": classification.get("confidence"),
+                    "fallback_reason": classification.get("fallback_reason"),
+                }
+                self._upsert(
+                    accumulator,
+                    step_id=f"budget:{event.get('run_id') or event_id}",
+                    step_type="control",
+                    title="动态计算预算",
+                    summary=(
+                        f"{data.get('effective_model_tier') or 'unknown'} 模型 · "
+                        f"{data.get('effective_retrieval_tier') or 'unknown'} 检索 · "
+                        f"{data.get('effective_execution_tier') or 'unknown'} 执行"
+                    ),
+                    status="success",
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        result_summary={
+                            "release_mode": data.get("release_mode"),
+                            "rollout_eligible": data.get("rollout_eligible"),
+                            "classification": safe_classification,
+                            "recommended": data.get("recommended") or {},
+                            "effective_model_tier": data.get("effective_model_tier"),
+                            "effective_retrieval_tier": data.get("effective_retrieval_tier"),
+                            "effective_execution_tier": data.get("effective_execution_tier"),
+                            "user_overrides": data.get("user_overrides") or [],
+                            "safety_guards": data.get("safety_guards") or [],
+                            "fallback_reason": data.get("fallback_reason"),
+                            "cost": data.get("cost") or {},
+                            "route": data.get("route") or {},
+                        },
+                    ),
+                )
+
             if event_type == "permission.decision":
                 decision = str(data.get("decision") or "denied")
                 reason = str(data.get("reason") or "")

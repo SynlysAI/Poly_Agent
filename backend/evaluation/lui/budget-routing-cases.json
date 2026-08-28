@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "dataset_version": "2026.08.28",
+  "description": "Plan 14 dynamic budget replay cases aligned with Plan 13 M1-M8 evaluation dimensions",
+  "cases": [
+    {
+      "case_id": "LUI-BR-SIMPLE",
+      "query": "知识库设计文档入口在哪里？",
+      "preset_id": "research_qa",
+      "context": {},
+      "expected": {
+        "category": "simple",
+        "model_tier": "simple",
+        "retrieval_tier": "vector",
+        "execution_tier": "one_shot"
+      }
+    },
+    {
+      "case_id": "LUI-BR-COMPLEX",
+      "query": "请比较两种方法的证据、成本和风险，并给出可解释建议。",
+      "preset_id": "research_qa",
+      "context": {},
+      "expected": {
+        "category": "complex",
+        "model_tier": "complex",
+        "retrieval_tier": "hybrid_reranker",
+        "execution_tier": "planning"
+      }
+    },
+    {
+      "case_id": "LUI-BR-HIGH-RISK",
+      "query": "运行算法并把结果提交到正式报告。",
+      "preset_id": "research_deep",
+      "context": {
+        "selected_tool_ids": ["algorithm:vertical_predictor_adapter"]
+      },
+      "expected": {
+        "category": "high_risk",
+        "model_tier": "high_risk",
+        "retrieval_tier": "hybrid_reranker",
+        "execution_tier": "planning_verification_human"
+      }
+    },
+    {
+      "case_id": "LUI-BR-CONFLICT",
+      "query": "知识库设计文档入口在哪里？",
+      "preset_id": "research_qa",
+      "context": {
+        "prior_evidence_conflict": true
+      },
+      "expected": {
+        "category": "complex",
+        "model_tier": "complex",
+        "retrieval_tier": "hybrid_reranker",
+        "execution_tier": "planning"
+      }
+    },
+    {
+      "case_id": "LUI-BR-USER-OVERRIDE",
+      "query": "请比较两种方法的证据、成本和风险。",
+      "preset_id": "research_qa",
+      "context": {
+        "model_selection_origin": "user",
+        "model": {"providerId": "provider-a", "modelId": "model-a"}
+      },
+      "expected": {
+        "category": "complex",
+        "model_tier": "complex",
+        "user_overrides": ["model"]
+      }
+    }
+  ]
+}

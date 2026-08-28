@@ -19,7 +19,9 @@ from app.infra.assistant_command_repositories import (
     AssistantCommandRunRepository,
     AssistantFeedbackRepository,
 )
+from app.services.assistant_budget_service import assistant_budget_service
 from app.services.assistant_command_service import CATALOG_LATENCY_SAMPLES
+from app.services.lui_evaluation_service import load_baseline_summary
 
 
 EXECUTING_TOOL_PHASES = {"queued", "running", "completed", "failed"}
@@ -335,6 +337,20 @@ def build_quality_metrics(
 
     context_distribution = _context_token_distribution(runs)
     context_tokens = sum(int(row["token_total"]) for row in context_distribution)
+    budget_events = [event for event in events if event.get("type") == "budget.decision"]
+    budget_dashboard = assistant_budget_service.aggregate_decisions(budget_events)
+    budget_dashboard["offline_baseline"] = load_baseline_summary(mode="smoke")
+    budget_dashboard["production_tokens"] = {
+        "prompt_tokens": sum(
+            int(run.get("prompt_tokens") or 0) for run in runs if run.get("prompt_tokens") is not None
+        ),
+        "completion_tokens": sum(
+            int(run.get("completion_tokens") or 0) for run in runs if run.get("completion_tokens") is not None
+        ),
+        "total_tokens": sum(
+            int(run.get("total_tokens") or 0) for run in runs if run.get("total_tokens") is not None
+        ),
+    }
 
     result = {
         "totals": {
@@ -349,6 +365,7 @@ def build_quality_metrics(
             "until": until_value.isoformat() if until_value else None,
         },
         "cache_hit": False,
+        "budget": budget_dashboard,
         "metrics": [
             {
                 "key": "command_catalog_latency",
