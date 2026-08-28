@@ -132,6 +132,7 @@ class AgentExecRunData(BaseModel):
     task_type: AgentExecTaskType
     status: Literal["requested", "running", "completed", "failed", "cancelled"]
     created_by: str
+    actor_role: AgentExecRole = "admin"
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None

@@ -160,6 +160,7 @@ class AgentExecService:
             task_type=request.task.task_type,
             status="requested",
             created_by=request.actor_user_id,
+            actor_role=request.actor_role,
             created_at=utc_now(),
             policy_snapshot=policy,
             chat_id=request.chat_id,
@@ -399,6 +400,7 @@ class AgentExecService:
                 provider_id=request.provider_id,
                 task_type=request.task.task_type,
                 actor=request.actor_user_id,
+                actor_role=request.actor_role,
                 reason_code=exc.code,
                 message=exc.message,
             )
@@ -435,6 +437,7 @@ class AgentExecService:
                 provider_id=request.provider_id,
                 task_type=request.task.task_type,
                 actor=request.actor_user_id,
+                actor_role=request.actor_role,
                 reason_code=exc.reason_code,
                 message=exc.message,
             )
@@ -733,6 +736,7 @@ class AgentExecService:
             provider_id=run.provider_id,
             task_type=run.task_type,
             actor=run.created_by,
+            actor_role=run.actor_role,
             reason_code=rejection.reason_code,
             message=rejection.message,
         )
@@ -833,6 +837,7 @@ class AgentExecService:
                 "provider_id": run.provider_id,
                 "task_type": run.task_type,
                 "actor_user_id": run.created_by,
+                "actor_role": run.actor_role,
                 "chat_id": run.chat_id,
                 "assistant_tool_call_id": run.assistant_tool_call_id,
                 "metadata": metadata,
@@ -847,6 +852,7 @@ class AgentExecService:
         provider_id: str,
         task_type: str,
         actor: str,
+        actor_role: str,
         reason_code: str,
         message: str,
     ) -> None:
@@ -857,6 +863,7 @@ class AgentExecService:
             provider_id: provider ID。
             task_type: 任务类型。
             actor: 操作人 ID。
+            actor_role: 操作人真实角色。
             reason_code: 拒绝原因码。
             message: 拒绝描述。
         """
@@ -867,6 +874,7 @@ class AgentExecService:
                 "provider_id": provider_id,
                 "task_type": task_type,
                 "actor_user_id": actor,
+                "actor_role": actor_role,
                 "metadata": {"reason_code": reason_code, "message": message},
                 "created_at": utc_now(),
             }

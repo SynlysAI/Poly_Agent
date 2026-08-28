@@ -16,6 +16,7 @@ except ImportError:
 from app.core.auth import build_access_token
 from app.core.config import settings
 from app.api.v1.endpoints import agent_exec as agent_exec_endpoint
+from app.infra.computation_repositories import AuditEventRepository
 from app.schemas.identity_runtime import UserRecord
 from app.schemas.agent_exec import AgentExecProviderReadiness, AgentExecProviderResult
 from app.services.agent_exec_providers.registry import AgentExecProviderRegistry
@@ -104,6 +105,19 @@ class AgentExecApiTest(ComputationTestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
 
+    def _authorize_user(self) -> None:
+        """显式启用连接器并允许普通用户调用。"""
+        response = self.client.patch(
+            f"/api/v1/agent-exec/providers/{self.provider_id}/policy",
+            json={
+                "enabled": True,
+                "allowed_roles": ["admin", "user"],
+                "requires_confirmation": False,
+            },
+            headers=self._admin_headers(),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
     def _admin_headers(self) -> dict:
         """管理员请求头。"""
         return {"Authorization": f"Bearer {self.admin_token}"}
@@ -148,16 +162,18 @@ class AgentExecApiTest(ComputationTestCase):
         payload.update(overrides)
         return payload
 
-    def test_providers_require_authentication_and_admin(self) -> None:
+    def test_providers_require_authentication_and_filter_user_by_policy(self) -> None:
         settings.auth_enabled = True
         with self._patch_user():
             response = self.client.get("/api/v1/agent-exec/providers")
             self.assertEqual(response.status_code, 401)
 
+            # 默认策略 admin-only：认证后的普通用户可访问接口，但目录为空。
             response = self.client.get(
                 "/api/v1/agent-exec/providers", headers=self._user_headers()
             )
-            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["data"], [])
 
             response = self.client.get(
                 "/api/v1/agent-exec/providers", headers=self._admin_headers()
@@ -170,6 +186,16 @@ class AgentExecApiTest(ComputationTestCase):
             self.assertIn("sandbox", card["sandbox_summary"])
             self.assertNotIn("workdir", response.text)
             self.assertNotIn("api_key", response.text.lower())
+
+            self._authorize_user()
+            response = self.client.get(
+                "/api/v1/agent-exec/providers", headers=self._user_headers()
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(
+                [item["provider_id"] for item in response.json()["data"]],
+                [self.provider_id],
+            )
 
     def test_policy_update_admin_only_and_scope_validation(self) -> None:
         settings.auth_enabled = True
@@ -198,6 +224,15 @@ class AgentExecApiTest(ComputationTestCase):
             )
             self.assertEqual(response.status_code, 200, response.text)
             self.assertTrue(response.json()["data"]["enabled"])
+            events, _ = AuditEventRepository.list_events(
+                entity_type="agent_exec_provider",
+                entity_id=self.provider_id,
+                event_type="agent_exec.policy.updated",
+                page=1,
+                page_size=10,
+            )
+            self.assertTrue(events)
+            self.assertEqual(events[0]["actor_role"], "admin")
 
     def test_create_run_policy_checked_and_sanitized(self) -> None:
         settings.auth_enabled = True
@@ -224,6 +259,58 @@ class AgentExecApiTest(ComputationTestCase):
             self.assertEqual(run["status"], "completed")
             self.runs[run["run_id"]] = run
             self.assertNotIn(str(settings.agent_exec_workdir_root), response.text)
+
+    def test_authorized_user_run_requires_confirmation_and_audits_real_role(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            self._authorize_user()
+
+            unconfirmed = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(confirmed=False),
+                headers=self._user_headers(),
+            )
+            self.assertEqual(unconfirmed.status_code, 403)
+            self.assertEqual(
+                unconfirmed.json()["data"]["detail"]["reason_code"],
+                "confirmation_required",
+            )
+
+            created = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(confirmed=True),
+                headers=self._user_headers(),
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            run = created.json()["data"]
+            self.assertEqual(run["created_by"], "user_api")
+            self.assertEqual(run["actor_role"], "user")
+            self.runs[run["run_id"]] = run
+
+            detail = self.client.get(
+                f"/api/v1/agent-exec/runs/{run['run_id']}",
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(detail.status_code, 200, detail.text)
+            events = detail.json()["data"]["events"]
+            self.assertTrue(events)
+            self.assertTrue(all(event["actor_role"] == "user" for event in events))
+
+            forbidden_detail = self.client.get(
+                f"/api/v1/agent-exec/runs/{run['run_id']}",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(forbidden_detail.status_code, 403)
+            forbidden_cancel = self.client.post(
+                f"/api/v1/agent-exec/runs/{run['run_id']}/cancel",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(forbidden_cancel.status_code, 403)
+            forbidden_quality = self.client.get(
+                "/api/v1/agent-exec/quality",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(forbidden_quality.status_code, 403)
 
     def test_get_and_cancel_run_with_stable_terminal_state(self) -> None:
         settings.auth_enabled = True
@@ -279,6 +366,9 @@ class AgentExecApiTest(ComputationTestCase):
                 headers=self._user_headers(),
             )
             self.assertEqual(response.status_code, 403)
+            self.assertEqual(
+                response.json()["data"]["detail"]["reason_code"], "role_not_allowed"
+            )
 
     def test_quality_summary(self) -> None:
         settings.auth_enabled = True

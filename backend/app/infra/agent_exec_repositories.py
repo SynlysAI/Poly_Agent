@@ -289,13 +289,14 @@ class AgentExecAuditWriter:
         run_id = str(event.get("run_id") or "")
         chat_id = str(event.get("chat_id") or "")
         actor = str(event.get("actor_user_id") or "")
+        actor_role = str(event.get("actor_role") or "user")
         event_type = str(event.get("event_type") or "")
         AuditEventRepository.append(
             {
                 "event_id": f"audit_{uuid4().hex[:20]}",
                 "event_type": event_type,
                 "actor_user_id": actor,
-                "actor_role": "user",
+                "actor_role": actor_role if actor_role in {"admin", "user"} else "user",
                 "request_id": None,
                 "entity_type": "agent_exec_run",
                 "entity_id": run_id,
@@ -338,6 +339,7 @@ class AgentExecAuditWriter:
         before: AgentExecProviderPolicy,
         after: AgentExecProviderPolicy,
         updated_by: str,
+        actor_role: str = "admin",
     ) -> None:
         """写入策略更新审计事件。
 
@@ -346,6 +348,7 @@ class AgentExecAuditWriter:
             before: 变更前策略。
             after: 变更后策略。
             updated_by: 操作人用户 ID。
+            actor_role: 操作人真实角色。
         """
         def summary(policy: AgentExecProviderPolicy) -> dict[str, Any]:
             """生成不含 secret 的策略摘要。"""
@@ -361,7 +364,7 @@ class AgentExecAuditWriter:
                 "event_id": f"audit_{uuid4().hex[:20]}",
                 "event_type": "agent_exec.policy.updated",
                 "actor_user_id": updated_by,
-                "actor_role": "user",
+                "actor_role": actor_role if actor_role in {"admin", "user"} else "user",
                 "request_id": None,
                 "entity_type": "agent_exec_provider",
                 "entity_id": provider_id,

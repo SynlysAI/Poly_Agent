@@ -78,11 +78,26 @@ def _provider_connection(provider) -> AgentExecProviderConnection:
 @router.get(
     "/providers",
     response_model=ApiResponse[list[AgentExecProviderConnection]],
-    dependencies=[Depends(require_admin)],
 )
-def list_providers() -> ApiResponse[list[AgentExecProviderConnection]]:
-    """管理员查看 Agent 连接器卡片。"""
-    data = [_provider_connection(item) for item in service.registry.list_providers()]
+def list_providers(
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[list[AgentExecProviderConnection]]:
+    """按当前角色查看脱敏 Agent 连接器卡片。
+
+    Args:
+        current_user: 当前登录用户；本地演示模式按管理员处理。
+
+    Returns:
+        管理员全量、普通用户按启用策略过滤后的连接器卡片。
+    """
+    _, role = _actor(current_user)
+    is_admin = role == "admin"
+    data = []
+    for item in service.registry.list_providers():
+        policy = service.policy_service.get_policy(item.provider_id)
+        if not is_admin and not (policy.enabled and role in policy.allowed_roles):
+            continue
+        data.append(_provider_connection(item))
     return ApiResponse(code=0, message="ok", data=data)
 
 
@@ -103,10 +118,13 @@ def update_provider_policy(
             status_code=404,
             detail={"reason_code": "provider_not_registered", "message": "连接器不存在"},
         )
-    actor_user_id, _ = _actor(current_user)
+    actor_user_id, actor_role = _actor(current_user)
     try:
         _, updated = service.policy_service.update_policy(
-            provider, payload, updated_by=actor_user_id
+            provider,
+            payload,
+            updated_by=actor_user_id,
+            actor_role=actor_role,
         )
     except AgentExecPolicyRejected as exc:
         raise HTTPException(
@@ -119,13 +137,12 @@ def update_provider_policy(
 @router.post(
     "/runs",
     response_model=ApiResponse[AgentExecRunData],
-    dependencies=[Depends(require_admin)],
 )
 def create_run(
     payload: AgentExecRunCreateRequest,
     current_user: dict[str, str] | None = Depends(get_current_user),
 ) -> ApiResponse[AgentExecRunData]:
-    """管理员发起受控连接器测试 run。"""
+    """发起由服务端策略治理的受控连接器 run。"""
     actor_user_id, actor_role = _actor(current_user)
     request = AgentExecExecutionRequest(
         provider_id=payload.provider_id,

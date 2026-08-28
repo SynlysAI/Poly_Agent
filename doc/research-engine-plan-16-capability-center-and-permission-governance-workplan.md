@@ -1,6 +1,6 @@
 # Plan 16：Agent 能力中心与权限治理工作计划
 
-> 状态：业务实现进行中（P16-A 已完成）
+> 状态：业务实现进行中（P16-A / P16-B 已完成）
 >
 > 日期：2026-08-28
 >
@@ -266,12 +266,12 @@ PolyAgent 的可调用能力目前分散在多个模块：外部服务集成、�
 
 ### P16-B. 策略允许的用户连接器调用
 
-- [ ] 调整 `GET /agent-exec/providers` 为认证用户可访问，admin 全量、user 按策略过滤。
-- [ ] 调整 `POST /agent-exec/runs` 为认证用户可访问，继续由 Plan 15 policy 服务端校验。
-- [ ] 普通用户 run 强制 `confirmed=true`；管理员行为保持兼容。
-- [ ] 保持 policy 更新、run 详情、取消和质量汇总 admin-only。
-- [ ] 修正 agent_exec 事件与 policy 审计中的真实 actor role。
-- [ ] 更新 API、policy 和事件测试，覆盖默认拒绝、显式授权、确认要求、管理接口权限与审计追溯。
+- [x] 调整 `GET /agent-exec/providers` 为认证用户可访问，admin 全量、user 按策略过滤。
+- [x] 调整 `POST /agent-exec/runs` 为认证用户可访问，继续由 Plan 15 policy 服务端校验。
+- [x] 普通用户 run 强制 `confirmed=true`；管理员行为保持兼容。
+- [x] 保持 policy 更新、run 详情、取消和质量汇总 admin-only。
+- [x] 修正 agent_exec 事件与 policy 审计中的真实 actor role。
+- [x] 更新 API、policy 和事件测试，覆盖默认拒绝、显式授权、确认要求、管理接口权限与审计追溯。
 
 ### P16-C. 能力中心前端独立入口
 
@@ -400,6 +400,7 @@ make test-backend
 
 ## 13. 状态记录
 
+- 2026-08-28（P16-B）：完成策略允许的普通用户连接器访问与调用：providers/runs 面向认证用户，默认策略仍拒绝普通用户；显式授权后可调用且服务端强制逐次确认；管理接口保持 admin-only，run 与 policy 审计记录真实 actor role。专项与 Plan 15 回归测试通过。
 - 2026-08-28（P16-A）：完成能力中心聚合契约、只读聚合服务与 `GET /capabilities/catalog`；新增认证、角色过滤、敏感信息脱敏、来源映射与失败隔离专项测试并通过。
 - 2026-08-27：从 Plan 15 修订拆分新建统一能力中心与权限治理计划；本次仅编写文档，未修改业务代码。
 - 2026-08-27（第二版修订）：明确 `/capabilities` 与 `/tools` 为两个独立入口；配置面与调用面分离，数据单向流动。

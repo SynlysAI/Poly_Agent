@@ -73,6 +73,7 @@ class AgentExecPolicyService:
         request: AgentExecPolicyUpdateRequest,
         *,
         updated_by: str,
+        actor_role: str = "admin",
     ) -> tuple[AgentExecProviderPolicy, AgentExecProviderPolicy]:
         """更新 provider 策略并返回变更前后快照。
 
@@ -80,6 +81,7 @@ class AgentExecPolicyService:
             provider: 目标 provider。
             request: 管理员提交的策略更新。
             updated_by: 操作人用户 ID。
+            actor_role: 操作人真实角色。
 
         Returns:
             (变更前策略, 变更后策略) 元组。
@@ -129,6 +131,7 @@ class AgentExecPolicyService:
             before=current,
             after=updated,
             updated_by=updated_by,
+            actor_role=actor_role,
         )
         return current, updated
 
@@ -202,6 +205,12 @@ class AgentExecPolicyService:
                 status_code=403,
                 reason_code="read_only_blocked",
                 message="只读权限下不允许执行外部 Agent 任务",
+            )
+        if request.actor_role == "user" and not request.confirmed:
+            raise AgentExecPolicyRejected(
+                status_code=403,
+                reason_code="confirmation_required",
+                message="普通用户必须在每次调用前显式确认",
             )
         if policy.requires_confirmation and not request.confirmed:
             raise AgentExecPolicyRejected(
