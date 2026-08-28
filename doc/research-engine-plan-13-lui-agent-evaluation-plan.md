@@ -571,7 +571,7 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_
 - [x] 延迟报告区分端到端、首 token、工具执行和检索。
 - [x] 成本报告区分最终回答、工具提案、续答和 compaction，且无重复计数。
 - [x] 人工兜底报告可区分确认、补参、权限阻断、失败接管和用户取消。
-- [ ] 现有 Assistant 相关回归、前端构建和 LUI e2e 不回退。
+- [x] 现有 Assistant 相关回归、前端构建和 LUI e2e 不回退。（2026-08-28 收尾验证：全量后端 996 项测试通过（1 skip）；前端构建通过；`make test-lui-eval` 基线门禁 PASS；dialogue 与 capability/admin e2e 全部通过）
 
 ## 11. 风险与规避
 
@@ -593,3 +593,4 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_
 - 2026-08-28：完成 Phase 3 试运行与人工校准：37 条确定性任务跑通；M4/M5 分层抽检 12 条、不一致率 0%；修复 M6/M7 无阈值误计失败口径；首份 smoke 基线入库。Phase 4–5 接续实施。
 - 2026-08-28：完成 Phase 4 回归集成与门禁：`make test-lui-eval` 接入 check-all；基线对比门禁覆盖通过率/覆盖率/版本一致性；管理员评测报告页上线（/admin/lui-evaluation），与链路侧质量指标互补。Phase 5 接续实施。
 - 2026-08-28：完成 Phase 5 生产采样与持续观测：新增默认 dry-run 的只读采样脚本（NDJSON 快照 / 显式只读 DB）、匿名化聚合（M6/M7/M8 候选 + 链路侧 M2 候选）与人工标注样本导出；双周/发布前观测流程写入 README。计划全部完成。
+- 2026-08-28：收尾验证通过，全部验收标准达成；计划状态改为已完成。后续变更须按 §1.1 追加评审记录并递增数据集版本。
