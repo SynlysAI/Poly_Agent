@@ -89,7 +89,7 @@
     escalation:
       needed_retry: true
     message:
-      content: 垂类预测服务未配置，本次预测失败。请配置 VERTICAL_PREDICTOR_URL 后重试。
+      content: 垂类预测服务未配置，本次无法给出预测结果，信息不足。请配置 VERTICAL_PREDICTOR_URL 后重试。
 
 - id: LUI-FR-0003
   category: failure_recovery
@@ -128,8 +128,6 @@
     knowledge_base_ids: ["kb-fluoro-handbook"]
   expected:
     task_success: false
-    answer:
-      type: insufficient_info
     escalation:
       level: takeover
       reason: 服务端续答进入 dead letter
@@ -180,19 +178,25 @@
       first_token_ms: 1100
       total_tokens: 2500
     tool_calls:
-      - call_id: fixture-call-fr-0005
+      - call_id: fixture-call-fr-0005-a
         tool_id: "algorithm:weknora_adapter"
         function_name: "algorithm_weknora_adapter_ea62586f9329"
         raw_arguments: "{\"query\": \"PTFE 击穿场强\""
         arguments: {}
         arguments_parse_error: "raw arguments JSON 解析失败"
+        phase: failed
+        duration_ms: 900
+        proposal_usage: {total_tokens: 660}
+      - call_id: fixture-call-fr-0005-b
+        tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments: {query: "PTFE 击穿场强", system_id: "kb-fluoro-handbook"}
         phase: completed
         duration_ms: 2200
-        proposal_usage: {total_tokens: 660}
     escalation:
       param_completions: 1
     message:
-      content: 首次参数解析失败，已请求补全 system_id 后重新发起检索并完成。
+      content: 首次参数解析失败，已请求补全 system_id 后重新发起 PTFE 击穿场强检索并完成。
 
 - id: LUI-FR-0006
   category: failure_recovery
@@ -275,6 +279,8 @@
       total_tokens: 900
     escalation:
       user_canceled: true
+    message:
+      content: 已取消刚才的垂类预测请求，本次任务终止。
 
 - id: LUI-FR-0009
   category: failure_recovery

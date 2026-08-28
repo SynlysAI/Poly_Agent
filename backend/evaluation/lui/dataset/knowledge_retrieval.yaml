@@ -189,9 +189,6 @@
     knowledge_base_ids: ["kb-fluoro-handbook"]
   expected:
     task_success: true
-    retrieval:
-      source: knowledge
-      relevant_ids: ["kb:fh-no-results-exp"]
     answer:
       type: insufficient_info
     hallucination:

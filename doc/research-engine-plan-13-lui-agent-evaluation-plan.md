@@ -1,6 +1,6 @@
 # Plan 13：LUI Agent 评估与八项指标体系工作计划
 
-> 状态：已评审 / 实施中
+> 状态：已评审 / Phase 0–2 已完成，Phase 3 起暂缓
 >
 > 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）
 >
@@ -50,6 +50,7 @@
 3. 报告默认输出到 `backend/evaluation/lui/reports/`，受控基线入库 `backend/evaluation/lui/baselines/`，避免污染仓库根目录。
 4. Phase 5 生产采样脚本默认 dry-run、只读聚合，不自动连接生产库、不写生产数据。
 5. **计算任务不参与本评测**：xTB / CREST / ORCA / 本地结构生成等计算类任务以及 ComputeEngine 完整计算任务全部排除在评测范围外；LUI 工具类任务仅覆盖非计算工具（垂类预测、知识检索、优化推荐）的提案层行为，只评估工具选择、参数、确认、补参、权限与续答，不评估计算执行结果质量。
+6. **实施节奏**（2026-08-28）：本轮完成 Phase 0–2 并按阶段提交；Phase 3（试运行与人工校准）及以后暂缓，待 Phase 2 产出评审后再启动。
 
 ## 2. 目标与非目标
 
@@ -500,17 +501,25 @@ backend/tests/
 
 ### Phase 2：评测器实现
 
-- [ ] 实现任务加载、schema 校验、会话创建、任务执行和原始事实抓取。
-- [ ] 实现 M1 任务成功判定器。
-- [ ] 实现 M2 工具选择 precision/recall 与参数 tolerance 判定。
-- [ ] 实现 M3 Recall@1/3/5 和命中单位映射。
-- [ ] 实现 M4 规则判定器与 LLM-as-judge 包装器。
-- [ ] 实现 M5 原子声明抽取、来源校验和对象存在性校验。
-- [ ] 实现 M6 四类延迟百分位与失败样本分离。
-- [ ] 实现 M7 token 去重、每任务成本和工具链路占比。
-- [ ] 实现 M8 人工兜底分类与归因。
+- [x] 实现任务加载、schema 校验、会话创建、任务执行和原始事实抓取。（`runner.py` 加载/校验/fixture 与录制事实执行；`capture.py` 按 `evaluation_id` 抓取 run/tool/event/message 投影；`scripts/run_lui_eval.py` 提供 CLI）
+- [x] 实现 M1 任务成功判定器。（`evaluators/task_success.py`，叠加终态、工具、回答、兜底与未恢复失败判定）
+- [x] 实现 M2 工具选择 precision/recall 与参数 tolerance 判定。（`evaluators/tool_call.py`，支持 exact/absolute/relative/significant_figures/ignore，重试中间态不计入选择错误）
+- [x] 实现 M3 Recall@1/3/5 和命中单位映射。（`evaluators/retrieval.py`，按 rank 槽位展开、支持 knowledge/web/any 与多来源最佳 rank 合并）
+- [x] 实现 M4 规则判定器与 LLM-as-judge 包装器。（`evaluators/answer.py` 七类判定 + `AnswerJudge` 协议，Rubric 可插 judge）
+- [x] 实现 M5 原子声明抽取、来源校验和对象存在性校验。（`evaluators/hallucination.py` 规则层：禁止声明 + 引用可解析性；LLM/人工原子声明抽取留待录制评测叠加）
+- [x] 实现 M6 四类延迟百分位与失败样本分离。（`evaluators/latency.py`）
+- [x] 实现 M7 token 去重、每任务成本和工具链路占比。（`evaluators/cost.py`，usage 事件优先，缺真实 usage 时标记估算）
+- [x] 实现 M8 人工兜底分类与归因。（`evaluators/escalation.py`，确认/补参/权限/接管/取消分类，主指标只计接管与权限阻断）
 
-### Phase 3：小规模试运行与人工校准
+Phase 2 验证记录（2026-08-28）：
+
+- 新增 18 项评测器单元测试（schema/工具判定/检索判定/报告），全量后端 976 项测试通过（1 skip）。
+- `scripts/run_lui_eval.py --mode smoke` 在 37 条内置 fixture 上完成任务成功率 100%；`LUI-TA-0010` 保留为参数错误样例，M2 按预期失败。
+- 计算任务（xTB/CREST/ORCA 等）未出现在任何工具期望中，仅在拒绝边界用例中作为应正确拒绝的对象。
+
+### Phase 3：小规模试运行与人工校准（暂缓）
+
+> 2026-08-28 决定：本轮先完成到 Phase 2；Phase 3 及以后暂不启动，待团队评审 Phase 2 产出后再排期。
 
 - [ ] 先在 30–60 条确定性任务上跑通。
 - [ ] 人工抽检至少 20% 的 M4/M5 判定，计算判定器不一致率。

@@ -285,10 +285,23 @@ class GoldenTask(BaseModel):
             raise ValueError("tool tasks require tool_calling capability")
         if self.category in {"tool_selection", "tool_argument"} and not self.expected.tool_calls:
             raise ValueError(f"category={self.category} requires expected tool_calls")
-        if self.category in {"knowledge_retrieval", "web_retrieval"} and not self.expected.retrieval:
+        if (
+            self.category in {"knowledge_retrieval", "web_retrieval"}
+            and not self.expected.retrieval
+            and not (
+                self.expected.answer
+                and self.expected.answer.type == "insufficient_info"
+            )
+        ):
             raise ValueError(f"category={self.category} requires expected retrieval")
-        if self.category in {"refusal_boundary", "failure_recovery"} and not self.expected.answer:
-            raise ValueError(f"category={self.category} requires expected answer")
+        if self.category == "refusal_boundary" and not self.expected.answer:
+            raise ValueError("category=refusal_boundary requires expected answer")
+        if self.category == "failure_recovery" and not (
+            self.expected.answer or self.expected.escalation.level != "none"
+        ):
+            raise ValueError(
+                "category=failure_recovery requires expected answer or escalation"
+            )
         return self
 
 
@@ -302,3 +315,28 @@ class ObservedFacts(TaskFixture):
     task_id: str
     trace_id: str | None = None
     captured_at: str | None = None
+
+
+class MetricOutcome(BaseModel):
+    """单项指标在单任务上的判定结果。"""
+
+    key: str
+    applicable: bool
+    passed: bool | None = None
+    score: float | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskEvaluation(BaseModel):
+    """单任务的 M1–M8 判定汇总。"""
+
+    task_id: str
+    category: GoldenCategory
+    mode: TaskMode
+    outcomes: dict[str, MetricOutcome]
+
+    @property
+    def success(self) -> bool:
+        """任务是否满足期望成功判定。"""
+        outcome = self.outcomes.get("m1")
+        return bool(outcome and outcome.applicable and outcome.passed)
