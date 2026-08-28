@@ -1,8 +1,8 @@
 # Plan 13：LUI Agent 评估与八项指标体系工作计划
 
-> 状态：待评审 / 未开始
+> 状态：已评审 / 实施中
 >
-> 日期：2026-08-18
+> 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）
 >
 > 前置文档：
 > - [research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md](research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md)
@@ -28,6 +28,28 @@
 | 人工兜底比例 | Human Escalation Rate | 多少任务需要人工确认、补参或接管 |
 
 本计划先建离线 Golden Set 和评测器，再接入现有 `assistant_runs`、`assistant_tool_calls`、`assistant_events` 与 Execution Trace。目标是让每次 LUI 变更都能回答“是否变好、是否变慢、是否更贵、是否更不可靠”。
+
+## 1.1 评审记录（2026-08-28）
+
+**评审基线**：`develop` 分支 `8005287`（收口外部 Agent 受限执行安全边界）。
+
+**结论**：计划可进入实施。八项指标口径完整，与现有 `assistant_quality_service` 的分层正确——质量服务继续负责链路侧聚合，本计划补齐任务级结果质量。基于当前代码核对后，做以下调整并冻结 Phase 0 口径。
+
+**现状核对**
+
+- `assistant_runs.request_snapshot.context` 已持久化自由上下文，可直接携带评测字段，但缺少 `evaluation_id` / `task_id` 的规范化与查询索引。
+- 检索链路已有 `retrieval.started` 与 `evidence` 事件，但缺稳定有序的结果条目（`id` / `rank` / `score` / `snippet` / `used_in_answer`）；web 引用仅保留 top-3 标题与 URL；`_knowledge_references` 未并入最终 references，当前无法计算 Recall@K 与引用使用映射。
+- Execution Trace 已投影检索步骤，但结果摘要只含引用数量，不含结果条目。
+- 工具调用已具备 `raw_arguments` / 解析后 `arguments` / `missing_fields` / `proposal_usage`，可直接支撑 M2 与 M7。
+- 现有质量服务已覆盖 run/tool 终态、时长与 token 链路指标，可作为 M6/M7 的生产采样数据源。
+
+**实施调整**
+
+1. Phase 0 的“与团队确认”在本次无人评审会场景下，以本评审记录作为口径冻结依据；后续口径变更必须追加评审记录，不允许静默改答案。
+2. 评测执行拆为两级：**离线 fixture 快速集**（不调用真实模型，用于回归门禁）与**录制事实评测**（任务经产品链路执行后，按 `evaluation_id` 从 run/tool/event 抓取原始事实再离线判定）。
+3. 报告默认输出到 `backend/evaluation/lui/reports/`，受控基线入库 `backend/evaluation/lui/baselines/`，避免污染仓库根目录。
+4. Phase 5 生产采样脚本默认 dry-run、只读聚合，不自动连接生产库、不写生产数据。
+5. **计算任务不参与本评测**：xTB / CREST / ORCA / 本地结构生成等计算类任务以及 ComputeEngine 完整计算任务全部排除在评测范围外；LUI 工具类任务仅覆盖非计算工具（垂类预测、知识检索、优化推荐）的提案层行为，只评估工具选择、参数、确认、补参、权限与续答，不评估计算执行结果质量。
 
 ## 2. 目标与非目标
 
@@ -65,6 +87,8 @@
 
 评估边界只覆盖当前受控 LUI 链路，不覆盖 ResearchEngine 的 AutoResearch 编排、ComputeEngine 完整计算任务和外部通用 agent provider。
 
+补充边界（2026-08-28）：**计算任务不参与本评测**。xTB / CREST / ORCA / 本地结构生成等计算类工具，以及任何需要实际执行 ComputeEngine 计算的任务，均不进入 Golden Set，也不作为评测运行矩阵的工具候选。评测中的 LUI 工具任务只覆盖非计算工具（垂类预测、知识检索、优化推荐）在提案层的选择、参数、确认、补参、权限与续答行为；工具执行结果只判定链路终态与续答是否可用，不判定计算数值质量。
+
 ### 3.1 评估运行矩阵
 
 | 维度 | 取值 | 备注 |
@@ -73,7 +97,7 @@
 | 模型能力 | `tool_calling`、非 `tool_calling` | 验证路由、fallback 与工具选择 |
 | 知识库 | 开启、关闭、空结果 | 测检索召回和 no-results 处理 |
 | 联网检索 | 开启、关闭、快照固定 | 联网结果非确定时使用快照 |
-| 工具状态 | 0 个、1 个、多个相关工具 | 测选择准确率和多工具边界 |
+| 工具状态 | 0 个、1 个、多个相关 LUI 非计算工具 | 测选择准确率和多工具边界；xTB/CREST/ORCA 等计算类工具不参与 |
 | 权限模式 | 默认 `workspace_write`、只读 | 测权限阻断与人工兜底 |
 
 ## 4. 八项指标定义
@@ -337,8 +361,8 @@ P95 = 升序样本的 95 百分位
 | 项目事实问答 | 入口、模块、算法、工具、报告链路 | 20–30 |
 | 知识库检索问答 | 需要引用固定文档/分块 | 15–25 |
 | 联网检索问答 | 使用快照或固定网页 | 10–20 |
-| 工具选择 | 多工具候选，考察选择 | 10–20 |
-| 工具参数 | 数值/单位/枚举/必填/附件 | 15–25 |
+| 工具选择 | 多个非计算 LUI 工具候选，考察选择 | 10–20 |
+| 工具参数 | 数值/单位/枚举/必填/附件（仅非计算工具） | 15–25 |
 | 多轮与上下文延续 | 依赖前文、补参、follow-up | 10–20 |
 | 拒绝与边界 | 权限、范围外、信息不足、模型无工具能力 | 10–20 |
 | 失败与恢复 | 工具失败、续答失败、权限阻断 | 10–15 |
@@ -462,10 +486,10 @@ backend/tests/
 
 ### Phase 0：口径与 Golden Set 冻结
 
-- [ ] 与团队确认八项指标主口径、建议阈值和“人工兜底”边界。
-- [ ] 建立 Golden Set schema 和 80–150 条首期任务。
-- [ ] 选定默认评测模型矩阵：一个 tool-capable 主模型、一个非 tool-capable 模型、一个备选模型。
-- [ ] 产出 `README.md`、任务标注说明和人工抽检规则。
+- [x] 与团队确认八项指标主口径、建议阈值和“人工兜底”边界。（2026-08-28 以 §1.1 评审记录冻结口径；补充边界：计算任务不参与评测）
+- [x] 建立 Golden Set schema 和 80–150 条首期任务。（`backend/evaluation/lui/schemas.py` + 8 分桶 80 条，其中 37 条内置离线 fixture；工具任务仅含垂类预测/知识检索/优化推荐）
+- [x] 选定默认评测模型矩阵：一个 tool-capable 主模型、一个非 tool-capable 模型、一个备选模型。（见 `backend/evaluation/lui/README.md`，具体模型以模型管理配置为准）
+- [x] 产出 `README.md`、任务标注说明和人工抽检规则。
 
 ### Phase 1：可观测性补齐
 

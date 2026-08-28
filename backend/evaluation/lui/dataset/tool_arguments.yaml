@@ -1,0 +1,304 @@
+# 工具参数分桶：考察非计算 LUI 工具的参数正确性与 tolerance 判定。
+- id: LUI-TA-0001
+  category: tool_argument
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 预测 PVDF（SMILES：C=C(F)Cl）的介电常数和疏水性。
+  context:
+    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(F)Cl"
+          target_properties: ["dielectric_constant", "hydrophobicity"]
+          material_family: fluoropolymer
+  fixture:
+    run:
+      run_id: fixture-run-ta-0001
+      status: completed
+      duration_ms: 6500
+      first_token_ms: 1150
+      total_tokens: 2700
+    tool_calls:
+      - call_id: fixture-call-ta-0001
+        tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(F)Cl"
+          target_properties: [hydrophobicity, dielectric_constant]
+          material_family: fluoropolymer
+        phase: completed
+        duration_ms: 2500
+        proposal_usage: {total_tokens: 720}
+    message:
+      content: 已按指定 SMILES 发起垂类预测，目标性质为介电常数与疏水性。
+
+- id: LUI-TA-0002
+  category: tool_argument
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 用硅聚合物体系预测 SMILES O-[Si](C)(C) 的弹性模量。
+  context:
+    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "O-[Si](C)(C)"
+          target_properties: ["elastic_modulus"]
+          material_family: "silicon_polymer"
+
+- id: LUI-TA-0003
+  category: tool_argument
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 优化介电常数目标，推荐大约 10 个候选条件。
+  context:
+    selected_tool_ids: ["algorithm:mobo_alchemist_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:mobo_alchemist_adapter"
+        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
+        arguments:
+          objectives: [{"name": "dielectric_constant", "direction": "minimize"}]
+          batch_size: 10
+        argument_tolerance:
+          batch_size: {kind: relative, value: 0.1}
+
+- id: LUI-TA-0004
+  category: tool_argument
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 在 kb-fluoro-handbook 上用 hybrid 模式检索 5 条 PVDF 资料。
+  context:
+    selected_tool_ids: ["algorithm:weknora_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments:
+          query: "PVDF 资料"
+          system_id: "kb-fluoro-handbook"
+          mode: "hybrid"
+          top_k: 5
+  fixture:
+    run:
+      run_id: fixture-run-ta-0004
+      status: completed
+      duration_ms: 5400
+      first_token_ms: 1020
+      total_tokens: 2350
+    tool_calls:
+      - call_id: fixture-call-ta-0004
+        tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments: {query: "PVDF 资料", system_id: "kb-fluoro-handbook", mode: hybrid, top_k: 5}
+        phase: completed
+        duration_ms: 2000
+        proposal_usage: {total_tokens: 690}
+    message:
+      content: 已按 hybrid 模式在 kb-fluoro-handbook 检索 5 条 PVDF 资料。
+
+- id: LUI-TA-0005
+  category: tool_argument
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 使用垂类模型 fp-v2 预测 C=C(F)F 的介电常数。
+  context:
+    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(F)F"
+          target_properties: ["dielectric_constant"]
+          model_id: "fp-v2"
+        ignored_extra_fields: ["features"]
+
+- id: LUI-TA-0006
+  category: tool_argument
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 以最大化产率、最小化能耗为双目标建立优化推荐。
+  context:
+    selected_tool_ids: ["algorithm:mobo_alchemist_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:mobo_alchemist_adapter"
+        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
+        arguments:
+          objectives:
+            - {"name": "yield", "direction": "maximize"}
+            - {"name": "energy_consumption", "direction": "minimize"}
+  fixture:
+    run:
+      run_id: fixture-run-ta-0006
+      status: completed
+      duration_ms: 6800
+      first_token_ms: 1180
+      total_tokens: 2800
+    tool_calls:
+      - call_id: fixture-call-ta-0006
+        tool_id: "algorithm:mobo_alchemist_adapter"
+        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
+        arguments:
+          objectives:
+            - {name: yield, direction: maximize}
+            - {name: energy_consumption, direction: minimize}
+        phase: completed
+        duration_ms: 2600
+        proposal_usage: {total_tokens: 740}
+    message:
+      content: 已建立双目标优化推荐：最大化产率、最小化能耗。
+
+- id: LUI-TA-0007
+  category: tool_argument
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 检索 kb-polymer-electrical 知识库，附带图谱上下文。
+  context:
+    selected_tool_ids: ["algorithm:weknora_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments:
+          query: "聚合物电性能"
+          system_id: "kb-polymer-electrical"
+          include_graph_context: true
+
+- id: LUI-TA-0008
+  category: tool_argument
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 预测碳聚合物 C=C(C)C 的拉伸强度和玻璃化转变温度。
+  context:
+    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(C)C"
+          target_properties: ["tensile_strength", "glass_transition_temperature"]
+          material_family: "carbon_polymer"
+  fixture:
+    run:
+      run_id: fixture-run-ta-0008
+      status: completed
+      duration_ms: 6100
+      first_token_ms: 1120
+      total_tokens: 2600
+    tool_calls:
+      - call_id: fixture-call-ta-0008
+        tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(C)C"
+          target_properties: [tensile_strength, glass_transition_temperature]
+          material_family: carbon_polymer
+        phase: completed
+        duration_ms: 2400
+        proposal_usage: {total_tokens: 710}
+    message:
+      content: 已发起碳聚合物体系预测，目标为拉伸强度与玻璃化转变温度。
+
+- id: LUI-TA-0009
+  category: tool_argument
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 基于全部 12 条历史观测重新推荐下一批实验，批次 6。
+  context:
+    selected_tool_ids: ["algorithm:mobo_alchemist_adapter"]
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:mobo_alchemist_adapter"
+        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
+        arguments:
+          objectives: [{"name": "yield", "direction": "maximize"}]
+          batch_size: 6
+        argument_tolerance:
+          batch_size: {kind: absolute, value: 1}
+
+- id: LUI-TA-0010
+  category: tool_argument
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 预测 SMILES C=C(F)F 的材料性质。（未指定目标性质时应请求补参）
+  context:
+    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+  expected:
+    task_success: false
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(F)F"
+    answer:
+      type: insufficient_info
+    escalation:
+      level: param_completion
+      reason: 缺少必填 target_properties，应请求用户补充
+  fixture:
+    run:
+      run_id: fixture-run-ta-0010
+      status: completed
+      duration_ms: 3200
+      first_token_ms: 850
+      total_tokens: 1500
+    tool_calls:
+      - call_id: fixture-call-ta-0010
+        tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments: {smiles: "C=C(F)F"}
+        missing_fields: ["target_properties"]
+        phase: "awaiting_input"
+        duration_ms: 900
+        proposal_usage: {total_tokens: 520}
+    escalation:
+      param_completions: 1
+    message:
+      content: 请补充需要预测的目标性质（如介电常数、热稳定性），我再发起垂类预测。

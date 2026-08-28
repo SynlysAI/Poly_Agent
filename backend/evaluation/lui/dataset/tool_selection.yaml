@@ -1,0 +1,311 @@
+# 工具选择分桶：多个非计算 LUI 工具候选下考察模型是否选对工具。
+# 边界：xTB/CREST/ORCA/结构生成/ComputeEngine 计算类工具不参与本评测。
+- id: LUI-TS-0001
+  category: tool_selection
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 预测 SMILES 为 C=C(F)F 的聚合物介电常数。
+  context:
+    selected_tool_ids:
+      - "algorithm:vertical_predictor_adapter"
+      - "algorithm:mobo_alchemist_adapter"
+      - "algorithm:weknora_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(F)F"
+          target_properties: ["dielectric_constant"]
+          material_family: fluoropolymer
+    answer:
+      type: keywords
+      must_include: ["介电"]
+  fixture:
+    run:
+      run_id: fixture-run-ts-0001
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+      - call_id: fixture-call-ts-0001
+        tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments: {smiles: "C=C(F)F", target_properties: [dielectric_constant], material_family: fluoropolymer}
+        phase: completed
+        duration_ms: 2400
+        proposal_usage: {total_tokens: 700}
+    message:
+      content: 已使用垂类性质预测服务预测 C=C(F)F 的介电常数，结果见工具返回。
+
+- id: LUI-TS-0002
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 根据当前实验历史推荐下一批 5 个合成条件。
+  context:
+    selected_tool_ids:
+      - "algorithm:vertical_predictor_adapter"
+      - "algorithm:mobo_alchemist_adapter"
+      - "algorithm:weknora_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:mobo_alchemist_adapter"
+        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
+        arguments:
+          objectives: [{"name": "yield", "direction": "maximize"}]
+          batch_size: 5
+
+- id: LUI-TS-0003
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 在知识库 kb-fluoro-handbook 中检索 PVDF 的介电常数数据。
+  context:
+    selected_tool_ids:
+      - "algorithm:weknora_adapter"
+      - "algorithm:vertical_predictor_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments:
+          query: "PVDF 介电常数"
+          system_id: "kb-fluoro-handbook"
+  fixture:
+    run:
+      run_id: fixture-run-ts-0003
+      status: completed
+      duration_ms: 5600
+      first_token_ms: 1000
+      total_tokens: 2400
+    tool_calls:
+      - call_id: fixture-call-ts-0003
+        tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments: {query: "PVDF 介电常数", system_id: "kb-fluoro-handbook", top_k: 5}
+        phase: completed
+        duration_ms: 2100
+        proposal_usage: {total_tokens: 680}
+    message:
+      content: 已通过 WeKnora 检索 kb-fluoro-handbook 中 PVDF 的介电常数数据。
+
+- id: LUI-TS-0004
+  category: tool_selection
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 预测重复单元 SMILES C(C(F)(F)F)C 的热稳定性。
+  context:
+    selected_tool_ids:
+      - "algorithm:vertical_predictor_adapter"
+      - "algorithm:weknora_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C(C(F)(F)F)C"
+          target_properties: ["thermal_stability"]
+
+- id: LUI-TS-0005
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 从溶剂表知识库检索 NMP 的沸点数据。
+  context:
+    selected_tool_ids:
+      - "algorithm:weknora_adapter"
+      - "algorithm:mobo_alchemist_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments:
+          query: "NMP 沸点"
+          system_id: "kb-solvent-table"
+  fixture:
+    run:
+      run_id: fixture-run-ts-0005
+      status: completed
+      duration_ms: 5200
+      first_token_ms: 980
+      total_tokens: 2300
+    tool_calls:
+      - call_id: fixture-call-ts-0005
+        tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments: {query: "NMP 沸点", system_id: "kb-solvent-table", top_k: 5}
+        phase: completed
+        duration_ms: 1900
+        proposal_usage: {total_tokens: 650}
+    message:
+      content: 已通过 WeKnora 检索溶剂表知识库中 NMP 的沸点数据。
+
+- id: LUI-TS-0006
+  category: tool_selection
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 同时优化产率和选择性两个目标，推荐下一批实验。
+  context:
+    selected_tool_ids:
+      - "algorithm:mobo_alchemist_adapter"
+      - "algorithm:vertical_predictor_adapter"
+      - "algorithm:weknora_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:mobo_alchemist_adapter"
+        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
+        arguments:
+          objectives:
+            - {"name": "yield", "direction": "maximize"}
+            - {"name": "selectivity", "direction": "maximize"}
+
+- id: LUI-TS-0007
+  category: tool_selection
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 同时预测 PVDF 的介电常数和玻璃化转变温度。
+  context:
+    selected_tool_ids:
+      - "algorithm:vertical_predictor_adapter"
+      - "algorithm:weknora_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(F)Cl"
+          target_properties: ["dielectric_constant", "glass_transition_temperature"]
+          material_family: fluoropolymer
+  fixture:
+    run:
+      run_id: fixture-run-ts-0007
+      status: completed
+      duration_ms: 7100
+      first_token_ms: 1200
+      total_tokens: 2900
+    tool_calls:
+      - call_id: fixture-call-ts-0007
+        tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(F)Cl"
+          target_properties: [dielectric_constant, glass_transition_temperature]
+          material_family: fluoropolymer
+        phase: completed
+        duration_ms: 2800
+        proposal_usage: {total_tokens: 760}
+    message:
+      content: 已发起一次垂类预测调用，同时预测介电常数与玻璃化转变温度。
+
+- id: LUI-TS-0008
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 检索 kb-polymer-thermal 知识库并附带图谱上下文。
+  context:
+    selected_tool_ids:
+      - "algorithm:weknora_adapter"
+      - "algorithm:mobo_alchemist_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:weknora_adapter"
+        function_name: "algorithm_weknora_adapter_ea62586f9329"
+        arguments:
+          query: "聚合物热性能"
+          system_id: "kb-polymer-thermal"
+          include_graph_context: true
+
+- id: LUI-TS-0009
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 预测碳聚合物重复单元 C=C(C)C 的导电性。
+  context:
+    selected_tool_ids:
+      - "algorithm:vertical_predictor_adapter"
+      - "algorithm:weknora_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments:
+          smiles: "C=C(C)C"
+          target_properties: ["conductivity"]
+          material_family: "carbon_polymer"
+  fixture:
+    run:
+      run_id: fixture-run-ts-0009
+      status: completed
+      duration_ms: 5900
+      first_token_ms: 1050
+      total_tokens: 2500
+    tool_calls:
+      - call_id: fixture-call-ts-0009
+        tool_id: "algorithm:vertical_predictor_adapter"
+        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
+        arguments: {smiles: "C=C(C)C", target_properties: [conductivity], material_family: carbon_polymer}
+        phase: completed
+        duration_ms: 2300
+        proposal_usage: {total_tokens: 700}
+    message:
+      content: 已使用垂类预测服务预测 C=C(C)C 在碳聚合物体系下的导电性。
+
+- id: LUI-TS-0010
+  category: tool_selection
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+    - role: user
+      content: 为本次氟聚合物筛选创建名为 fluoropolymer-round-2 的优化推荐会话。
+  context:
+    selected_tool_ids:
+      - "algorithm:mobo_alchemist_adapter"
+      - "algorithm:vertical_predictor_adapter"
+      - "algorithm:weknora_adapter"
+  expected:
+    task_success: true
+    tool_calls:
+      - tool_id: "algorithm:mobo_alchemist_adapter"
+        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
+        arguments:
+          objectives: [{"name": "dielectric_constant", "direction": "minimize"}]
+          session_name: "fluoropolymer-round-2"

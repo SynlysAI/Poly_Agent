@@ -1,0 +1,174 @@
+# 项目事实问答分桶：答案必须来自 ProjectGroundingService 注入的项目事实。
+- id: LUI-PF-0001
+  category: project_fact
+  difficulty: easy
+  mode: qa
+  messages:
+    - role: user
+      content: PolyAgent 里负责算法与研发编排的模块叫什么？
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include: ["ResearchEngine"]
+    hallucination:
+      forbidden_claims: ["AutoResearch 无需审批即可执行"]
+  fixture:
+    run:
+      run_id: fixture-run-pf-0001
+      status: completed
+      duration_ms: 2100
+      first_token_ms: 620
+      total_tokens: 1180
+      model_id: fixture-chat
+    message:
+      content: PolyAgent 的研发编排模块是 ResearchEngine，负责算法清单、AutoResearch 与计算 Workflow 的统一管理。
+
+- id: LUI-PF-0002
+  category: project_fact
+  difficulty: medium
+  mode: qa
+  messages:
+    - role: user
+      content: AutoResearch 时间线出现 blocked_approval 时应该怎么处理？
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include: ["blocked_approval", "审批"]
+    hallucination:
+      forbidden_claims: ["blocked_approval 表示任务失败"]
+
+- id: LUI-PF-0003
+  category: project_fact
+  difficulty: easy
+  mode: qa
+  messages:
+    - role: user
+      content: 知识库 RAG/KG 升级的设计文档放在哪里？
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include: ["doc/knowledge-base-rag-kg-upgrade-plan.md"]
+  fixture:
+    run:
+      run_id: fixture-run-pf-0003
+      status: completed
+      duration_ms: 1750
+      first_token_ms: 540
+      total_tokens: 1020
+    message:
+      content: 知识库 RAG/KG 升级设计文档位于 doc/knowledge-base-rag-kg-upgrade-plan.md。
+
+- id: LUI-PF-0004
+  category: project_fact
+  difficulty: medium
+  mode: qa
+  messages:
+    - role: user
+      content: 垂类性质预测服务依赖哪个环境变量？
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include: ["VERTICAL_PREDICTOR_URL"]
+
+- id: LUI-PF-0005
+  category: project_fact
+  difficulty: medium
+  mode: qa
+  messages:
+    - role: user
+      content: WeKnora 检索工具 top_k 默认返回几条结果？
+  expected:
+    task_success: true
+    answer:
+      type: numeric
+      numeric_value: 5
+      numeric_tolerance: {kind: exact}
+  fixture:
+    run:
+      run_id: fixture-run-pf-0005
+      status: completed
+      duration_ms: 1900
+      first_token_ms: 580
+      total_tokens: 960
+    message:
+      content: WeKnora 检索工具的 top_k 默认值是 5，可在 1 到 20 之间调整。
+
+- id: LUI-PF-0006
+  category: project_fact
+  difficulty: medium
+  mode: qa
+  messages:
+    - role: user
+      content: Alchemist BO/MOBO 优化推荐依赖哪个后端地址配置？
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include: ["ALCHEMIST_BACKEND_URL"]
+
+- id: LUI-PF-0007
+  category: project_fact
+  difficulty: easy
+  mode: qa
+  messages:
+    - role: user
+      content: 这个平台的产品名称是什么？
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include: ["Poly Agent"]
+  fixture:
+    run:
+      run_id: fixture-run-pf-0007
+      status: completed
+      duration_ms: 1500
+      first_token_ms: 460
+      total_tokens: 840
+    message:
+      content: 这个平台的产品名称是 Poly Agent，内置 PolyAgent 产品内助手。
+
+- id: LUI-PF-0008
+  category: project_fact
+  difficulty: hard
+  mode: qa
+  messages:
+    - role: user
+      content: 垂类预测服务的 material_family 参数支持哪些取值？请全部列出。
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include:
+        ["fluoropolymer", "carbon_polymer", "silicon_polymer", "fluoro_carbon_copolymer", "universal"]
+
+- id: LUI-PF-0009
+  category: project_fact
+  difficulty: medium
+  mode: qa
+  messages:
+    - role: user
+      content: /dialogue 当前支持哪两种 assistant preset/mode？
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include: ["qa", "deep"]
+
+- id: LUI-PF-0010
+  category: project_fact
+  difficulty: medium
+  mode: deep
+  messages:
+    - role: user
+      content: 请说明 LUI 对话模型的配置来源与提供商标识。
+  expected:
+    task_success: true
+    answer:
+      type: keywords
+      must_include: ["LLM_", "模型管理"]
+    latency_budget_ms: 30000
