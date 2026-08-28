@@ -1,6 +1,6 @@
 # Plan 16：Agent 能力中心与权限治理工作计划
 
-> 状态：文档修订完成 / 业务实现未开始
+> 状态：业务实现进行中（P16-A 已完成）
 >
 > 日期：2026-08-28
 >
@@ -257,12 +257,12 @@ PolyAgent 的可调用能力目前分散在多个模块：外部服务集成、�
 
 ### P16-A. 能力中心聚合契约
 
-- [ ] 扩展 `backend/app/schemas/capabilities.py`，新增 catalog item / group / policy / invocation 契约。
-- [ ] 新增 `backend/app/services/capability_catalog_service.py`，实时只读聚合四个能力组。
-- [ ] 新增 `GET /capabilities/catalog`，认证与本地演示模式行为符合第 5 节。
-- [ ] 聚合算法工具、连接器、报告 Skill 与 LLM 的 readiness、策略、调用方式和来源。
-- [ ] 单个来源异常只标记该分组 unavailable，不阻断其他分组。
-- [ ] 补充服务与 API 测试，断言 readiness 一致、角色过滤正确且敏感信息不泄漏。
+- [x] 扩展 `backend/app/schemas/capabilities.py`，新增 catalog item / group / policy / invocation 契约。
+- [x] 新增 `backend/app/services/capability_catalog_service.py`，实时只读聚合四个能力组。
+- [x] 新增 `GET /capabilities/catalog`，认证与本地演示模式行为符合第 5 节。
+- [x] 聚合算法工具、连接器、报告 Skill 与 LLM 的 readiness、策略、调用方式和来源。
+- [x] 单个来源异常只标记该分组 unavailable，不阻断其他分组。
+- [x] 补充服务与 API 测试，断言 readiness 一致、角色过滤正确且敏感信息不泄漏。
 
 ### P16-B. 策略允许的用户连接器调用
 
@@ -400,6 +400,7 @@ make test-backend
 
 ## 13. 状态记录
 
+- 2026-08-28（P16-A）：完成能力中心聚合契约、只读聚合服务与 `GET /capabilities/catalog`；新增认证、角色过滤、敏感信息脱敏、来源映射与失败隔离专项测试并通过。
 - 2026-08-27：从 Plan 15 修订拆分新建统一能力中心与权限治理计划；本次仅编写文档，未修改业务代码。
 - 2026-08-27（第二版修订）：明确 `/capabilities` 与 `/tools` 为两个独立入口；配置面与调用面分离，数据单向流动。
 - 2026-08-28：基于 `develop@bac4d3b` 复核代码现状，修正 Plan 15 已落地、`/tools` 已有 6 个 tab、连接器配置面已存在等过期基线；记录“策略允许的普通用户可调用连接器且必须确认”的决策；重排任务、测试、兼容、风险与完成定义。本轮仅修改本文档，未修改任何业务代码、前端代码、测试代码或配置文件。
