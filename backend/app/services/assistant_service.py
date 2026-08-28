@@ -46,6 +46,12 @@ from app.services.assistant_context_assembler import (
     ContextAssembly,
     estimate_native_tool_schema_tokens,
 )
+from app.services.assistant_retrieval_telemetry import (
+    knowledge_result_entries,
+    mark_used_in_answer,
+    retrieval_result_event,
+    web_result_entries,
+)
 from app.services.assistant_tool_contract import (
     build_function_tool,
     normalize_provider_arguments,
@@ -2038,7 +2044,8 @@ class AssistantService:
             web_outcome = self.web_service.search(search_query_plan.query, deep=intent.deep)
 
         web_refs = self._web_references(web_outcome)
-        references = project_refs + web_refs
+        knowledge_refs = self._knowledge_references(knowledge_outcome)
+        references = project_refs + knowledge_refs + web_refs
         retrieval_status = self._combined_retrieval_status(knowledge_outcome, web_outcome)
         answer_mode = self._answer_mode(intent)
         response_facts = self._build_response_facts(
@@ -2237,8 +2244,21 @@ class AssistantService:
                 web_outcome = self.web_service.search(search_query_plan.query, deep=intent.deep)
 
             web_refs = self._web_references(web_outcome)
-            references = project_refs + web_refs
+            knowledge_refs = self._knowledge_references(knowledge_outcome)
+            references = project_refs + knowledge_refs + web_refs
             retrieval_status = self._combined_retrieval_status(knowledge_outcome, web_outcome)
+            knowledge_entries = mark_used_in_answer(
+                knowledge_result_entries(knowledge_outcome),
+                references,
+            )
+            web_entries = mark_used_in_answer(web_result_entries(web_outcome), references)
+            if knowledge_outcome:
+                yield retrieval_result_event(
+                    source="knowledge",
+                    query_digest=self._short_digest(user_text),
+                    status=knowledge_outcome.status,
+                    entries=knowledge_entries,
+                )
             if web_outcome:
                 yield {
                     "type": "evidence",
@@ -2248,6 +2268,12 @@ class AssistantService:
                     "query_digest": self._short_digest(search_query_plan.query),
                     "references": [item.model_dump(mode="python") for item in web_refs],
                 }
+                yield retrieval_result_event(
+                    source="web",
+                    query_digest=self._short_digest(search_query_plan.query),
+                    status=web_outcome.status,
+                    entries=web_entries,
+                )
 
             answer_mode = self._answer_mode(intent)
             response_facts = self._build_response_facts(
@@ -2634,9 +2660,27 @@ class AssistantService:
         }
 
     def _web_references(self, outcome: SearchOutcome | None) -> list[AssistantReference]:
+        """把联网检索命中转换为可追溯引用。
+
+        Args:
+            outcome: 联网检索结果。
+
+        Returns:
+            带 source_id 与 rank 的引用列表，便于 Recall@K 判定。
+        """
         if not outcome or not outcome.results:
             return []
-        return [AssistantReference(label=item.title, target=item.url, type="web") for item in outcome.results[:3]]
+        return [
+            AssistantReference(
+                label=item.title,
+                target=item.url,
+                type="web",
+                source="web",
+                source_id=item.url,
+                rank=index + 1,
+            )
+            for index, item in enumerate(outcome.results[:3])
+        ]
 
     def _retrieve_knowledge(self, query: str, request: AssistantChatRequest) -> KnowledgeOutcome | None:
         """按前端选择从 WeKnora 检索知识库证据。
@@ -2731,7 +2775,17 @@ class AssistantService:
                 continue
             seen.add(key)
             label = item.title or outcome.system_name
-            refs.append(AssistantReference(label=label, target=target, type="knowledge"))
+            refs.append(
+                AssistantReference(
+                    label=label,
+                    target=target,
+                    type="knowledge",
+                    source="knowledge",
+                    source_id=key,
+                    rank=len(refs) + 1,
+                    score=item.score,
+                )
+            )
             if len(refs) >= 5:
                 break
         return refs

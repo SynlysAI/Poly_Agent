@@ -786,6 +786,29 @@ class AssistantTraceProjectionService:
                     parent_step_id=f"retrieval:{source}:{digest}",
                     details={"result_summary": {"references": len(data.get("references") or [])}},
                 )
+            elif event_type == "retrieval.result":
+                source = str(data.get("source") or "knowledge")
+                digest = str(data.get("query_digest") or event_id)
+                entries = data.get("results") or []
+                used_count = sum(1 for item in entries if bool(item.get("used_in_answer")))
+                self._upsert(
+                    accumulator,
+                    step_id=f"retrieval-result:{source}:{digest}",
+                    step_type="tool_result",
+                    title="检索结果",
+                    summary=f"返回 {len(entries)} 条稳定结果条目，{used_count} 条用于回答",
+                    status="success",
+                    timestamp=timestamp,
+                    ref=ref,
+                    parent_step_id=f"retrieval:{source}:{digest}",
+                    details={
+                        "result_summary": {
+                            "entry_count": len(entries),
+                            "used_in_answer_count": used_count,
+                            "entries": entries,
+                        }
+                    },
+                )
 
             if event_type.startswith("agent_exec."):
                 agent_run_id = str(data.get("run_id") or event_id)

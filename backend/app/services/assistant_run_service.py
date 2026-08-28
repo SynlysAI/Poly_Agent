@@ -128,6 +128,11 @@ class AssistantRunService:
         now = utc_now()
         run_id = f"asrun_{uuid4().hex[:16]}"
         context = dict(payload.context)
+        # 评测上下文字段规范化：保证可索引、可按 evaluation_id 回放抓取。
+        for eval_key in ("evaluation_id", "task_id", "evaluation_version"):
+            eval_value = context.get(eval_key)
+            if eval_value is not None:
+                context[eval_key] = str(eval_value).strip()[:120]
         preset_id, compatibility_mode = resolve_assistant_runtime(
             context.get("preset_id") or chat.get("preset_id"),
             context.get("mode") or chat.get("mode"),

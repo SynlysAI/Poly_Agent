@@ -493,10 +493,10 @@ backend/tests/
 
 ### Phase 1：可观测性补齐
 
-- [ ] 在 run 请求上下文中增加可选 `evaluation_id`、`task_id`、`evaluation_version`。
-- [ ] 为知识库/联网检索事件增加稳定结果条目：`source`、`id`、`rank`、`score`、`snippet`、`used_in_answer`。
-- [ ] 在 AssistantMessage 或 Trace 中补齐 references 与检索结果 ID 的映射。
-- [ ] 保持新字段可空、向后兼容，不破坏旧消息、旧 run 和历史回放。
+- [x] 在 run 请求上下文中增加可选 `evaluation_id`、`task_id`、`evaluation_version`。（`AssistantRunService.create` 规范化，`AssistantRunRepository` 增加索引与 `find_by_evaluation_id`）
+- [x] 为知识库/联网检索事件增加稳定结果条目：`source`、`id`、`rank`、`score`、`snippet`、`used_in_answer`。（新增 `assistant_retrieval_telemetry` 并在 `stream_chat` 发出 `retrieval.result`）
+- [x] 在 AssistantMessage 或 Trace 中补齐 references 与检索结果 ID 的映射。（`AssistantReference` 增加 `source/source_id/rank/score` 可空字段；知识库引用并入最终 references；Trace 投影 `retrieval.result`）
+- [x] 保持新字段可空、向后兼容，不破坏旧消息、旧 run 和历史回放。（`test_assistant_retrieval_telemetry.py` 6 项 + 既有 55 项相关测试通过）
 
 ### Phase 2：评测器实现
 
