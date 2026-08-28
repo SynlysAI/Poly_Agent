@@ -1592,9 +1592,6 @@ watch(activeTab, (tab) => {
 
 <style scoped>
 .tools-view {
-  max-width: 1360px;
-  margin: 0 auto;
-  padding: 24px 34px 48px;
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -2664,22 +2661,7 @@ summary {
   gap: 12px;
 }
 
-@media (max-width: 1280px) {
-  .tools-view {
-    padding-inline: 24px;
-  }
-}
-
-@media (max-width: 900px) {
-  .tools-view {
-    padding-inline: 14px;
-  }
-}
-
 @media (max-width: 720px) {
-  .tools-view {
-    padding: 16px 10px 32px;
-  }
   .tools-header {
     align-items: flex-start;
     flex-direction: column;
