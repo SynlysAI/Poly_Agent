@@ -371,66 +371,81 @@ onMounted(loadCatalog)
 </template>
 
 <style scoped>
+/* —— Manus 风格：两侧留白、简洁高级 —— */
 .capability-view {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 24px 56px 48px;
   display: grid;
-  gap: 18px;
+  gap: 28px;
 }
 
+/* 页头 */
 .capability-header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--app-border-soft);
 }
 
 .capability-header h1 {
   margin: 0;
   color: var(--app-ink);
-  font-size: 24px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
 }
 
 .capability-header p {
-  margin: 6px 0 0;
-  color: var(--app-ink-body);
+  margin: 8px 0 0;
+  color: var(--app-ink-muted);
   font-size: 14px;
-  max-width: 720px;
+  line-height: 1.6;
+  max-width: 640px;
 }
 
-.permission-panel,
-.capability-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
+/* 能力来源 */
 .module-source {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
-  padding: 12px 14px;
+  padding: 14px 18px;
   border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius);
-  background: #fff;
+  border-radius: var(--app-radius-lg);
+  background: rgba(255, 255, 255, 0.7);
 }
 
 .module-source > span {
   color: var(--app-ink-muted);
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+/* 权限摘要 + 能力网格 */
+.permission-panel,
+.capability-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
 }
 
 .permission-panel article,
 .capability-card {
-  padding: 16px;
+  padding: 20px;
   border: 1px solid var(--app-border-soft);
-  border-radius: var(--app-radius);
+  border-radius: var(--app-radius-lg);
   background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  transition: box-shadow 0.22s ease, transform 0.22s ease;
 }
 
 .permission-panel article {
   display: grid;
-  gap: 3px;
+  gap: 6px;
 }
 
 .permission-panel span,
@@ -439,35 +454,47 @@ onMounted(loadCatalog)
   font-size: 12px;
 }
 
-.permission-panel strong {
-  color: var(--app-ink);
-  font-size: 24px;
+.permission-panel small {
+  font-size: 11px;
+  line-height: 1.5;
 }
 
+.permission-panel strong {
+  color: var(--app-ink);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+/* 分组 */
 .capability-group {
   display: grid;
-  gap: 12px;
+  gap: 16px;
 }
 
 .group-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
 }
 
 .group-heading h2 {
   margin: 0;
   color: var(--app-ink);
-  font-size: 17px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
 }
 
 .group-heading p {
-  margin: 4px 0 0;
-  color: var(--app-ink-body);
+  margin: 6px 0 0;
+  color: var(--app-ink-muted);
   font-size: 13px;
+  line-height: 1.6;
 }
 
+/* 能力卡片网格 */
 .capability-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -475,49 +502,57 @@ onMounted(loadCatalog)
 .capability-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+}
+
+.capability-card:hover {
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
 }
 
 .capability-card header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
 }
 
 .capability-card h3 {
   margin: 0;
   color: var(--app-ink);
   font-size: 15px;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .capability-card header p,
 .reason,
 .scope-note {
-  margin: 4px 0 0;
-  color: var(--app-ink-body);
+  margin: 6px 0 0;
+  color: var(--app-ink-muted);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .reason {
   color: var(--app-danger, #c53030);
 }
 
+/* 策略清单 */
 .policy-list {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
-  padding: 10px;
-  border-radius: var(--app-radius-sm);
-  background: var(--app-primary-light, #f7f9fc);
+  padding: 14px 16px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-md);
+  background: #f8fafc;
 }
 
 .policy-list div {
   display: grid;
   grid-template-columns: 68px 1fr;
-  gap: 8px;
+  gap: 10px;
   align-items: baseline;
 }
 
@@ -528,7 +563,8 @@ onMounted(loadCatalog)
 }
 
 .policy-list dt {
-  color: var(--app-ink-muted);
+  color: var(--app-ink-subtle);
+  font-weight: 500;
 }
 
 .policy-list dd {
@@ -544,6 +580,14 @@ onMounted(loadCatalog)
   justify-content: flex-end;
   gap: 8px;
   margin-top: auto;
+  padding-top: 4px;
+}
+
+/* 响应式：随屏宽收窄两侧留白 */
+@media (max-width: 1280px) {
+  .capability-view {
+    padding-inline: 40px;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -553,7 +597,18 @@ onMounted(loadCatalog)
   }
 }
 
+@media (max-width: 900px) {
+  .capability-view {
+    padding-inline: 24px;
+  }
+}
+
 @media (max-width: 700px) {
+  .capability-view {
+    padding: 16px 16px 32px;
+    gap: 22px;
+  }
+
   .capability-header,
   .group-heading {
     align-items: stretch;
