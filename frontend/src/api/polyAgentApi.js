@@ -210,6 +210,12 @@ export function getModuleAttribution(moduleId) {
   return apiClient.get(`/attributions/modules/${encodeURIComponent(moduleId)}`).then(unwrapResponse)
 }
 
+// ── 能力中心 API ──
+
+export function getCapabilityCatalog() {
+  return apiClient.get('/capabilities/catalog').then(unwrapResponse)
+}
+
 // ── 认证 API ──
 
 export function getAuthStatus() {

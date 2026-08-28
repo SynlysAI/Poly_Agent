@@ -917,12 +917,13 @@ watch(activeTab, (tab) => {
     <header class="tools-page-header">
       <div>
         <h1>工具服务</h1>
-        <p>真实计算工具链、Mongo/artifact、SpecLabOS 和优化服务状态。</p>
+        <p>管理员配置真实计算工具链、外部连接器、服务参数与 LLM 模型；能力可用性与调用入口请前往能力中心。</p>
       </div>
       <div class="header-actions">
         <el-tag size="large" :type="healthSummary.total > 0 && healthSummary.ready === healthSummary.total ? 'success' : 'warning'">
           核心服务 {{ healthSummary.ready }}/{{ healthSummary.total }}
         </el-tag>
+        <el-button @click="router.push('/capabilities')">查看能力中心</el-button>
         <el-button :icon="Refresh" :loading="loadingStatus || loadingConfigs" @click="loadAll">刷新</el-button>
       </div>
     </header>

@@ -1,6 +1,6 @@
 # Plan 16：Agent 能力中心与权限治理工作计划
 
-> 状态：业务实现进行中（P16-A / P16-B 已完成）
+> 状态：业务实现进行中（P16-A 至 P16-C 已完成）
 >
 > 日期：2026-08-28
 >
@@ -275,13 +275,13 @@ PolyAgent 的可调用能力目前分散在多个模块：外部服务集成、�
 
 ### P16-C. 能力中心前端独立入口
 
-- [ ] 新增 `/capabilities` 路由、导航入口、面包屑映射与 `CapabilityCenterView.vue`。
-- [ ] 实现总览、对话工具、外部连接器、报告 Skill、LLM 能力和权限摘要六块视图。
-- [ ] 卡片展示 readiness、原因、策略摘要、调用方式、来源牌和配置跳转。
-- [ ] 对话工具跳 `/dialogue?toolIds=...`，LLM 跳 `/dialogue?providerId=...&modelId=...`。
-- [ ] 连接器调用复用确认与 payload 构建逻辑，直接走 `POST /agent-exec/runs`。
-- [ ] `/tools` 增加 admin 路由守卫和顶部能力中心引导；现有 6 个 tab 不回退。
-- [ ] 新增 `capabilityCenter` 纯函数与测试，覆盖分组状态、角色过滤、调用目标、配置跳转和脱敏。
+- [x] 新增 `/capabilities` 路由、导航入口、面包屑映射与 `CapabilityCenterView.vue`。
+- [x] 实现总览、对话工具、外部连接器、报告 Skill、LLM 能力和权限摘要六块视图。
+- [x] 卡片展示 readiness、原因、策略摘要、调用方式、来源牌和配置跳转。
+- [x] 对话工具跳 `/dialogue?toolIds=...`，LLM 跳 `/dialogue?providerId=...&modelId=...`。
+- [x] 连接器调用复用确认与 payload 构建逻辑，直接走 `POST /agent-exec/runs`。
+- [x] `/tools` 增加 admin 路由守卫和顶部能力中心引导；现有 6 个 tab 不回退。
+- [x] 新增 `capabilityCenter` 纯函数与测试，覆盖分组状态、角色过滤、调用目标、配置跳转和脱敏。
 
 ### P16-D. 用户与邀请码管理 UI
 
@@ -400,6 +400,7 @@ make test-backend
 
 ## 13. 状态记录
 
+- 2026-08-28（P16-C）：新增 `/capabilities` 独立只读页面、全局导航与 API 封装；实现权限摘要和四个能力分组，卡片包含状态、原因、策略、调用方式、来源牌与配置跳转；外部连接器调用复用既有显式确认 payload 构建并直接调用 run API；`/tools` 收窄为管理员配置入口并保留 6 个 tab；新增 capabilityCenter 纯函数测试，production build 通过。
 - 2026-08-28（P16-B）：完成策略允许的普通用户连接器访问与调用：providers/runs 面向认证用户，默认策略仍拒绝普通用户；显式授权后可调用且服务端强制逐次确认；管理接口保持 admin-only，run 与 policy 审计记录真实 actor role。专项与 Plan 15 回归测试通过。
 - 2026-08-28（P16-A）：完成能力中心聚合契约、只读聚合服务与 `GET /capabilities/catalog`；新增认证、角色过滤、敏感信息脱敏、来源映射与失败隔离专项测试并通过。
 - 2026-08-27：从 Plan 15 修订拆分新建统一能力中心与权限治理计划；本次仅编写文档，未修改业务代码。
