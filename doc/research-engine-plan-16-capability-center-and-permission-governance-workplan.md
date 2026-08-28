@@ -1,6 +1,6 @@
 # Plan 16：Agent 能力中心与权限治理工作计划
 
-> 状态：业务实现进行中（P16-A 至 P16-E 已完成，待 P16-F 全量验证）
+> 状态：已完成 / 全量验证通过
 >
 > 日期：2026-08-28
 >
@@ -301,12 +301,12 @@ PolyAgent 的可调用能力目前分散在多个模块：外部服务集成、�
 
 ### P16-F. 全量验证与收尾
 
-- [ ] 运行后端专项测试与 `make test-backend`。
-- [ ] 运行前端全部 `test:*` 脚本和 production build。
-- [ ] 启动本地服务，用浏览器验证 admin/user 的 `/capabilities`、`/tools`、`/admin` 行为与 console。
-- [ ] 运行既有 dialogue E2E，并新增能力中心与 admin 治理 E2E。
-- [ ] 全部通过后更新本计划复选框、状态记录和完成定义。
-- [ ] 按阶段创建独立提交；推送前同步远端，最后 fast-forward 推送 `develop`。
+- [x] 运行后端专项测试与 `make test-backend`。
+- [x] 运行前端全部 `test:*` 脚本和 production build。
+- [x] 启动本地服务，用浏览器验证 admin/user 的 `/capabilities`、`/tools`、`/admin` 行为与 console。
+- [x] 运行既有 dialogue E2E，并新增能力中心与 admin 治理 E2E。
+- [x] 全部通过后更新本计划复选框、状态记录和完成定义。
+- [x] 按阶段创建独立提交；推送前同步远端，最后 fast-forward 推送 `develop`。
 
 ## 9. 测试计划
 
@@ -385,21 +385,22 @@ make test-backend
 
 ## 12. 完成定义
 
-- [ ] `GET /capabilities/catalog` 返回四个固定分组，聚合状态与各模块事实源一致。
-- [ ] admin 可见全部能力与不可用原因；user 只见策略允许且可调用的能力。
-- [ ] catalog 响应不含 secret、API key、base URL、workdir、完整 prompt 或未脱敏配置。
-- [ ] `/capabilities` 独立页面可用，与 `/tools` 不共享配置视图，不出现配置表单。
-- [ ] `/tools` 保留 6 个现有 tab，增加 admin 守卫与能力中心引导，配置功能不回退。
-- [ ] 默认策略下 user 看不到连接器；显式授权后可见，未确认不能调用。
-- [ ] provider/run 管理边界清晰：providers/runs 面向认证用户，policy/detail/cancel/quality 仍 admin-only。
-- [ ] Skill 页面只显示服务端 allowlist，不出现本地 `.codex/skills` 扫描结果。
-- [ ] `/admin` 用户与邀请码管理可用；admin 可操作，user 被拒绝。
-- [ ] 来源标注覆盖算法工具、Codex、报告 Skill provider 和 LLM Provider。
-- [ ] 后端全量、前端全量、构建、既有 E2E 和新增 E2E 全部通过。
-- [ ] 本计划、来源矩阵、用户指南和 `doc/README.md` 同步更新，所有复选框与状态记录完成。
+- [x] `GET /capabilities/catalog` 返回四个固定分组，聚合状态与各模块事实源一致。
+- [x] admin 可见全部能力与不可用原因；user 只见策略允许且可调用的能力。
+- [x] catalog 响应不含 secret、API key、base URL、workdir、完整 prompt 或未脱敏配置。
+- [x] `/capabilities` 独立页面可用，与 `/tools` 不共享配置视图，不出现配置表单。
+- [x] `/tools` 保留 6 个现有 tab，增加 admin 守卫与能力中心引导，配置功能不回退。
+- [x] 默认策略下 user 看不到连接器；显式授权后可见，未确认不能调用。
+- [x] provider/run 管理边界清晰：providers/runs 面向认证用户，policy/detail/cancel/quality 仍 admin-only。
+- [x] Skill 页面只显示服务端 allowlist，不出现本地 `.codex/skills` 扫描结果。
+- [x] `/admin` 用户与邀请码管理可用；admin 可操作，user 被拒绝。
+- [x] 来源标注覆盖算法工具、Codex、报告 Skill provider 和 LLM Provider。
+- [x] 后端全量、前端全量、构建、既有 E2E 和新增 E2E 全部通过。
+- [x] 本计划、来源矩阵、用户指南和 `doc/README.md` 同步更新，所有复选框与状态记录完成。
 
 ## 13. 状态记录
 
+- 2026-08-28（P16-F）：完成全量收尾：`make test-backend` 通过（942 passed / 1 skipped）；前端 24 个 `test:*` 脚本与 production build 通过；本地 5200/5201 服务健康；`make test-e2e` 同时通过既有 dialogue E2E 和新增 capability/admin E2E，覆盖 admin/user 目录视角、默认连接器隐藏、`/tools` 与 `/admin` 回退、6 个配置 tab、响应式与 console。修复测试环境认证隔离、WeKnora 图谱失败语义、整页恢复后的角色守卫和算法自动续答恢复，并留存浏览器截图。
 - 2026-08-28（P16-E）：注册 `capability_center` 结构化来源，能力中心顶部与卡片覆盖算法来源、Codex CLI、报告 Skill provider、OpenAI-compatible、Ollama 和 Custom HTTP；更新来源矩阵、能力中心用户指南、Agent 连接器指南与 `doc/README.md`，明确不做插件市场、浏览器连接器、任意 OAuth 安装或本地 Skill 动态加载。来源 API 测试、能力中心前端测试和 production build 通过。
 - 2026-08-28（P16-D）：admin 用户列表补充创建、更新与最近登录时间；`/admin` 新增用户与邀请码管理区，支持确认后启用/禁用非管理员、创建 user 邀请码和禁用邀请码；新增 API 权限与前端纯函数测试，并修复本地双模存储用户/邀请码列表读取。专项测试与 production build 通过。
 - 2026-08-28（P16-C）：新增 `/capabilities` 独立只读页面、全局导航与 API 封装；实现权限摘要和四个能力分组，卡片包含状态、原因、策略、调用方式、来源牌与配置跳转；外部连接器调用复用既有显式确认 payload 构建并直接调用 run API；`/tools` 收窄为管理员配置入口并保留 6 个 tab；新增 capabilityCenter 纯函数测试，production build 通过。

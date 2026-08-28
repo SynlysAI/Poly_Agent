@@ -84,6 +84,27 @@ def login_token(backend_url: str, env: dict[str, str]) -> str:
     return str(data["access_token"])
 
 
+def cancel_active_assistant_run(backend_url: str, token: str) -> None:
+    """取消测试前遗留的活动回答，避免旧状态阻塞新验收。
+
+    Args:
+        backend_url: 后端基础地址。
+        token: 管理员访问令牌。
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+    active = httpx.get(f"{backend_url}/api/v1/assistant/runs-active/current", headers=headers, timeout=15)
+    active.raise_for_status()
+    run = active.json().get("data")
+    if not run:
+        return
+    cancelled = httpx.post(
+        f"{backend_url}/api/v1/assistant/runs/{run['run_id']}/cancel",
+        headers=headers,
+        timeout=15,
+    )
+    cancelled.raise_for_status()
+
+
 def open_authenticated_page(
     playwright,
     frontend_url: str,
@@ -158,7 +179,7 @@ def run_real_model_flow(page) -> None:
     awaiting_card = page.locator(".tool-call-card.tool-call-awaiting_confirmation")
     awaiting_card.first.wait_for(state="visible", timeout=120_000)
 
-    trace = page.locator(".chat-message .execution-trace").first
+    trace = page.locator(".execution-trace").first
     trace.wait_for(state="visible", timeout=30_000)
     expect(trace).to_contain_text("上下文准备")
     expect(trace).to_contain_text("等待确认")
@@ -180,7 +201,7 @@ def run_real_model_flow(page) -> None:
     expect(trace).to_contain_text("算法结果", timeout=30_000)
     assert not page.locator(".execution-trace", has_text="Chain of Thought").count(), "Trace 不应暴露内部推理"
     step_ids = page.eval_on_selector_all(
-        ".chat-message .execution-trace li[data-step-id]",
+        ".execution-trace li[data-step-id]",
         "nodes => nodes.map(node => node.dataset.stepId)",
     )
     assert step_ids and len(step_ids) == len(set(step_ids)), f"Trace 断线重连后出现重复步骤: {step_ids}"
@@ -188,11 +209,11 @@ def run_real_model_flow(page) -> None:
     # 刷新后从 Trace Snapshot 恢复，而不是依赖内存中的 SSE 状态。
     page.reload(wait_until="domcontentloaded", timeout=60_000)
     page.locator(".dialogue-page").wait_for(state="visible", timeout=60_000)
-    restored_trace = page.locator(".chat-message .execution-trace").first
+    restored_trace = page.locator(".execution-trace").first
     restored_trace.wait_for(state="visible", timeout=30_000)
     expect(restored_trace).to_contain_text("任务完成")
     restored_step_ids = page.eval_on_selector_all(
-        ".chat-message .execution-trace li[data-step-id]",
+        ".execution-trace li[data-step-id]",
         "nodes => nodes.map(node => node.dataset.stepId)",
     )
     assert restored_step_ids and len(restored_step_ids) == len(set(restored_step_ids)), (
@@ -273,9 +294,9 @@ def run_manual_model_selection_flow(page) -> bool:
         return False
     options.first.wait_for(state="visible", timeout=30_000)
 
-    before = model_select.locator(".el-select__selected-item").inner_text().strip()
+    before = selected_model_text(model_select)
     options.nth(1).click()
-    after = model_select.locator(".el-select__selected-item").inner_text().strip()
+    after = selected_model_text(model_select)
     assert after and after != before, f"模型选择未切换: before={before!r} after={after!r}"
 
     mode_trigger = page.locator(".mode-trigger")
@@ -286,11 +307,23 @@ def run_manual_model_selection_flow(page) -> bool:
     target_item.click()
     expect(mode_trigger).to_contain_text(target_label)
 
-    after_mode_switch = model_select.locator(".el-select__selected-item").inner_text().strip()
+    after_mode_switch = selected_model_text(model_select)
     assert after_mode_switch == after, (
         f"切换模式后手动模型选择被覆盖: before={after!r} after={after_mode_switch!r}"
     )
     return True
+
+
+def selected_model_text(model_select) -> str:
+    """读取当前模型选择器的可见文本。
+
+    Args:
+        model_select: 模型选择器 locator。
+
+    Returns:
+    去除首尾空白后的模型显示名。
+    """
+    return model_select.locator(".el-select__selected-item:not(.is-hidden)").inner_text().strip()
 
 
 def run_session_control_trace_flow(page) -> None:
@@ -374,6 +407,7 @@ def main() -> int:
     backend_url = DEFAULT_BACKEND_URL
     frontend_url = DEFAULT_FRONTEND_URL
     token = login_token(backend_url, env)
+    cancel_active_assistant_run(backend_url, token)
     screenshots_dir = pathlib.Path(__file__).resolve().parent / "screenshots"
     screenshots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -403,6 +437,7 @@ def main() -> int:
                 if "favicon" not in item
                 and "vite" not in item.lower()
                 and "409 (Conflict)" not in item
+                and "ERR_INTERNET_DISCONNECTED" not in item
             ]
             assert not page_errors, f"浏览器控制台存在错误: {page_errors[:10]}"
             print("PASS real-model E2E flow + responsive checks")

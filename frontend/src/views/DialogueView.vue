@@ -892,6 +892,11 @@ function startToolCallStream(message, call) {
       replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
       if (['completed', 'failed', 'canceled'].includes(updated.phase)) {
         stopToolCallStream(call.call_id)
+        if (updated.continuation_run_id) {
+          await refreshActiveRun()
+        } else if (updated.continuation_state === 'pending' || updated.continuation_state === 'scheduled') {
+          window.setTimeout(refreshActiveRun, 4000)
+        }
         if (updated.phase === 'completed' && shouldContinueToolCall(updated) && !continuedToolCalls.has(call.call_id)) {
           continuedToolCalls.add(call.call_id)
           await continueToolCall(updated.call_id)
