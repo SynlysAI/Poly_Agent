@@ -1,0 +1,186 @@
+{
+  "run": {
+    "run_id": "asrun_ac75b159b6294b90",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 34738,
+    "first_token_ms": 24040,
+    "queue_wait_ms": 508,
+    "prompt_tokens": 5665,
+    "completion_tokens": 128,
+    "total_tokens": 5793,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "970b2b3cde519f2f",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 5665,
+        "completion_tokens": 128,
+        "total_tokens": 5793
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://www.mcpworld.com/en/detail/d3a6e8653bd21a5dd39c980ff54c87f0",
+          "rank": 1,
+          "score": null,
+          "snippet": "📄 Export dialogue as Markdown file 🖼️ Responsive design, adaptive window size 🖼️ Interface Preview Desktop petDialogue interfaceSettings interfaceCute Shiba Inu Table PetMulti Model Intelligent DialogueRich Configuration Options 🚀 Quick St…",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://blog.csdn.net/gitblog_00853/article/details/151845821",
+          "rank": 2,
+          "score": null,
+          "snippet": "# 自动化示例:晚上10点自动切换到睡眠模式 alias: 夜间睡眠模式 trigger: platform: time at: '22:00:00' action: service: climate.set_preset_mode target: entity_id: climate.bedroom data: preset_mode: sleep yaml 实现温度自动化控制 结合Home Assistant的自动化功能,你可以实现更智能的温度控制逻辑。例如...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.asus.com/me-en/support/faq/1050223/",
+          "rank": 3,
+          "score": null,
+          "snippet": "2025年7月11日 - [LCD Monitor] ROG A.I. Assistant Technology Introduction[LCD Monitor] ASUS DisplayWidget Center To provide you more detailed instruction, yo...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.mcpworld.com/en/detail/86f4c460719382e3af7a101a234d48a0",
+          "rank": 4,
+          "score": null,
+          "snippet": "voice_dialogue Multi-speaker dialogue synthesis. 1 2 3 4 5 6 7 script: \"Alice: Hello!\\nBob: Hey there!\" cast?: { \"Alice\": \"af_sky\", \"Bob\": \"am_fenrir\" } speed?: 1.0 concat?: true # Combine into single file debug",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.dji.com/ca/ronin-s",
+          "rank": 5,
+          "score": null,
+          "snippet": "2021年1月28日 - To update the firmware, power on the Ronin-S and connect it to a PC or Mac computer, then use DJI Pro Assistant for Ronin. 5.Does the Ronin...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "根据项目配置，当前支持 **两种 assistant preset/mode**：\n\n1. **Deep Mode**（深度模式）\n2. **Web Mode**（网页模式）\n\n---\n\n**依据：**\n\n- 项目配置中 `assistant` 字段显示 `\"deep_mode\": false`，表示当前未启用深度模式。\n- `\"intent_scope\": \"web\"` 表示当前意图范围为网页模式。\n\n---\n\n**可执行建议：**\n\n- 如需切换模式，请在对话界面中调整 assistant 设置。\n- Deep Mode 通常用于需要深度推理的场景，Web Mode 则用于常规问答。",
+    "references": [
+      {
+        "label": "Yuns Desktop Assistant - AI Chat & MCP Tools Integration...",
+        "target": "https://www.mcpworld.com/en/detail/d3a6e8653bd21a5dd39c980ff54c87f0",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.mcpworld.com/en/detail/d3a6e8653bd21a5dd39c980ff54c87f0",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "10分钟上手Home Assistant温控器:从零开始的HVAC系统集成攻略-CSDN博客",
+        "target": "https://blog.csdn.net/gitblog_00853/article/details/151845821",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://blog.csdn.net/gitblog_00853/article/details/151845821",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "[LCD Monitor] ASUS DisplayWidget Center | Official Support | ASUS",
+        "target": "https://www.asus.com/me-en/support/faq/1050223/",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.asus.com/me-en/support/faq/1050223/",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0009",
+  "trace_id": "asrun_ac75b159b6294b90",
+  "captured_at": "2026-09-01T04:27:30.430772"
+}

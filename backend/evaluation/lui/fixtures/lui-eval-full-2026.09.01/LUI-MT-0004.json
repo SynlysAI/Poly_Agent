@@ -1,0 +1,136 @@
+{
+  "run": {
+    "run_id": "asrun_f7402d50a6db4ca2",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 31392,
+    "first_token_ms": 10525,
+    "queue_wait_ms": 1864,
+    "prompt_tokens": 3790,
+    "completion_tokens": 183,
+    "total_tokens": 3973,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "457a3d8e18c22fee",
+          "query_complexity": "simple",
+          "risk_level": "low",
+          "evidence_need": "entry_fact",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "simple_keyword"
+          ],
+          "category": "simple",
+          "confidence": 0.58,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "simple",
+        "recommended_model_purpose": "qa",
+        "recommended_retrieval_tier": "vector",
+        "recommended_execution_tier": "one_shot",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3790,
+        "completion_tokens": 183,
+        "total_tokens": 3973
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [],
+  "message": {
+    "content": "AutoResearch 的审批入口在 **任务中心**。\n\n**具体路径：**\n- 进入 **任务中心**（`/tasks/center`），筛选模块为 **research-engine**，状态选择 **blocked_approval**（待审批）。\n- 在 ResearchRun 阶段时间线中出现 **blocked_approval** 状态时，点击 **审批按钮**，填写原因后选择 **批准** 或 **拒绝**。\n\n**需要审批的阶段（gate_stages）：**\n- PROBLEM_SPEC（问题定义）\n- RECOMMENDATION_ASK（推荐询问）\n- EXPERIMENT_EXECUTION（实验执行）\n\n**依据：** 项目配置中明确标注了审批路由为 `/tasks/center?module_id=research-engine&status=blocked_approval`，并说明在时间线出现该状态时点击审批按钮操作。",
+    "references": [
+      {
+        "label": "ResearchEngine 算法清单",
+        "target": "/research-engine",
+        "type": "route",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      },
+      {
+        "label": "AutoResearch 运行说明",
+        "target": "doc/autoresearch-user-guide.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-MT-0004",
+  "trace_id": "asrun_f7402d50a6db4ca2",
+  "captured_at": "2026-09-01T07:52:23.998043"
+}

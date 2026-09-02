@@ -192,6 +192,11 @@ def verify_admin_tools_and_admin_pages(page) -> None:
     expect(page.locator(".identity-section").first).to_contain_text("管理员")
     expect(page.get_by_role("button", name="创建邀请码")).to_be_visible()
 
+    page.goto(f"{FRONTEND_URL}/admin/lui-evaluation", wait_until="domcontentloaded")
+    page.locator(".lui-eval-page").wait_for(state="visible", timeout=60_000)
+    expect(page.get_by_role("heading", name="LUI Agent 评测报告")).to_be_visible()
+    expect(page.locator(".el-menu-item", has_text="评测报告")).to_be_visible()
+
 
 def verify_user_capability_page(page) -> None:
     """验证普通用户能力目录与路由守卫。
@@ -215,6 +220,12 @@ def verify_user_capability_page(page) -> None:
     print(f"INFO user /admin url={page.url}")
     page.locator(".dashboard-view").wait_for(state="visible", timeout=60_000)
     assert page.url.startswith(f"{FRONTEND_URL}/dashboard"), "普通用户 /admin 应回退工作台"
+
+    page.goto(f"{FRONTEND_URL}/admin/lui-evaluation", wait_until="domcontentloaded")
+    print(f"INFO user /admin/lui-evaluation url={page.url}")
+    page.locator(".dashboard-view").wait_for(state="visible", timeout=60_000)
+    assert page.url.startswith(f"{FRONTEND_URL}/dashboard"), "普通用户 /admin/lui-evaluation 应回退工作台"
+    assert page.locator(".el-menu-item", has_text="评测报告").count() == 0, "普通用户不应看到评测报告入口"
 
 
 def main() -> int:

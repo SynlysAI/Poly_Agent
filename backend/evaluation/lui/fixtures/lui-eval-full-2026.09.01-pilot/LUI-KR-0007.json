@@ -1,0 +1,135 @@
+{
+  "run": {
+    "run_id": "asrun_228537fa13bf4c8d",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 24687,
+    "first_token_ms": 11084,
+    "queue_wait_ms": 597,
+    "prompt_tokens": 3787,
+    "completion_tokens": 200,
+    "total_tokens": 3987,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "6c2cefe5c2055547",
+          "query_complexity": "simple",
+          "risk_level": "low",
+          "evidence_need": "entry_fact",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "simple_keyword"
+          ],
+          "category": "simple",
+          "confidence": 0.58,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "simple",
+        "recommended_model_purpose": "qa",
+        "recommended_retrieval_tier": "vector",
+        "recommended_execution_tier": "one_shot",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3787,
+        "completion_tokens": 200,
+        "total_tokens": 3987
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "failed",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "**结论**：无法回答。知识库中没有收录内部实验号 EXP-9999 的任何结果。\n\n**依据**：\n- 本次查询针对知识库 `kb-fluoro-handbook` 发起检索，返回状态为 `failed`，错误信息为：`WeKnora 知识库 'kb-fluoro-handbook' 不存在`（HTTP 404）。\n- 检索结果为 0 条，未返回任何候选内容，因此不存在 EXP-9999 对应的实验数据。\n\n**可执行建议**：\n1. 确认知识库名称是否正确（当前配置的系统 ID 为 `kb-fluoro-handbook`，但该库在 WeKnora 中不存在）。\n2. 若该知识库应存在，请检查 WeKnora 服务配置或知识库是否已创建/挂载。\n3. 若 EXP-9999 是内部实验号，建议直接查询实验管理系统或原始实验记录，而非知识库。",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "failed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-KR-0007",
+  "trace_id": "asrun_228537fa13bf4c8d",
+  "captured_at": "2026-09-01T04:27:30.225068"
+}

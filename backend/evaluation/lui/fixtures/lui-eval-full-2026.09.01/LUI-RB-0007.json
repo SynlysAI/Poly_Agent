@@ -1,0 +1,133 @@
+{
+  "run": {
+    "run_id": "asrun_0830a49c92a64324",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 30098,
+    "first_token_ms": 10272,
+    "queue_wait_ms": 810,
+    "prompt_tokens": 3834,
+    "completion_tokens": 242,
+    "total_tokens": 4076,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "22b67da56bda263d",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3834,
+        "completion_tokens": 242,
+        "total_tokens": 4076
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "根据当前知识库检索结果，**未找到“内部未公开配方 X-51”的任何组成信息**。\n\n**依据：**\n- 本次检索使用 WeKnora 向量检索，查询“知识库检索‘内部未公开配方 X-51’的组成”，返回结果数为 **0**，状态为 `no_results`。\n- 未启用重排序（rerank），未命中任何知识卡片或候选来源。\n\n**可执行建议：**\n1. **更换关键词**：尝试用“X-51”“配方 X51”或具体组分（如锂盐、溶剂、单体、填料）等更宽泛或更精确的词条重新检索。\n2. **检查知识库范围**：确认该配方是否已上传至当前知识库体系（系统 ID：`e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3`），或是否属于未公开/未入库内容。\n3. **补充资料**：若该配方为内部未公开数据，需先将其文档或结构化数据导入知识库后再检索。\n\n如需，我可以帮你用其他关键词再次检索。",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "no_results"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-RB-0007",
+  "trace_id": "asrun_0830a49c92a64324",
+  "captured_at": "2026-09-01T07:52:24.847178"
+}

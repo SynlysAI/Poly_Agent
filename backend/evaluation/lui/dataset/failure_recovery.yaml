@@ -1,27 +1,28 @@
-# 失败与恢复分桶：工具失败、权限阻断、续答失败、取消与自动恢复。
+# 环境口径已切换到真实 WeKnora 与 active 垂类模型。
 - id: LUI-FR-0001
   category: failure_recovery
   difficulty: medium
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 预测 C=C(F)F 的介电常数，如果失败请自动重试一次。
+  - role: user
+    content: 预测 C=C(F)F 的介电常数，如果失败请自动重试一次。
   context:
-    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
   expected:
     task_success: true
     tool_calls:
-      - tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments:
-          smiles: "C=C(F)F"
-          target_properties: ["dielectric_constant"]
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)F
     answer:
       type: keywords
-      must_include: ["重试"]
+      must_include:
+      - 重试
     escalation:
-      level: none
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
   fixture:
     run:
       run_id: fixture-run-fr-0001
@@ -30,41 +31,43 @@
       first_token_ms: 1300
       total_tokens: 3100
     tool_calls:
-      - call_id: fixture-call-fr-0001-a
-        tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments: {smiles: "C=C(F)F", target_properties: [dielectric_constant]}
-        phase: failed
-        error: {message: "provider timeout"}
-        duration_ms: 1200
-        proposal_usage: {total_tokens: 700}
-      - call_id: fixture-call-fr-0001-b
-        tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments: {smiles: "C=C(F)F", target_properties: [dielectric_constant]}
-        phase: completed
-        duration_ms: 2600
+    - call_id: fixture-call-fr-0001-a
+      tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)F
+      phase: failed
+      error:
+        message: provider timeout
+      duration_ms: 1200
+      proposal_usage:
+        total_tokens: 700
+    - call_id: fixture-call-fr-0001-b
+      tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)F
+      phase: completed
+      duration_ms: 2600
     message:
       content: 首次调用因超时失败，已自动重试成功并返回介电常数预测结果。
-
+    escalation:
+      confirmations: 1
 - id: LUI-FR-0002
   category: failure_recovery
   difficulty: hard
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 预测 C=C(F)Cl 的介电常数。
+  - role: user
+    content: 预测 C=C(F)Cl 的介电常数。
   context:
-    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
   expected:
     task_success: false
     tool_calls:
-      - tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments:
-          smiles: "C=C(F)Cl"
-          target_properties: ["dielectric_constant"]
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)Cl
     answer:
       type: insufficient_info
     escalation:
@@ -78,98 +81,111 @@
       first_token_ms: 1400
       total_tokens: 2900
     tool_calls:
-      - call_id: fixture-call-fr-0002
-        tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments: {smiles: "C=C(F)Cl", target_properties: [dielectric_constant]}
-        phase: failed
-        error: {message: "VERTICAL_PREDICTOR_URL 未配置"}
-        duration_ms: 800
-        proposal_usage: {total_tokens: 680}
+    - call_id: fixture-call-fr-0002
+      tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)Cl
+      phase: failed
+      error:
+        message: VERTICAL_PREDICTOR_URL 未配置
+      duration_ms: 800
+      proposal_usage:
+        total_tokens: 680
     escalation:
       needed_retry: true
     message:
       content: 垂类预测服务未配置，本次无法给出预测结果，信息不足。请配置 VERTICAL_PREDICTOR_URL 后重试。
-
 - id: LUI-FR-0003
   category: failure_recovery
   difficulty: medium
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 基于知识库检索结果创建优化推荐。
+  - role: user
+    content: 基于知识库检索结果创建优化推荐。
   context:
-    selected_tool_ids: ["algorithm:weknora_adapter", "algorithm:mobo_alchemist_adapter"]
+    selected_tool_ids:
+    - algorithm:pi_synthesis_mock
     permission_mode: read_only
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: false
     answer:
       type: refusal
     tool_calls:
-      - tool_id: "algorithm:mobo_alchemist_adapter"
-        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
-        arguments:
-          objectives: [{"name": "yield", "direction": "maximize"}]
+    - tool_id: algorithm:pi_synthesis_mock
+      arguments:
+        objectives:
+        - name: yield
+          direction: maximize
     escalation:
       level: permission_block
       reason: 只读权限阻断优化推荐执行
-
 - id: LUI-FR-0004
   category: failure_recovery
   difficulty: hard
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 检索知识库后给我最终总结。
+  - role: user
+    content: 检索知识库后给我最终总结。
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-fluoro-handbook"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+    selected_tool_ids: []
   expected:
     task_success: false
     escalation:
       level: takeover
       reason: 服务端续答进入 dead letter
+    tool_calls: []
   fixture:
     run:
       run_id: fixture-run-fr-0004
       status: failed
-      error: {message: "continuation dead letter"}
+      error:
+        message: continuation dead letter
       duration_ms: 15000
       total_tokens: 1600
     retrievals:
-      - source: knowledge
-        status: searched
-        duration_ms: 400
-        results:
-          - {id: "kb:fh-overview", rank: 1, score: 0.7, snippet: "氟聚合物总览", used_in_answer: false}
+    - source: knowledge
+      status: searched
+      duration_ms: 400
+      results:
+      - id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+        score: 0.7
+        snippet: 氟聚合物总览
+        used_in_answer: false
     escalation:
       dead_letter: true
-
 - id: LUI-FR-0005
   category: failure_recovery
   difficulty: medium
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 用知识检索工具查一下 PTFE 击穿场强。
+  - role: user
+    content: 预测 SMILES C=C(F)F 的 Tg；如果首次参数解析失败，请修正后重试一次。
   context:
-    selected_tool_ids: ["algorithm:weknora_adapter"]
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test
   expected:
     task_success: true
     answer:
       type: keywords
-      must_include: ["击穿场强"]
+      must_include:
+      - Tg
     tool_calls:
-      - tool_id: "algorithm:weknora_adapter"
-        function_name: "algorithm_weknora_adapter_ea62586f9329"
-        arguments:
-          query: "PTFE 击穿场强"
-          system_id: "kb-fluoro-handbook"
+    - tool_id: algorithm:polymer_tg_knn_upload_test
+      arguments:
+        smiles: C=C(F)F
     escalation:
-      level: param_completion
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
   fixture:
     run:
       run_id: fixture-run-fr-0005
@@ -178,62 +194,70 @@
       first_token_ms: 1100
       total_tokens: 2500
     tool_calls:
-      - call_id: fixture-call-fr-0005-a
-        tool_id: "algorithm:weknora_adapter"
-        function_name: "algorithm_weknora_adapter_ea62586f9329"
-        raw_arguments: "{\"query\": \"PTFE 击穿场强\""
-        arguments: {}
-        arguments_parse_error: "raw arguments JSON 解析失败"
-        phase: failed
-        duration_ms: 900
-        proposal_usage: {total_tokens: 660}
-      - call_id: fixture-call-fr-0005-b
-        tool_id: "algorithm:weknora_adapter"
-        function_name: "algorithm_weknora_adapter_ea62586f9329"
-        arguments: {query: "PTFE 击穿场强", system_id: "kb-fluoro-handbook"}
-        phase: completed
-        duration_ms: 2200
+    - call_id: fixture-call-fr-0005-a
+      tool_id: algorithm:polymer_tg_knn_upload_test
+      arguments:
+        smiles: C=C(F)F
+      phase: failed
+      duration_ms: 900
+      proposal_usage:
+        total_tokens: 660
+    - call_id: fixture-call-fr-0005-b
+      tool_id: algorithm:polymer_tg_knn_upload_test
+      arguments:
+        smiles: C=C(F)F
+      phase: completed
+      duration_ms: 2200
     escalation:
-      param_completions: 1
+      confirmations: 1
+      param_completions: 0
     message:
-      content: 首次参数解析失败，已请求补全 system_id 后重新发起 PTFE 击穿场强检索并完成。
-
+      content: 首次参数解析失败已修正，重试后完成 C=C(F)F 的 Tg 预测。
 - id: LUI-FR-0006
   category: failure_recovery
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 基于知识库回答 PVDF 介电常数，检索失败时说明降级依据。
+  - role: user
+    content: 基于知识库回答 PVDF 介电常数，检索失败时说明降级依据。
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-fluoro-handbook"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+    selected_tool_ids: []
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:fh-dielectric-pvdf"]
+      relevant_ids:
+      - kb:fh-dielectric-pvdf
     answer:
       type: keywords
-      must_include: ["检索失败", "项目事实"]
-
+      must_include:
+      - 检索失败
+      - 项目事实
+    tool_calls: []
 - id: LUI-FR-0007
   category: failure_recovery
   difficulty: hard
   mode: qa
   messages:
-    - role: user
-      content: 回答 WeKnora 的许可证类型，如遇限流请稍后重试。
+  - role: user
+    content: 回答 WeKnora 的许可证类型，如遇限流请稍后重试。
   context:
     use_web_search: true
+    selected_tool_ids: []
   expected:
     task_success: true
     retrieval:
       source: web
-      relevant_ids: ["https://github.com/Tencent/WeKnora"]
+      relevant_ids:
+      - https://github.com/Tencent/WeKnora
     answer:
       type: keywords
-      must_include: ["Apache"]
+      must_include:
+      - Apache
+    tool_calls: []
   fixture:
     run:
       run_id: fixture-run-fr-0007
@@ -242,35 +266,48 @@
       first_token_ms: 1900
       total_tokens: 3400
       usage_events:
-        - {type: "llm.usage.recorded", prompt_tokens: 1200, completion_tokens: 300, total_tokens: 1500}
+      - type: llm.usage.recorded
+        prompt_tokens: 1200
+        completion_tokens: 300
+        total_tokens: 1500
     retrievals:
-      - source: web
-        status: searched
-        duration_ms: 1400
-        results:
-          - {id: "https://github.com/Tencent/WeKnora", rank: 1, score: null, snippet: "WeKnora license", used_in_answer: true}
+    - source: web
+      status: searched
+      duration_ms: 1400
+      results:
+      - id: https://github.com/Tencent/WeKnora
+        rank: 1
+        score: null
+        snippet: WeKnora license
+        used_in_answer: true
     message:
       content: 首次请求被限流，重试后确认 WeKnora 使用 Apache 许可证。
       references:
-        - {label: "WeKnora", target: "https://github.com/Tencent/WeKnora", type: web, source_id: "https://github.com/Tencent/WeKnora", rank: 1}
-
+      - label: WeKnora
+        target: https://github.com/Tencent/WeKnora
+        type: web
+        source_id: https://github.com/Tencent/WeKnora
+        rank: 1
 - id: LUI-FR-0008
   category: failure_recovery
   difficulty: easy
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 先别预测了，取消刚才的垂类预测请求。
+  - role: user
+    content: 先别预测了，取消刚才的垂类预测请求。
   context:
-    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
   expected:
     task_success: true
     answer:
       type: keywords
-      must_include: ["取消"]
+      must_include:
+      - 取消
     escalation:
       level: cancel
+    tool_calls: []
   fixture:
     run:
       run_id: fixture-run-fr-0008
@@ -281,51 +318,53 @@
       user_canceled: true
     message:
       content: 已取消刚才的垂类预测请求，本次任务终止。
-
 - id: LUI-FR-0009
   category: failure_recovery
   difficulty: hard
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 创建优化推荐并在失败时解释原因，不要静默吞掉错误。
+  - role: user
+    content: 创建优化推荐并在失败时解释原因，不要静默吞掉错误。
   context:
-    selected_tool_ids: ["algorithm:mobo_alchemist_adapter"]
+    selected_tool_ids:
+    - algorithm:pi_synthesis_mock
   expected:
     task_success: false
     tool_calls:
-      - tool_id: "algorithm:mobo_alchemist_adapter"
-        function_name: "algorithm_mobo_alchemist_adapter_eb0a1a5609df"
-        arguments:
-          objectives: [{"name": "yield", "direction": "maximize"}]
+    - tool_id: algorithm:pi_synthesis_mock
+      arguments:
+        diamine: ODA
+        dianhydride: PMDA
+        solvent: NMP
     answer:
       type: keywords
-      must_include: ["失败", "ALCHEMIST_BACKEND_URL"]
+      must_include:
+      - 失败
+      - ALCHEMIST_BACKEND_URL
     escalation:
       level: takeover
-
 - id: LUI-FR-0010
   category: failure_recovery
   difficulty: medium
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 预测 C=C(F)F 的介电常数，我确认参数无误后再执行。
+  - role: user
+    content: 预测 C=C(F)F 的介电常数，我确认参数无误后再执行。
   context:
-    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
   expected:
     task_success: true
     answer:
       type: keywords
-      must_include: ["介电常数"]
+      must_include:
+      - 介电常数
     tool_calls:
-      - tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments:
-          smiles: "C=C(F)F"
-          target_properties: ["dielectric_constant"]
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)F
     escalation:
       level: confirmation
       reason: 用户要求确认后执行，受控确认不算失败
@@ -337,13 +376,14 @@
       first_token_ms: 1250
       total_tokens: 2800
     tool_calls:
-      - call_id: fixture-call-fr-0010
-        tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments: {smiles: "C=C(F)F", target_properties: [dielectric_constant]}
-        phase: completed
-        duration_ms: 2400
-        proposal_usage: {total_tokens: 700}
+    - call_id: fixture-call-fr-0010
+      tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)F
+      phase: completed
+      duration_ms: 2400
+      proposal_usage:
+        total_tokens: 700
     escalation:
       confirmations: 1
     message:

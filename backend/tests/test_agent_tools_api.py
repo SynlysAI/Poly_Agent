@@ -144,6 +144,19 @@ class AgentToolsApiTest(ComputationTestCase):
         )
         self.assertEqual(demo["model_proposal"], {"smiles": "CCC"})
 
+    def test_agent_tool_filters_model_proposal_to_declared_fields(self) -> None:
+        """参数模板含契约外字段时应在目录派生阶段剔除。"""
+        AlgorithmVersionRepository.update_fields(
+            "ver-v1",
+            {"model_proposal": {"smiles": "CCC", "temperature_c": 25}},
+        )
+        response = self.client.get(self.base_url)
+        demo = next(
+            item for item in response.json()["data"]["items"]
+            if item["algorithm_id"] == "vertical-demo"
+        )
+        self.assertEqual(demo["model_proposal"], {"smiles": "CCC"})
+
     def test_agent_tool_does_not_derive_model_proposal_from_sample_input(self) -> None:
         """工具目录只暴露显式参数模板，不能把 sample_input 当作模板。"""
         AlgorithmVersionRepository.update_fields(

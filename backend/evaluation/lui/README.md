@@ -6,7 +6,7 @@
 
 - 只覆盖受控 LUI 链路：意图路由、上下文装配、检索、工具提案、确认/补参/权限、服务端续答与最终回答。
 - **计算任务不参与本评测**：xTB / CREST / ORCA / 本地结构生成等计算类工具，以及 ComputeEngine 完整计算任务，全部排除在 Golden Set 与运行矩阵之外。
-- 工具类任务仅覆盖非计算 LUI 工具（垂类预测、知识检索、优化推荐）的提案层行为：选择、参数、确认、补参、权限与续答；不评估计算执行结果的数值质量。
+- 工具类任务仅覆盖产品 LUI 目录中已部署且 active 的垂类算法提案层行为：选择、参数、确认、补参、权限与续答；不评估计算执行结果的数值质量。
 - 不替代 Playwright 功能回归与 `assistant_quality_service` 链路指标。
 
 ## 目录结构
@@ -35,6 +35,80 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
   --facts-dir backend/evaluation/lui/fixtures \
   --report-dir backend/evaluation/lui/reports
 ```
+
+## 录制事实 full 评测工作流
+
+完整集需要先把 Golden 任务经真实产品链路执行，并把观测事实录制到
+`fixtures/<evaluation_id>/`；随后才能离线评测并落 full 基线。
+
+前置条件：后端、MongoDB 与 `assistant_run_worker` 均已启动，模型管理中
+已配置 tool-capable 主模型，评测涉及的知识库/工具可用。
+
+```bash
+# 1. 试点：先跑约 20 条覆盖工具/检索/问答，验收 0 missing_facts、确认→续答→capture 全通
+PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_capture.py \
+  --evaluation-id lui-eval-full-2026.09.01-pilot \
+  --categories tool_selection,knowledge_retrieval,project_fact \
+  --provider-id <provider> --model-id <model> \
+  --username <admin-or-eval-user> --password <password>
+
+# 2. 试点事实先离线验证一遍
+PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
+  --dataset backend/evaluation/lui/dataset --mode full \
+  --facts-dir backend/evaluation/lui/fixtures/lui-eval-full-2026.09.01-pilot \
+  --report-dir backend/evaluation/lui/reports \
+  --evaluation-id lui-eval-full-2026.09.01-pilot
+
+# 3. 全量 80 条；失败任务可用 --only-task <task_id> 同一 evaluation_id 重跑
+PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_capture.py \
+  --evaluation-id lui-eval-full-2026.09.01 \
+  --provider-id <provider> --model-id <model>
+
+# 4. 生成完整报告并导出 M4/M5 人工抽检表；--metadata 记录固定模型
+PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
+  --dataset backend/evaluation/lui/dataset --mode full \
+  --facts-dir backend/evaluation/lui/fixtures/lui-eval-full-2026.09.01 \
+  --report-dir backend/evaluation/lui/reports \
+  --evaluation-id lui-eval-full-2026.09.01 \
+  --metadata '{"model": "<provider>/<model>"}' \
+  --export-review-sheet backend/evaluation/lui/reports/full-manual-review-sheet.json \
+  --reviewer "抽检人"
+
+# 5. 人工完成 ≥20% 抽检后，汇入抽检结论并保存 full 基线
+PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py \
+  --dataset backend/evaluation/lui/dataset --mode full \
+  --facts-dir backend/evaluation/lui/fixtures/lui-eval-full-2026.09.01 \
+  --report-dir backend/evaluation/lui/reports \
+  --evaluation-id lui-eval-full-2026.09.01 \
+  --metadata '{"model": "<provider>/<model>"}' \
+  --manual-review backend/evaluation/lui/baselines/full-manual-review-2026.09.01.json \
+  --baseline backend/evaluation/lui/baselines/full-2026.09.01.json
+```
+
+### 2026.09.01 真实环境快照
+
+- 知识库：`e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3`（粘结剂资料库，WeKnora ready，98 篇文档）。
+- active 垂类工具：`electrolyte_formulation_predictor`、`pi_synthesis_mock`、
+  `polymer_tg_knn_upload_test`、`polymer_tg_knn_upload_test_manual`、
+  `polymer_tg_knn_upload_test_ui`。
+- 数据集版本：`2026.09.01`。KR 全部指向真实 WeKnora 库；TS/TA 全部改用上述
+  active 垂类工具，不再引用无 active 版本的内置适配器。
+
+full 首跑（`lui-eval-full-2026.09.01`，`default_openai/deepseek-v4-flash`）已完成
+80/80 条产品链路录制与事实抓取，0 missing facts。自动判定结果：M1 58.75%，
+M2 33.33%，M3 29.17%（其中 KR 分桶 Recall 均值 70%），M4 71.43%，M5 95.00%。
+完整事实在 `fixtures/lui-eval-full-2026.09.01/`，自动 full 基线在
+`baselines/full-2026.09.01.json`。16 条 M4/M5 抽检表已导出到本地 reports 目录，
+人工复核完成后才能把该基线标记为人工验收版。
+
+驱动器行为约定：
+
+- 工具提案仅在 `phase=awaiting_confirmation`（参数齐全）时自动确认并等待服务端续答；
+  `awaiting_input`（缺参）保持原样，按 M2 参数错误如实计分。
+- 登录信息可改用环境变量 `LUI_EVAL_USERNAME` / `LUI_EVAL_PASSWORD`。
+- 失败/超时任务不中断整批；命令退出码 1 表示存在失败任务，重跑时加
+  `--only-task <task_id>` 即可（capture 按任务取最新 run）。
+- 会话默认保留（标题带 `[LUI-EVAL]` 前缀）便于排查；如需清理加 `--cleanup-chats`。
 
 ## 人工抽检工作流
 

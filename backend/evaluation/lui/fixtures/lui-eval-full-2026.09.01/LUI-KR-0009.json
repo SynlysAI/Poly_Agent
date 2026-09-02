@@ -1,0 +1,150 @@
+{
+  "run": {
+    "run_id": "asrun_b568354501c24b98",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 30892,
+    "first_token_ms": 17553,
+    "queue_wait_ms": 1191,
+    "prompt_tokens": 4015,
+    "completion_tokens": 138,
+    "total_tokens": 4153,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "7f1a27b6898455c2",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 4015,
+        "completion_tokens": 138,
+        "total_tokens": 4153
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "e16cb4d1-5546-48cd-a138-c9a6dcd0223b",
+          "rank": 1,
+          "score": 1.0,
+          "snippet": "## 3.5. Binders\n\nEven though binders make up only 3–5% of the total weight of a Li-ion battery, they play an important role in maintaining the structural integrity and performance of electrodes [191,192]. These polymeric materials serve to…",
+          "used_in_answer": true
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "根据知识库检索结果，粘结剂通常占锂离子电池总重量的 **3%–5%**。\n\n**依据**：[K1] 文献《Challenges and Issues Facing Ultrafast-Charging Lithium-Ion Batteries》指出，尽管粘结剂仅占锂离子电池总重量的 3–5%，但它们在维持电极结构完整性和性能方面发挥着重要作用——通过确保活性材料在集流体上的均匀粘附、在锂化/脱锂过程中提供机械强度，并维持电极在体积变化下的完整性。\n\n**补充说明**：该数据来自知识库中的文献证据，可作为设计或评估电极配方时的参考。",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      },
+      {
+        "label": "Aghili Mehrizi 等 - 2025 - Challenges and Issues Facing Ultrafast-Charging Lithium-Ion Batteries.pdf",
+        "target": "/knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3",
+        "type": "knowledge",
+        "source": "knowledge",
+        "source_id": "e16cb4d1-5546-48cd-a138-c9a6dcd0223b",
+        "rank": 1,
+        "score": 1.0
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-KR-0009",
+  "trace_id": "asrun_b568354501c24b98",
+  "captured_at": "2026-09-01T07:52:23.815936"
+}

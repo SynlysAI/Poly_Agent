@@ -48,7 +48,7 @@ ToleranceKind = Literal[
     "ignore",
 ]
 
-DATASET_VERSION = "2026.08.28"
+DATASET_VERSION = "2026.09.01"
 DEFAULT_RECALL_KS = (1, 3, 5)
 
 

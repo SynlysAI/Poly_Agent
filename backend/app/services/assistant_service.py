@@ -1549,6 +1549,11 @@ class AssistantService:
             context.get("preset_id"),
             context.get("mode"),
         )
+        evaluation_context = {
+            key: context.get(key)
+            for key in ("evaluation_id", "task_id", "evaluation_version")
+            if context.get(key) is not None
+        }
         return {
             "trace_id": context.get("trace_id") or context.get("run_id"),
             "original_user_message_id": context.get("message_id"),
@@ -1574,6 +1579,7 @@ class AssistantService:
                 if capability_relevance
                 else {}
             ),
+            **evaluation_context,
         }
 
     @staticmethod

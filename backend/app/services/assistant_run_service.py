@@ -593,6 +593,11 @@ class AssistantRunService:
             or call.get("assistant_run_id")
             or ""
         )
+        evaluation_context = {
+            key: source_context.get(key)
+            for key in ("evaluation_id", "task_id", "evaluation_version")
+            if source_context.get(key) is not None
+        }
         return {
             "trace_id": trace_id,
             "chat_id": call.get("chat_id"),
@@ -608,6 +613,7 @@ class AssistantRunService:
                 "context_manifest_digest": source_context.get("context_manifest_digest"),
                 "route_snapshot": route_snapshot,
             },
+            **evaluation_context,
         }
 
     @staticmethod

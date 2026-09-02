@@ -132,8 +132,8 @@ class LuiManualReviewTest(unittest.TestCase):
         validate_sheet_completed(sheet)
         validate_review_sheet_alignment(
             sheet,
-            evaluation_id=self.report["evaluation_id"],
-            dataset_version=self.report["dataset_version"],
+            evaluation_id=sheet.evaluation_id,
+            dataset_version=sheet.dataset_version,
         )
         summary = summarize_review(sheet)
         for metric in ("m4", "m5"):

@@ -1,0 +1,157 @@
+{
+  "run": {
+    "run_id": "asrun_a06911fd02ef4eef",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 58900,
+    "first_token_ms": 16856,
+    "queue_wait_ms": 481,
+    "prompt_tokens": 5090,
+    "completion_tokens": 366,
+    "total_tokens": 5456,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "344b88a71b0a8f5f",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker_web",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "retrieval_web"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 5090,
+        "completion_tokens": 366,
+        "total_tokens": 5456
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://alchemist.farm/",
+          "rank": 1,
+          "score": null,
+          "snippet": "Subscribe to reward programs in a self-custodial way, store tokens securely, and easily transfer your Crucible with its contents. Launch Crucible Chaos Labs The Alchemist tool for building out ideas through community contributions. Launch …",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://k.sina.com.cn/article_7879996046_1d5af328e06801i4ye.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "针对 内容由AI生成不保真 的担忧,AI助手在处理事实类、新闻资讯等查询时,会执行一套严格的规则:全域强制联网检索优先、..._新浪网 ... 标注风...",
+          "used_in_answer": true
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "**结论**：根据当前可获取的公开网页证据，**没有找到 Alchemist 项目与 ChemOS 2.0 之间存在直接关系的说明**。两者属于不同领域、不同主体的独立项目。\n\n**依据**：\n- 网页证据 [1] 显示，Alchemist（alchemist.farm）是一个**去中心化金融（DeFi）项目**，主要功能包括：自我托管订阅奖励计划、安全存储代币、转移 \"Crucible\" 资产，以及通过社区贡献构建创意工具（Chaos Labs）。它属于区块链/加密资产领域，与化学或实验室自动化无关。\n- 关于 ChemOS 2.0，当前检索结果中**没有出现**任何与之相关的网页证据，因此无法确认其与 Alchemist 的关联。\n\n**说明**：\n- 需要提醒的是，网页证据 [1] 中提到的 Alchemist 是加密金融项目，而化学领域也存在名为 \"Alchemist\" 的实验自动化/优化平台（例如部分实验室自动化软件）。**如果用户指的是化学实验自动化场景下的 Alchemist，则当前网页证据无法覆盖**，且项目内事实（PROJECT_FACTS）中也没有 Alchemist 与 ChemOS 2.0 的关联记录。\n- 由于两者名称存在歧义，建议明确你指的是哪个 Alchemist（加密金融版还是化学实验自动化版），以便进一步核实。\n\n**可执行建议**：\n1. 若指化学实验自动化场景，建议直接查阅 ChemOS 2.0 官方文档或 GitHub 仓库，确认其是否集成了名为 Alchemist 的模块。\n2. 若指加密金融项目，则两者无关联，可忽略此问题。",
+    "references": [
+      {
+        "label": "Alchemist",
+        "target": "https://alchemist.farm/",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://alchemist.farm/",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "内容由ai生成不保真?看懂这套检索核验规则,避免被误导|AI|风险|纯文学|联网|医疗_新浪新闻",
+        "target": "https://k.sina.com.cn/article_7879996046_1d5af328e06801i4ye.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://k.sina.com.cn/article_7879996046_1d5af328e06801i4ye.html",
+        "rank": 2,
+        "score": null
+      }
+    ],
+    "answer_mode": "hybrid_grounded",
+    "answer_scope": "hybrid",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-WR-0005",
+  "trace_id": "asrun_a06911fd02ef4eef",
+  "captured_at": "2026-09-01T07:52:26.174283"
+}

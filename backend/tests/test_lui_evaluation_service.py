@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -19,6 +21,10 @@ from app.services.lui_evaluation_service import (
     list_baseline_modes,
     load_baseline_summary,
 )
+from app.core.auth import build_access_token
+from app.core.config import settings
+from app.infra.repositories import UserRepository
+from app.schemas.identity_runtime import UserRecord
 
 
 class LuiEvaluationServiceTest(unittest.TestCase):
@@ -80,3 +86,80 @@ class LuiEvaluationApiTest(ComputationTestCase):
         payload = response.json()["data"]
         self.assertIn("available", payload)
         self.assertIn(payload["mode"], ("smoke", "full"))
+
+
+class LuiEvaluationAdminPermissionTest(ComputationTestCase):
+    """评测报告接口必须保持管理员专属。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.admin = UserRecord(
+            user_id="admin_lui_eval",
+            username="admin_lui_eval",
+            password_hash="unused",
+            role="admin",
+            status="active",
+            created_at=datetime(2026, 9, 1, 9, 0, 0),
+            updated_at=datetime(2026, 9, 1, 9, 0, 0),
+        )
+        self.user = UserRecord(
+            user_id="user_lui_eval",
+            username="user_lui_eval",
+            password_hash="unused",
+            role="user",
+            status="active",
+            created_at=datetime(2026, 9, 1, 9, 0, 0),
+            updated_at=datetime(2026, 9, 1, 9, 0, 0),
+        )
+        UserRepository.save(self.admin)
+        UserRepository.save(self.user)
+        self.admin_token, _ = build_access_token(
+            self.admin.user_id, self.admin.username, self.admin.role
+        )
+        self.user_token, _ = build_access_token(
+            self.user.user_id, self.user.username, self.user.role
+        )
+
+    def _patch_users(self):
+        """把 token 用户解析到本次测试创建的真实用户。"""
+
+        def fake_find(user_id: str) -> UserRecord | None:
+            """按 ID 返回测试用户。
+
+            Args:
+                user_id: 用户 ID。
+
+            Returns:
+                对应用户记录。
+            """
+            if user_id == self.admin.user_id:
+                return self.admin
+            if user_id == self.user.user_id:
+                return self.user
+            return None
+
+        return patch(
+            "app.infra.repositories.UserRepository.find_by_user_id",
+            side_effect=fake_find,
+        )
+
+    def test_summary_endpoint_rejects_normal_user(self) -> None:
+        """普通用户访问评测基线接口应得到 403。"""
+        settings.auth_enabled = True
+        with self._patch_users():
+            response = self.client.get(
+                "/api/v1/assistant/lui-evaluation/summary",
+                headers={"Authorization": f"Bearer {self.user_token}"},
+            )
+        self.assertEqual(response.status_code, 403)
+
+    def test_summary_endpoint_allows_admin(self) -> None:
+        """管理员访问评测基线接口应返回 200 与可用模式。"""
+        settings.auth_enabled = True
+        with self._patch_users():
+            response = self.client.get(
+                "/api/v1/assistant/lui-evaluation/summary",
+                headers={"Authorization": f"Bearer {self.admin_token}"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("available", response.json()["data"])

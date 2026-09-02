@@ -1,0 +1,142 @@
+{
+  "run": {
+    "run_id": "asrun_4cd27c5ecbce4afc",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 57653,
+    "first_token_ms": 22785,
+    "queue_wait_ms": 162,
+    "prompt_tokens": 3849,
+    "completion_tokens": 438,
+    "total_tokens": 4287,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_deep",
+      "purpose": "deep",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "complex",
+      "budget": {
+        "preset_id": "research_deep",
+        "compatibility_mode": "deep",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "7dfd45558eb1ae25",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "multi_source_synthesis",
+          "explainability_required": true,
+          "user_constraint": "high_explainability",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "complex_keyword",
+            "explainability_required"
+          ],
+          "category": "complex",
+          "confidence": 0.67,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "complex",
+        "effective_model_purpose": "deep",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 2,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3849,
+        "completion_tokens": 438,
+        "total_tokens": 4287
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "failed",
+      "duration_ms": null,
+      "results": []
+    },
+    {
+      "source": "web",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "# 氟聚合物与碳聚合物的介电性能差异\n\n## 结论\n\n很遗憾，**当前无法完成该对比**。知识库检索请求已失败，原因是目标知识库不存在：\n\n- 查询的知识库：`kb-fluoro-handbook`（氟聚合物手册）\n- 检索状态：**失败**（HTTP 404）\n- 错误信息：`WeKnora 知识库 'kb-fluoro-handbook' 不存在`\n- 检索结果：0 条\n\n同时，本次会话未命中任何知识库证据（KNOWLEDGE_EVIDENCE 不可用），也没有可用的网页证据（WEB_EVIDENCE 不可用），因此无法提供有依据的介电性能对比结论。\n\n## 依据\n\n1. 系统尝试从 `kb-fluoro-handbook` 和 `kb-carbon-handbook` 两个知识库检索\"氟聚合物与碳聚合物介电性能差异\"，但 `kb-fluoro-handbook` 返回 404 不存在，导致整个检索失败，候选结果数为 0。\n2. 当前没有可用的知识库证据或网页证据支撑该对比。\n\n## 可执行建议\n\n1. **确认知识库名称**：请核对系统中实际创建的知识库 ID。可在知识库管理页面查看已存在的知识库列表，确认氟聚合物手册对应的正确 ID（可能不是 `kb-fluoro-handbook`）。\n2. **创建/导入知识库**：若 `kb-fluoro-handbook` 确实未创建，请先上传氟聚合物相关文档并建立该知识库，再重新发起对比查询。\n3. **改用已存在的知识库**：如果碳聚合物知识库 `kb-carbon-handbook` 可用，可先单独检索碳聚合物介电性能，再补充氟聚合物来源。\n4. **补充外部资料**：如需立即获取对比结论，可提供权威文献或手册内容，我将基于你提供的资料进行整理。\n\n> 说明：为避免编造数据，在知识库不可用且无外部证据的情况下，我不会给出未经证实的介电常数、损耗因子等具体数值对比。",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "hybrid_grounded",
+    "answer_scope": "hybrid",
+    "retrieval_status": "failed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-KR-0003",
+  "trace_id": "asrun_4cd27c5ecbce4afc",
+  "captured_at": "2026-09-01T04:27:30.157205"
+}

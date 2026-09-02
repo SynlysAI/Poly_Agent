@@ -1,0 +1,186 @@
+{
+  "run": {
+    "run_id": "asrun_b5a1b6457a5947ae",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 27256,
+    "first_token_ms": 11480,
+    "queue_wait_ms": 278,
+    "prompt_tokens": 6536,
+    "completion_tokens": 180,
+    "total_tokens": 6716,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "322211172abaa51e",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 6536,
+        "completion_tokens": 180,
+        "total_tokens": 6716
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://bbs.csdn.net/weixin_30575517/article/details/100200676",
+          "rank": 1,
+          "score": null,
+          "snippet": "2026年7月16日 - 和普通文档检索工具相比,WeKnora 的特点在于对 结构复杂 和 内容异构 的场景做了专门优化。这意味着它处理的不只是纯文本,还会识别表格、标题层级、列...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://bbs.csdn.net/weixin_42526415/article/details/100200757",
+          "rank": 2,
+          "score": null,
+          "snippet": "2026年7月16日 - 传统的全文检索在面对合同、报告、技术手册等多页异构文档时,往往难以精准理解语义关联,导致检索结果不尽如人意。腾讯推出的WeKnora正是为解决这一痛...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://ai-bot.cn/weknora/",
+          "rank": 3,
+          "score": null,
+          "snippet": "WeKnora 是腾讯开源的基于大语言模型(LLM)的文档理解与语义检索框架。框架基于模块化设计,支持多模态文档解析(如 PDF、Word、图片等),通过 RAG(检索增强生成)机制实现精准问答。 ... 项目官网:h...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://cloud.tencent.com/developer/article/2552362",
+          "rank": 4,
+          "score": null,
+          "snippet": "开启知识图谱功能后,WeKnora会分析并构建文档内部的语义关联网络,不仅帮助用户理解文档内容,还为索引和检索提供结构化支撑,提升检索结果的相关性和广度。 快速开... 高效问题管理:支持高频问题...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://cloud.tencent.com/developer/article/2610798",
+          "rank": 5,
+          "score": null,
+          "snippet": "腾讯开源WeKnora v0.2.0企业级文档理解检索框架,基于RAG机制深度集成ReACT Agent模式,支持多模态文档解析、混合检索与知识图谱构建,提供全链路文档智能处理方案... 工具 —— 内置文档解析 / 检...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "根据项目事实，PolyAgent 中的 WeKnora 知识增强检索适配器（`weknora_adapter`）通过 PolyAgent 知识库服务查询 WeKnora，但项目事实中**未提供 top_k 默认返回条数的具体配置**。\n\n**依据：**\n- 项目算法注册表中仅描述了 `weknora_adapter` 的调用方式（REST）和依赖（`WEKNORA_BASE_URL`），未包含 top_k 参数默认值 [项目事实]。\n- 网页证据也未提及 WeKnora 的 top_k 默认返回条数 [1][2]。\n\n**建议：**\n如需确认默认返回条数，请查看 PolyAgent 后端中 `weknora_adapter` 的调用代码或知识库服务配置，通常在请求参数中会显式设置 top_k 值。",
+    "references": [
+      {
+        "label": "WeKnora私有化部署指南:复杂文档语义检索实战",
+        "target": "https://bbs.csdn.net/weixin_30575517/article/details/100200676",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://bbs.csdn.net/weixin_30575517/article/details/100200676",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "腾讯WeKnora:基于大模型的复杂文档语义检索私有化部署指南",
+        "target": "https://bbs.csdn.net/weixin_42526415/article/details/100200757",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://bbs.csdn.net/weixin_42526415/article/details/100200757",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "WeKnora - 腾讯开源的文档理解与语义检索框架 | AI工具集",
+        "target": "https://ai-bot.cn/weknora/",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://ai-bot.cn/weknora/",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0005",
+  "trace_id": "asrun_b5a1b6457a5947ae",
+  "captured_at": "2026-09-01T07:52:24.437024"
+}

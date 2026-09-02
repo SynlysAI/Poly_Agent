@@ -1,0 +1,193 @@
+{
+  "run": {
+    "run_id": "asrun_af7c28f96e034c9c",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 95119,
+    "first_token_ms": 62606,
+    "queue_wait_ms": 489,
+    "prompt_tokens": 7120,
+    "completion_tokens": 387,
+    "total_tokens": 7507,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_deep",
+      "purpose": "deep",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "complex",
+      "budget": {
+        "preset_id": "research_deep",
+        "compatibility_mode": "deep",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "25c637879ce3730a",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "complex",
+        "effective_model_purpose": "deep",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 2,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 7120,
+        "completion_tokens": 387,
+        "total_tokens": 7507
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    },
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://pbtsl.com/shiyanshuju/41356.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "PVDF介电常数(1kHz)对比表(部分).厂家及牌号 试验条件 测试方法 介电常数(1kHz) PVDF 美国西湖塑料 Westlake Kynar® 740 ASTMD150 8.50 PVDF 日本吴羽 KF 1000...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://m.sohu.com/sa/845609065_121950246",
+          "rank": 2,
+          "score": null,
+          "snippet": "- PVDF在锂电池中作为正极粘结剂,因其抗氧化还原能力强、热稳定性好,且易分散在NMP溶剂中。 结论 PVDF材料以其卓越的化学稳定性、热稳定性、电绝缘性、耐候性以及机械性能,在多个行业中发挥着重要作用。随着科技的发展和对高性能材料需求的增加,PVDF材料的应用领域将继续扩大,为各行各业提供更多的创新解决方案。 目前PVDF价格处于低位,我司有各种品牌、型号、规格的PVDF材料出售,物美价廉,欢迎选...",
+          "used_in_answer": true
+        },
+        {
+          "id": "http://pbtsl.com/shiyanshuju/9949.html",
+          "rank": 3,
+          "score": null,
+          "snippet": "对比表(部分).厂家及牌号 试验条件 测试方法 介电常数(1MHz) PVDF 美国Nytef UNINAR® 740 ASTMD150 8.20 PVDF 美国3M 3M™ Dyneon™ Fluoroplastic PVDF 315080003 ASTMD1...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://b2b.baidu.com/q/aland?q=ACFAFEF0FDF9ABADACF9F9FBF8F1FFFFFDF9F1AAF9F9F8FDAAFAFBACABACF9FC&id=qide37940bde0021866408c0014c32ebe05&answer=17247531560264024057&utype=2&ptype=10",
+          "rank": 4,
+          "score": null,
+          "snippet": "一,pvdf的介电性能pvdf(聚偏氟乙烯)是一种具有优异介电性能的高分子材料.它的介电常数通常在8-12之间,介电损耗较低,这使得它在电容器,传感器等电子元件中具有广泛应用.pvdf的介电性能还表现出频率依赖性,在低频范围内保持稳定,高频时略有下降.这种特性使其成为高频电子器件的理想选择....",
+          "used_in_answer": false
+        },
+        {
+          "id": "http://www.doc88.com/p-6324438375925.html",
+          "rank": 5,
+          "score": null,
+          "snippet": "内容提示:第37卷第5期2009年5月化工新型材料N EW CH EM I CAL M ATERI ALSVD L 37 N o.5· 43·高介电常数PVDF/PZT/Terfenol —D复合材料的介电性能研究,.权红英...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "## 结论\n\nPVDF 的介电性能表现出明显的**频率依赖性**：介电常数在低频范围保持稳定，随频率升高略有下降；介电损耗较低。关于**温度依赖性**，当前检索到的资料未提供系统的温频依赖数据，仅能给出频率依赖的结论。\n\n---\n\n## 依据\n\n**频率依赖性** [4]：\n- PVDF 介电常数通常在 **8–12** 之间\n- 低频范围内保持稳定，**高频时略有下降**\n- 介电损耗较低，适合高频电子器件应用\n\n**介电常数典型值**（不同频率下）：\n- 1 kHz 下：约 **7.5–10.0**（不同牌号，ASTM D150）[1]\n- 1 MHz 下：约 **7.0–8.2**（不同牌号，ASTM D150）[3]\n\n**其他相关性能** [2]：\n- 具有高介电强度和低介电常数特性（部分资料表述）\n- 同质多晶现象赋予 PVDF 较高的压电和热电活性\n- 压电系数约 6–7 pC/N\n\n---\n\n## 可执行建议\n\n1. **如需温度依赖性数据**：当前知识库和网页证据均未覆盖，建议补充检索 PVDF 介电常数随温度变化的文献（如 DSC 或宽频介电谱测试数据）。\n2. **如需精确数值**：不同厂家、牌号（如 Kynar®、KF 系列）的介电常数存在差异，建议按具体牌号查阅对应 ASTM D150 测试报告。\n3. **若用于高频场景**：可参考 1 MHz 数据（约 7.0–8.2）进行设计，注意高频下介电常数下降的趋势。",
+    "references": [
+      {
+        "label": "PVDF 介电常数(1kHz)_PVDF物理性能【塑料海洋网】",
+        "target": "http://pbtsl.com/shiyanshuju/41356.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://pbtsl.com/shiyanshuju/41356.html",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "pvdf材料性能_领域_使其_制造",
+        "target": "https://m.sohu.com/sa/845609065_121950246",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://m.sohu.com/sa/845609065_121950246",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "PVDF 介电常数(1MHz)_PVDF物理性能【塑料海洋网】",
+        "target": "http://pbtsl.com/shiyanshuju/9949.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://pbtsl.com/shiyanshuju/9949.html",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-MT-0005",
+  "trace_id": "asrun_af7c28f96e034c9c",
+  "captured_at": "2026-09-01T07:52:24.028877"
+}

@@ -91,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="抽检人名称；仅 --export-review-sheet 时写入抽检表",
     )
+    parser.add_argument(
+        "--metadata",
+        default=None,
+        help='可选：JSON 字符串，附加到报告 metadata（如 \'{"model": "deepseek-chat"}\'）',
+    )
     return parser
 
 
@@ -121,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         facts_dir=args.facts_dir,
         evaluation_id=args.evaluation_id,
         manual_review_summary=manual_review_summary,
+        metadata=json.loads(args.metadata) if args.metadata else None,
     )
     if args.export_review_sheet:
         tasks = load_dataset(args.dataset)

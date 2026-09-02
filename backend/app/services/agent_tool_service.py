@@ -69,6 +69,27 @@ class AgentToolService:
         )
 
     @staticmethod
+    def _contract_scoped_model_proposal(
+        proposal: Any,
+        schema_source: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """按输入契约过滤参数模板，避免目录暴露不可通过校验的默认参数。
+
+        Args:
+            proposal: active 版本或注册表中的显式参数模板。
+            schema_source: 提供 input_schema 的注册表或版本文档。
+
+        Returns:
+            只包含契约声明字段的参数模板；原模板无效时返回 None。
+        """
+        if not isinstance(proposal, dict):
+            return None
+        fields = (schema_source.get("input_schema") or {}).get("fields")
+        declared = set(fields) if isinstance(fields, dict) else set()
+        scoped = {key: value for key, value in proposal.items() if key in declared}
+        return scoped or None
+
+    @staticmethod
     def _registries() -> list[dict[str, Any]]:
         """确保内置 registry 与用户部署条目都已写入后再派生目录。"""
         from app.services.research_engine_service import ResearchEngineService
@@ -216,9 +237,9 @@ class AgentToolService:
         schema_source = version or registry
         owner = registry.get("owner") or (version or {}).get("created_by")
         # 参数模板只是管理端元数据；样例输入保留测试语义，不能变成 LUI 默认参数。
-        model_proposal = (
-            (version or {}).get("model_proposal")
-            or registry.get("model_proposal")
+        model_proposal = cls._contract_scoped_model_proposal(
+            (version or {}).get("model_proposal") or registry.get("model_proposal"),
+            schema_source,
         )
         tool = AgentToolRegistryItem(
             tool_id=f"algorithm:{algorithm_id}",

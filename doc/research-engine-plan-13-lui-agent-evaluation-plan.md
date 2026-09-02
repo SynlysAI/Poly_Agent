@@ -1,8 +1,8 @@
 # Plan 13：LUI Agent 评估与八项指标体系工作计划
 
-> 状态：已评审 / Phase 0–5 全部完成
+> 状态：已评审 / Phase 0–5 完成；Phase 6 full 事实首跑完成，人工抽检待完成
 >
-> 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）
+> 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）/ 2026-09-01（Phase 6 真实环境复跑）
 >
 > 前置文档：
 > - [research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md](research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md)
@@ -539,6 +539,42 @@ Phase 2 验证记录（2026-08-28）：
 - [x] 用匿名化样本人工标注小批次，补充真实分布覆盖率。（`--label-sample N --label-output PATH` 导出匿名化 run 投影：run_key 短哈希 + 状态 + 时长/用量 + 日期桶，不含用户、内容、参数与精确时间）
 - [x] 每两周或每次大版本发布前刷新 baseline，发现成功率、幻觉、延迟或成本异常。（README 固化观测节奏：导出快照 → 采样聚合 → 人工标注 → 与上期对比 → 必要时递增数据集版本并刷新基线；回归门禁 `make test-lui-eval` 持续生效）
 
+### Phase 6：录制事实 full 评测首跑（2026-09-01 追加）
+
+> 目标：补齐“任务执行”半截，先试点后全量跑通录制事实评测，落第一份真实 full 基线。
+
+- [x] 修复评测上下文续答丢失：`_tool_source_context` 保存 `evaluation_id / task_id / evaluation_version`，`_continuation_context` 透传到续答 run。（三字段缺省不写入，旧快照兼容；`test_lui_evaluation_context.py` 覆盖提案/续答/缺省三场景）
+- [x] 新增录制驱动器 `scripts/run_lui_capture.py`：HTTP 真实产品链路、每任务独立会话、注入评测上下文、轮询终态、自动确认参数齐全提案并等待续答、按 `evaluation_id` 抓取事实写入 `fixtures/<evaluation_id>/`。（`test_lui_capture_driver.py` 桩客户端覆盖筛选/上下文/final 提取/确认策略/超时链路）
+- [x] `run_lui_eval.py` 支持 `--metadata` JSON，把固定 provider/model 写入报告与基线元数据。
+- [x] 评测报告入口权限回归：后端普通用户 403 / 管理员 200 测试；e2e 普通用户访问 `/admin/lui-evaluation` 重定向工作台且菜单不可见，管理员可见可进入。（不改实现，仅防回退）
+- [x] 试点跑通：`lui-eval-full-2026.09.01-pilot`，分类 tool_selection / knowledge_retrieval / project_fact，验收 0 missing_facts、工具确认→续答→capture 全通。（2026-09-01 首跑发现的环境/口径缺口已按下方真实环境复跑决策处理）
+- [x] 全量事实跑通：`lui-eval-full-2026.09.01` 80/80 任务经产品链路执行，80 份事实齐全、0 missing facts，并导出 16 条 M4/M5 分层抽检表。
+- [ ] 完成 ≥20% M4/M5 人工抽检：抽检表在本地 `reports/full-manual-review-sheet.json`，人工结论未回填前 full 基线仅代表自动判定口径。
+- [x] 落第一份自动判定 full 基线：`baselines/full-2026.09.01.json` 入库，`/admin/lui-evaluation` full 模式可见真实 M1–M8（M6/M7 有真实数值）；人工抽检完成后再升级为人工验收版。
+
+### Phase 6 真实环境复跑决策与结论（2026-09-01）
+
+**环境口径决策**
+
+1. KR 不再引用不存在的 `kb-fluoro-handbook` 等假想库，全部切换到已接入且 ready 的 WeKnora「粘结剂资料库」（`e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3`）。`relevant_ids` 使用 WeKnora 实际 `knowledge_id`，不伪造知识内容。
+2. TS/TA 不再引用无 active 版本或非 `vertical_algorithm` 分组的 `vertical_predictor_adapter / weknora_adapter / mobo_alchemist_adapter`，改用当前 5 个已激活垂类模型：含氟电解液配方预测、PI 合成难度评分、Polymer Tg KNN（基础/手工/UI 三个上传版本）。
+3. 数据集版本递增为 `2026.09.01`；离线环境门禁禁止 full Golden 再引用上述不可调用适配器或假想知识库。
+4. 工具目录修复：active 版本 `model_proposal` 中超出 `input_schema` 的字段会在目录派生阶段过滤，避免 available 工具在提案层必然因契约外参数失败。
+
+**full 首跑结果（lui-eval-full-2026.09.01，default_openai/deepseek-v4-flash）**
+
+- 录制与事实抓取：80/80 成功，0 missing facts；工具确认→执行→续答→capture 链路已打通。
+- 自动质量结果：M1 58.75%（47/80），M2 33.33%（10/30），M3 29.17%（7/24；KR 分桶 Recall 均值 70%），M4 71.43%（40/56），M5 95.00%（19/20），M8 86.25%（69/80）。M6/M7 首次获得真实延迟与 token 数值。
+- 已知残留：部分 active 版本显式 `model_proposal` 会覆盖 provider 按用户输入生成的自定义参数，导致非默认 SMILES/温度/配方号任务失败；拒绝与取消类信号未全部落入持久化 escalation 事实；少量真实检索排序和项目事实回答仍不达标。这些问题保留在 full 基线中，后续按产品缺陷修复，不允许通过修改 Golden 答案掩盖。
+
+**2026-09-02 回归记录**：后端全量 1038 通过 / 1 跳过；前端构建通过；LUI 专项与 smoke 基线门禁通过；能力中心 + 管理员权限 e2e 通过。dialogue e2e 当前被外部 LLM 网关阻断（OpenAI-compatible providers 探测返回 401/500），未产生工具提案；该失败不使用 mock 伪装通过，待网关凭据恢复后重跑。
+
+2026-09-01 试点结论（lui-eval-full-2026.09.01-pilot，模型 default_openai/deepseek-v4-flash）：
+
+1. **链路验证通过**：驱动器 → run worker → 事实抓取 → full 报告全通；20 条 KR/PF 任务全部产生事实，M6 延迟与 M7 token 均为真实观测值。
+2. **KR 环境缺口**：Golden 依赖的知识库（如 `kb-fluoro-handbook`）在当前环境不存在，WeKnora 返回 404，M3 Recall=0；模型如实拒答，部分 M4 因拿不到证据失败。全量前需先接入真实知识库，禁止为对答案伪造知识库。
+3. **TS 工具口径冲突**：Golden 期望 `vertical_predictor_adapter / weknora_adapter / mobo_alchemist_adapter` 可作为 LUI 工具，但产品 `agent_tool_service` 仅放行 `capability_group=vertical_algorithm` 且要求 active 版本；三个内置适配器均无版本记录，且 weknora/mobo 分组为 knowledge/wetlab_optimization。需要产品决策：要么把三个适配器纳入 LUI 可调用目录（涉及权限边界评审），要么工具题改用环境已激活垂类工具并递增数据集版本。
+
 ## 9. 测试与验证命令
 
 ```bash
@@ -550,6 +586,9 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --data
 
 # 完整评测并生成报告
 PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_eval.py --dataset backend/evaluation/lui/dataset --mode full --report-dir reports/lui-eval
+
+# 录制事实驱动器（任务先经真实产品链路执行，详见 backend/evaluation/lui/README.md）
+PYTHONPATH=backend conda run -n poly_agent python scripts/run_lui_capture.py --evaluation-id lui-eval-full-<date> --categories tool_selection,knowledge_retrieval,project_fact
 
 # 回归门禁（离线 fixture 快速集 + 基线对比）
 make test-lui-eval
@@ -595,3 +634,6 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_
 - 2026-08-28：完成 Phase 5 生产采样与持续观测：新增默认 dry-run 的只读采样脚本（NDJSON 快照 / 显式只读 DB）、匿名化聚合（M6/M7/M8 候选 + 链路侧 M2 候选）与人工标注样本导出；双周/发布前观测流程写入 README。计划全部完成。
 - 2026-08-28：收尾验证通过，全部验收标准达成；计划状态改为已完成。后续变更须按 §1.1 追加评审记录并递增数据集版本。
 - 2026-08-29：评审加固：人工抽检表并入报告前必须校验 `evaluation_id` 与 `dataset_version`，防止过期校准污染新基线；生产数据库只读采样按时间倒序跨页定位窗口，避免历史窗口被最新一页遮挡。新增对应回归测试。
+- 2026-09-01：追加 Phase 6 并完成代码侧四项：修复评测三字段经提案→确认→续答的透传丢失；新增 `scripts/run_lui_capture.py` 录制驱动器（只自动确认参数齐全提案）；`run_lui_eval.py` 支持 `--metadata`；评测报告入口补后端 403/200 与 e2e 守卫回归。试点、全量与 full 基线待环境执行后勾选。
+- 2026-09-01：试点首跑完成（后端 1031 项测试、e2e、smoke 门禁均通过；服务已滚动加载新代码）：KR+PF 20/20 执行与抓取全通并产出真实 M6/M7；KR 知识库缺失与 TS 工具目录口径冲突两个环境缺口已记录，全量暂缓待决策。驱动器补充 API 错误 detail 透出与对应测试。
+- 2026-09-01：完成 Phase 6 真实环境复跑：KR 切换 ready WeKnora 粘结剂资料库，TS/TA 切换 5 个 active 垂类模型，数据集版本递增 `2026.09.01`；80/80 full 事实抓取成功，落自动判定 full 基线。M4/M5 人工抽检与产品质量残留另行跟进。

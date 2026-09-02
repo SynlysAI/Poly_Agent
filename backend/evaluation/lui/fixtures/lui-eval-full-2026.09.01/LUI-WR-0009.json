@@ -1,0 +1,187 @@
+{
+  "run": {
+    "run_id": "asrun_a7abb7756a29451d",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 57315,
+    "first_token_ms": 18176,
+    "queue_wait_ms": 375,
+    "prompt_tokens": 6197,
+    "completion_tokens": 456,
+    "total_tokens": 6653,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_deep",
+      "purpose": "deep",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "complex",
+      "budget": {
+        "preset_id": "research_deep",
+        "compatibility_mode": "deep",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "f2a8be609d35cbcc",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker_web",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "complex",
+        "effective_model_purpose": "deep",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning",
+        "user_overrides": [
+          "model",
+          "retrieval_web"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 2,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 6197,
+        "completion_tokens": 456,
+        "total_tokens": 6653
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://blog.csdn.net/gitblog_00504/article/details/157234939",
+          "rank": 1,
+          "score": null,
+          "snippet": "2026年1月22日 - 但很多团队在实际部署过程中遇到了各种难题:环境配置复杂、服务依赖繁多、性能调优困难....WeKnora作为基于LLM的智能框架,提供了文档理解、语义检索和...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://m.blog.csdn.net/gitblog_00959/article/details/156417753",
+          "rank": 2,
+          "score": null,
+          "snippet": "专为文档深度理解、语义检索和上下文感知问答设计。本指南将为您提供从零开始的完整部署方案，帮助.检查端口占用情况 验证依赖服务状态 查看容器运行日志 ...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://ai.so.com/search/socd715e63ced5963587e24b0ca97abefe?search=%E5%B0%8F%E7%99%BD%E4%B9%9F%E8%83%BD%E6%87%82%3AWeKnora%E6%9C%AC%E5%9C%B0%E5%8C%96%E9%83%A8%E7%BD%B2%E4%B8%8E%E4%BD%BF%E7%94%A8%E9%81%BF%E5%9D%91%E6%8C%87%E5%8D%97&src=so_result_natural_ask&srcg=so_result_natural_ask",
+          "rank": 3,
+          "score": null,
+          "snippet": "WeKnora是腾讯开源的基于RAG架构的智能知识库框架,支持本地私有化部署,能实现文档深度理解与精准问答,核心优势是数据完全本地化、零AI幻觉、支持多格式文档解析... 需检查P...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://m.blog.csdn.net/gitblog_00007/article/details/156556715",
+          "rank": 4,
+          "score": null,
+          "snippet": "WeKnora是一款基于LLM技术的企业级AI知识管理平台，采用RAG（检索增强生成）范式，提供深度文档理解、语义检索和上下文感知回答能力。本指南将帮助您快速部署并掌握WeKnora的核心功能，让企业文档管理智能化，提升知识利用效率。一、WeKnora核心架构解析WeKnora采用模块...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://blog.csdn.net/weixin_42514540/article/details/158523549",
+          "rank": 5,
+          "score": null,
+          "snippet": "2026年3月10日 - API端点地址:通常是Web界面的公网地址,比如端口号:默认可能是8080或其他端口.#知识库问答#API集成#AI应用部署ߧ� WeKnora - 知识库问答系统一键部署...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "## 结论\n\nWeKnora 部署时**默认 Web 端口为 8080**，并依赖 **Ollama（默认监听 11434 端口）** 作为本地 LLM 推理服务，同时需要 Docker Engine、Docker Compose 和 Git 作为基础环境。\n\n---\n\n## 依据\n\n- **Web 端口**：WeKnora 镜像启动后，Web 前端默认监听 **8080** 端口；若在远程服务器部署，需在防火墙放行 11434（Ollama）和 8080（Web）端口 [7]。\n- **依赖服务**：\n  - **Ollama**：默认监听 **11434** 端口，需提前下载好所需模型 [7]。\n  - **Docker Engine / Docker Compose**：作为容器运行时与多服务编排工具，是部署的前置依赖 [1]。\n  - **Git**：用于获取项目代码 [1]。\n- **环境要求**：内存最低 4GB（推荐 8GB+）、磁盘 20GB（推荐 50GB+）、Docker 20.10+，建议在 Linux/macOS 或 WSL2 下部署 [1]。\n\n---\n\n## 可执行建议\n\n1. **确认端口可用**：部署前检查 8080 与 11434 端口未被占用，远程服务器需在防火墙/安全组中放行这两个端口 [7]。\n2. **准备依赖**：确保 Docker Engine、Docker Compose、Git 已安装，并提前拉取 Ollama 所需模型 [1][7]。\n3. **配置调整**：复制 `config/config.yaml` 为 `config/config.local.yaml`，按实际环境调整数据库连接、存储后端与服务端口 [1]。\n4. **一键启动**：使用项目脚本 `./scripts/start_all.sh --quick` 快速启动服务 [1]。\n\n> 注：以上为通用部署信息。若你在 PolyAgent 产品内使用 WeKnora 知识增强检索，实际接入地址由 `WEKNORA_BASE_URL` 环境变量配置，具体以你的部署环境为准。",
+    "references": [
+      {
+        "label": "WeKnora实战部署全攻略:从零搭建到高效运维的完整指南-CSDN博客",
+        "target": "https://blog.csdn.net/gitblog_00504/article/details/157234939",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://blog.csdn.net/gitblog_00504/article/details/157234939",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "WeKnora完整部署指南：10分钟搭建企业级AI知识平台-CSDN博客",
+        "target": "https://m.blog.csdn.net/gitblog_00959/article/details/156417753",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://m.blog.csdn.net/gitblog_00959/article/details/156417753",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "小白也能懂:WeKnora本地化部署与使用避坑指南",
+        "target": "https://ai.so.com/search/socd715e63ced5963587e24b0ca97abefe?search=%E5%B0%8F%E7%99%BD%E4%B9%9F%E8%83%BD%E6%87%82%3AWeKnora%E6%9C%AC%E5%9C%B0%E5%8C%96%E9%83%A8%E7%BD%B2%E4%B8%8E%E4%BD%BF%E7%94%A8%E9%81%BF%E5%9D%91%E6%8C%87%E5%8D%97&src=so_result_natural_ask&srcg=so_result_natural_ask",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://ai.so.com/search/socd715e63ced5963587e24b0ca97abefe?search=%E5%B0%8F%E7%99%BD%E4%B9%9F%E8%83%BD%E6%87%82%3AWeKnora%E6%9C%AC%E5%9C%B0%E5%8C%96%E9%83%A8%E7%BD%B2%E4%B8%8E%E4%BD%BF%E7%94%A8%E9%81%BF%E5%9D%91%E6%8C%87%E5%8D%97&src=so_result_natural_ask&srcg=so_result_natural_ask",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-WR-0009",
+  "trace_id": "asrun_a7abb7756a29451d",
+  "captured_at": "2026-09-01T07:52:26.312919"
+}

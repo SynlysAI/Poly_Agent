@@ -1,0 +1,271 @@
+{
+  "run": {
+    "run_id": "asrun_b44c55c6a69f4481",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 67836,
+    "first_token_ms": 21861,
+    "queue_wait_ms": 1601,
+    "prompt_tokens": 8106,
+    "completion_tokens": 549,
+    "total_tokens": 8655,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "75253f174a1faf43",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "multi_source_synthesis",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 2,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "complex_keyword",
+            "high_risk_signal",
+            "selected_tools"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 96,
+        "prompt_tokens": 7084,
+        "total_tokens": 7180,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      {
+        "prompt_tokens": 8106,
+        "completion_tokens": 549,
+        "total_tokens": 8655
+      }
+    ]
+  },
+  "tool_calls": [
+    {
+      "call_id": "atc_53edcbb5d7ba4789",
+      "tool_id": "algorithm:pi_synthesis_mock",
+      "function_name": "algorithm_pi_synthesis_mock_b6e07499944d",
+      "raw_arguments": "{\"diamine\": \"ODA\", \"diamine_solubility\": 4, \"dianhydride\": \"PMDA\", \"dianhydride_solubility\": 3, \"inert_atmosphere_status\": true, \"solvent\": \"NMP\", \"water_content_status\": \"low\"}",
+      "arguments": {
+        "diamine": "ODA",
+        "dianhydride": "PMDA",
+        "solvent": "NMP",
+        "diamine_solubility": 4,
+        "dianhydride_solubility": 3,
+        "water_content_status": "low",
+        "inert_atmosphere_status": true
+      },
+      "missing_fields": [],
+      "arguments_parse_error": null,
+      "phase": "completed",
+      "error": null,
+      "duration_ms": 1637,
+      "proposal_usage": {
+        "completion_tokens": 96,
+        "prompt_tokens": 7084,
+        "total_tokens": 7180,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://www.doc88.com/p-1058536856155.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "temperature of the polyimide was reduced to 3 14 ℃.and the flexibility of P1 was improved. Keywords:Polyimide;Asymmetric;Synthesis;Solubility 、聚酰...",
+          "used_in_answer": true
+        },
+        {
+          "id": "http://www.doc88.com/p-8919203446377.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "第23卷第4期高分子材料科学与工程v。1.23,N。.42007年7月POLYMERMATERIALSSCIENCEANDENGINEERINGJul.2007高强度聚酰亚胺的合成与性能表征黄超伯1,张和安2,彭信文...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://wenku.baidu.com/view/e600a8f4bdd5b9f3f90f76c66137ee06eef94e5f.html",
+          "rank": 3,
+          "score": null,
+          "snippet": "聚酰亚胺的合成通常采用二酐与二胺的缩聚反应。请完成以下问题：(1)写出以均苯四甲酸二酐(PMDA)和4,4'-二氨基二苯醚(ODA)为原料合成聚酰亚胺的两步反应方程式，注明关键反应条件 (2)分析该聚合物在航空航天领域应用时表现出的三项突出性能，并说明这些性能与分子结构的关系 解析：本题考查聚酰亚胺的合成化学与结构-性",
+          "used_in_answer": true
+        },
+        {
+          "id": "http://word.baidu.com/noteview/f986c3090340be1e650e52ea551810a6f524c8c2.html",
+          "rank": 4,
+          "score": null,
+          "snippet": "合成两步走战略 第一步 极性溶剂里搞事情 PMDA和ODA在NMP溶剂中 室温下就悄悄发生亲核加成 ...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.renrendoc.com/paper/103093540.html",
+          "rank": 5,
+          "score": null,
+          "snippet": "1、聚酰亚胺的合成方法聚酰亚胺是一类环链化合物,根据其结构和制备方法,可分成主链含有脂肪链的聚酰亚胺和主链中含有芳环链的聚酰亚胺2大类。其通式为:聚酰亚胺...",
+          "used_in_answer": false
+        }
+      ]
+    },
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://www.doc88.com/p-1058536856155.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "temperature of the polyimide was reduced to 3 14 ℃.and the flexibility of P1 was improved. Keywords:Polyimide;Asymmetric;Synthesis;Solubility 、聚酰...",
+          "used_in_answer": true
+        },
+        {
+          "id": "http://www.doc88.com/p-8919203446377.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "第23卷第4期高分子材料科学与工程v。1.23,N。.42007年7月POLYMERMATERIALSSCIENCEANDENGINEERINGJul.2007高强度聚酰亚胺的合成与性能表征黄超伯1,张和安2,彭信文...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://wenku.baidu.com/view/e600a8f4bdd5b9f3f90f76c66137ee06eef94e5f.html",
+          "rank": 3,
+          "score": null,
+          "snippet": "聚酰亚胺的合成通常采用二酐与二胺的缩聚反应。请完成以下问题：(1)写出以均苯四甲酸二酐(PMDA)和4,4'-二氨基二苯醚(ODA)为原料合成聚酰亚胺的两步反应方程式，注明关键反应条件 (2)分析该聚合物在航空航天领域应用时表现出的三项突出性能，并说明这些性能与分子结构的关系 解析：本题考查聚酰亚胺的合成化学与结构-性",
+          "used_in_answer": true
+        },
+        {
+          "id": "http://word.baidu.com/noteview/f986c3090340be1e650e52ea551810a6f524c8c2.html",
+          "rank": 4,
+          "score": null,
+          "snippet": "合成两步走战略 第一步 极性溶剂里搞事情 PMDA和ODA在NMP溶剂中 室温下就悄悄发生亲核加成 ...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.renrendoc.com/paper/103093540.html",
+          "rank": 5,
+          "score": null,
+          "snippet": "1、聚酰亚胺的合成方法聚酰亚胺是一类环链化合物,根据其结构和制备方法,可分成主链含有脂肪链的聚酰亚胺和主链中含有芳环链的聚酰亚胺2大类。其通式为:聚酰亚胺...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "## PI 合成难度评估结果（ODA + PMDA，NMP）\n\n**结论：总难度评分 80/100，属于较高难度合成，存在溶解性差、粘度上升快、氧化风险和高位阻风险。**\n\n---\n\n### 评分明细\n\n| 维度 | 得分 | 说明 |\n|------|------|------|\n| 反应性 R | 27 | 二胺基础 15 + 二酐基础 12 |\n| 位阻/构型 H | 20 | 二胺 6 + 二酐 6 + 构象 4 + 不对称 4 |\n| 溶解度 S | 22 | 单体 9 + 聚合物 7 + 粘度 6 |\n| 不确定性 U | 11 | 水分 4 + 氧化 2 + 热 2 + 凝胶 3 |\n\n**公式校验：** R(27) + H(20) + S(22) + U(11) = **80**\n\n---\n\n### 风险标签\n- **POOR_SOLUBILITY**（溶解性差）\n- **FAST_VISCOSITY**（粘度快速上升）\n- **OXIDATION_RISK**（氧化风险）\n- **HIGH_STERIC**（高位阻）\n\n---\n\n### 推荐工艺参数\n| 参数 | 值 |\n|------|-----|\n| 工艺编号 | PI-P08 |\n| 温度 | 55 ℃ |\n| 反应时间 | 42 h |\n| 溶剂体积 | 60 mL |\n\n**置信度：** 0.85（IN_DOMAIN，适用域内）\n\n---\n\n### 可执行建议\n1. **溶解性控制**：PMDA/ODA 体系在 NMP 中聚合物易析出，建议控制固含量并逐步加料，避免局部浓度过高。\n2. **粘度管理**：反应后期粘度上升快，需及时补加溶剂或降低温度，防止凝胶化。\n3. **氧化防护**：全程保持惰性气氛（N₂/Ar），并严格控制水分（建议 <50 ppm）。\n4. **位阻应对**：PMDA 刚性结构位阻较大，可适当提高温度（如 55 ℃）促进缩聚，但需平衡副反应。\n\n---\n\n> 说明：以上为 PI 合成难度评分 Mock 接口（`pi_synthesis_mock@1.0.0`）的确定性输出，评分规则来自随服务分发的 `PI_synthesis_difficulty_scoring_rules_v1.0.json`。该结果为仿真验证用途，实际合成请结合实验条件复核。",
+    "references": [
+      {
+        "label": "一种不对称可溶性聚酰亚胺的制备及性能Synthesis and Properties of Asymmetric Soluble Polyimides - 道客巴巴",
+        "target": "http://www.doc88.com/p-1058536856155.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://www.doc88.com/p-1058536856155.html",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "高强度聚酰亚胺的合成与性能表征synthesis and characterization of high strength polyimide - 道客巴巴",
+        "target": "http://www.doc88.com/p-8919203446377.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://www.doc88.com/p-8919203446377.html",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "聚酰亚胺的合成通常采用二酐与二胺的缩聚反应。请完成以下问题:(1)写出...",
+        "target": "https://wenku.baidu.com/view/e600a8f4bdd5b9f3f90f76c66137ee06eef94e5f.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://wenku.baidu.com/view/e600a8f4bdd5b9f3f90f76c66137ee06eef94e5f.html",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 1,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-TS-0005",
+  "trace_id": "asrun_46921fa4ab854eda",
+  "captured_at": "2026-09-01T07:52:25.765997"
+}

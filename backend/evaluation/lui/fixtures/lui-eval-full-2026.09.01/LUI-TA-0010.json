@@ -1,0 +1,201 @@
+{
+  "run": {
+    "run_id": "asrun_f5d4aa4785cd4de0",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 52192,
+    "first_token_ms": 18553,
+    "queue_wait_ms": 1944,
+    "prompt_tokens": 6644,
+    "completion_tokens": 362,
+    "total_tokens": 7006,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "31e035faffd8dee5",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 1,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "high_risk_signal",
+            "selected_tools"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 78,
+        "prompt_tokens": 6480,
+        "total_tokens": 6558,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      {
+        "prompt_tokens": 6644,
+        "completion_tokens": 362,
+        "total_tokens": 7006
+      }
+    ]
+  },
+  "tool_calls": [
+    {
+      "call_id": "atc_f2d756a59751443c",
+      "tool_id": "algorithm:electrolyte_formulation_predictor",
+      "function_name": "algorithm_electrolyte_formulation_predictor_d948c0c80b0b",
+      "raw_arguments": "{\"formulations\": [{\"electrolyte_component_1\": \"FEC\", \"electrolyte_component_1_mol_ratio\": 1, \"electrolyte_component_2\": \"DME\", \"electrolyte_component_2_mol_ratio\": 1, \"formula_id\": \"TEST-001\", \"lithium_salt\": \"LiTFSI\", \"lithium_salt_mol_L\": 1, \"task_type\": \"electrolyte\"}]}",
+      "arguments": {
+        "formulations": [
+          {
+            "formula_id": "TEST-001",
+            "task_type": "electrolyte",
+            "lithium_salt": "LiTFSI",
+            "lithium_salt_mol_L": 1,
+            "electrolyte_component_1": "FEC",
+            "electrolyte_component_1_mol_ratio": 1,
+            "electrolyte_component_2": "DME",
+            "electrolyte_component_2_mol_ratio": 1
+          }
+        ]
+      },
+      "missing_fields": [],
+      "arguments_parse_error": null,
+      "phase": "completed",
+      "error": null,
+      "duration_ms": 1475,
+      "proposal_usage": {
+        "completion_tokens": 78,
+        "prompt_tokens": 6480,
+        "total_tokens": 6558,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://klamar-reagent.com/Productshow-36494.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "(KNP-001);H2O,ppm: 20max 配方 1M NaPF6 in DEC:EC=1:1 Vol% (KNP-007);H2O,ppm: 20max 配方 1M NaPF6 in DMC:EC=1:1 Vol% with 5%FEC (KNP-004);H2O,ppm... (KNP-014);H2...",
+          "used_in_answer": true
+        }
+      ]
+    },
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://klamar-reagent.com/Productshow-36494.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "(KNP-001);H2O,ppm: 20max 配方 1M NaPF6 in DEC:EC=1:1 Vol% (KNP-007);H2O,ppm: 20max 配方 1M NaPF6 in DMC:EC=1:1 Vol% with 5%FEC (KNP-004);H2O,ppm... (KNP-014);H2...",
+          "used_in_answer": true
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "已为您运行含氟电解液配方性能预测算法，配方号 **EVAL-FEC-DME-001** 的预测结果如下：\n\n**配方输入**\n- 锂盐：LiTFSI，1 mol/L\n- 溶剂：FEC : DME = 1 : 1（摩尔比）\n\n**预测结果（模型：extra_trees）**\n\n| 指标 | 第1周期 | 第4周期 | 第20周期 |\n|------|---------|---------|----------|\n| 放电比容量 DSC (mAh/g) | 78.30 | 71.78 | 70.66 |\n| 库仑效率 CE | 0.558 | 0.472 | 0.503 |\n\n**结论与建议**\n- 该配方放电比容量随循环衰减较缓（第1→20周期仅下降约 9.8%），但**库仑效率整体偏低**（0.47–0.56），且第4周期出现明显下降，提示可能存在副反应或界面不稳定问题。\n- 建议：\n  1. 优先排查 FEC 含量或添加剂（如 5% FEC 常见于 NaPF6 体系 [1]）对成膜的影响，以提升 CE；\n  2. 可尝试调整 FEC:DME 比例或引入共溶剂（如 EC、PC）改善界面稳定性；\n  3. 如需更高精度，可结合 ORCA DFT 精加工计算（当前 ORCA license 未标记可用，需先配置）或 xTB 半经验计算做能量验证。\n\n> 说明：本结果为算法预测值，用于配方初筛与实验优先级排序，实际性能需以实验验证为准。",
+    "references": [
+      {
+        "label": "NaPF6电解液|克拉玛尔",
+        "target": "http://klamar-reagent.com/Productshow-36494.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://klamar-reagent.com/Productshow-36494.html",
+        "rank": 1,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 1,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-TA-0010",
+  "trace_id": "asrun_9e96056c71344a1d",
+  "captured_at": "2026-09-01T07:52:25.479342"
+}

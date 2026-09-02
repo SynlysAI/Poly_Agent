@@ -1,0 +1,270 @@
+{
+  "run": {
+    "run_id": "asrun_770e1d702fbd4af0",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 58097,
+    "first_token_ms": 20200,
+    "queue_wait_ms": 1478,
+    "prompt_tokens": 8268,
+    "completion_tokens": 577,
+    "total_tokens": 8845,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "a1cac5e53fd67cd9",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 1,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "high_risk_signal",
+            "selected_tools"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 178,
+        "prompt_tokens": 7070,
+        "total_tokens": 7248,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      {
+        "prompt_tokens": 8268,
+        "completion_tokens": 577,
+        "total_tokens": 8845
+      }
+    ]
+  },
+  "tool_calls": [
+    {
+      "call_id": "atc_8a365865895c4719",
+      "tool_id": "algorithm:pi_synthesis_mock",
+      "function_name": "algorithm_pi_synthesis_mock_b6e07499944d",
+      "raw_arguments": "{\"diamine\": \"ODA\", \"diamine_solubility\": 4, \"dianhydride\": \"PMDA\", \"dianhydride_solubility\": 3, \"inert_atmosphere_status\": true, \"solvent\": \"NMP\", \"water_content_status\": \"low\"}",
+      "arguments": {
+        "diamine": "ODA",
+        "dianhydride": "PMDA",
+        "solvent": "NMP",
+        "diamine_solubility": 4,
+        "dianhydride_solubility": 3,
+        "water_content_status": "low",
+        "inert_atmosphere_status": true
+      },
+      "missing_fields": [],
+      "arguments_parse_error": null,
+      "phase": "completed",
+      "error": null,
+      "duration_ms": 1465,
+      "proposal_usage": {
+        "completion_tokens": 178,
+        "prompt_tokens": 7070,
+        "total_tokens": 7248,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://agents.baidu.com/content/question/55f079e4f81e3efb530a9932",
+          "rank": 1,
+          "score": null,
+          "snippet": "聚酰亚胺(Polyimide,简称PI)是一种高性能聚合物,其重复单元主要由二酐(dianhydride)和二胺(diamine)通过缩聚反应形成。常见的重复单元结构包括以下几种: 1. 均苯四甲酸二酐(PMDA)与二氨基二苯醚(ODA):这是最经典的聚酰亚胺重复单元组合,形成的聚合物具有优异的耐高温性和机械强度,广泛应用于薄膜、涂层等领域。例如...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://baijiahao.baidu.com/s?id=1798670276495415978&wfr=spider&for=pc",
+          "rank": 2,
+          "score": null,
+          "snippet": "聚酰亚胺树脂合成工艺解析：材料专家视角 #聚酰亚胺# 聚酰亚胺（Polyimide, PI）树脂是一类具有显著高温稳定性、卓越机械强度以及极佳电绝缘性的高性能工程塑料。由于其在极端条件下的可靠性，聚酰亚胺在电子、航空、汽车以及工业等众多领域得到了广泛应用。本文旨在探讨聚酰亚胺树脂的合成工艺，并分析其关键步骤和影响因素。聚...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://baike.so.com/doc/5682833-32337921.html",
+          "rank": 3,
+          "score": null,
+          "snippet": "聚酰亚胺（Polyimide，简写为 PI）是指主链上含有酰亚胺环（-CO-NR-CO-）的一类聚合物，是综合性能最佳的有机高分子材料之一。这种材料由于其刚性的芳杂环结构，是目前耐热性能最好的聚合物材料之一，其 Tg（玻璃化转变温度）可以达到350℃或更高。 详情>>简介 - 材料特性 - 应用 - 合成方法",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://ai.so.com/search/so233197d3b45b563bda4863735c795922?search=%E8%81%9A%E9%85%B0%E4%BA%9A%E8%83%BA%28%E8%81%9A%E9%85%B0%E4%BA%9A%E8%83%BA%29&src=so_result_natural&srcg=so_result_natural",
+          "rank": 4,
+          "score": null,
+          "snippet": "聚酰亚胺(Polyimide,简称PI)是一类主链含酰亚胺环(-CO-NH-CO-)的高性能聚合物,被誉为 黄金材料 ,具有耐高温(长期使用-200~300℃,短期可耐400℃)、优异绝缘性(介电常数3...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.sohu.com/a/289736200_816970",
+          "rank": 5,
+          "score": null,
+          "snippet": "聚酰亚胺是综合性能最佳的有机高分子材料之一,耐高温达400℃以上 ,长期使用温度范围-200～300℃,部分无明显熔点,高绝缘性能。由于其性能与合...",
+          "used_in_answer": false
+        }
+      ]
+    },
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://agents.baidu.com/content/question/55f079e4f81e3efb530a9932",
+          "rank": 1,
+          "score": null,
+          "snippet": "聚酰亚胺(Polyimide,简称PI)是一种高性能聚合物,其重复单元主要由二酐(dianhydride)和二胺(diamine)通过缩聚反应形成。常见的重复单元结构包括以下几种: 1. 均苯四甲酸二酐(PMDA)与二氨基二苯醚(ODA):这是最经典的聚酰亚胺重复单元组合,形成的聚合物具有优异的耐高温性和机械强度,广泛应用于薄膜、涂层等领域。例如...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://baike.so.com/doc/5682833-32337921.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "聚酰亚胺（Polyimide，简写为 PI）是指主链上含有酰亚胺环（-CO-NR-CO-）的一类聚合物，是综合性能最佳的有机高分子材料之一。这种材料由于其刚性的芳杂环结构，是目前耐热性能最好的聚合物材料之一，其 Tg（玻璃化转变温度）可以达到350℃或更高。 详情>>简介 - 材料特性 - 应用 - 合成方法",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://baijiahao.baidu.com/s?id=1798670276495415978&wfr=spider&for=pc",
+          "rank": 3,
+          "score": null,
+          "snippet": "聚酰亚胺树脂合成工艺解析：材料专家视角 #聚酰亚胺# 聚酰亚胺（Polyimide, PI）树脂是一类具有显著高温稳定性、卓越机械强度以及极佳电绝缘性的高性能工程塑料。由于其在极端条件下的可靠性，聚酰亚胺在电子、航空、汽车以及工业等众多领域得到了广泛应用。本文旨在探讨聚酰亚胺树脂的合成工艺，并分析其关键步骤和影响因素。聚...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://ai.so.com/search/so233197d3b45b563bda4863735c795922?search=%E8%81%9A%E9%85%B0%E4%BA%9A%E8%83%BA%28%E8%81%9A%E9%85%B0%E4%BA%9A%E8%83%BA%29&src=so_result_natural&srcg=so_result_natural",
+          "rank": 4,
+          "score": null,
+          "snippet": "聚酰亚胺(Polyimide,简称PI)是一类主链含酰亚胺环(-CO-NH-CO-)的高性能聚合物,被誉为 黄金材料 ,具有耐高温(长期使用-200~300℃,短期可耐400℃)、优异绝缘性(介电常数3...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.sohu.com/a/289736200_816970",
+          "rank": 5,
+          "score": null,
+          "snippet": "聚酰亚胺是综合性能最佳的有机高分子材料之一,耐高温达400℃以上 ,长期使用温度范围-200～300℃,部分无明显熔点,高绝缘性能。由于其性能与合...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "## PI 合成难度评分结果（ODA + PMDA，NMP 溶剂）\n\n**结论：总难度分 80/100，属于较高难度合成，存在溶解性差、粘度上升快、氧化风险和高位阻四类风险。**\n\n---\n\n### 一、评分构成\n\n| 维度 | 得分 | 说明 |\n|------|------|------|\n| 反应性 R | 27 | 二胺 15 + 二酐 12 |\n| 工艺难度 H | 20 | 单体 6+6、构象 4、不对称 4 |\n| 溶解度 S | 22 | 单体 9、聚合物 7、粘度 6 |\n| 不确定性 U | 11 | 水分 4、氧化 2、热 2、凝胶 3 |\n| **化学难度 C** | **47** | R + H |\n| **物性执行难度 P** | **33** | S + U |\n| **总难度 D** | **80** | R(27)+H(20)+S(22)+U(11)=80 |\n\n---\n\n### 二、风险标签\n\n- **POOR_SOLUBILITY**（溶解性差）\n- **FAST_VISCOSITY**（粘度快速上升）\n- **OXIDATION_RISK**（氧化风险）\n- **HIGH_STERIC**（高位阻）\n\n---\n\n### 三、推荐初始工艺参数\n\n| 参数 | 值 |\n|------|-----|\n| 工艺编号 | PI-P08 |\n| 反应温度 | 55 ℃ |\n| 反应时间 | 42 h |\n| 溶剂体积 | 60 mL |\n\n---\n\n### 四、可执行建议\n\n1. **溶解性**：你补充的 diamine_solubility=4、dianhydride_solubility=3 属于中等偏好，但体系仍标记 POOR_SOLUBILITY，建议适当提高溶剂用量或分步加料。\n2. **粘度控制**：FAST_VISCOSITY 提示聚合后期粘度上升快，建议控制固含量并加强搅拌。\n3. **氧化与水分**：你已设置惰性气氛 true、水分 low，这两项已有效缓解 OXIDATION_RISK 和水分相关不确定性，继续保持。\n4. **高位阻**：PMDA/ODA 体系位阻较高，建议按推荐温度 55 ℃ 缓慢升温，避免局部过热。\n\n> 说明：以上为 `pi_synthesis_mock@1.0.0` 确定性评分结果（置信度 0.85，适用域 IN_DOMAIN），评分规则来自随服务分发的 `PI_synthesis_difficulty_scoring_rules_v1.0.json`。",
+    "references": [
+      {
+        "label": "聚酰亚胺重复单元有哪些 - 智能助手",
+        "target": "https://agents.baidu.com/content/question/55f079e4f81e3efb530a9932",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://agents.baidu.com/content/question/55f079e4f81e3efb530a9932",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "聚酰亚胺树脂合成工艺解析:材料专家视角",
+        "target": "https://baijiahao.baidu.com/s?id=1798670276495415978&wfr=spider&for=pc",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://baijiahao.baidu.com/s?id=1798670276495415978&wfr=spider&for=pc",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "聚酰亚胺_360百科",
+        "target": "https://baike.so.com/doc/5682833-32337921.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://baike.so.com/doc/5682833-32337921.html",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 1,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-TA-0006",
+  "trace_id": "asrun_c9e2dba9beaa4cc7",
+  "captured_at": "2026-09-01T07:52:25.286110"
+}

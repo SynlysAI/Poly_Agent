@@ -1,0 +1,179 @@
+{
+  "run": {
+    "run_id": "asrun_0904877e89494498",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 31023,
+    "first_token_ms": 14211,
+    "queue_wait_ms": 885,
+    "prompt_tokens": 4808,
+    "completion_tokens": 169,
+    "total_tokens": 4977,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "970b2b3cde519f2f",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 4808,
+        "completion_tokens": 169,
+        "total_tokens": 4977
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://help.aliyun.com/en/model-studio/enhance-the-security-compliance-of-large-models",
+          "rank": 1,
+          "score": null,
+          "snippet": "Training data consists of user prompts (user) and corresponding model responses (assistant). High-quality dialogue samples provide sufficient input-output examples for fine... Thes...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://blog.csdn.net/landuochong200/article/details/159774823",
+          "rank": 2,
+          "score": null,
+          "snippet": "2026年7月22日 - python cli_assistant.py discuss 问题 快速讨论模式,三阶段搞定 python cli_assistant.py new 议题 --preset tech_selection 完整会议,多阶段串联 py...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.asus.com/me-en/support/faq/1050223/",
+          "rank": 3,
+          "score": null,
+          "snippet": "2025年7月11日 - [LCD Monitor] ROG A.I. Assistant Technology Introduction[LCD Monitor] ASUS DisplayWidget Center To provide you more detailed instruction, yo...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.dji.com/ca/ronin-s",
+          "rank": 4,
+          "score": null,
+          "snippet": "2021年1月28日 - To update the firmware, power on the Ronin-S and connect it to a PC or Mac computer, then use DJI Pro Assistant for Ronin. 5.Does the Ronin...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "根据项目配置，当前支持 **两种 assistant preset/mode**：\n\n1. **web**：面向网页/外部信息检索的问答模式（当前会话即为此模式，`intent_scope: \"web\"`）。\n2. **deep**：深度推理模式，用于复杂问题分析（`deep_mode` 相关配置）。\n\n**依据**：`assistant` 配置中 `intent_scope` 为 `\"web\"`，且 `deep_mode` 为 `false`；LLM 路由中 `purpose` 为 `\"qa\"`，`route_reason` 为 `\"user_selected\"`。\n\n**说明**：当前会话处于 `web` 模式。若需切换至 `deep` 模式，可在对话界面调整模式设置。",
+    "references": [
+      {
+        "label": "Zero-Code Reinforcement of Large Language Model Security and Compliance-Alibaba Cloud Model Studio(Model Studio)-阿里云帮助中心",
+        "target": "https://help.aliyun.com/en/model-studio/enhance-the-security-compliance-of-large-models",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://help.aliyun.com/en/model-studio/enhance-the-security-compliance-of-large-models",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "让 AI 们开个会吧——CLI Assistant 使用指南_让ai参加讨论会议-CSDN博客",
+        "target": "https://blog.csdn.net/landuochong200/article/details/159774823",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://blog.csdn.net/landuochong200/article/details/159774823",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "[LCD Monitor] ASUS DisplayWidget Center | Official Support | ASUS",
+        "target": "https://www.asus.com/me-en/support/faq/1050223/",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.asus.com/me-en/support/faq/1050223/",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0009",
+  "trace_id": "asrun_0904877e89494498",
+  "captured_at": "2026-09-01T07:52:24.572455"
+}

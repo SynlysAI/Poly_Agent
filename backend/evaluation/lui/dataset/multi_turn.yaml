@@ -1,21 +1,24 @@
-# 多轮与上下文延续分桶：考察前文依赖、补参、follow-up 与话题切换。
+# 环境口径已切换到真实 WeKnora 与 active 垂类模型。
 - id: LUI-MT-0001
   category: multi_turn
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: PVDF 的介电常数典型范围是多少？
-    - role: assistant
-      content: PVDF 的介电常数典型范围约为 8–11。
-    - role: user
-      content: 那它的玻璃化转变温度呢？
+  - role: user
+    content: PVDF 的介电常数典型范围是多少？
+  - role: assistant
+    content: PVDF 的介电常数典型范围约为 8–11。
+  - role: user
+    content: 那它的玻璃化转变温度呢？
   expected:
     task_success: true
     answer:
       type: numeric
       numeric_value: -40
-      numeric_tolerance: {kind: absolute, value: 5}
+      numeric_tolerance:
+        kind: absolute
+        value: 5
+    tool_calls: []
   fixture:
     run:
       run_id: fixture-run-mt-0001
@@ -25,64 +28,73 @@
       total_tokens: 1900
     message:
       content: PVDF 的玻璃化转变温度约为 -40°C。
-
+  context:
+    selected_tool_ids: []
 - id: LUI-MT-0002
   category: multi_turn
   difficulty: medium
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 预测 C=C(F)F 的介电常数。
-    - role: assistant
-      content: 已发起垂类预测，介电常数预测值约 9.2。
-    - role: user
-      content: 这个结果的确定性如何？请说明依据。
+  - role: user
+    content: 预测 C=C(F)F 的介电常数。
+  - role: assistant
+    content: 已发起垂类预测，介电常数预测值约 9.2。
+  - role: user
+    content: 这个结果的确定性如何？请说明依据。
   expected:
     task_success: true
     answer:
       type: rubric
-      must_include: ["不确定性", "模型"]
-
+      must_include:
+      - 不确定性
+      - 模型
+    tool_calls: []
+  context:
+    selected_tool_ids: []
 - id: LUI-MT-0003
   category: multi_turn
   difficulty: hard
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 预测 SMILES C=C(F)F 的介电常数。
-    - role: assistant
-      content: 已准备调用垂类预测，SMILES 记录为 C=C(F)F。
-    - role: user
-      content: 更正一下，SMILES 应该是 C=C(F)Cl，请用新材料重新预测。
+  - role: user
+    content: 预测 SMILES C=C(F)F 的介电常数。
+  - role: assistant
+    content: 已准备调用垂类预测，SMILES 记录为 C=C(F)F。
+  - role: user
+    content: 更正一下，SMILES 应该是 C=C(F)Cl，请用新材料重新预测。
   context:
-    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
   expected:
     task_success: true
     tool_calls:
-      - tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments:
-          smiles: "C=C(F)Cl"
-          target_properties: ["dielectric_constant"]
-
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)Cl
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
 - id: LUI-MT-0004
   category: multi_turn
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 知识库中 NMP 的沸点是多少？
-    - role: assistant
-      content: 根据溶剂表知识库，NMP 沸点约 202°C。
-    - role: user
-      content: 换个话题，AutoResearch 的审批入口在哪里？
+  - role: user
+    content: 知识库中 NMP 的沸点是多少？
+  - role: assistant
+    content: 根据溶剂表知识库，NMP 沸点约 202°C。
+  - role: user
+    content: 换个话题，AutoResearch 的审批入口在哪里？
   expected:
     task_success: true
     answer:
       type: keywords
-      must_include: ["审批", "任务中心"]
+      must_include:
+      - 审批
+      - 任务中心
+    tool_calls: []
   fixture:
     run:
       run_id: fixture-run-mt-0004
@@ -92,46 +104,54 @@
       total_tokens: 1750
     message:
       content: AutoResearch 的审批入口在任务中心，blocked_approval 状态下可点击审批按钮。
-
+  context:
+    selected_tool_ids: []
 - id: LUI-MT-0005
   category: multi_turn
   difficulty: hard
   mode: deep
   messages:
-    - role: user
-      content: 检索知识库中氟聚合物介电性能资料。
-    - role: assistant
-      content: 已检索到 PVDF 与 PTFE 的介电性能资料。
-    - role: user
-      content: 只保留 PVDF 相关内容，重新总结介电温频依赖性。
+  - role: user
+    content: 检索知识库中氟聚合物介电性能资料。
+  - role: assistant
+    content: 已检索到 PVDF 与 PTFE 的介电性能资料。
+  - role: user
+    content: 只保留 PVDF 相关内容，重新总结介电温频依赖性。
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-fluoro-handbook"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+    selected_tool_ids: []
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:fh-dielectric-pvdf"]
+      relevant_ids:
+      - 2447679b-bfee-4f30-811f-4d892a8cc6ad
     answer:
       type: rubric
-      must_include: ["PVDF", "介电"]
-
+      must_include:
+      - PVDF
+      - 介电
+    tool_calls: []
 - id: LUI-MT-0006
   category: multi_turn
   difficulty: hard
   mode: deep
   messages:
-    - role: user
-      content: 总结垂类预测服务的能力边界。
-    - role: assistant
-      content: 垂类预测服务面向氟聚合物等体系的性质预测，依赖 VERTICAL_PREDICTOR_URL 配置。
-    - role: user
-      content: 基于这些边界，给出三条使用建议。
+  - role: user
+    content: 总结垂类预测服务的能力边界。
+  - role: assistant
+    content: 垂类预测服务面向氟聚合物等体系的性质预测，依赖 VERTICAL_PREDICTOR_URL 配置。
+  - role: user
+    content: 基于这些边界，给出三条使用建议。
   expected:
     task_success: true
     answer:
       type: rubric
-      must_include: ["建议"]
+      must_include:
+      - 建议
+    tool_calls: []
   fixture:
     run:
       run_id: fixture-run-mt-0006
@@ -140,74 +160,85 @@
       first_token_ms: 1400
       total_tokens: 4100
     message:
-      content: 使用建议：1) 先确认 VERTICAL_PREDICTOR_URL 已配置；2) 按材料体系选择 material_family；3) 对关键预测结果结合知识库证据交叉验证。
-
+      content: 使用建议：1) 先确认 VERTICAL_PREDICTOR_URL 已配置；2) 按材料体系选择 material_family；3)
+        对关键预测结果结合知识库证据交叉验证。
+  context:
+    selected_tool_ids: []
 - id: LUI-MT-0007
   category: multi_turn
   difficulty: medium
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 预测 C=C(F)F 的材料性质。
-    - role: assistant
-      content: 请补充目标性质，例如介电常数或热稳定性。
-    - role: user
-      content: 目标性质是介电常数。
+  - role: user
+    content: 预测 C=C(F)F 的材料性质。
+  - role: assistant
+    content: 请补充目标性质，例如介电常数或热稳定性。
+  - role: user
+    content: 目标性质是介电常数。
   context:
-    selected_tool_ids: ["algorithm:vertical_predictor_adapter"]
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
   expected:
     task_success: true
     tool_calls:
-      - tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments:
-          smiles: "C=C(F)F"
-          target_properties: ["dielectric_constant"]
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)F
     escalation:
-      level: param_completion
-
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
 - id: LUI-MT-0008
   category: multi_turn
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 知识库里 PEEK 的 Tg 是多少？
-    - role: assistant
-      content: 根据知识库，PEEK 的玻璃化转变温度约 150°C，来源为 kb:pt-peek-tg。
-    - role: user
-      content: 引用刚才那条来源，对比 PEEK 与 PI 的耐热等级。
+  - role: user
+    content: 知识库里 PEEK 的 Tg 是多少？
+  - role: assistant
+    content: 根据知识库，PEEK 的玻璃化转变温度约 150°C，来源为 kb:pt-peek-tg。
+  - role: user
+    content: 引用刚才那条来源，对比 PEEK 与 PI 的耐热等级。
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-polymer-thermal"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+    selected_tool_ids: []
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:pt-peek-tg", "kb:pt-pi-thermal"]
+      relevant_ids:
+      - 2447679b-bfee-4f30-811f-4d892a8cc6ad
+      - 1157c0b6-ba02-4dfc-8e49-86d64e31fd26
     answer:
       type: rubric
-      must_include: ["PEEK", "PI"]
-
+      must_include:
+      - PEEK
+      - PI
+    tool_calls: []
 - id: LUI-MT-0009
   category: multi_turn
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 用普通模式回答，WeKnora 是什么？
-    - role: assistant
-      content: WeKnora 是腾讯开源的知识库检索增强框架。
-    - role: user
-      content: 切到深度模式，分析它适合接入 PolyAgent 的哪些场景。
+  - role: user
+    content: 用普通模式回答，WeKnora 是什么？
+  - role: assistant
+    content: WeKnora 是腾讯开源的知识库检索增强框架。
+  - role: user
+    content: 切到深度模式，分析它适合接入 PolyAgent 的哪些场景。
   context:
     mode: deep
+    selected_tool_ids: []
   expected:
     task_success: true
     answer:
       type: rubric
-      must_include: ["知识库", "检索"]
+      must_include:
+      - 知识库
+      - 检索
+    tool_calls: []
   fixture:
     run:
       run_id: fixture-run-mt-0009
@@ -217,27 +248,30 @@
       total_tokens: 3800
     message:
       content: WeKnora 适合接入 PolyAgent 的知识库检索、RAG 问答与图谱上下文场景，可为 LUI 提供可追溯证据。
-
 - id: LUI-MT-0010
   category: multi_turn
   difficulty: hard
   mode: qa
   requires_model_capability: tool_calling
   messages:
-    - role: user
-      content: 在 kb-fluoro-handbook 检索 PVDF 介电常数。
-    - role: assistant
-      content: 已检索到 PVDF 介电常数约 8–11，来源 kb:fh-dielectric-pvdf。
-    - role: user
-      content: 基于这个结果，预测同体系 C=C(F)Cl 的介电常数。
+  - role: user
+    content: 在 e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3 检索 PVDF 介电常数。
+  - role: assistant
+    content: 已检索到 PVDF 介电常数约 8–11，来源 kb:fh-dielectric-pvdf。
+  - role: user
+    content: 基于这个结果，预测同体系 C=C(F)Cl 的介电常数。
   context:
-    selected_tool_ids: ["algorithm:weknora_adapter", "algorithm:vertical_predictor_adapter"]
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     tool_calls:
-      - tool_id: "algorithm:vertical_predictor_adapter"
-        function_name: "algorithm_vertical_predictor_adapter_66a47bf68bae"
-        arguments:
-          smiles: "C=C(F)Cl"
-          target_properties: ["dielectric_constant"]
-          material_family: fluoropolymer
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(F)Cl
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。

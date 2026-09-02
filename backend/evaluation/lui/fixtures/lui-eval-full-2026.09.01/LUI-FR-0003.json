@@ -1,0 +1,174 @@
+{
+  "run": {
+    "run_id": "asrun_ec1bf4e9b5d345b6",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 70686,
+    "first_token_ms": 26291,
+    "queue_wait_ms": 2344,
+    "prompt_tokens": 5512,
+    "completion_tokens": 541,
+    "total_tokens": 6053,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "affb6e86c448a8df",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 1,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "high_risk_signal",
+            "selected_tools"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 96,
+        "prompt_tokens": 4433,
+        "total_tokens": 4529,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      {
+        "prompt_tokens": 5512,
+        "completion_tokens": 541,
+        "total_tokens": 6053
+      }
+    ]
+  },
+  "tool_calls": [
+    {
+      "call_id": "atc_8d230b1fa10e46a8",
+      "tool_id": "algorithm:pi_synthesis_mock",
+      "function_name": "algorithm_pi_synthesis_mock_b6e07499944d",
+      "raw_arguments": "{\"diamine\": \"ODA\", \"diamine_solubility\": 4, \"dianhydride\": \"PMDA\", \"dianhydride_solubility\": 3, \"inert_atmosphere_status\": true, \"solvent\": \"NMP\", \"water_content_status\": \"low\"}",
+      "arguments": {
+        "diamine": "ODA",
+        "dianhydride": "PMDA",
+        "solvent": "NMP",
+        "diamine_solubility": 4,
+        "dianhydride_solubility": 3,
+        "water_content_status": "low",
+        "inert_atmosphere_status": true
+      },
+      "missing_fields": [],
+      "arguments_parse_error": null,
+      "phase": "completed",
+      "error": null,
+      "duration_ms": 1334,
+      "proposal_usage": {
+        "completion_tokens": 96,
+        "prompt_tokens": 4433,
+        "total_tokens": 4529,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "## PI 合成难度评估结果\n\n**结论**：ODA + PMDA 在 NMP 溶剂中的 PI 低温溶液缩聚合成难度评分为 **80 分（较高难度）**，置信度 0.85，属于域内（IN_DOMAIN）评估。\n\n---\n\n### 评分构成\n\n| 维度 | 得分 | 说明 |\n|------|------|------|\n| 反应性 R | 27 | 二胺 15 + 二酐 12 |\n| 水解/副反应 H | 20 | 单体各 6 + 构象 4 + 不对称 4 |\n| 溶解度/粘度 S | 22 | 单体 9 + 聚合物 7 + 粘度 6 |\n| 不确定性 U | 11 | 水 4 + 氧化 2 + 热 2 + 凝胶 3 |\n\n**总分校验**：R(27) + H(20) + S(22) + U(11) = **80** ✓\n\n---\n\n### 风险标签\n\n- **POOR_SOLUBILITY**（溶解性差）\n- **FAST_VISCOSITY**（粘度上升快）\n- **OXIDATION_RISK**（氧化风险）\n- **HIGH_STERIC**（高空间位阻）\n\n---\n\n### 推荐工艺参数\n\n| 参数 | 推荐值 |\n|------|--------|\n| 工艺编号 | PI-P08 |\n| 温度 | 55 °C |\n| 反应时间 | 42 h |\n| 溶剂体积 | 60 mL |\n\n---\n\n### 可执行建议\n\n1. **溶解性风险**：NMP 中单体溶解性一般（二胺 4/二酐 3），建议预溶解验证，必要时升温助溶后再降温至反应温度。\n2. **粘度控制**：体系粘度上升快，建议控制固含量并加强搅拌，防止凝胶化。\n3. **氧化防护**：已启用惰性气氛（inert_atmosphere=true），保持全程氮气保护，并控制水分（water_content=low）。\n4. **工艺执行**：按 PI-P08 参数（55°C / 42h / 60mL）执行，若实验中出现异常粘度或沉淀，可回调温度至 50°C 并延长反应时间。\n\n> 注：以上为 `pi_synthesis_mock@1.0.0` 确定性 mock 评分结果，评分规则来源于随服务分发的 `PI_synthesis_difficulty_scoring_rules_v1.0.json`。",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 1,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-FR-0003",
+  "trace_id": "asrun_3c6813b287104616",
+  "captured_at": "2026-09-01T07:52:23.237301"
+}

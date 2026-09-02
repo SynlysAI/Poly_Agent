@@ -15,8 +15,7 @@ test-lui-eval:
 	PYTHONNOUSERSITE=$(PYTHONNOUSERSITE) PYTHONPATH=$(PYTHONPATH) conda run -n $(CONDA_ENV) python scripts/run_lui_eval.py \
 		--dataset backend/evaluation/lui/dataset --mode smoke \
 		--report-dir backend/evaluation/lui/reports \
-		--manual-review backend/evaluation/lui/baselines/manual-review-2026.08.28.json \
-		--check-baseline backend/evaluation/lui/baselines/smoke-2026.08.28.json
+		--check-baseline backend/evaluation/lui/baselines/smoke-2026.09.01.json
 
 init-mongo-indexes:
 	PYTHONNOUSERSITE=$(PYTHONNOUSERSITE) PYTHONPATH=$(PYTHONPATH) conda run -n $(CONDA_ENV) python scripts/init_mongo_indexes.py

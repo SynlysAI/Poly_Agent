@@ -6,7 +6,7 @@ Poly Agent 是 AI4MS 门户下的高分子材料智能研发平台，与 [Spec A
 
 当前仓库的定位是 **“计算智能 + ResearchEngine P0 双通道闭环”演示与迭代基线**：本地结构生成、xTB、受控 ORCA/ComputeEngine fixture、Alchemist 优化、WeKnora 知识库、算法包管理和报告链路已经可以组合使用；真实 ORCA/HPC/AiiDA、SpecLabOS 设备提交和生产级外部模型服务仍通过集成配置逐步接入。
 
-> 文档状态：2026-08-15。README 描述以当前代码和 `doc/` 进度文档为准；mock、fixture、demo store 和 fallback 只用于本地演示或验收，不代表生产模型或真实实验结果。
+> 文档状态：2026-08-28。README 描述以当前代码和 `doc/` 进度文档为准；mock、fixture、demo store 和 fallback 只用于本地演示或验收，不代表生产模型或真实实验结果。
 
 ## 先看这几张图
 
@@ -45,7 +45,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 | **Knowledge Base** | `/knowledge` | WeKnora 问答、证据清单和 Neo4j 增强检索子图 | 通过 WeKnora API 接入；Neo4j 图谱增强可选 |
 | **Data Catalog** | `/database/data-catalog`、`/data-catalog` | 材料数据资产浏览、检索和只读外部数据接入 | 资产库使用 `poly_data` 与 MinIO |
 | **助手与报告** | `/dialogue`、ResearchEngine 报告面板 | 基于项目事实导航、垂类算法工具调用、Slash Command 控制、统一回放、历史会话和结构化报告生成 | 算法工具仅来自已部署且 active 的垂类算法；支持 OpenAI、Ollama、Edison、Codex 和自定义 HTTP provider |
-| **基础工作台** | `/dashboard`、`/tasks/center`、`/tools`、`/admin` | 统一任务视图、模型选择、集成状态和管理 | 与 AI4MS 门户共享认证体系 |
+| **基础工作台与能力治理** | `/dashboard`、`/tasks/center`、`/capabilities`、`/tools`、`/admin` | 统一任务视图、Agent 能力目录与调用确认、集成配置和管理 | 与 AI4MS 门户共享认证体系；`/tools` 收窄为管理员配置入口 |
 
 ### 模块细节
 
@@ -68,6 +68,8 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 | Knowledge Base | ✅ WeKnora 已接入 | 知识库、问答流、证据和检索子图可用 |
 | Data Catalog | ✅ 基础可用 | 目录浏览、筛选和资产读取可用 |
 | 认证、助手、任务中心 | ✅ 基础可用 | HMAC token、门户 SSO、对话历史、垂类算法工具调用和跨模块任务视图可用；真实模型/算法服务依赖环境配置 |
+| LUI 动态计算预算 | ✅ 已完成 / 影子观测 | Query 分类、模型路由、RAG 分层、执行分级、影子观测与灰度回滚已落地；默认不改变线上行为，待双档对比后启用 |
+| Agent 连接器与能力中心 | ✅ 已完成 / 生产化收口中 | 受控外部 Agent 执行安全内核、连接器策略、逐次确认与审计可用；`/capabilities` 能力目录、Skill allowlist、用户与邀请码治理可用；Plan 15 P15-H 生产化收口进行中 |
 | 真实 ORCA/HPC/AiiDA/SpecLabOS | 📋 规划中 | 通过 integration config 和 adapter 契约逐步接入 |
 
 ### 下一阶段优先级
@@ -273,6 +275,7 @@ E2E 默认使用后端 `5201`、前端 `5200` 和 PI Mock `8300`；临时环境�
 | 实验设计与优化 | [`doc/optimization-workflow-user-guide.md`](doc/optimization-workflow-user-guide.md) |
 | ResearchEngine / AutoResearch | [`doc/autoresearch-user-guide.md`](doc/autoresearch-user-guide.md)、[`doc/research-engine-and-auto-research-design.md`](doc/research-engine-and-auto-research-design.md) |
 | ResearchEngine 路线与验收 | [`doc/research-engine-plan-00-roadmap.md`](doc/research-engine-plan-00-roadmap.md)、[`doc/research-engine-progress-and-plan.md`](doc/research-engine-progress-and-plan.md)、[`doc/research-engine-plan-08-regression-test-matrix.md`](doc/research-engine-plan-08-regression-test-matrix.md)、[`doc/research-engine-plan-08-wrapup.md`](doc/research-engine-plan-08-wrapup.md) |
+| LUI 动态预算与 Agent 能力治理 | [`doc/research-engine-plan-14-lui-dynamic-compute-budget-plan.md`](doc/research-engine-plan-14-lui-dynamic-compute-budget-plan.md)、[`doc/research-engine-plan-15-agent-exec-provider-seam-workplan.md`](doc/research-engine-plan-15-agent-exec-provider-seam-workplan.md)、[`doc/research-engine-plan-16-capability-center-and-permission-governance-workplan.md`](doc/research-engine-plan-16-capability-center-and-permission-governance-workplan.md) |
 | 算法包上传与远程模型 | [`doc/algorithm-upload-user-guide.md`](doc/algorithm-upload-user-guide.md)、[`doc/vertical-model-interface-user-guide.md`](doc/vertical-model-interface-user-guide.md) |
 | 知识库 RAG + 图谱 | [`doc/knowledge-base-rag-kg-product-design.md`](doc/knowledge-base-rag-kg-product-design.md) |
 | 报告生成 | [`doc/research-report-generation-product-design.md`](doc/research-report-generation-product-design.md) |

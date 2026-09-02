@@ -1,0 +1,181 @@
+{
+  "run": {
+    "run_id": "asrun_250db3ae8cfa4b3b",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 59583,
+    "first_token_ms": 19770,
+    "queue_wait_ms": 755,
+    "prompt_tokens": 6638,
+    "completion_tokens": 292,
+    "total_tokens": 6930,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "1ff35f0bc3e6b239",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": true,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "explainability_required"
+          ],
+          "category": "complex",
+          "confidence": 0.58,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 6638,
+        "completion_tokens": 292,
+        "total_tokens": 6930
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://blog.csdn.net/weixin_31902781/article/details/161911215",
+          "rank": 1,
+          "score": null,
+          "snippet": "2026年6月11日 - 区别不在精度,而在责任归属:蒙特卡洛把 出错风险 打包进结果本身(比如p-value=0.05),而拉斯维加斯把 出错风险 彻底排除,只把 耗时不确定性 留给你。...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.163.com/dy/article/HP3RHKCV0516DOTJ.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "事实上,第3.1节的形式是决定论的:一旦λ固定,偏振测量的结果A(λ,a)和B(λ,b)是确定的。有人推测,这可能是与量子力学的不确定性形式相冲突的一个很好的理由。事实上,如贝尔首先指出的并且继续发展的,很容易将第3.1节的形式推广到随机补充参数理论,其中确定性测量函数A(λ,a)和B(λ,b′)被概率函数代替。",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://ai.so.com/search/so9725d3e759374aa02b3a91e05ba879b1?search=%E8%AF%B7%E4%B8%BE%E4%BE%8B%E8%AF%B4%E6%98%8E%E4%BB%80%E4%B9%88%E6%98%AF%E7%A1%AE%E5%AE%9A%E6%80%A7%E8%A7%84%E8%8C%83&src=so_result_natural_ask&srcg=so_result_natural_ask",
+          "rank": 3,
+          "score": null,
+          "snippet": "对比说明: 与之相对的是非确定性规范,包括委任性规范(如 国务院反垄断委员会的组成和工作规则由国务院规定 )和准用性规范(如 供用水合同参照供用电合同的有关规定 ),这些都...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://m.bidizhaobiao.com/info-759416248.html",
+          "rank": 4,
+          "score": null,
+          "snippet": "2026年4月9日 - 结果确定函 四川远通工程项目管理咨询有限公司: 2026年全国两会期间安全生产明查暗访警示教育片制作项目已依照相关规定于2026年4月9日上午9时30分(北...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "**结论：该预测结果确定性较低，属于模型估算值，而非实验测量值。**\n\n**依据：**\n\n1. **预测来源**：该结果来自垂类性质预测服务（`vertical_predictor_adapter`），属于模型预测，而非实验测量。预测值本身带有不确定性。\n\n2. **模型类型**：当前可用的预测算法（如 `property_predictor_mock`）基于描述符或 SMILES 快速预测目标性质，返回预测值和不确定性，但未配置具体模型服务时，结果可靠性有限。\n\n3. **分子特殊性**：C=C(F)F（1,1-二氟乙烯）是含氟小分子，介电常数受分子极化率、偶极矩、温度、相态（气/液/固）等多因素影响，单一预测值难以覆盖全部条件。\n\n4. **系统状态**：当前集成状态显示 ORCA 等高级计算引擎不可用（`not_available`），无法通过高精度 DFT 计算交叉验证。\n\n**可执行建议：**\n- 若需更高确定性，建议：\n  - 配置并调用高精度计算引擎（如 ORCA DFT）进行单点能/极化率计算；\n  - 参考实验文献数据（如 NIST 数据库）进行比对；\n  - 使用知识库检索（WeKnora）获取该分子的已知介电常数实验值。",
+    "references": [
+      {
+        "label": "蒙特卡洛与拉斯维加斯算法本质区别:结果确定性vs时间确定性-CSDN博客",
+        "target": "https://blog.csdn.net/weixin_31902781/article/details/161911215",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://blog.csdn.net/weixin_31902781/article/details/161911215",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "贝尔定理:一位实验学家的朴素观点|爱因斯坦|光子|不等式_网易订阅",
+        "target": "https://www.163.com/dy/article/HP3RHKCV0516DOTJ.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.163.com/dy/article/HP3RHKCV0516DOTJ.html",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "请举例说明什么是确定性规范",
+        "target": "https://ai.so.com/search/so9725d3e759374aa02b3a91e05ba879b1?search=%E8%AF%B7%E4%B8%BE%E4%BE%8B%E8%AF%B4%E6%98%8E%E4%BB%80%E4%B9%88%E6%98%AF%E7%A1%AE%E5%AE%9A%E6%80%A7%E8%A7%84%E8%8C%83&src=so_result_natural_ask&srcg=so_result_natural_ask",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://ai.so.com/search/so9725d3e759374aa02b3a91e05ba879b1?search=%E8%AF%B7%E4%B8%BE%E4%BE%8B%E8%AF%B4%E6%98%8E%E4%BB%80%E4%B9%88%E6%98%AF%E7%A1%AE%E5%AE%9A%E6%80%A7%E8%A7%84%E8%8C%83&src=so_result_natural_ask&srcg=so_result_natural_ask",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-MT-0002",
+  "trace_id": "asrun_250db3ae8cfa4b3b",
+  "captured_at": "2026-09-01T07:52:23.906277"
+}

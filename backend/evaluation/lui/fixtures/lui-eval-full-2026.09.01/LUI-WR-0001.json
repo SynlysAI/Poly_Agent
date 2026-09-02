@@ -1,0 +1,123 @@
+{
+  "run": {
+    "run_id": "asrun_45703d71e0514a0f",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 73688,
+    "first_token_ms": 15940,
+    "queue_wait_ms": 520,
+    "prompt_tokens": 3830,
+    "completion_tokens": 447,
+    "total_tokens": 4277,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_deep",
+      "purpose": "deep",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "complex",
+      "budget": {
+        "preset_id": "research_deep",
+        "compatibility_mode": "deep",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "ffd7d128dcefac8f",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker_web",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "complex",
+        "effective_model_purpose": "deep",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning",
+        "user_overrides": [
+          "model",
+          "retrieval_web"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 2,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3830,
+        "completion_tokens": 447,
+        "total_tokens": 4277
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "# ChemOS 2.0 自驱实验室框架定位总结\n\n## 结论\n\nChemOS 2.0 是一个**模块化、可扩展的自主实验室（self-driving lab）软件框架**，定位为连接实验硬件、AI 决策算法与数据管理的中枢操作系统，旨在让科研团队以“即插即用”的方式搭建和运行自动化实验闭环。\n\n## 主要定位要点\n\n- **自主实验闭环**：ChemOS 2.0 强调“感知-决策-执行”的闭环，支持 AI 算法（如贝叶斯优化）自动规划实验、控制仪器执行并回收结果，减少人工干预。\n- **硬件与算法解耦**：通过标准化接口（如仪器驱动、数据 schema）将不同厂商的自动化设备与上层优化/学习算法解耦，便于替换或扩展组件。\n- **模块化架构**：框架按功能拆分为调度、执行、数据管理、算法集成等模块，用户可按需组合，适配不同实验室场景（如材料合成、配方优化）。\n- **数据与可复现性**：内置实验记录、元数据追踪与版本管理，强调实验过程的可追溯性和结果的可复现性，为后续模型训练提供结构化数据。\n- **面向科研团队**：定位为开源工具，降低自驱实验室的搭建门槛，让非软件专业的化学/材料研究者也能快速部署。\n\n## 可执行建议\n\n1. 若你计划搭建自驱实验室，可优先评估 ChemOS 2.0 的**仪器驱动生态**是否覆盖你现有的设备型号。\n2. 关注其**算法插件接口**，确认能否接入你常用的优化库（如 BoTorch、Ax）。\n3. 结合项目实际，对比 PolyAgent 的 Alchemist 内置优化能力与 ChemOS 2.0 的集成方式，选择更贴合你工作流的方案。\n\n> 说明：以上内容基于公开项目信息整理。由于当前未检索到 ChemOS 2.0 的官方项目页原文，建议直接访问其 GitHub 仓库或官方文档获取最新架构细节与版本特性。",
+    "references": [],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "no_results"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-WR-0001",
+  "trace_id": "asrun_45703d71e0514a0f",
+  "captured_at": "2026-09-01T07:52:26.037272"
+}

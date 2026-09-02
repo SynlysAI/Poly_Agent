@@ -1,0 +1,133 @@
+{
+  "run": {
+    "run_id": "asrun_d8d8d52bc8bd452a",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 34081,
+    "first_token_ms": 12018,
+    "queue_wait_ms": 1701,
+    "prompt_tokens": 3781,
+    "completion_tokens": 369,
+    "total_tokens": 4150,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "d94b7a51ca5e10ea",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3781,
+        "completion_tokens": 369,
+        "total_tokens": 4150
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "failed",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "根据项目事实，知识库检索失败时（如本次查询返回 `HTTPException: 404: WeKnora 知识库 'kb-platform-docs' 不存在`），回答必须**明确说明检索失败，不得编造或臆测知识库内容**。\n\n具体处理规则如下：\n\n1. **如实报告失败状态**：当知识库检索返回错误（如 404、服务不可用等）时，回答中应明确告知用户检索失败，并说明失败原因（例如知识库不存在、服务未配置等）。\n2. **不编造依据**：不得虚构知识库中的内容、引用不存在的文档或伪造证据来源。所有回答依据必须来自实际可用的项目事实或网页证据。\n3. **降级处理**：若知识库不可用，可基于项目事实（PROJECT_FACTS）或其他可用证据回答，但需明确区分哪些内容来自项目事实、哪些来自知识库，避免混淆。\n4. **冲突处理**：若项目事实与网页证据冲突，以项目事实为准，并明确说明冲突点。\n\n**本次检索情况**：查询 `\"知识库检索失败时，回答必须如何处理？请引用知识库检索说明文档。\"` 时，WeKnora 知识库 `kb-platform-docs` 返回 404 错误，检索失败，因此无法引用知识库检索说明文档原文。以上回答基于项目配置的检索失败处理规则（`knowledge_search` 状态为 `failed`，`fallback_reason` 为空，未触发降级）。\n\n**可执行建议**：若需查阅知识库检索说明文档，请确认知识库 `kb-platform-docs` 是否已正确创建并配置，或联系管理员检查 WeKnora 服务状态。",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "failed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-KR-0010",
+  "trace_id": "asrun_d8d8d52bc8bd452a",
+  "captured_at": "2026-09-01T04:27:30.274521"
+}

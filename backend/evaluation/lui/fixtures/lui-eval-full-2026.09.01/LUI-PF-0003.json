@@ -1,0 +1,197 @@
+{
+  "run": {
+    "run_id": "asrun_2644599b23fc4f00",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 26955,
+    "first_token_ms": 10656,
+    "queue_wait_ms": 460,
+    "prompt_tokens": 6032,
+    "completion_tokens": 235,
+    "total_tokens": 6267,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "37815f8d4e01c8cc",
+          "query_complexity": "simple",
+          "risk_level": "low",
+          "evidence_need": "entry_fact",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "simple_keyword"
+          ],
+          "category": "simple",
+          "confidence": 0.58,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "simple",
+        "recommended_model_purpose": "qa",
+        "recommended_retrieval_tier": "vector",
+        "recommended_execution_tier": "one_shot",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 6032,
+        "completion_tokens": 235,
+        "total_tokens": 6267
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://blog.csdn.net/Python_0011/article/details/146034526",
+          "rank": 1,
+          "score": null,
+          "snippet": "2025年3月5日 - SPOKE已经整合了来自不同领域的40多个生物医学知识库,每个知识库都专注于生物医学概念,如基因、蛋白质、药物、化合物、疾病及其相关连接。.这是一个与...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://blog.csdn.net/m0_71745484/article/details/143945124",
+          "rank": 2,
+          "score": null,
+          "snippet": "2025年9月1日 - 一般来说企业的信息系统中都可能有较完善的知识库维护与管理应用,但是如何让变化的知识能够同步更新到RAG应用中则不一样,知识进入到RAG应用通常需要经...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://blog.csdn.net/m0_55699184/article/details/162653584",
+          "rank": 3,
+          "score": null,
+          "snippet": "图1:RAG 文档入库完整流程 1.2 Chunk 切分的本质 一个文档进入知识库之前会被切分为很多Chunk(文本块)。切分不是简单的按字数截断,而是要保证每个 Chunk 包含相对完整的语义单元。常见的切分策略: <table><tr><th>切分策略</th><th>特点</th></tr><tr><td>Fixed-size 固定长度切分<",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://github.com/winterpi/blog/issues/62",
+          "rank": 4,
+          "score": null,
+          "snippet": "RAG 的流程一般是将本地文件(如doc, pdf 等)数据分块、向量化之后存储到向量数据库,大模型可以从向量数据库中检索以获得新的知识。 RAG 现有的问题 召回率偏低,无法检索到对应的优质内容给大模型; 提高RAG 召回率的几种方式 文本向量化的提升 数据清理 检查原始文档数据是否存在逻辑不合理、前后矛盾的问题;- 确认...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.360kuai.com/pc/994dbbaff74d014a2?cota=3&kuai_so=1&sign=360_57c3bbd1&refer_scene=so_1",
+          "rank": 5,
+          "score": null,
+          "snippet": "数字经济时代,企业文档、报表等数据已成为核心资产。但传统知识库普遍陷入 静态沉淀、检索低效、联动缺失 的困境——维修手册难调用、政策查询耗时长...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "根据项目事实，我没有找到名为“知识库 RAG/KG 升级的设计文档”的具体文件或路径记录。项目内可用的知识库相关文档包括：\n\n- `doc/autoresearch-user-guide.md`（AutoResearch 用户指南）\n- `doc/computation-workflows-user-guide.md`（计算工作流用户指南）\n- `doc/knowledg...`（知识库相关文档，路径被截断）\n\n**可执行建议：**\n1. 在项目的 `doc/` 目录下查找以 `knowledge` 或 `rag` 开头的文档文件。\n2. 如果找不到，请提供更具体的文档名称或关键词，我可以帮你进一步定位。\n\n如果你指的是知识库 RAG/KG 的**功能实现**，项目内已有相关算法适配器，例如：\n- `knowledge_graph_adapter`：知识图谱子图检索（基于 WeKnora 检索结果合成子图，可选 Neo4j 增强）\n- `weknora_adapter`：WeKnora 知识增强检索\n\n需要我帮你查看这些功能的详细配置或使用方式吗？",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      },
+      {
+        "label": "【2025版】知识图谱增强的RAG(KG-RAG)详细解析,从零基础到精通,精通收藏这篇就够了!-CSDN博客",
+        "target": "https://blog.csdn.net/Python_0011/article/details/146034526",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://blog.csdn.net/Python_0011/article/details/146034526",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "实操|如何优雅的实现RAG与GraphRAG应用中的知识文档增量更新?_rag数据库如何更新-CSDN博客",
+        "target": "https://blog.csdn.net/m0_71745484/article/details/143945124",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://blog.csdn.net/m0_71745484/article/details/143945124",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "RAG 知识库为什么越更新越乱?一文讲透生产级文档更新方案_rag 如何更新...",
+        "target": "https://blog.csdn.net/m0_55699184/article/details/162653584",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://blog.csdn.net/m0_55699184/article/details/162653584",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "hybrid_grounded",
+    "answer_scope": "hybrid",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0003",
+  "trace_id": "asrun_2644599b23fc4f00",
+  "captured_at": "2026-09-01T07:52:24.376186"
+}

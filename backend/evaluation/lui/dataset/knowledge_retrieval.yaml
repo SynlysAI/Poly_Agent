@@ -1,26 +1,29 @@
-# 知识库检索分桶：固定 WeKnora 快照，relevant_ids 对应稳定 source_id。
+# 知识库检索分桶：使用真实 WeKnora 粘结剂资料库，relevant_id 为实际 knowledge_id。
 - id: LUI-KR-0001
   category: knowledge_retrieval
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 根据知识库说明，PVDF 的介电常数典型范围是多少？
+  - role: user
+    content: 根据知识库说明，PVDF-HFP 在二次电池中有哪些用途？
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-fluoro-handbook"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:fh-dielectric-pvdf"]
+      relevant_ids:
+      - 2447679b-bfee-4f30-811f-4d892a8cc6ad
     answer:
-      type: numeric
-      numeric_value: 9.5
-      numeric_tolerance: {kind: absolute, value: 1.5}
+      type: rubric
+      must_include:
+      - PVDF-HFP
+      - 粘结剂
+      - 隔膜
     hallucination:
       require_citations: true
-      checks: ["介电常数数值必须来自知识库命中片段"]
   fixture:
     run:
       run_id: fixture-run-kr-0001
@@ -29,242 +32,350 @@
       first_token_ms: 900
       total_tokens: 2100
     retrievals:
-      - source: knowledge
-        status: searched
-        duration_ms: 350
-        results:
-          - {id: "kb:fh-dielectric-pvdf", rank: 1, score: 0.92, snippet: "PVDF 介电常数典型范围 8–11", used_in_answer: true}
-          - {id: "kb:fh-overview", rank: 2, score: 0.71, snippet: "氟聚合物手册总览", used_in_answer: false}
+    - source: knowledge
+      status: searched
+      duration_ms: 350
+      results:
+      - id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+        score: 0.95
+        snippet: PVDF-HFP is widely used as a binder and a component of separators
+          in secondary batteries.
+        used_in_answer: true
+      - id: 8ef99540-5f80-46b7-a5e7-580e24f4431d
+        rank: 2
+        score: 0.71
+        snippet: PVDF-HFP/SiO2 nanocomposite electrolyte.
+        used_in_answer: false
     message:
-      content: 根据知识库，PVDF 的介电常数典型值约为 9.5（范围 8–11）。
+      content: 知识库说明 PVDF-HFP 在二次电池中广泛用作粘结剂，并可作为隔膜组分，原因是其机械与电化学稳定性较好。
       references:
-        - {label: "PVDF 介电常数", target: "/knowledge?system_id=kb-fluoro-handbook", type: knowledge, source_id: "kb:fh-dielectric-pvdf", rank: 1}
-
+      - label: PVDF-HFP 用途
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
 - id: LUI-KR-0002
   category: knowledge_retrieval
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 知识库里 PTFE 的最高连续使用温度是多少？
+  - role: user
+    content: 知识库提到 PAA 线性结构会带来什么限制？
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-fluoro-handbook"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:fh-thermal-ptfe"]
+      relevant_ids:
+      - 388c0708-1989-4f0c-bb59-5c0cf075f0da
     answer:
-      type: numeric
-      numeric_value: 260
-      numeric_tolerance: {kind: absolute, value: 10}
-
+      type: rubric
+      must_include:
+      - PAA
+      - 线性结构
+      - 粘附力
+    hallucination:
+      require_citations: true
+  fixture:
+    run:
+      run_id: fixture-run-kr-0002
+      status: completed
+      duration_ms: 3900
+      first_token_ms: 860
+      total_tokens: 2000
+    retrievals:
+    - source: knowledge
+      status: searched
+      duration_ms: 300
+      results:
+      - id: 388c0708-1989-4f0c-bb59-5c0cf075f0da
+        rank: 1
+        score: 0.96
+        snippet: PAA 的线性结构限制了粘附力，长期循环中涂层易剥离。
+        used_in_answer: true
+    message:
+      content: 知识库指出 PAA 虽是水溶性环保粘结剂，但线性结构限制粘附力，长期循环中涂层容易剥离。
+      references:
+      - label: PAA 结构限制
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 388c0708-1989-4f0c-bb59-5c0cf075f0da
+        rank: 1
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
 - id: LUI-KR-0003
   category: knowledge_retrieval
   difficulty: hard
   mode: deep
   messages:
-    - role: user
-      content: 对比知识库中氟聚合物与碳聚合物的介电性能差异，并给出依据文档。
+  - role: user
+    content: 对比知识库中 PVDF-HFP 与纤维素纳米纤维作为电池粘结剂的定位差异，并给出依据文档。
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-fluoro-handbook", "kb-carbon-handbook"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:fh-dielectric-pvdf", "kb:ch-dielectric-pp"]
+      relevant_ids:
+      - 2447679b-bfee-4f30-811f-4d892a8cc6ad
     answer:
       type: rubric
-      must_include: ["介电", "氟聚合物", "碳聚合物"]
+      must_include:
+      - PVDF-HFP
+      - 纤维素纳米纤维
+      - 粘结剂
     hallucination:
       require_citations: true
   fixture:
     run:
       run_id: fixture-run-kr-0003
       status: completed
-      duration_ms: 8600
-      first_token_ms: 1500
-      total_tokens: 4300
+      duration_ms: 8200
+      first_token_ms: 1400
+      total_tokens: 4100
     retrievals:
-      - source: knowledge
-        status: searched
-        duration_ms: 620
-        results:
-          - {id: "kb:fh-dielectric-pvdf", rank: 1, score: 0.89, snippet: "PVDF 介电常数 8–11", used_in_answer: true}
-          - {id: "kb:ch-dielectric-pp", rank: 2, score: 0.84, snippet: "PP 介电常数 2.2–2.4", used_in_answer: true}
-          - {id: "kb:fh-overview", rank: 3, score: 0.66, snippet: "氟聚合物总览", used_in_answer: false}
+    - source: knowledge
+      status: searched
+      duration_ms: 620
+      results:
+      - id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+        score: 0.93
+        snippet: PVDF-HFP widely used as a binder and separator component.
+        used_in_answer: true
+      - id: 1157c0b6-ba02-4dfc-8e49-86d64e31fd26
+        rank: 2
+        score: 0.9
+        snippet: CNF 作为水性油墨粘合剂替代 PVdF 与 NMP。
+        used_in_answer: true
     message:
-      content: 介电性能对比：氟聚合物（如 PVDF，介电常数 8–11）明显高于碳聚合物（如 PP，介电常数 2.2–2.4），差异主要来自极性 C–F 键。
+      content: PVDF-HFP 是二次电池中常用的聚合物粘结剂和隔膜组分；纤维素纳米纤维则面向水性油墨与绿色制造，可替代传统含氟粘结剂和有机溶剂。
       references:
-        - {label: "PVDF 介电常数", target: "/knowledge", type: knowledge, source_id: "kb:fh-dielectric-pvdf", rank: 1}
-        - {label: "PP 介电常数", target: "/knowledge", type: knowledge, source_id: "kb:ch-dielectric-pp", rank: 2}
-
+      - label: PVDF-HFP
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+      - label: CNF 水性油墨
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 1157c0b6-ba02-4dfc-8e49-86d64e31fd26
+        rank: 2
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
 - id: LUI-KR-0004
   category: knowledge_retrieval
   difficulty: easy
   mode: qa
   messages:
-    - role: user
-      content: 知识库中 NMP 溶剂的沸点是多少？
+  - role: user
+    content: 知识库中 PE 隔膜的熔点是多少？
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-solvent-table"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:st-nmp"]
+      relevant_ids:
+      - 388c0708-1989-4f0c-bb59-5c0cf075f0da
     answer:
-      type: numeric
-      numeric_value: 202
-      numeric_tolerance: {kind: absolute, value: 3}
-
+      type: rubric
+      must_include:
+      - PE
+      - '135'
+    hallucination:
+      require_citations: true
+  fixture:
+    run:
+      run_id: fixture-run-kr-0004
+      status: completed
+      duration_ms: 3500
+      first_token_ms: 780
+      total_tokens: 1800
+    retrievals:
+    - source: knowledge
+      status: searched
+      duration_ms: 280
+      results:
+      - id: 388c0708-1989-4f0c-bb59-5c0cf075f0da
+        rank: 1
+        score: 0.94
+        snippet: 传统 PE 隔膜熔点低（135°C），导致热稳定性差。
+        used_in_answer: true
+    message:
+      content: 知识库说明传统 PE 隔膜的熔点约为 135°C，因此热稳定性较差。
+      references:
+      - label: PE 熔点
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 388c0708-1989-4f0c-bb59-5c0cf075f0da
+        rank: 1
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
 - id: LUI-KR-0005
   category: knowledge_retrieval
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 知识库提到 PEEK 的玻璃化转变温度范围是多少？
+  - role: user
+    content: 知识库提到纤维素纳米纤维粘结剂如何让电池制造更环保？
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-polymer-thermal"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:pt-peek-tg"]
-    answer:
-      type: numeric
-      numeric_value: 150
-      numeric_tolerance: {kind: absolute, value: 8}
-  fixture:
-    run:
-      run_id: fixture-run-kr-0005
-      status: completed
-      duration_ms: 3800
-      first_token_ms: 820
-      total_tokens: 1900
-    retrievals:
-      - source: knowledge
-        status: searched
-        duration_ms: 410
-        results:
-          - {id: "kb:pt-peek-tg", rank: 1, score: 0.9, snippet: "PEEK Tg 约 143–152°C", used_in_answer: true}
-    message:
-      content: 根据知识库，PEEK 的玻璃化转变温度约为 150°C（143–152°C 区间）。
-      references:
-        - {label: "PEEK Tg", target: "/knowledge", type: knowledge, source_id: "kb:pt-peek-tg", rank: 1}
-
-- id: LUI-KR-0006
-  category: knowledge_retrieval
-  difficulty: hard
-  mode: deep
-  messages:
-    - role: user
-      content: 汇总知识库中三类氟聚合物薄膜的击穿场强数据。
-  context:
-    use_knowledge_base: true
-    knowledge_base_ids: ["kb-fluoro-handbook"]
-  expected:
-    task_success: true
-    retrieval:
-      source: knowledge
-      relevant_ids: ["kb:fh-breakdown-pvdf", "kb:fh-breakdown-ptfe", "kb:fh-breakdown-fep"]
+      relevant_ids:
+      - 1157c0b6-ba02-4dfc-8e49-86d64e31fd26
     answer:
       type: rubric
-      must_include: ["PVDF", "PTFE", "FEP", "击穿"]
-
-- id: LUI-KR-0007
+      must_include:
+      - 水性油墨
+      - NMP
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0006
   category: knowledge_retrieval
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 知识库没有收录的内部实验号 EXP-9999 的结果是什么？请基于知识库回答。
+  - role: user
+    content: 知识库列举了哪些水系负极粘结剂？
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-fluoro-handbook"]
-  expected:
-    task_success: true
-    answer:
-      type: insufficient_info
-    hallucination:
-      forbidden_claims: ["EXP-9999 的实验结果是"]
-
-- id: LUI-KR-0008
-  category: knowledge_retrieval
-  difficulty: easy
-  mode: qa
-  messages:
-    - role: user
-      content: 知识库中 DMAC 溶剂的介电常数是多少？
-  context:
-    use_knowledge_base: true
-    knowledge_base_ids: ["kb-solvent-table"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:st-dmac"]
+      relevant_ids:
+      - 1eeb602a-e6a8-4cec-88ec-8f0b10d75225
     answer:
-      type: numeric
-      numeric_value: 37.8
-      numeric_tolerance: {kind: absolute, value: 1.0}
-
+      type: rubric
+      must_include:
+      - CMC
+      - SBR
+      - PAA
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0007
+  category: knowledge_retrieval
+  difficulty: hard
+  mode: deep
+  messages:
+  - role: user
+    content: 总结知识库中 CMC 用于硅负极时的分子作用与局限。
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - 7c6ae808-d64c-4aa9-81ea-e1a15e69a8fe
+    answer:
+      type: rubric
+      must_include:
+      - CMC
+      - 酯键
+      - 体积
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0008
+  category: knowledge_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+  - role: user
+    content: 知识库中硅负极体积变化对粘结剂提出什么挑战？
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - a56d1936-b062-4b9a-be4e-20bf4e016e90
+    answer:
+      type: rubric
+      must_include:
+      - 硅负极
+      - 体积变化
+      - 粘结剂
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
 - id: LUI-KR-0009
   category: knowledge_retrieval
   difficulty: medium
   mode: qa
   messages:
-    - role: user
-      content: 根据知识库，PI 薄膜在 250°C 下的体积电阻率数量级是多少？
+  - role: user
+    content: 知识库说粘结剂通常占锂离子电池总重量的多少？
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-polymer-electrical"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:pe-pi-resistivity"]
+      relevant_ids:
+      - e16cb4d1-5546-48cd-a138-c9a6dcd0223b
     answer:
-      type: keywords
-      must_include: ["10^14", "Ω"]
-  fixture:
-    run:
-      run_id: fixture-run-kr-0009
-      status: completed
-      duration_ms: 4400
-      first_token_ms: 950
-      total_tokens: 2200
-    retrievals:
-      - source: knowledge
-        status: searched
-        duration_ms: 380
-        results:
-          - {id: "kb:pe-pi-resistivity", rank: 1, score: 0.88, snippet: "PI 250°C 体积电阻率约 10^14 Ω·cm", used_in_answer: true}
-    message:
-      content: 根据知识库，PI 薄膜在 250°C 下的体积电阻率约为 10^14 Ω·cm。
-      references:
-        - {label: "PI 电阻率", target: "/knowledge", type: knowledge, source_id: "kb:pe-pi-resistivity", rank: 1}
-
+      type: rubric
+      must_include:
+      - '3'
+      - '5'
+      - 重量
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
 - id: LUI-KR-0010
   category: knowledge_retrieval
-  difficulty: medium
-  mode: qa
+  difficulty: hard
+  mode: deep
   messages:
-    - role: user
-      content: 知识库检索失败时，回答必须如何处理？请引用知识库检索说明文档。
+  - role: user
+    content: 基于知识库综述说明 NMP 溶剂的环境风险与替代方向。
   context:
     use_knowledge_base: true
-    knowledge_base_ids: ["kb-platform-docs"]
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
   expected:
     task_success: true
     retrieval:
       source: knowledge
-      relevant_ids: ["kb:pd-retrieval-fallback"]
+      relevant_ids:
+      - a56d1936-b062-4b9a-be4e-20bf4e016e90
     answer:
-      type: keywords
-      must_include: ["继续使用", "项目事实"]
+      type: rubric
+      must_include:
+      - NMP
+      - 环境
+      - 水系
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
