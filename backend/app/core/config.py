@@ -317,6 +317,12 @@ class Settings:
             "AGENT_EXEC_CODEX_API_KEY", os.getenv("CODEX_API_KEY", "")
         )
         self.agent_exec_codex_model: str = os.getenv("AGENT_EXEC_CODEX_MODEL", "").strip()
+        agent_exec_codex_home_raw: str = os.getenv("AGENT_EXEC_CODEX_HOME", "").strip()
+        self.agent_exec_codex_home: Path | None = (
+            self._resolve_project_path(agent_exec_codex_home_raw)
+            if agent_exec_codex_home_raw
+            else None
+        )
 
         # 统一认证（AI4MS）配置；认证库与业务库分离时显式配置 AUTH_MONGODB_URI。
         self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "").strip()

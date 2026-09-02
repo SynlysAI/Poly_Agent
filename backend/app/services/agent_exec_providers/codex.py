@@ -61,10 +61,32 @@ class CodexAgentExecProvider:
         """返回脱敏后的配置来源摘要，不包含 secret。"""
         model = settings.agent_exec_codex_model
         model_part = f"，model={model}" if model else ""
+        if settings.agent_exec_codex_home is not None:
+            home = settings.agent_exec_codex_home
+            home_part = self._display_home(home)
+            return (
+                f"独立 CODEX_HOME（{home_part}，sandbox="
+                f"{settings.agent_exec_codex_sandbox_mode}{model_part}）"
+            )
         return (
             f"环境变量 AGENT_EXEC_CODEX_*"
             f"（sandbox={settings.agent_exec_codex_sandbox_mode}{model_part}）"
         )
+
+    @staticmethod
+    def _display_home(home: Path) -> str:
+        """返回脱敏后的 CODEX_HOME 展示路径。
+
+        Args:
+            home: 解析后的独立 Codex 配置目录。
+
+        Returns:
+            项目内相对路径或固定占位文案，不暴露绝对路径。
+        """
+        try:
+            return str(home.resolve().relative_to(settings.project_root))
+        except ValueError:
+            return "自定义路径"
 
     def readiness(self) -> AgentExecProviderReadiness:
         """检查 Codex 连接器是否可用。
@@ -103,6 +125,16 @@ class CodexAgentExecProvider:
                 reason_code="codex_binary_not_executable",
                 message=f"codex 二进制 '{binary}' 不可执行",
             )
+        home = settings.agent_exec_codex_home
+        if home is not None and not self._codex_home_ready(home):
+            return AgentExecProviderReadiness.unavailable(
+                provider_id=self.provider_id,
+                reason_code="codex_home_config_missing",
+                message=(
+                    f"独立 CODEX_HOME '{self._display_home(home)}' "
+                    "缺少 config.toml 或 auth.json"
+                ),
+            )
         if not self._has_credentials():
             return AgentExecProviderReadiness.unavailable(
                 provider_id=self.provider_id,
@@ -117,6 +149,20 @@ class CodexAgentExecProvider:
             checked_at=self._now(),
             details={"sandbox_mode": mode, "binary": Path(binary).name},
         )
+
+    @staticmethod
+    def _codex_home_ready(home: Path) -> bool:
+        """静态检查独立 CODEX_HOME 是否具备必需配置文件。
+
+        Args:
+            home: 独立 Codex 配置目录。
+
+        Returns:
+            config.toml 与 auth.json 均存在且为常规文件时返回 True。
+        """
+        config_file = home / "config.toml"
+        auth_file = home / "auth.json"
+        return config_file.is_file() and auth_file.is_file()
 
     def execute(
         self,
@@ -156,6 +202,9 @@ class CodexAgentExecProvider:
             "--json",
             "--sandbox",
             settings.agent_exec_codex_sandbox_mode,
+            # run workdir 是服务端生成的临时目录，不在 Codex 受信项目表中；
+            # 跳过 git 仓库检查不影响 --sandbox 只读边界与服务端 allowlist。
+            "--skip-git-repo-check",
             "--output-schema",
             schema_path.name,
             "-o",
@@ -170,6 +219,8 @@ class CodexAgentExecProvider:
             for key, value in os.environ.items()
             if key in ALLOWED_ENV_KEYS
         }
+        if settings.agent_exec_codex_home is not None:
+            env["CODEX_HOME"] = str(settings.agent_exec_codex_home)
         if settings.agent_exec_codex_api_key:
             env["CODEX_API_KEY"] = settings.agent_exec_codex_api_key
 

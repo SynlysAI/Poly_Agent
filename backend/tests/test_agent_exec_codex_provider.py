@@ -94,12 +94,14 @@ class CodexProviderTest(unittest.TestCase):
             "sandbox": settings.agent_exec_codex_sandbox_mode,
             "api_key": settings.agent_exec_codex_api_key,
             "model": settings.agent_exec_codex_model,
+            "home": settings.agent_exec_codex_home,
         }
         settings.agent_exec_enabled = True
         settings.agent_exec_codex_bin = "codex"
         settings.agent_exec_codex_sandbox_mode = "read-only"
         settings.agent_exec_codex_api_key = "test-key"
         settings.agent_exec_codex_model = ""
+        settings.agent_exec_codex_home = None
 
     def tearDown(self) -> None:
         settings.agent_exec_enabled = self.originals["enabled"]
@@ -107,6 +109,7 @@ class CodexProviderTest(unittest.TestCase):
         settings.agent_exec_codex_sandbox_mode = self.originals["sandbox"]
         settings.agent_exec_codex_api_key = self.originals["api_key"]
         settings.agent_exec_codex_model = self.originals["model"]
+        settings.agent_exec_codex_home = self.originals["home"]
 
     def test_readiness_disabled_by_default(self) -> None:
         settings.agent_exec_enabled = False
@@ -168,6 +171,44 @@ class CodexProviderTest(unittest.TestCase):
         self.assertEqual(readiness.reason_code, "ready")
         which_mock.assert_called_once_with("codex")
 
+    def test_readiness_codex_home_config_missing(self) -> None:
+        provider = CodexAgentExecProvider()
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "app.services.agent_exec_providers.codex.shutil.which",
+            return_value="/usr/local/bin/codex",
+        ), patch(
+            "app.services.agent_exec_providers.codex.os.access", return_value=True
+        ):
+            settings.agent_exec_codex_home = Path(temp_dir)
+            (Path(temp_dir) / "config.toml").write_text(
+                'model = "glm-52"', encoding="utf-8"
+            )
+            readiness = provider.readiness()
+
+        self.assertFalse(readiness.available)
+        self.assertEqual(readiness.reason_code, "codex_home_config_missing")
+
+    def test_readiness_ready_with_codex_home_and_model(self) -> None:
+        provider = CodexAgentExecProvider()
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "app.services.agent_exec_providers.codex.shutil.which",
+            return_value="/usr/local/bin/codex",
+        ), patch(
+            "app.services.agent_exec_providers.codex.os.access", return_value=True
+        ):
+            settings.agent_exec_codex_home = Path(temp_dir)
+            settings.agent_exec_codex_model = "glm-52"
+            (Path(temp_dir) / "config.toml").write_text(
+                'model = "glm-52"', encoding="utf-8"
+            )
+            (Path(temp_dir) / "auth.json").write_text("{}", encoding="utf-8")
+            readiness = provider.readiness()
+
+        self.assertTrue(readiness.available)
+        self.assertEqual(readiness.reason_code, "ready")
+
     def test_execute_success_uses_read_only_sandbox(self) -> None:
         captured: dict = {}
 
@@ -194,11 +235,60 @@ class CodexProviderTest(unittest.TestCase):
         command = captured["command"]
         self.assertIn("--sandbox", command)
         self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
+        self.assertIn("--skip-git-repo-check", command)
         env_keys = set(captured.get("env", {}))
         self.assertLessEqual(
             env_keys,
             {"PATH", "HOME", "LANG", "LC_ALL", "TERM", "CODEX_API_KEY"},
         )
+
+    def test_execute_injects_codex_home_env(self) -> None:
+        captured: dict = {}
+
+        def factory(command, **kwargs):
+            """记录环境变量并返回成功进程。"""
+            captured.update(kwargs)
+            return FakeProcess(
+                command,
+                cwd=kwargs["cwd"],
+                mode="ok",
+                payload={"summary": "ok"},
+            )
+
+        provider = CodexAgentExecProvider(process_factory=factory)
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "app.services.agent_exec_providers.codex.shutil.which",
+            return_value="/usr/local/bin/codex",
+        ):
+            settings.agent_exec_codex_home = Path(temp_dir)
+            result = self._execute(provider)
+
+        self.assertTrue(result.success)
+        self.assertEqual(captured["env"].get("CODEX_HOME"), temp_dir)
+
+    def test_execute_without_codex_home_uses_global_config(self) -> None:
+        captured: dict = {}
+
+        def factory(command, **kwargs):
+            """记录环境变量并返回成功进程。"""
+            captured.update(kwargs)
+            return FakeProcess(
+                command,
+                cwd=kwargs["cwd"],
+                mode="ok",
+                payload={"summary": "ok"},
+            )
+
+        provider = CodexAgentExecProvider(process_factory=factory)
+        with patch(
+            "app.services.agent_exec_providers.codex.shutil.which",
+            return_value="/usr/local/bin/codex",
+        ):
+            settings.agent_exec_codex_home = None
+            result = self._execute(provider)
+
+        self.assertTrue(result.success)
+        self.assertNotIn("CODEX_HOME", captured["env"])
 
     def test_execute_nonzero_exit(self) -> None:
         provider = CodexAgentExecProvider(

@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import sys
 import unittest
+import os
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -39,7 +41,14 @@ class StaticProvider:
 
 class AgentExecContractTest(unittest.TestCase):
     def test_settings_default_disabled_and_resource_limits(self) -> None:
-        settings = Settings()
+        # 清除本机 .env 注入的 AGENT_EXEC_*，验证真正的默认值。
+        env_without_agent_exec = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("AGENT_EXEC_")
+        }
+        with patch("os.environ", env_without_agent_exec):
+            settings = Settings()
 
         self.assertFalse(settings.agent_exec_enabled)
         self.assertEqual(settings.agent_exec_workdir_root.name, "agent_exec")

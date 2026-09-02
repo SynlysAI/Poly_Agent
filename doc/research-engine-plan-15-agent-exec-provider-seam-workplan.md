@@ -168,6 +168,7 @@ class AgentExecProvider(Protocol):
 | `AGENT_EXEC_CODEX_SANDBOX_MODE` | `read-only` | MVP 仅允许 `read-only`，其他模式 readiness 直接 unavailable |
 | `AGENT_EXEC_CODEX_API_KEY` | 空 | 只允许环境变量 / 密钥引用；缺省可回退读取既有 `CODEX_API_KEY`，不得进入前端或审计 |
 | `AGENT_EXEC_CODEX_MODEL` | 空 | 可选模型配置；与 API key 共同构成凭证判断 |
+| `AGENT_EXEC_CODEX_HOME` | 空 | 可选独立 Codex 配置目录；为空时沿用全局 `~/.codex`，设置后 readiness 静态检查目录内 `config.toml` 与 `auth.json`，并向子进程注入 `CODEX_HOME` |
 
 配置约束：
 
@@ -242,7 +243,7 @@ backend/app/api/v1/endpoints/agent_exec.py
 | provider 解析 | `provider_not_registered` | provider 未注册，400 / 404 |
 | 策略 | `role_not_allowed`、`provider_disabled`、`plan_mode_blocked`、`read_only_blocked`、`confirmation_required` | 403 |
 | 策略 | `task_type_not_supported`、`task_type_not_allowed`、`task_types_empty`、`roles_empty`、`permission_mode_unsupported` | 400 |
-| readiness | `agent_exec_disabled`、`sandbox_mode_unsupported`、`codex_binary_missing`、`codex_binary_not_executable`、`credentials_missing` | 聚合为 `provider_unavailable`，503 |
+| readiness | `agent_exec_disabled`、`sandbox_mode_unsupported`、`codex_binary_missing`、`codex_binary_not_executable`、`codex_home_config_missing`、`credentials_missing` | 聚合为 `provider_unavailable`，503 |
 | 输入 | `too_many_input_files`、`input_name_invalid`、`input_name_duplicate`、`input_source_not_found`、`input_symlink_rejected`、`input_hardlink_rejected`、`input_not_a_file`、`input_outside_managed_root`、`input_empty`、`input_too_large`、`input_total_too_large`、`input_size_mismatch`、`input_source_changed`、`input_hash_mismatch` | 400 |
 | 输出 | `output_path_invalid`、`output_symlink_rejected`、`output_hidden_rejected`、`output_escape_rejected`、`output_hardlink_rejected`、`output_executable_rejected`、`output_empty_rejected`、`output_too_many_files`、`output_too_large` | run failed |
 | provider 执行 | `codex_spawn_failed`、`codex_nonzero_exit`、`output_missing`、`schema_mismatch`、`timeout`、`cancelled` | run failed / cancelled |
@@ -544,3 +545,5 @@ conda run -n poly_agent python -m pytest \
 - 2026-08-28：完成 P15-A–P15-G 收尾：专项测试 56 项（含 3 个子测试）与 Plan 8.2 回归 31 项全部通过；默认关闭配置下 FastAPI 应用导入与 agent-exec 路由挂载验证正常；完成定义全部勾选。
 - 2026-08-28：复核计划与实现 / 测试 / 用户指南 / 来源矩阵的一致性：新增 5.5 配置基线、6.2 API 与错误契约、6.3 存储与数据生命周期、9.1 运维与回滚 runbook；修正 Mongo 索引、前端测试范围、readiness 版本记录和 audit_error 的表述；新增未开始的 P15-H 与 11.2 生产化追加验收。复核证据覆盖 `backend/app/schemas/agent_exec.py`、`agent_exec_service.py`、`agent_exec_policy_service.py`、`agent_exec_repositories.py`、`agent_exec_providers/*`、`api/v1/endpoints/agent_exec.py`、`backend/tests/test_agent_exec_*`、`ToolServicesView.vue`、`agentConnectors.test.mjs`、`agent-connector-user-guide.md` 与来源矩阵。本次仅更新文档，未修改业务代码。
 - 2026-08-28（P15-H 首轮）：完成高优先级生产化收口：拒绝 `full_access` 语义、输入从受管根逐级 `O_NOFOLLOW + O_NONBLOCK` 打开并同描述符校验 / 哈希 / 复制、输出与 result.json 拒绝 symlink / 硬链接 / FIFO / 设备文件 / 可执行位、全局并发与每用户活跃 run 429、单进程终态 CAS、`audit_error` 终态保留与质量计数、Mongo 首访 / 启动 / 部署唯一索引接线、管理员 run 分页列表、普通用户响应隐藏策略更新者。新增替换攻击、迟到成功、限流、审计失败、嵌套受管输入、输出硬链接 / FIFO / workdir symlink 和 run 列表测试；agent_exec 专项 67 项、含能力中心 API 的组合回归 72 项、完整后端回归 952 项通过 / 1 项跳过；默认关闭配置下应用导入与 `/api/v1/agent-exec/runs` 路由挂载验证通过；连接器 / 能力中心前端测试与 Vite 生产构建通过。保留 workdir 清理、重启恢复、多实例 CAS、资源隔离、readiness 版本探测、配置健壮性和外部告警为后续项。
+- 2026-09-01：新增 `AGENT_EXEC_CODEX_HOME` 独立 Codex 配置目录支持：为空时沿用全局 `~/.codex`（现状不变）；设置后适配器向 codex 子进程注入 `CODEX_HOME`，readiness 静态检查目录内 `config.toml` 与 `auth.json`（缺失返回 `codex_home_config_missing`），`config_source` 展示脱敏相对路径。本地部署通过 `.runtime/codex-home`（gitignore 内，`auth.json` 0600）接入 GLM5.2 本地模型（`glm-52`），不影响全局 cc-switch / `~/.codex` 配置；`backend/.env` 追加 `AGENT_EXEC_ENABLED=true`、`AGENT_EXEC_CODEX_MODEL=glm-52`、`AGENT_EXEC_CODEX_HOME=.runtime/codex-home`。新增 4 项适配器测试（home 注入 / 空 home 回归 / 配置缺失 unavailable / 配置完整 ready），Codex 专项 16 项通过；不改变既有安全语义。
+- 2026-09-02（接入验证）：真实受控 run 发现独立 CODEX_HOME 无受信项目条目时 `codex exec` 拒绝在临时 workdir 执行，适配器命令固定追加 `--skip-git-repo-check`（仅跳过受信目录检查，`--sandbox read-only` 与服务端输入/输出 allowlist 安全边界不变），并补充命令断言测试。端到端验证结论：连接器 readiness 就绪、`config_source` 正确显示独立 CODEX_HOME；但本地网关 `10.26.15.52:30081` 的 GLM5.2 / DeepSeek 本地推理端点当前均返回 401（cc-switch 记录最后成功为 08-28，均为代理转发；`/models` 仍可达但 `/responses`、`/chat/completions` 拒绝），判定为网关侧凭证轮换 / 过期，需获取新 token 后更新 `.runtime/codex-home/`（config.toml 的 base_url path token 或 auth.json 密钥）即可，代码与配置链路无需再改。
