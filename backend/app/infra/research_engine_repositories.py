@@ -1646,6 +1646,13 @@ class AssistantRunRepository(BaseRepository):
             collection.create_index([("chat_id", 1), ("created_by", 1), ("created_at", -1)])
             collection.create_index([("trace_id", 1), ("created_at", 1)])
             collection.create_index([("request_snapshot.context.trace_id", 1), ("created_at", 1)])
+            collection.create_index("request_snapshot.context.evaluation_id")
+            collection.create_index(
+                [
+                    ("request_snapshot.context.evaluation_id", 1),
+                    ("request_snapshot.context.task_id", 1),
+                ]
+            )
         except PyMongoError as exc:
             cls._handle_mongo_error(exc)
 
@@ -1688,6 +1695,38 @@ class AssistantRunRepository(BaseRepository):
             run_id,
             ["run_id", "chat_id", "created_by", "status", "stage", "updated_at"],
         ) or {}
+
+    @classmethod
+    def find_by_evaluation_id(cls, evaluation_id: str) -> list[dict[str, Any]]:
+        """按评测 ID 读取全部关联 run，供离线评测抓取原始事实。
+
+        Args:
+            evaluation_id: 评测批次 ID，来自 request_snapshot.context.evaluation_id。
+
+        Returns:
+            按 created_at 升序的 run 文档列表。
+        """
+        normalized = str(evaluation_id or "").strip()
+        if not normalized:
+            return []
+        filters = {"request_snapshot.context.evaluation_id": normalized}
+        if cls._can_use_mongo():
+            try:
+                return list(
+                    cls._collection()
+                    .find(filters, {"_id": 0})
+                    .sort([("created_at", 1)])
+                )
+            except PyMongoError as exc:
+                cls._handle_mongo_error(exc)
+        rows = [
+            clone_document(item)
+            for item in demo_store.load_collection(cls.collection_name)
+            if ((item.get("request_snapshot") or {}).get("context") or {}).get("evaluation_id")
+            == normalized
+        ]
+        rows.sort(key=lambda item: str(item.get("created_at") or ""))
+        return rows
 
     @classmethod
     def find_trace_status(cls, trace_id: str) -> dict[str, Any]:

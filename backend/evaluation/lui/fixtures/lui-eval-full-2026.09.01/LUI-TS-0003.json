@@ -1,0 +1,200 @@
+{
+  "run": {
+    "run_id": "asrun_b637df933dcd47c7",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 60924,
+    "first_token_ms": 26404,
+    "queue_wait_ms": 1396,
+    "prompt_tokens": 7089,
+    "completion_tokens": 284,
+    "total_tokens": 7373,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "83c0a96dc62c4535",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 2,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "high_risk_signal",
+            "selected_tools"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 102,
+        "prompt_tokens": 7365,
+        "total_tokens": 7467,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      {
+        "prompt_tokens": 7089,
+        "completion_tokens": 284,
+        "total_tokens": 7373
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://www.chinaz.com/top/ranker/110319_110551.shtml",
+          "rank": 1,
+          "score": null,
+          "snippet": "在这篇评测中,我们将比较测距仪式无反光镜相机徕卡CL和袖珍的相机奥林巴斯TG-320。徕卡CL于2017-11-21推向市场,奥林巴斯TG-320于2012-01-10推出。徕卡CL和奥... 徕卡CL以综合得分 59分排名第0,...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.chinaz.com/top/ranker/110319_110552.shtml",
+          "rank": 2,
+          "score": null,
+          "snippet": "在这篇评测中,我们将比较测距仪式无反光镜相机徕卡CL和袖珍的相机奥林巴斯TG-310。徕卡CL于2017-11-21推向市场,奥林巴斯TG-310于2011-01-06推出。徕卡CL和奥... 徕卡CL以综合得分 59分排名第0,...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.chinaz.com/top/ranker/110319_110529.shtml",
+          "rank": 3,
+          "score": null,
+          "snippet": "在这篇评测中,我们将比较测距仪式无反光镜相机徕卡CL和袖珍的相机奥林巴斯TG-610。徕卡CL于2017-11-21推向市场,奥林巴斯TG-610于2011-01-06推出。徕卡CL和奥... 徕卡CL以综合得分 59分排名第0,...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://blog.csdn.net/weixin_43135178/article/details/126813921",
+          "rank": 4,
+          "score": null,
+          "snippet": "2020年2月21日 - 文章浏览阅读216次。以SMILES为输入生成优化后的分子相关文章_smiles如何输入gru中 以SMILES为输入生成优化后的分子相关文章 最新推荐文章于 2024-01...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.dancihu.com/yinghan/s/smile365073.htm",
+          "rank": 5,
+          "score": null,
+          "snippet": "smile： 指面露微笑，侧重于无声。 giggle： 指发出咯咯的笑声，较多地用于女... partially amortized mortgage的汉语翻译 rapid start的汉语翻译 cinesioneurosis ...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "根据项目内已注册的算法，`C=C(F)Cl`（氯氟乙烯）的玻璃化转变温度（Tg）预测可以通过 **Polymer Tg KNN Upload Test** 算法完成。\n\n**结论**：请使用 `Polymer Tg KNN Upload Test` 算法，并传入参数 `{\"smiles\": \"C=C(F)Cl\"}` 来获取 Tg 预测结果。\n\n**依据**：\n- 项目算法注册表中存在 `polymer_tg_knn_upload_test`（以及 `_manual`、`_ui` 变体），类型为 `predictor`，调用方式为 `LOCAL_PYTHON_ADAPTER`，运行时依赖为上传的 Python 包 [项目事实]。\n- 该算法用于基于单体 SMILES 预测聚合物 Tg，与您的输入格式匹配。\n\n**可执行建议**：\n1. 在算法列表中选择 **Polymer Tg KNN Upload Test**（推荐使用 `_ui` 版本，便于界面操作）。\n2. 输入参数：`{\"smiles\": \"C=C(F)Cl\"}`。\n3. 运行后查看返回的 Tg 预测值及不确定性（如有）。\n\n> 说明：当前会话未命中知识库证据，且网页证据与聚合物 Tg 预测无关，故以上回答完全基于项目内算法注册事实。",
+    "references": [
+      {
+        "label": "徕卡CL和奥林巴斯TG-320比较哪个好、性价比高又有什么区别?",
+        "target": "https://www.chinaz.com/top/ranker/110319_110551.shtml",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.chinaz.com/top/ranker/110319_110551.shtml",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "徕卡CL和奥林巴斯TG-310比较哪个好、性价比高又有什么区别?",
+        "target": "https://www.chinaz.com/top/ranker/110319_110552.shtml",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.chinaz.com/top/ranker/110319_110552.shtml",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "徕卡CL和奥林巴斯TG-610比较哪个好、性价比高又有什么区别?",
+        "target": "https://www.chinaz.com/top/ranker/110319_110529.shtml",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.chinaz.com/top/ranker/110319_110529.shtml",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-TS-0003",
+  "trace_id": "asrun_b637df933dcd47c7",
+  "captured_at": "2026-09-01T07:52:25.624778"
+}

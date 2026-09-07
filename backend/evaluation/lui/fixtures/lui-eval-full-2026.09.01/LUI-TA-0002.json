@@ -1,0 +1,264 @@
+{
+  "run": {
+    "run_id": "asrun_46479b1173284b9e",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 37045,
+    "first_token_ms": 19663,
+    "queue_wait_ms": 1613,
+    "prompt_tokens": 6991,
+    "completion_tokens": 236,
+    "total_tokens": 7227,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "45a561756888b902",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 1,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "high_risk_signal",
+            "selected_tools"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 113,
+        "prompt_tokens": 6829,
+        "total_tokens": 6942,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      {
+        "prompt_tokens": 6991,
+        "completion_tokens": 236,
+        "total_tokens": 7227
+      }
+    ]
+  },
+  "tool_calls": [
+    {
+      "call_id": "atc_1f58e4329dc64e8e",
+      "tool_id": "algorithm:polymer_tg_knn_upload_test_manual",
+      "function_name": "algorithm_polymer_tg_knn_upload_test_manual_8f1ab2d6fe2f",
+      "raw_arguments": "{\"smiles\": \"C=C(F)F\"}",
+      "arguments": {
+        "smiles": "C=C(F)F"
+      },
+      "missing_fields": [],
+      "arguments_parse_error": null,
+      "phase": "completed",
+      "error": null,
+      "duration_ms": 1552,
+      "proposal_usage": {
+        "completion_tokens": 113,
+        "prompt_tokens": 6829,
+        "total_tokens": 6942,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://baike.so.com/doc/1506530-1592882.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "SMILES(Simplified molecular input line entry system)，简化分子线性输入规范，是一种用ASCII字符串明确描述分子结构的规范。SMILES由Arthur Weininger和David... 详情>>典范SMILES - 异构SMILES - 发展 - 其他记法及比较",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://ai.so.com/search?search=SMILES%28%E7%94%A8ASCII%E5%AD%97%E7%AC%A6%E4%B8%B2%E6%98%8E%E7%A1%AE%E6%8F%8F%E8%BF%B0%E5%88%86%E5%AD%90%E7%BB%93%E6%9E%84%E7%9A%84%E8%A7%84%E8%8C%83%29&src=so_result_natural&srcg=so_result_natural",
+          "rank": 2,
+          "score": null,
+          "snippet": "SMILES(简化分子线性输入规范)是一种用ASCII字符串描述分子结构的规范,核心信息如下: 基本原理:通过深度优先遍历分子结构式生成字符串,先去除氢原子、打开环,用数字标...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.jianshu.com/p/025a0a4123e9",
+          "rank": 3,
+          "score": null,
+          "snippet": "SMILES SMILES是简化分子线性输入的方法(Simplified molecular input line entry specification), 用字符串来描述分子结构, 由Arthur Weininger和David Weininger于20世纪8... 典范SMILES(Canon...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.jianshu.com/p/8c915de5ad4d",
+          "rank": 4,
+          "score": null,
+          "snippet": "一.什么是SMILES SMILES,全称是Simplified Molecular Input Line Entry System,是一种用于输入和表示分子反应的线性符号,是一种ASCII编码,下面看一些例子: SMILES包含的信息可能与一些扩展的源...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://blog.csdn.net/weixin_42038527/article/details/124198509",
+          "rank": 5,
+          "score": null,
+          "snippet": "(6条消息) 将分子SMILES生成DGLGraph_wufeil的博客-CSDN博客_smiles转graph1. 导入相关的包.molecule_smiles='[C@@H](Cl)(F)Br'...",
+          "used_in_answer": false
+        }
+      ]
+    },
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://baike.so.com/doc/1506530-1592882.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "SMILES(Simplified molecular input line entry system)，简化分子线性输入规范，是一种用ASCII字符串明确描述分子结构的规范。SMILES由Arthur Weininger和David... 详情>>典范SMILES - 异构SMILES - 发展 - 其他记法及比较",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://ai.so.com/search?search=SMILES%28%E7%94%A8ASCII%E5%AD%97%E7%AC%A6%E4%B8%B2%E6%98%8E%E7%A1%AE%E6%8F%8F%E8%BF%B0%E5%88%86%E5%AD%90%E7%BB%93%E6%9E%84%E7%9A%84%E8%A7%84%E8%8C%83%29&src=so_result_natural&srcg=so_result_natural",
+          "rank": 2,
+          "score": null,
+          "snippet": "SMILES(简化分子线性输入规范)是一种用ASCII字符串描述分子结构的规范,核心信息如下: 基本原理:通过深度优先遍历分子结构式生成字符串,先去除氢原子、打开环,用数字标...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.jianshu.com/p/025a0a4123e9",
+          "rank": 3,
+          "score": null,
+          "snippet": "SMILES SMILES是简化分子线性输入的方法(Simplified molecular input line entry specification), 用字符串来描述分子结构, 由Arthur Weininger和David Weininger于20世纪8... 典范SMILES(Canon...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.jianshu.com/p/8c915de5ad4d",
+          "rank": 4,
+          "score": null,
+          "snippet": "一.什么是SMILES SMILES,全称是Simplified Molecular Input Line Entry System,是一种用于输入和表示分子反应的线性符号,是一种ASCII编码,下面看一些例子: SMILES包含的信息可能与一些扩展的源...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://blog.csdn.net/weixin_42038527/article/details/124198509",
+          "rank": 5,
+          "score": null,
+          "snippet": "(6条消息) 将分子SMILES生成DGLGraph_wufeil的博客-CSDN博客_smiles转graph1. 导入相关的包.molecule_smiles='[C@@H](Cl)(F)Br'...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "**结论**：在 25°C 下，SMILES `C=C(F)F`（1,1-二氟乙烯）的玻璃化转变温度（Tg）预测为 **102.9 °C**。\n\n**依据**（来自算法运行结果）：\n- 预测性质：glass_transition_temperature\n- Tg 值：102.9 °C\n- 模型版本：pure-python-knn-0.1.0（KNN，邻居数 3）\n- 最近邻训练样本：`C=C(F)F`、`CC(C)(F)F`、`FC(F)=C(F)F`\n- 特征摘要：碳数 2、氟数 2、双键 1、卤素占比 0.2857、温度 25.0 °C\n\n**说明**：该预测由 `Polymer Tg KNN Upload Test` 算法（LOCAL_PYTHON_ADAPTER 方式）执行，运行 ID 为 `arun_ca85341da1a7`，结果已作为 JSON 工件保存（`algorithm-output.json`）。",
+    "references": [
+      {
+        "label": "SMILES(用ASCII字符串明确描述分子结构的规范)_360百科",
+        "target": "https://baike.so.com/doc/1506530-1592882.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://baike.so.com/doc/1506530-1592882.html",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "SMILES(用ASCII字符串明确描述分子结构的规范)",
+        "target": "https://ai.so.com/search?search=SMILES%28%E7%94%A8ASCII%E5%AD%97%E7%AC%A6%E4%B8%B2%E6%98%8E%E7%A1%AE%E6%8F%8F%E8%BF%B0%E5%88%86%E5%AD%90%E7%BB%93%E6%9E%84%E7%9A%84%E8%A7%84%E8%8C%83%29&src=so_result_natural&srcg=so_result_natural",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://ai.so.com/search?search=SMILES%28%E7%94%A8ASCII%E5%AD%97%E7%AC%A6%E4%B8%B2%E6%98%8E%E7%A1%AE%E6%8F%8F%E8%BF%B0%E5%88%86%E5%AD%90%E7%BB%93%E6%9E%84%E7%9A%84%E8%A7%84%E8%8C%83%29&src=so_result_natural&srcg=so_result_natural",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "SMILES 和 SMARTS 式 - 简书",
+        "target": "https://www.jianshu.com/p/025a0a4123e9",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.jianshu.com/p/025a0a4123e9",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 1,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-TA-0002",
+  "trace_id": "asrun_b2d5f617321147f3",
+  "captured_at": "2026-09-01T07:52:25.077683"
+}

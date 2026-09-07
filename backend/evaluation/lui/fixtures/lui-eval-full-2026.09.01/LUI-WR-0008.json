@@ -1,0 +1,187 @@
+{
+  "run": {
+    "run_id": "asrun_365ac49fed3c4493",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 44187,
+    "first_token_ms": 27708,
+    "queue_wait_ms": 735,
+    "prompt_tokens": 4864,
+    "completion_tokens": 144,
+    "total_tokens": 5008,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "cfb02b5fbcbc3e1e",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker_web",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "retrieval_web"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 4864,
+        "completion_tokens": 144,
+        "total_tokens": 5008
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://openbabel.org/docs/Installation/install.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "Install Open Babel Open Babel runs on Windows, Linux and MacOSX. You can either install a binary package(the easiest option) or compile Open Babel yourself(also...",
+          "used_in_answer": true
+        },
+        {
+          "id": "http://openbabel.org/",
+          "rank": 2,
+          "score": null,
+          "snippet": "Ready-to-use programs, and complete programmer’s toolkitRead, write and convert over 110 chemical file formatsFilter and search molecular files using SMARTS and other methodsSupports molecular modeling, cheminf...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.pconline.com.cn/ai/1957/19574594.html",
+          "rank": 3,
+          "score": null,
+          "snippet": "2025年8月30日 - 一、安装OpenBabel OpenBabel的安装方式多样,用户可根据自身需求选择。对于Linux用户,可以直接使用包管理器安装,如~sudo apt-get install openbabel~...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://blog.csdn.net/gitblog_09493/article/details/142222753",
+          "rank": 4,
+          "score": null,
+          "snippet": "文章浏览阅读8.9k次,点赞3次,收藏13次。---## 项目基础介绍Open Babel 是一个强大的化学数据处理工具箱,旨在跨不同的化学数据格式进行通信。它是一款开源且协作的... openbabel安装教程 开源化...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://github.com/openbabel/openbabel.github.io",
+          "rank": 5,
+          "score": null,
+          "snippet": "The Open Babel website https://openbabel.org. Contribute to openbabel/openbabel.github.io development by creating an account on GitHub.",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "Open Babel 官网地址是：**http://openbabel.org/** [2]\n\n**依据**：Open Babel 官方文档站点（openbabel-3-2-0 文档）首页即标注为 \"Open Babel - the chemistry toolbox\"，并给出官网地址 http://openbabel.org/ [2]。\n\n**可执行建议**：\n- 如需下载安装包或查看文档，可访问官网首页，或直接进入安装文档页：https://openbabel.org/docs/Installation/install.html [1]\n- 官网支持 Windows、Linux、MacOSX 平台，推荐直接使用二进制安装包（最简单），也可自行编译 [1]。",
+    "references": [
+      {
+        "label": "Install Open Babel — Open Babel openbabel-3-2-0 documentation",
+        "target": "https://openbabel.org/docs/Installation/install.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://openbabel.org/docs/Installation/install.html",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "Open Babel - the chemistry toolbox — Open Babel openbabel-3-2-0 documentation",
+        "target": "http://openbabel.org/",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://openbabel.org/",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "openbabel如何使用-太平洋科技",
+        "target": "https://www.pconline.com.cn/ai/1957/19574594.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.pconline.com.cn/ai/1957/19574594.html",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-WR-0008",
+  "trace_id": "asrun_365ac49fed3c4493",
+  "captured_at": "2026-09-01T07:52:26.267080"
+}

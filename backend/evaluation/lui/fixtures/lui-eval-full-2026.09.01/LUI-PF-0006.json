@@ -1,0 +1,115 @@
+{
+  "run": {
+    "run_id": "asrun_48cc13dc152c4a40",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 20664,
+    "first_token_ms": 7233,
+    "queue_wait_ms": 332,
+    "prompt_tokens": 3763,
+    "completion_tokens": 159,
+    "total_tokens": 3922,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "0f628bfeaad9a44e",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3763,
+        "completion_tokens": 159,
+        "total_tokens": 3922
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [],
+  "message": {
+    "content": "Alchemist BO/MOBO 优化推荐依赖 **`ALCHEMIST_BACKEND_URL`** 环境变量配置。\n\n**依据**：算法注册表中 `mobo_alchemist_adapter` 的 `runtime_dependency` 明确标注为 `ALCHEMIST_BACKEND_URL`。\n\n**说明**：该适配器通过 REST 调用 Alchemist 的 session/variable/experiment/model/acquisition API 来生成 BO/MOBO 推荐。不过当前集成状态显示 Alchemist 已内置到 Poly Agent 后端（`built_in`），模型存储路径为 `/home/fangyikai/code/Poly_Agent/.runtime/alchemist`，因此实际运行时可能无需额外配置外部服务地址。",
+    "references": [],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0006",
+  "trace_id": "asrun_48cc13dc152c4a40",
+  "captured_at": "2026-09-01T07:52:24.481652"
+}

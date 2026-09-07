@@ -221,6 +221,21 @@ def get_research_runs_collection() -> Collection:
     return get_database()["research_runs"]
 
 
+def get_agent_exec_runs_collection() -> Collection:
+    """获取 agent_exec_runs 受控外部 Agent 执行集合。"""
+    return get_database()["agent_exec_runs"]
+
+
+def get_agent_exec_artifacts_collection() -> Collection:
+    """获取 agent_exec_artifacts 输出清单集合。"""
+    return get_database()["agent_exec_artifacts"]
+
+
+def get_agent_exec_provider_policies_collection() -> Collection:
+    """获取 agent_exec_provider_policies 连接器策略集合。"""
+    return get_database()["agent_exec_provider_policies"]
+
+
 def get_report_jobs_collection() -> Collection:
     """获取 report_jobs 集合。"""
     return get_database()["report_jobs"]

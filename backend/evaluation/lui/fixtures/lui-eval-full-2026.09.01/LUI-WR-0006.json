@@ -1,0 +1,123 @@
+{
+  "run": {
+    "run_id": "asrun_e8914cb54be341d1",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 67701,
+    "first_token_ms": 16404,
+    "queue_wait_ms": 349,
+    "prompt_tokens": 3830,
+    "completion_tokens": 390,
+    "total_tokens": 4220,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_deep",
+      "purpose": "deep",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "complex",
+      "budget": {
+        "preset_id": "research_deep",
+        "compatibility_mode": "deep",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "7ddd05ec15cb2239",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker_web",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "complex",
+        "effective_model_purpose": "deep",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning",
+        "user_overrides": [
+          "model",
+          "retrieval_web"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 2,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3830,
+        "completion_tokens": 390,
+        "total_tokens": 4220
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "# 2025 年氟聚合物介电储能综述要点\n\n## 结论先行\n\n基于 2025 年氟聚合物介电储能领域的代表性综述，可总结出以下三点核心结论：\n\n1. **氟聚合物仍是高能量密度介质材料的核心选择**，其强电负性 C–F 键带来的高极化率与宽禁带特性，使其在介电常数与击穿强度之间具备独特的平衡优势。\n2. **界面与结构工程成为性能突破的主要路径**，包括核壳结构、多层复合、纳米填料取向等策略，用于抑制漏电流与提升击穿场强。\n3. **面向实际应用（如薄膜电容器）的规模化制备与可靠性评估**正成为研究重点，从单纯追求介电常数转向兼顾损耗、温度稳定性和循环寿命。\n\n---\n\n## 依据说明\n\n> ⚠️ **重要提示**：本次联网检索未能获取到可验证的 2025 年氟聚合物介电储能综述原文或权威网页证据（`WEB_EVIDENCE` 为空）。上述三点结论是基于该领域公认的研究趋势归纳的**一般性判断**，并非来自特定综述文献的直接引用。\n\n## 可执行建议\n\n- 建议在 **Web of Science / Scopus** 以 `\"fluoropolymer\" AND \"dielectric energy storage\" AND \"review\"` 检索 2025 年文献，重点关注 *Progress in Polymer Science*、*Advanced Materials*、*Chemical Reviews* 等期刊。\n- 若需项目内知识库支撑，可在 PolyAgent 知识库中检索相关体系（当前会话未命中知识库证据）。\n- 如需精确引用某篇综述的具体结论，请提供目标文献标题或 DOI，我可进一步协助核对。\n\n如需我针对某一具体方向（如 PVDF 基复合材料、多层结构设计）深入展开，请告知。",
+    "references": [],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "no_results"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-WR-0006",
+  "trace_id": "asrun_e8914cb54be341d1",
+  "captured_at": "2026-09-01T07:52:26.204389"
+}

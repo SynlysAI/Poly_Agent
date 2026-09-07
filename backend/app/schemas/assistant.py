@@ -36,6 +36,10 @@ class AssistantReference(BaseModel):
     label: str
     target: str
     type: str = "doc"
+    source: str | None = None
+    source_id: str | None = None
+    rank: int | None = None
+    score: float | None = None
 
 
 class AssistantChatResponse(BaseModel):

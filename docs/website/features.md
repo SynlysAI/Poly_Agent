@@ -44,7 +44,7 @@ Poly Agent 是 AI4MS 门户下的高分子材料智能研发平台。它把材�
 | 管理数据 | `/database/data-catalog` | 数据资产目录、数据集详情和记录下钻 |
 | 使用助手 | `/dialogue` | 项目事实问答、算法工具调用和 Slash Command 控制 |
 | 查看任务 | `/tasks/center` | 聚合计算任务、算法运行和 ResearchEngine 任务 |
-| 管理服务 | `/tools` | 查看工具、LLM 模型和服务健康状态 |
+| 工具服务 | `/tools` | 查看当前账号 AI 能力；管理员另可配置工具、LLM 模型和服务健康状态 |
 
 ## 3. ResearchEngine 研发引擎
 
@@ -428,7 +428,13 @@ Slash Command 是 `/dialogue` 的用户控制面，不进入模型请求历史�
 
 ### 11.2 工具服务
 
-`/tools` 展示：
+`/tools` 是统一入口。所有登录用户可见“AI 能力”页签，聚合：
+
+- 对话算法工具
+- 受控外部 Agent 连接器
+- 服务端报告 Skill pipeline
+
+管理员另可使用：
 
 - 核心存储：MongoDB、SQLite、artifact 存储
 - 运行组件：计算 worker、Docker
@@ -436,6 +442,8 @@ Slash Command 是 `/dialogue` 的用户控制面，不进入模型请求历史�
 - 计算工具链：RDKit、OpenBabel、xTB、CREST、ORCA
 - 优化与实验：Alchemist、SpecLabOS
 - LLM 模型服务和配置状态
+
+旧入口 `/capabilities` 自动跳转到 `/tools?tab=ai-ready`。
 
 ## 12. 安全与治理
 

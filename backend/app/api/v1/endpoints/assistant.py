@@ -54,6 +54,7 @@ from app.services.assistant_chat_service import assistant_chat_service
 from app.services.assistant_quality_service import build_quality_metrics
 from app.services.assistant_run_service import assistant_run_service
 from app.services.assistant_trace_service import assistant_trace_service
+from app.services.lui_evaluation_service import load_baseline_summary
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -430,6 +431,22 @@ def assistant_quality_metrics(
         code=0,
         message="ok",
         data=build_quality_metrics(since=since, until=until, use_cache=True),
+    )
+
+
+@router.get("/lui-evaluation/summary", response_model=ApiResponse[dict], dependencies=[Depends(require_admin)])
+def lui_evaluation_baseline_summary(
+    mode: str = Query(default="smoke", pattern="^(smoke|full)$"),
+) -> ApiResponse[dict]:
+    """读取受控 LUI 评测基线的任务级 M1–M8 汇总。
+
+    与 `/quality-metrics/summary` 的区别：质量接口聚合生产链路侧
+    指标；本接口读取离线 Golden Set 评测基线，反映任务级结果质量。
+    """
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=load_baseline_summary(mode=mode),
     )
 
 

@@ -38,6 +38,7 @@ from app.schemas.research_engine import (
     ResearchStageKey,
     ResearchStageStatus,
     StageApprovalRequest,
+    StageExecutionPlan,
     StageGate,
     StageGateDecision,
     TriggerSource,
@@ -52,6 +53,14 @@ from app.services.research_engine_defaults import (
     P0_GATE_STAGES,
     get_default_stage_contract,
     is_p0_gate_stage,
+)
+from app.services.research_engine_plan import (
+    build_stage_execution_plan,
+    planned_input_fields,
+    prepare_gate_plan_review,
+    stage_blocks_plan_drift,
+    stage_requires_plan,
+    verify_stage_plan,
 )
 
 
@@ -479,6 +488,15 @@ class ResearchEngineOrchestrator:
                 sr["updated_at"] = now.isoformat() if isinstance(now, datetime) else str(now)
                 self._save_stage_runs(run_id, stage_runs)
 
+            # Plan-first：所有需要执行的动作先生成可审查计划，再进入工具调用。
+            if stage_requires_plan(sr) and not sr.get("plan"):
+                self._generate_stage_plan(
+                    doc=doc,
+                    stage_run=sr,
+                    actor_user_id=actor_user_id,
+                    request_id=request_id,
+                )
+
             # 需要先产出候选/计算结果的 gate 阶段，先执行再等待审批。
             if self._stage_algorithm_id(stage_key) is not None:
                 try:
@@ -490,6 +508,8 @@ class ResearchEngineOrchestrator:
                         request_id=request_id,
                     )
                     sr["output_summary"] = stage_output
+                    if sr.get("plan"):
+                        self._record_plan_verification(sr, stage_output)
                     self._save_stage_runs(run_id, stage_runs)
                 except Exception as exc:
                     sr["status"] = "failed"
@@ -545,6 +565,8 @@ class ResearchEngineOrchestrator:
             # 非 gate 阶段：自动完成
             try:
                 mock_output = sr.get("output_summary") or self._run_mock_stage(sr, problem_spec)
+                if sr.get("plan") and not sr.get("checkpoint_data", {}).get("plan_verification"):
+                    self._record_plan_verification(sr, mock_output)
                 sr["status"] = "completed"
                 sr["output_summary"] = mock_output
                 sr["finished_at"] = utc_now().isoformat() if isinstance(utc_now(), datetime) else str(utc_now())
@@ -597,6 +619,113 @@ class ResearchEngineOrchestrator:
         self._check_run_completed(run_id)
         self._save_checkpoint(run_id)
         return self._get_run_doc(run_id)
+
+    def _generate_stage_plan(
+        self,
+        *,
+        doc: dict,
+        stage_run: dict,
+        actor_user_id: str,
+        request_id: str | None = None,
+        previous_plan: dict | None = None,
+    ) -> StageExecutionPlan:
+        """基于阶段契约和实际上下文生成规则式执行计划。
+
+        Args:
+            doc: ResearchRun 文档。
+            stage_run: 当前 StageRun 文档。
+            actor_user_id: 操作人用户 ID。
+            request_id: 请求追踪 ID。
+            previous_plan: 被替换的旧计划（可选）。
+
+        Returns:
+            已写入 StageRun 的执行计划。
+        """
+        stage_key = stage_run["stage_key"]
+        algorithm_id = self._stage_algorithm_id(stage_key)
+        input_fields = self._planned_input_fields(doc, stage_run, algorithm_id)
+        plan = build_stage_execution_plan(
+            doc=doc,
+            stage_run=stage_run,
+            algorithm_id=algorithm_id,
+            input_fields=input_fields,
+            plan_id=self._new_id("plan"),
+            generated_at=utc_now(),
+        )
+        stage_run["plan"] = plan.model_dump(mode="json")
+        self._save_stage_runs(doc["run_id"], doc.get("stage_runs", []))
+        self._write_audit(
+            actor_user_id=actor_user_id,
+            entity_type="research_stage_run",
+            entity_id=stage_run["stage_run_id"],
+            event_type="plan_generated",
+            reason=f"阶段 '{stage_key}' 生成受限执行计划",
+            before={
+                "has_plan": bool(previous_plan),
+                "plan_id": (previous_plan or {}).get("plan_id"),
+            },
+            after={
+                "plan_id": plan.plan_id,
+                "review_status": plan.review_status,
+                "step_count": len(plan.steps),
+                "tool_ref": algorithm_id,
+            },
+            request_id=request_id,
+        )
+        return plan
+
+    def _planned_input_fields(
+        self,
+        doc: dict,
+        stage_run: dict,
+        algorithm_id: str | None,
+    ) -> list[str]:
+        """计算当前阶段计划需要显式声明的输入字段。
+
+        Args:
+            doc: ResearchRun 文档。
+            stage_run: 当前 StageRun 文档。
+            algorithm_id: 阶段将要调用的算法 ID。
+
+        Returns:
+            去重后的输入字段列表。
+        """
+        algorithm_input = (
+            self._build_stage_algorithm_input(doc, stage_run, algorithm_id)
+            if algorithm_id is not None
+            else None
+        )
+        return planned_input_fields(stage_run, algorithm_input)
+
+    def _record_plan_verification(self, stage_run: dict, output: dict) -> dict:
+        """记录计划与实际执行的一致性核验结果。
+
+        Args:
+            stage_run: 当前 StageRun 文档。
+            output: 实际阶段输出。
+
+        Returns:
+            可序列化的核验结果。
+        """
+        verification = self._verify_stage_plan(stage_run, output)
+        stage_run.setdefault("checkpoint_data", {})["plan_verification"] = verification
+        return verification
+
+    def _verify_stage_plan(self, stage_run: dict, output: dict) -> dict:
+        """核验实际工具、输入字段与计划是否一致。
+
+        Args:
+            stage_run: 当前 StageRun 文档。
+            output: 实际阶段输出。
+
+        Returns:
+            包含工具、输入和制品覆盖情况的核验结果。
+        """
+        return verify_stage_plan(
+            stage_run,
+            output,
+            actual_tool=self._stage_algorithm_id(stage_run.get("stage_key", "")),
+        )
 
     def _run_mock_stage(self, stage_run: dict, problem_spec_id: str) -> dict:
         """为 mock 阶段生成确定性输出。
@@ -726,6 +855,7 @@ class ResearchEngineOrchestrator:
             return self._run_mock_stage(stage_run, doc.get("problem_spec_id", ""))
 
         input_snapshot = self._build_stage_algorithm_input(doc, stage_run, algorithm_id)
+        stage_run["input_snapshot"] = input_snapshot
         try:
             algorithm_run = service.create_algorithm_run(
                 AlgorithmRunCreate(
@@ -923,6 +1053,22 @@ class ResearchEngineOrchestrator:
     # Gate 审批
     # ------------------------------------------------------------------
 
+    def _prepare_gate_plan_review(self, stage_run: dict, *, decision: str) -> dict:
+        """准备 Gate 决策中的计划审查与核验结果。
+
+        Args:
+            stage_run: 当前 StageRun 文档。
+            decision: 人工决策类型。
+
+        Returns:
+            写入 StageGateDecision 的计划审查结果。
+        """
+        return prepare_gate_plan_review(
+            stage_run,
+            decision=decision,
+            actual_tool=self._stage_algorithm_id(stage_run.get("stage_key", "")),
+        )
+
     def approve_stage(
         self,
         research_run_id: str,
@@ -966,6 +1112,20 @@ class ResearchEngineOrchestrator:
         stage_key = sr["stage_key"]
         now = utc_now()
 
+        plan_review = self._prepare_gate_plan_review(sr, decision="approved")
+        if (
+            plan_review.get("status") == "mismatched"
+            and stage_blocks_plan_drift(sr)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"StageRun '{stage_run_id}' 计划与实际执行不一致："
+                    f"{plan_review.get('missing_input_fields') or '工具引用漂移'}，"
+                    "请修正输入或重新生成计划后再审批"
+                ),
+            )
+
         # 记录审批决策
         decision = StageGateDecision(
             stage_key=stage_key,
@@ -973,6 +1133,7 @@ class ResearchEngineOrchestrator:
             actor_user_id=actor_user_id,
             reason=reason,
             modified_candidates=modified_candidates or [],
+            plan_review=plan_review,
             decided_at=now,
         )
 
@@ -995,7 +1156,12 @@ class ResearchEngineOrchestrator:
             event_type="approved",
             reason=reason,
             before={"status": "blocked_approval"},
-            after={"status": "completed", "decision": "approved"},
+            after={
+                "status": "completed",
+                "decision": "approved",
+                "plan_id": (sr.get("plan") or {}).get("plan_id"),
+                "plan_review_status": plan_review.get("status"),
+            },
             request_id=request_id,
         )
 
@@ -1057,12 +1223,15 @@ class ResearchEngineOrchestrator:
         stage_key = sr["stage_key"]
         now = utc_now()
 
+        plan_review = self._prepare_gate_plan_review(sr, decision="rejected")
+
         # 记录审批决策
         decision = StageGateDecision(
             stage_key=stage_key,
             decision="rejected",
             actor_user_id=actor_user_id,
             reason=reason,
+            plan_review=plan_review,
             decided_at=now,
         )
 
@@ -1102,11 +1271,110 @@ class ResearchEngineOrchestrator:
             event_type="rejected",
             reason=reason,
             before={"status": "blocked_approval"},
-            after={"status": "failed", "decision": "rejected"},
+            after={
+                "status": "failed",
+                "decision": "rejected",
+                "plan_id": (sr.get("plan") or {}).get("plan_id"),
+                "plan_review_status": plan_review.get("status"),
+            },
             request_id=request_id,
         )
 
         self._save_checkpoint(research_run_id)
+        return self._doc_to_research_run(self._get_run_doc(research_run_id))
+
+    def regenerate_stage_plan(
+        self,
+        research_run_id: str,
+        stage_run_id: str,
+        *,
+        actor_user_id: str,
+        is_admin: bool = False,
+        reason: str,
+        request_id: str | None = None,
+    ) -> ResearchRun:
+        """在 Gate 拒绝后显式重生成计划，并保留拒绝历史。
+
+        该操作只生成新的 draft 计划，不改变 ResearchRun/StageRun 的 failed
+        终态，也不会自动重试工具调用；被拒绝的旧计划和决策快照写入
+        checkpoint_data.plan_history，供后续审查使用。
+
+        Args:
+            research_run_id: ResearchRun ID。
+            stage_run_id: StageRun ID。
+            actor_user_id: 操作人用户 ID。
+            is_admin: 是否为管理员。
+            reason: 重生成原因。
+            request_id: 请求追踪 ID。
+
+        Returns:
+            更新后的 ResearchRun。
+
+        Raises:
+            HTTPException: ResearchRun 不存在、StageRun 不存在或状态不允许重生成。
+        """
+        doc = self._get_run_doc(research_run_id)
+        self._ensure_run_access(doc, actor_user_id=actor_user_id, is_admin=is_admin)
+        stage_run = self._find_stage_run(doc, stage_run_id)
+        decisions = stage_run.get("decisions") or []
+        last_decision = decisions[-1] if decisions else {}
+        previous_plan = stage_run.get("plan") or {}
+
+        if (
+            stage_run.get("status") != "failed"
+            or last_decision.get("decision") != "rejected"
+            or previous_plan.get("review_status") != "rejected"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"StageRun '{stage_run_id}' 不允许重生成计划："
+                    "仅最近一次 Gate 决策为 rejected、且当前计划已拒绝的失败阶段可操作"
+                ),
+            )
+
+        plan_history = list(
+            stage_run.get("checkpoint_data", {}).get("plan_history") or []
+        )
+        plan_history.append({
+            **previous_plan,
+            "archived_reason": "gate_rejected",
+            "rejected_reason": last_decision.get("reason", ""),
+            "regeneration_reason": reason,
+            "plan_review": last_decision.get("plan_review") or {},
+        })
+        checkpoint_data = dict(stage_run.get("checkpoint_data") or {})
+        checkpoint_data["plan_history"] = plan_history
+        stage_run["checkpoint_data"] = checkpoint_data
+
+        new_plan = self._generate_stage_plan(
+            doc=doc,
+            stage_run=stage_run,
+            actor_user_id=actor_user_id,
+            request_id=request_id,
+            previous_plan=previous_plan,
+        )
+
+        self._write_audit(
+            actor_user_id=actor_user_id,
+            entity_type="research_stage_run",
+            entity_id=stage_run_id,
+            event_type="plan_regenerated",
+            reason=reason,
+            before={
+                "status": stage_run.get("status"),
+                "plan_id": previous_plan.get("plan_id"),
+                "review_status": previous_plan.get("review_status"),
+            },
+            after={
+                "status": stage_run.get("status"),
+                "plan_id": new_plan.plan_id,
+                "review_status": new_plan.review_status,
+                "history_count": len(plan_history),
+            },
+            request_id=request_id,
+        )
+
         return self._doc_to_research_run(self._get_run_doc(research_run_id))
 
     # ------------------------------------------------------------------
@@ -1476,6 +1744,7 @@ class ResearchEngineOrchestrator:
                 stage_key=sr.get("stage_key", "PROBLEM_SPEC"),
                 status=sr.get("status", "pending"),
                 gate=StageGate(**sr["gate"]) if sr.get("gate") else None,
+                plan=StageExecutionPlan(**sr["plan"]) if sr.get("plan") else None,
                 input_snapshot=sr.get("input_snapshot", {}),
                 output_summary=sr.get("output_summary", {}),
                 error=sr.get("error"),

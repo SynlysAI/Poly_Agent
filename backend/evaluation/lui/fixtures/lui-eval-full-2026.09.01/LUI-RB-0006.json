@@ -1,0 +1,140 @@
+{
+  "run": {
+    "run_id": "asrun_e7f49d84e6a849fd",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 35147,
+    "first_token_ms": 11361,
+    "queue_wait_ms": 493,
+    "prompt_tokens": 5628,
+    "completion_tokens": 270,
+    "total_tokens": 5898,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "a8addd1382ee8b2a",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 5628,
+        "completion_tokens": 270,
+        "total_tokens": 5898
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://www.27ka.cn/612385.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "如何利用sql语句修改mysql数据库用户登录密码.如果你需要更改数据库用户密码,以下是步骤:.然后在下方输入下列代码其中123456代码新密码,root...",
+          "used_in_answer": true
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "**结论**：直接修改生产数据库用户密码是高风险操作，不建议直接执行。若必须修改，请严格遵循备份、变更审批和最小影响原则。\n\n**依据**：\n- 生产数据库承载业务数据，直接改密码可能导致应用连接中断、服务不可用。\n- 密码修改涉及权限管理，需确保新密码符合安全策略并同步更新所有依赖该账号的应用配置。\n\n**可执行建议**：\n1. **先备份**：修改前对数据库进行完整备份或至少导出相关权限表。\n2. **走变更流程**：通过审批后，在维护窗口执行。\n3. **使用安全命令**（以 MySQL 为例）：\n   ```sql\n   ALTER USER 'username'@'host' IDENTIFIED BY 'new_strong_password';\n   FLUSH PRIVILEGES;\n   ```\n4. **同步更新应用**：修改后立即更新所有使用该账号的应用连接配置，并重启相关服务。\n5. **验证**：用新密码测试连接，确认业务正常。\n6. **记录**：在变更记录中登记修改时间、操作人、原因。\n\n**注意**：若涉及 PolyAgent 系统内部数据库，请先确认是否有内置的管理界面或配置项，避免绕过系统机制直接改库。",
+    "references": [
+      {
+        "label": "如何更改数据库用户密码? (数据库用户改密码)-云搜网",
+        "target": "https://www.27ka.cn/612385.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.27ka.cn/612385.html",
+        "rank": 1,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-RB-0006",
+  "trace_id": "asrun_e7f49d84e6a849fd",
+  "captured_at": "2026-09-01T07:52:24.816093"
+}

@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.common import UtcDatetimeJsonModel
+from app.schemas.execution_security import ExecutionAccessRecord
 
 
 JsonValueType = Literal["string", "number", "integer", "boolean", "object", "array", "any"]
@@ -45,6 +46,66 @@ class DispatchSourceContract(BaseModel):
     required_fields: list[DispatchSourceField] = Field(default_factory=list)
 
 
+class BoundaryLimit(BaseModel):
+    """单个数值字段的边界限制。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    min: float | None = Field(default=None)
+    max: float | None = Field(default=None)
+    min_inclusive: bool = True
+    max_inclusive: bool = True
+    message: str | None = Field(default=None, max_length=500)
+
+
+class FieldSecurityPolicy(BaseModel):
+    """单个 target 字段的配置级安全策略。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    write_allowed: bool = True
+    boundary: BoundaryLimit | None = None
+    allowed_values: list[Any] | None = None
+    violation_policy: Literal["error", "warn"] = "error"
+    audit_level: Literal["default", "verbose"] = "default"
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _json_pointer(value)
+
+    @model_validator(mode="after")
+    def validate_boundary(self):
+        """校验数值边界的单调性。"""
+        if self.boundary and self.boundary.min is not None and self.boundary.max is not None:
+            if self.boundary.min > self.boundary.max:
+                raise ValueError("字段边界 minimum 不能大于 maximum")
+        return self
+
+
+class TargetSecurityPolicy(BaseModel):
+    """一个实验下发 target 的整体安全策略。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["experiment_dispatch_target_security.v1"] = (
+        "experiment_dispatch_target_security.v1"
+    )
+    target_id: str = Field(min_length=1, max_length=100)
+    version: str = Field(min_length=1, max_length=40)
+    field_policies: list[FieldSecurityPolicy] = Field(default_factory=list, max_length=500)
+    default_write_allowed: bool = True
+
+    @model_validator(mode="after")
+    def validate_unique_paths(self):
+        """确保每个字段路径只有一条安全策略。"""
+        paths = [item.path for item in self.field_policies]
+        if len(paths) != len(set(paths)):
+            raise ValueError("target 安全策略存在重复字段路径")
+        return self
+
+
 class DispatchTargetField(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,11 +117,19 @@ class DispatchTargetField(BaseModel):
     default_value: Any = None
     allow_override: bool = False
     order: int = Field(default=0, ge=0)
+    security: FieldSecurityPolicy | None = None
 
     @field_validator("path")
     @classmethod
     def validate_path(cls, value: str) -> str:
         return _json_pointer(value)
+
+    @model_validator(mode="after")
+    def validate_field_security(self):
+        """确保字段内联安全策略只作用于当前字段。"""
+        if self.security and self.security.path != self.path:
+            raise ValueError("字段安全策略 path 必须与 target 字段 path 一致")
+        return self
 
 
 class DispatchTargetDefinition(UtcDatetimeJsonModel):
@@ -76,8 +145,19 @@ class DispatchTargetDefinition(UtcDatetimeJsonModel):
     path: str | None = Field(default=None, max_length=500)
     fields: list[DispatchTargetField] = Field(default_factory=list)
     response_schema: dict[str, Any] = Field(default_factory=dict)
+    security_policy: TargetSecurityPolicy | None = None
     system_managed: bool = True
     created_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_target_identity(self):
+        """确保安全策略归属当前 target 与版本。"""
+        if self.security_policy and (
+            self.security_policy.target_id != self.target_id
+            or self.security_policy.version != self.version
+        ):
+            raise ValueError("target 安全策略的 target_id/version 与契约不一致")
+        return self
 
 
 class DispatchValueSource(BaseModel):
@@ -248,13 +328,79 @@ class DispatchMappingTrace(BaseModel):
     rule_id: str | None = None
 
 
+class DispatchSecurityEvent(BaseModel):
+    """实验下发安全策略命中事件。"""
+
+    event_type: Literal["write_denied", "boundary_exceeded", "value_not_allowed"]
+    path: str
+    severity: Literal["error", "warning"]
+    message: str
+    policy_version: str
+    audit_level: Literal["default", "verbose"] = "default"
+
+
 class DispatchEvaluationResult(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     trace: list[DispatchMappingTrace] = Field(default_factory=list)
     matched_rules: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    security_events: list[DispatchSecurityEvent] = Field(default_factory=list)
     is_valid: bool = False
+
+
+class AtomicIntent(BaseModel):
+    """从自然语言拆解出的单个原子下发意图。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent_id: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=1000)
+    target_path: str | None = Field(default=None, max_length=500)
+    value: Any = None
+    unit: str | None = Field(default=None, max_length=40)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    resolved: bool = False
+
+
+class NLDispatchProfileCandidate(BaseModel):
+    """自然语言与单个下发配置的匹配候选。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str = Field(min_length=1, max_length=100)
+    profile_version: str = Field(min_length=1, max_length=40)
+    score: float = Field(ge=0.0)
+    matched_paths: list[str] = Field(default_factory=list, max_length=500)
+
+
+class NLDispatchParseResult(BaseModel):
+    """自然语言下发参数解析结果，仅用于生成 manual_values 候选。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str | None = Field(default=None, max_length=120)
+    raw_text: str = Field(min_length=1, max_length=4000)
+    intents: list[AtomicIntent] = Field(default_factory=list, max_length=200)
+    unresolved: list[AtomicIntent] = Field(default_factory=list, max_length=200)
+    manual_values: dict[str, Any] = Field(default_factory=dict)
+    profile_id: str | None = Field(default=None, max_length=100)
+    profile_version: str | None = Field(default=None, max_length=40)
+    profile_candidates: list[NLDispatchProfileCandidate] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+
+
+class ExperimentDispatchNLParseRequest(BaseModel):
+    """自然语言下发参数解析请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=120)
+    natural_language: str = Field(min_length=1, max_length=4000)
+    profile_id: str | None = Field(default=None, max_length=100)
+    profile_version: str | None = Field(default=None, max_length=40)
 
 
 class ExperimentDispatchProfileCreateRequest(BaseModel):
@@ -323,6 +469,8 @@ class ExperimentDispatchProfileEvaluationRequest(BaseModel):
     profile_id: str = Field(min_length=1, max_length=100)
     profile_version: str | None = Field(default=None, max_length=40)
     manual_values: dict[str, Any] = Field(default_factory=dict)
+    natural_language: str | None = Field(default=None, min_length=1, max_length=4000)
+    nl_parse: NLDispatchParseResult | None = None
 
 
 class ExperimentDispatchProfileSaveRequest(ExperimentDispatchProfileEvaluationRequest):
@@ -339,7 +487,9 @@ class ExperimentDispatchProfileEvaluation(BaseModel):
     target_id: str
     target_version: str
     result: DispatchEvaluationResult
+    execution_access: ExecutionAccessRecord = Field(default_factory=ExecutionAccessRecord)
     preview_digest: str
+    nl_parse: NLDispatchParseResult | None = None
 
 
 class ExperimentDispatchCandidate(UtcDatetimeJsonModel):

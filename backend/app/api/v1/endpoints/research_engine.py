@@ -70,6 +70,7 @@ from app.schemas.research_engine import (
     ResearchEngineExampleInstantiateResult,
     ResearchEngineExampleListData,
     StageApprovalRequest,
+    StagePlanRegenerateRequest,
     StageRunTraceability,
     WorkflowRun,
     WorkflowRunListData,
@@ -1910,6 +1911,32 @@ def reject_stage(
     决策必须包含 reason（拒绝原因）。
     """
     data = orchestrator.reject_stage(
+        research_run_id=run_id,
+        stage_run_id=stage_run_id,
+        actor_user_id=_actor_user_id(current_user),
+        is_admin=_has_full_access(current_user),
+        reason=payload.reason,
+        request_id=_request_id(request),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post(
+    "/research-runs/{run_id}/stages/{stage_run_id}/regenerate-plan",
+    response_model=ApiResponse[ResearchRun],
+)
+def regenerate_stage_plan(
+    run_id: str,
+    stage_run_id: str,
+    payload: StagePlanRegenerateRequest,
+    request: Request,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[ResearchRun]:
+    """拒绝后显式重生成阶段执行计划。
+
+    旧计划与拒绝决策保留在历史中，新的计划为 draft；本操作不自动重试阶段。
+    """
+    data = orchestrator.regenerate_stage_plan(
         research_run_id=run_id,
         stage_run_id=stage_run_id,
         actor_user_id=_actor_user_id(current_user),

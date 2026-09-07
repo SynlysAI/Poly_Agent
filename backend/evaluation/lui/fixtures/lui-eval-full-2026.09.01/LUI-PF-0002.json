@@ -1,0 +1,134 @@
+{
+  "run": {
+    "run_id": "asrun_91b3e7dec16f4a98",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 20908,
+    "first_token_ms": 6575,
+    "queue_wait_ms": 788,
+    "prompt_tokens": 3763,
+    "completion_tokens": 231,
+    "total_tokens": 3994,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "2523528553117a1d",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3763,
+        "completion_tokens": 231,
+        "total_tokens": 3994
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [],
+  "message": {
+    "content": "**结论**：当 AutoResearch 时间线出现 `blocked_approval` 状态时，你需要进入任务中心进行人工审批，批准或拒绝后流程才会继续。\n\n**依据**：\n- AutoResearch 的审批路由为 `/tasks/center?module_id=research-engine&status=blocked_approval`，即任务中心的研究引擎模块。\n- 审批关卡（gate stages）包括 `EXPERIMENT_EXECUTION`、`PROBLEM_SPEC`、`RECOMMENDATION_ASK` 三个阶段，这些阶段会触发阻塞等待审批。\n\n**可执行步骤**：\n1. 打开任务中心，筛选 `research-engine` 模块、状态为 `blocked_approval` 的任务。\n2. 点击对应 ResearchRun 时间线上的**审批按钮**。\n3. 填写审批原因后，选择**批准**或**拒绝**。\n\n审批完成后，ResearchRun 会按阶段序列（如 `PROBLEM_SPEC → KNOWLEDGE_RETRIEVAL → ... → EXPERIMENT_EXECUTION → ...`）继续推进。",
+    "references": [
+      {
+        "label": "ResearchEngine 算法清单",
+        "target": "/research-engine",
+        "type": "route",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      },
+      {
+        "label": "AutoResearch 运行说明",
+        "target": "doc/autoresearch-user-guide.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0002",
+  "trace_id": "asrun_91b3e7dec16f4a98",
+  "captured_at": "2026-09-01T07:52:24.295500"
+}

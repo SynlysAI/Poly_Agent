@@ -1,0 +1,257 @@
+# 联网检索分桶：使用预先录制的检索快照，relevant_ids 对应稳定 URL。
+- id: LUI-WR-0001
+  category: web_retrieval
+  difficulty: medium
+  mode: deep
+  messages:
+    - role: user
+      content: 联网检索 ChemOS 2.0 自驱实验室框架的项目页，并总结其定位。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids: ["https://github.com/RescPai/ChemOS"]
+    answer:
+      type: rubric
+      must_include: ["ChemOS", "自驱"]
+    hallucination:
+      require_citations: true
+  fixture:
+    run:
+      run_id: fixture-run-wr-0001
+      status: completed
+      duration_ms: 9200
+      first_token_ms: 1800
+      total_tokens: 5200
+    retrievals:
+      - source: web
+        status: searched
+        duration_ms: 900
+        results:
+          - {id: "https://github.com/RescPai/ChemOS", rank: 1, score: null, snippet: "ChemOS self-driving lab", used_in_answer: true}
+          - {id: "https://example.org/chemos-paper", rank: 2, score: null, snippet: "ChemOS paper", used_in_answer: false}
+    message:
+      content: ChemOS 2.0 是自驱实验室编排框架，项目页给出其架构与模块定位，详见来源引用。
+      references:
+        - {label: "ChemOS", target: "https://github.com/RescPai/ChemOS", type: web, source_id: "https://github.com/RescPai/ChemOS", rank: 1}
+
+- id: LUI-WR-0002
+  category: web_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+    - role: user
+      content: 联网查一下 WeKnora 项目的开源许可证。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids: ["https://github.com/Tencent/WeKnora"]
+    answer:
+      type: keywords
+      must_include: ["Apache"]
+
+- id: LUI-WR-0003
+  category: web_retrieval
+  difficulty: hard
+  mode: deep
+  messages:
+    - role: user
+      content: 联网对比 WeKnora 与传统 RAG 框架的定位差异，并列出来源。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids: ["https://github.com/Tencent/WeKnora", "https://example.org/rag-survey"]
+    answer:
+      type: rubric
+      must_include: ["WeKnora", "RAG"]
+  fixture:
+    run:
+      run_id: fixture-run-wr-0003
+      status: completed
+      duration_ms: 12800
+      first_token_ms: 2100
+      total_tokens: 6800
+    retrievals:
+      - source: web
+        status: searched
+        duration_ms: 1200
+        results:
+          - {id: "https://github.com/Tencent/WeKnora", rank: 1, score: null, snippet: "WeKnora project", used_in_answer: true}
+          - {id: "https://example.org/rag-survey", rank: 2, score: null, snippet: "RAG survey", used_in_answer: true}
+          - {id: "https://example.org/vector-db-notes", rank: 3, score: null, snippet: "背景资料", used_in_answer: false}
+    message:
+      content: WeKnora 定位为开箱即用的知识库检索增强框架，内置检索与问答链路；传统 RAG 框架更偏通用组件组合。来源已列出。
+      references:
+        - {label: "WeKnora", target: "https://github.com/Tencent/WeKnora", type: web, source_id: "https://github.com/Tencent/WeKnora", rank: 1}
+        - {label: "RAG survey", target: "https://example.org/rag-survey", type: web, source_id: "https://example.org/rag-survey", rank: 2}
+
+- id: LUI-WR-0004
+  category: web_retrieval
+  difficulty: easy
+  mode: qa
+  messages:
+    - role: user
+      content: 联网查 RDKit 官方文档首页地址。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids: ["https://www.rdkit.org/"]
+    answer:
+      type: keywords
+      must_include: ["https://www.rdkit.org"]
+
+- id: LUI-WR-0005
+  category: web_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+    - role: user
+      content: 联网检索 ALchemist 项目与 ChemOS 2.0 的关系说明。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids: ["https://github.com/robertsawhite/alchemist"]
+    answer:
+      type: rubric
+      must_include: ["ALchemist"]
+  fixture:
+    run:
+      run_id: fixture-run-wr-0005
+      status: completed
+      duration_ms: 8800
+      first_token_ms: 1600
+      total_tokens: 4900
+    retrievals:
+      - source: web
+        status: searched
+        duration_ms: 850
+        results:
+          - {id: "https://github.com/robertsawhite/alchemist", rank: 1, score: null, snippet: "ALchemist project", used_in_answer: true}
+    message:
+      content: ALchemist 是自驱实验室优化工具，ChemOS 2.0 是其参考编排框架之一；项目页见引用。
+      references:
+        - {label: "ALchemist", target: "https://github.com/robertsawhite/alchemist", type: web, source_id: "https://github.com/robertsawhite/alchemist", rank: 1}
+
+- id: LUI-WR-0006
+  category: web_retrieval
+  difficulty: hard
+  mode: deep
+  messages:
+    - role: user
+      content: 联网查找 2025 年氟聚合物介电储能的代表性综述，并总结三点结论。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids:
+        ["https://example.org/fluoropolymer-review-2025", "https://example.org/pvdf-energy-storage"]
+    answer:
+      type: rubric
+      must_include: ["综述", "介电", "储能"]
+
+- id: LUI-WR-0007
+  category: web_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+    - role: user
+      content: 联网检索快照失效、无法访问任何来源时的处理方式是什么？
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids: ["https://example.org/unreachable"]
+    answer:
+      type: insufficient_info
+
+- id: LUI-WR-0008
+  category: web_retrieval
+  difficulty: easy
+  mode: qa
+  messages:
+    - role: user
+      content: 联网查 Open Babel 官网地址。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids: ["https://openbabel.org/"]
+    answer:
+      type: keywords
+      must_include: ["https://openbabel.org"]
+  fixture:
+    run:
+      run_id: fixture-run-wr-0008
+      status: completed
+      duration_ms: 5400
+      first_token_ms: 1200
+      total_tokens: 3100
+    retrievals:
+      - source: web
+        status: searched
+        duration_ms: 620
+        results:
+          - {id: "https://openbabel.org/", rank: 1, score: null, snippet: "Open Babel", used_in_answer: true}
+    message:
+      content: Open Babel 官网地址是 https://openbabel.org/，提供化学文件格式转换能力。
+      references:
+        - {label: "Open Babel", target: "https://openbabel.org/", type: web, source_id: "https://openbabel.org/", rank: 1}
+
+- id: LUI-WR-0009
+  category: web_retrieval
+  difficulty: medium
+  mode: deep
+  messages:
+    - role: user
+      content: 联网检索 WeKnora 部署文档中的默认端口与依赖服务。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids: ["https://github.com/Tencent/WeKnora/tree/main/deploy"]
+    answer:
+      type: rubric
+      must_include: ["部署"]
+
+- id: LUI-WR-0010
+  category: web_retrieval
+  difficulty: hard
+  mode: deep
+  messages:
+    - role: user
+      content: 联网检索并交叉验证 PTFE 与 FEP 的介电常数差异，引用至少两个来源。
+  context:
+    use_web_search: true
+  expected:
+    task_success: true
+    retrieval:
+      source: web
+      relevant_ids:
+        ["https://example.org/ptfe-dielectric", "https://example.org/fep-dielectric"]
+    answer:
+      type: rubric
+      must_include: ["PTFE", "FEP"]
+    hallucination:
+      require_citations: true

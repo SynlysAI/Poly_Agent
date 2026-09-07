@@ -210,6 +210,12 @@ export function getModuleAttribution(moduleId) {
   return apiClient.get(`/attributions/modules/${encodeURIComponent(moduleId)}`).then(unwrapResponse)
 }
 
+// ── 能力中心 API ──
+
+export function getCapabilityCatalog() {
+  return apiClient.get('/capabilities/catalog').then(unwrapResponse)
+}
+
 // ── 认证 API ──
 
 export function getAuthStatus() {
@@ -628,6 +634,13 @@ export function getAssistantQualityMetrics() {
   return apiClient.get('/assistant/quality-metrics/summary').then(unwrapResponse)
 }
 
+/** LUI Agent 任务级评测基线（M1–M8） */
+export function getLuiEvaluationSummary(mode = 'smoke') {
+  return apiClient
+    .get('/assistant/lui-evaluation/summary', { params: { mode } })
+    .then(unwrapResponse)
+}
+
 // ── ResearchEngine API ──
 
 // ── ProblemSpec ──
@@ -1013,6 +1026,10 @@ export function evaluateExperimentDispatchProfile(payload) {
   return apiClient.post('/experiment-dispatch-profile-evaluations', payload).then(unwrapResponse)
 }
 
+export function parseExperimentDispatchNaturalLanguage(payload) {
+  return apiClient.post('/experiment-dispatch-nl-parses', payload).then(unwrapResponse)
+}
+
 export function saveProfileExperimentDispatch(payload) {
   return apiClient.post('/experiment-dispatches', payload).then(unwrapResponse)
 }
@@ -1123,6 +1140,10 @@ export function approveStage(runId, stageRunId, payload) {
 
 export function rejectStage(runId, stageRunId, payload) {
   return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/reject`, payload).then(unwrapResponse)
+}
+
+export function regenerateStagePlan(runId, stageRunId, payload) {
+  return apiClient.post(`/research-engine/research-runs/${runId}/stages/${stageRunId}/regenerate-plan`, payload).then(unwrapResponse)
 }
 
 export function getResearchRunTraceability(runId) {
@@ -1427,6 +1448,28 @@ export function updateAgentToolPolicy(algorithmId, payload) {
 
 export function syncAgentTools() {
   return apiClient.post('/agent-tools/sync').then(unwrapResponse)
+}
+
+// ── Agent 连接器（受控外部 Agent 执行）API ──
+
+export function getAgentExecProviders() {
+  return apiClient.get('/agent-exec/providers').then(unwrapResponse)
+}
+
+export function updateAgentExecPolicy(providerId, payload) {
+  return apiClient.patch(`/agent-exec/providers/${encodeURIComponent(providerId)}/policy`, payload).then(unwrapResponse)
+}
+
+export function probeAgentExecProvider(providerId) {
+  return apiClient.post(`/agent-exec/providers/${encodeURIComponent(providerId)}/probe`).then(unwrapResponse)
+}
+
+export function createAgentExecRun(payload) {
+  return apiClient.post('/agent-exec/runs', payload).then(unwrapResponse)
+}
+
+export function getAgentExecQuality() {
+  return apiClient.get('/agent-exec/quality').then(unwrapResponse)
 }
 
 export function createAssistantToolCall(payload) {

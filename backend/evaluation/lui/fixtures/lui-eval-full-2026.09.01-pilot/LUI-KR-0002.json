@@ -1,0 +1,133 @@
+{
+  "run": {
+    "run_id": "asrun_06a7b295df844c36",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 28761,
+    "first_token_ms": 12001,
+    "queue_wait_ms": 513,
+    "prompt_tokens": 3772,
+    "completion_tokens": 191,
+    "total_tokens": 3963,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "99e1d4d50f6389a4",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3772,
+        "completion_tokens": 191,
+        "total_tokens": 3963
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "failed",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "根据当前项目知识库的检索结果，**无法给出 PTFE 的最高连续使用温度**。\n\n**依据：**\n- 本次查询指定了知识库 `kb-fluoro-handbook`，但检索返回了错误：`HTTPException: 404: WeKnora 知识库 'kb-fluoro-handbook' 不存在`。\n- 检索状态为 `failed`，结果数为 0，未命中任何知识卡片或候选来源。\n\n**建议：**\n1. 确认知识库名称是否正确（当前系统中不存在 `kb-fluoro-handbook` 这个库）。\n2. 在知识库管理界面查看可用的知识库列表，选择正确的库后重新发起查询。\n3. 如需外部参考，PTFE 的常见最高连续使用温度约为 **260°C**，但该数据来自通用材料常识，并非本项目知识库内容，请以实际检索到的项目资料为准。",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "failed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-KR-0002",
+  "trace_id": "asrun_06a7b295df844c36",
+  "captured_at": "2026-09-01T04:27:30.141014"
+}

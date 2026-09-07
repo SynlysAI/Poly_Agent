@@ -1,0 +1,343 @@
+# 环境口径已切换到真实 WeKnora 与 active 垂类模型。
+- id: LUI-TS-0001
+  category: tool_selection
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: '预测 SMILES C=C(F)F 的 Tg。工具参数 JSON 只能为 {"smiles": "C=C(F)F"}。'
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test
+    - algorithm:electrolyte_formulation_predictor
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test
+      arguments: &id001
+        smiles: C=C(F)F
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ts-0001
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ts-0001
+      tool_id: algorithm:polymer_tg_knn_upload_test
+      arguments: *id001
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 已完成真实垂类工具调用并返回结果。
+    escalation:
+      confirmations: 1
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0002
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 使用带温度参数的 KNN 工具，在 25°C 预测 C=C(F)F 的玻璃化转变温度。
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
+    - algorithm:polymer_tg_knn_upload_test
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments: &id002
+        smiles: C=C(F)F
+        temperature_c: 25
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ts-0002
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ts-0002
+      tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments: *id002
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 已完成真实垂类工具调用并返回结果。
+    escalation:
+      confirmations: 1
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0003
+  category: tool_selection
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: '预测 SMILES C=C(F)Cl 的 Tg。工具参数 JSON 只能为 {"smiles": "C=C(F)Cl"}。'
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_ui
+    - algorithm:polymer_tg_knn_upload_test
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test_ui
+      arguments: &id003
+        smiles: C=C(F)Cl
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ts-0003
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ts-0003
+      tool_id: algorithm:polymer_tg_knn_upload_test_ui
+      arguments: *id003
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 已完成真实垂类工具调用并返回结果。
+    escalation:
+      confirmations: 1
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0004
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 预测含氟电解液配方：1 M LiTFSI，FEC 与 DME 摩尔比 1:1。
+  context:
+    selected_tool_ids:
+    - algorithm:electrolyte_formulation_predictor
+    - algorithm:pi_synthesis_mock
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:electrolyte_formulation_predictor
+      arguments: &id004
+        formulations: &id006
+        - formula_id: EVAL-FEC-DME-001
+          task_type: electrolyte
+          lithium_salt: LiTFSI
+          lithium_salt_mol_L: 1
+          electrolyte_component_1: FEC
+          electrolyte_component_1_mol_ratio: 1
+          electrolyte_component_2: DME
+          electrolyte_component_2_mol_ratio: 1
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ts-0004
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ts-0004
+      tool_id: algorithm:electrolyte_formulation_predictor
+      arguments: *id004
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 已完成真实垂类工具调用并返回结果。
+    escalation:
+      confirmations: 1
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0005
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 评估 ODA、PMDA 在 NMP 中的聚酰亚胺合成难度。 调用工具时仅传 smiles 参数，不要生成 temperature_c 或其他参数。
+  context:
+    selected_tool_ids:
+    - algorithm:pi_synthesis_mock
+    - algorithm:polymer_tg_knn_upload_test
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:pi_synthesis_mock
+      arguments: &id005
+        diamine: ODA
+        dianhydride: PMDA
+        solvent: NMP
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ts-0005
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ts-0005
+      tool_id: algorithm:pi_synthesis_mock
+      arguments: *id005
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 已完成真实垂类工具调用并返回结果。
+    escalation:
+      confirmations: 1
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0006
+  category: tool_selection
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 在聚酰亚胺评分中补充二胺溶胀性 4、二酐溶胀性 3、低水分和惰性气氛。
+  context:
+    selected_tool_ids:
+    - algorithm:pi_synthesis_mock
+    - algorithm:electrolyte_formulation_predictor
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:pi_synthesis_mock
+      arguments:
+        diamine: ODA
+        dianhydride: PMDA
+        solvent: NMP
+        diamine_solubility: 4
+        dianhydride_solubility: 3
+        water_content_status: low
+        inert_atmosphere_status: true
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0007
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 筛选 1 M LiTFSI/FEC/DME 电解液配方的首圈性能。 调用工具时仅传 smiles 参数，不要生成 temperature_c
+      或其他参数。
+  context:
+    selected_tool_ids:
+    - algorithm:electrolyte_formulation_predictor
+    - algorithm:polymer_tg_knn_upload_test
+    - algorithm:pi_synthesis_mock
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:electrolyte_formulation_predictor
+      arguments:
+        formulations: *id006
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0008
+  category: tool_selection
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 请在环境温度 40°C 下用手工上传的 KNN 模型预测 C=C(C)C。
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
+    - algorithm:polymer_tg_knn_upload_test_ui
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: C=C(C)C
+        temperature_c: 40
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0009
+  category: tool_selection
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 使用 UI 上传版本的 KNN 模型，预测重复单元 C=C(F)F。
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_ui
+    - algorithm:polymer_tg_knn_upload_test_manual
+    - algorithm:polymer_tg_knn_upload_test
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test_ui
+      arguments:
+        smiles: C=C(F)F
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。
+- id: LUI-TS-0010
+  category: tool_selection
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 为 ODA/PMDA/NMP 体系选择合成难度评分工具并执行评估。 调用工具时仅传 smiles 参数，不要生成 temperature_c
+      或其他参数。
+  context:
+    selected_tool_ids:
+    - algorithm:pi_synthesis_mock
+    - algorithm:electrolyte_formulation_predictor
+    - algorithm:polymer_tg_knn_upload_test
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:pi_synthesis_mock
+      arguments: *id005
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 当前产品 LUI 目录中已激活的垂类模型口径。

@@ -1,0 +1,270 @@
+{
+  "run": {
+    "run_id": "asrun_fdda19b59d404179",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 63049,
+    "first_token_ms": 21985,
+    "queue_wait_ms": 1680,
+    "prompt_tokens": 8676,
+    "completion_tokens": 517,
+    "total_tokens": 9193,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "bdfd74cc8922301c",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 2,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "high_risk_signal",
+            "selected_tools"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 224,
+        "prompt_tokens": 7768,
+        "total_tokens": 7992,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      {
+        "prompt_tokens": 8676,
+        "completion_tokens": 517,
+        "total_tokens": 9193
+      }
+    ]
+  },
+  "tool_calls": [
+    {
+      "call_id": "atc_b0fd981a2ded4d17",
+      "tool_id": "algorithm:pi_synthesis_mock",
+      "function_name": "algorithm_pi_synthesis_mock_b6e07499944d",
+      "raw_arguments": "{\"diamine\": \"ODA\", \"diamine_solubility\": 4, \"dianhydride\": \"PMDA\", \"dianhydride_solubility\": 3, \"inert_atmosphere_status\": true, \"solvent\": \"NMP\", \"water_content_status\": \"low\"}",
+      "arguments": {
+        "diamine": "ODA",
+        "dianhydride": "PMDA",
+        "solvent": "NMP",
+        "diamine_solubility": 4,
+        "dianhydride_solubility": 3,
+        "water_content_status": "low",
+        "inert_atmosphere_status": true
+      },
+      "missing_fields": [],
+      "arguments_parse_error": null,
+      "phase": "completed",
+      "error": null,
+      "duration_ms": 1434,
+      "proposal_usage": {
+        "completion_tokens": 224,
+        "prompt_tokens": 7768,
+        "total_tokens": 7992,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://baike.so.com/doc/1753791-1854516.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "聚酰亚胺（Polyimide），简称PI，是一类主链中含有酰亚氨基团（─C(O)─N─C(O)─）的高分子聚合物。基础信息聚酰亚胺（Polyimide），简称PI，是一种主链含有酰... 详情>>基础信息 - 分类与合成 - PI应用",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.xjishu.com/zhuanli/27/202411954541.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "2026年7月1日 - 2、一般而言,聚酰亚胺(polyimide,pi)是可由二胺(diamine)单体与二酐(dianhydride)单体经聚缩合反应(polycondensationreaction)所得到的高分子材料。由...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.chemicalbook.com/NewsInfo_3361.htm",
+          "rank": 3,
+          "score": null,
+          "snippet": "聚酰亚胺(polyimide)在微电子工业中应用已久,主要作为绝缘层和封装材料,尤其在多层互连问形成平面层以及多模块间隔离获得广泛应用。1908年,...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.sohu.com/a/289736200_816970",
+          "rank": 4,
+          "score": null,
+          "snippet": "韩国SKC&KOLON:SKC&KOLON PI是由SKC与KOLON整合聚酰亚胺胶片事业,于2008年6月合资兴建的公司。韩国SKC于2001年启动聚酰亚胺薄膜的...",
+          "used_in_answer": false
+        },
+        {
+          "id": "http://www.nbjbh.com/nd.jsp?id=7",
+          "rank": 5,
+          "score": null,
+          "snippet": "聚酰亚胺:英文名Polyimide (简称PI) 聚酰亚胺作为一种特种工程材料,已广泛应用在航空、航天、微电子、纳米、液晶、分离膜、激光等领域。近...",
+          "used_in_answer": false
+        }
+      ]
+    },
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://baike.so.com/doc/1753791-1854516.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "聚酰亚胺（Polyimide），简称PI，是一类主链中含有酰亚氨基团（─C(O)─N─C(O)─）的高分子聚合物。基础信息聚酰亚胺（Polyimide），简称PI，是一种主链含有酰... 详情>>基础信息 - 分类与合成 - PI应用",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.xjishu.com/zhuanli/27/202411954541.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "2026年7月1日 - 2、一般而言,聚酰亚胺(polyimide,pi)是可由二胺(diamine)单体与二酐(dianhydride)单体经聚缩合反应(polycondensationreaction)所得到的高分子材料。由...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.chemicalbook.com/NewsInfo_3361.htm",
+          "rank": 3,
+          "score": null,
+          "snippet": "聚酰亚胺(polyimide)在微电子工业中应用已久,主要作为绝缘层和封装材料,尤其在多层互连问形成平面层以及多模块间隔离获得广泛应用。1908年,...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.sohu.com/a/289736200_816970",
+          "rank": 4,
+          "score": null,
+          "snippet": "韩国SKC&KOLON:SKC&KOLON PI是由SKC与KOLON整合聚酰亚胺胶片事业,于2008年6月合资兴建的公司。韩国SKC于2001年启动聚酰亚胺薄膜的...",
+          "used_in_answer": false
+        },
+        {
+          "id": "http://www.nbjbh.com/nd.jsp?id=7",
+          "rank": 5,
+          "score": null,
+          "snippet": "聚酰亚胺:英文名Polyimide (简称PI) 聚酰亚胺作为一种特种工程材料,已广泛应用在航空、航天、微电子、纳米、液晶、分离膜、激光等领域。近...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "## PI 合成难度评分结果（已补充输入条件）\n\n**结论**：在原有 ODA/PMDA/NMP 体系基础上，补充二胺溶胀性=4、二酐溶胀性=3、低水分、惰性气氛后，**总难度评分 D = 80**（化学难度 C=47，物理执行难度 P=33），置信度 0.85，判定为 **IN_DOMAIN**。\n\n---\n\n### 评分构成\n\n| 维度 | 得分 | 说明 |\n|------|------|------|\n| **R（反应性）** | 27 | 二胺基础 15 + 二酐基础 12，无修正项 |\n| **H（位阻/构象）** | 20 | 二胺 6 + 二酐 6 + 构象 4 + 不对称 4 |\n| **S（溶解度/工艺）** | 22 | 单体 9 + 聚合物 7 + 粘度 6 |\n| **U（不稳定性）** | 11 | 水分 4 + 氧化 2 + 热 2 + 凝胶 3 |\n| **合计** | **80** | R(27)+H(20)+S(22)+U(11)=80 ✓ |\n\n---\n\n### 风险标签\n- **POOR_SOLUBILITY**（溶解性差）\n- **FAST_VISCOSITY**（粘度上升快）\n- **OXIDATION_RISK**（氧化风险）\n- **HIGH_STERIC**（高位阻）\n\n---\n\n### 推荐工艺参数\n| 参数 | 值 |\n|------|-----|\n| 工艺编号 | PI-P08 |\n| 温度 | 55 °C |\n| 反应时间 | 42 h |\n| 溶剂体积 | 60 mL |\n\n---\n\n### 说明\n- 本次运行未触发任何 override（`override_applied=false`），推荐参数即初始参数。\n- 补充的溶胀性、水分、气氛条件已纳入评分输入，但**未改变最终难度分**（仍为 80），说明这些条件在当前评分规则下未产生额外修正项。\n- 该结果为确定性 mock 评分，依据 `PI_synthesis_difficulty_scoring_rules_v1.0.json` 规则派生 [T2]。\n\n如需调整单体组合（如换用其他二胺/二酐）或溶剂重新评估，可继续运行该算法。",
+    "references": [
+      {
+        "label": "pi(聚酰亚胺)_360百科",
+        "target": "https://baike.so.com/doc/1753791-1854516.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://baike.so.com/doc/1753791-1854516.html",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "含金刚烷结构的二胺单体及其制备方法、聚酰亚胺及其制备方法和应用、聚酰亚胺薄膜",
+        "target": "https://www.xjishu.com/zhuanli/27/202411954541.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.xjishu.com/zhuanli/27/202411954541.html",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "聚酰亚胺的应用和合成方法",
+        "target": "https://www.chemicalbook.com/NewsInfo_3361.htm",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.chemicalbook.com/NewsInfo_3361.htm",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 1,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-TS-0006",
+  "trace_id": "asrun_ed68be0187724861",
+  "captured_at": "2026-09-01T07:52:25.815599"
+}

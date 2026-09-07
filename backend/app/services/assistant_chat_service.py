@@ -160,6 +160,7 @@ class AssistantChatService:
             "created_by": owner_id,
             "archived": False,
             "model": payload.model,
+            "model_selection_origin": payload.model_selection_origin,
             **preset_fields,
             "knowledge_base_ids": payload.knowledge_base_ids,
             "knowledge_base_names": payload.knowledge_base_names,

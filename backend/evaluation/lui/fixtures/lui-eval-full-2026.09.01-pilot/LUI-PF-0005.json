@@ -1,0 +1,186 @@
+{
+  "run": {
+    "run_id": "asrun_8096eb06bccb479f",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 36298,
+    "first_token_ms": 16827,
+    "queue_wait_ms": 1090,
+    "prompt_tokens": 6241,
+    "completion_tokens": 257,
+    "total_tokens": 6498,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "322211172abaa51e",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 6241,
+        "completion_tokens": 257,
+        "total_tokens": 6498
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://cloud.tencent.com/developer/article/2610798",
+          "rank": 1,
+          "score": null,
+          "snippet": "腾讯开源WeKnora v0.2.0企业级文档理解检索框架,基于RAG机制深度集成ReACT Agent模式,支持多模态文档解析、混合检索与知识图谱构建,提供全链路文档智能处理方案... 工具 —— 内置文档解析 / 检...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.jianshu.com/p/920d898c015d",
+          "rank": 2,
+          "score": null,
+          "snippet": "第一轮粗排从库里召回100条候选结果,第二轮用Cross-Encoder模型精排,筛出最相关的10条给大模型。这样既保证找得全,又控制了推理成本。 模块化设计 向量库、搜索引擎、大模型都是可替换的。不想用PostgreSQL可以换Milvus,想换个大模型改配置就行。这种设计让系统有很好的扩展性。 快速部署 git clone https://",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://ai-bot.cn/weknora/",
+          "rank": 3,
+          "score": null,
+          "snippet": "WeKnora 是腾讯开源的基于大语言模型(LLM)的文档理解与语义检索框架。框架基于模块化设计,支持多模态文档解析(如 PDF、Word、图片等),通过 RAG(检索增强生成)机制实现精准问答。 ... 项目官网:h...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://new.qq.com/rain/a/20250916A01BN400",
+          "rank": 4,
+          "score": null,
+          "snippet": "目前在 GitHub 上,WeKnora 的 star 已经超过5.6k(数据统计到9.15)。 👉 项目地址:https...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://bbs.csdn.net/weixin_42526415/article/details/100200757",
+          "rank": 5,
+          "score": null,
+          "snippet": "2026年7月16日 - 传统的全文检索在面对合同、报告、技术手册等多页异构文档时,往往难以精准理解语义关联,导致检索结果不尽如人意。腾讯推出的WeKnora正是为解决这一痛...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "根据项目配置，PolyAgent 中的 WeKnora 知识增强检索适配器（`weknora_adapter`）通过 PolyAgent 知识库服务查询 WeKnora，但**项目事实中未明确记录 top_k 的默认返回条数**。\n\n不过，结合网页证据，WeKnora 的检索机制通常采用**两阶段重排序**：\n\n- **第一轮粗排**：从向量库/搜索引擎召回约 **100 条**候选结果；\n- **第二轮精排**：用 Cross-Encoder 模型筛出最相关的 **10 条**给大模型 [2]。\n\n因此，WeKnora 默认返回给上层（如 LLM）的结果数通常为 **10 条**（Top10），其 Top10 准确率可达 89% [1]。\n\n---\n\n**可执行建议**：\n- 若需确认 PolyAgent 中该适配器的实际 top_k 配置，请查看 `WEKNORA_BASE_URL` 指向的 WeKnora 服务端检索参数，或检查 PolyAgent 知识库服务的调用配置。\n- 如需调整返回条数，可在 WeKnora 服务端配置中修改检索策略参数（如 `top_k`）。",
+    "references": [
+      {
+        "label": "开源技术深析:腾讯 WeKnora v0.2.0 + ReACT Agent,解锁企业级文档智能处理新范式-腾讯云开发者社区-腾讯云",
+        "target": "https://cloud.tencent.com/developer/article/2610798",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://cloud.tencent.com/developer/article/2610798",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "腾讯开源WeKnora:解决企业文档检索难题的RAG框架 - 简书",
+        "target": "https://www.jianshu.com/p/920d898c015d",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.jianshu.com/p/920d898c015d",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "WeKnora - 腾讯开源的文档理解与语义检索框架 | AI工具集",
+        "target": "https://ai-bot.cn/weknora/",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://ai-bot.cn/weknora/",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0005",
+  "trace_id": "asrun_8096eb06bccb479f",
+  "captured_at": "2026-09-01T04:27:30.367540"
+}

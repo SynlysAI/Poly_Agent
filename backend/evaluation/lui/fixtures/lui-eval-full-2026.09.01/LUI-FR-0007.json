@@ -1,0 +1,187 @@
+{
+  "run": {
+    "run_id": "asrun_bad504dbd2dc4765",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 46907,
+    "first_token_ms": 18235,
+    "queue_wait_ms": 499,
+    "prompt_tokens": 6364,
+    "completion_tokens": 220,
+    "total_tokens": 6584,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "0bba306b4a70548e",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker_web",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "retrieval_web"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 6364,
+        "completion_tokens": 220,
+        "total_tokens": 6584
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "https://www.ebingou.cn/gongju/19652.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "免费的开源项目，采用MIT许可证，用户可以自由使用.WeKnora的RAG设计本身就是为了突破模型窗口限制，通过只检索相关片段来回答问题，从而也能应对超长文档的问答。我是一个学生，想用WeKnora来帮我读论文...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://sina.cn/news/detail/5208979646973436.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "2026年7月27日 - 腾讯那个IMA知识库的后台引擎。开源之后,大家就可以在本地部署使用了。这个很可能是为了打开企业市场,因为企业市场用知识库,别人不好上传到互联网平台...",
+          "used_in_answer": true
+        },
+        {
+          "id": "http://www.kao8.cc/login",
+          "rank": 3,
+          "score": null,
+          "snippet": "WeKnora是一款基于大语言模型的文档理解与语义检索框架，专为结构复杂、内容异构的文档场景而打造。",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.gitlink.org.cn/mirrors/WeKnora",
+          "rank": 4,
+          "score": null,
+          "snippet": "Formulaformula: update weknora-lite to 0.3.6-test3个月前.v0.6.3—— 网站嵌入 Widget 与发布集成中心(安全模式 Token 交换 + 限流);对话体验全面革新(引用浮层、RAG 流水线进度、流式 Markd...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://ai.so.com/search/sof0d73a348a9f5b977a501f920c4ceb22?search=%E6%94%B6%E8%97%8F%21%E5%B0%8F%E7%99%BD%2F%E7%A8%8B%E5%BA%8F%E5%91%98%E5%BF%85%E7%9C%8B%3A%E8%85%BE%E8%AE%AF%E5%BC%80%E6%BA%90WeKnora%E7%9F%A5%E8%AF%86%E5%BA%93%E7%B3%BB%E7%BB%9F%2C%E8%BD%BB%E6%9D%BE%E5%85%A5%E9%97%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B...&src=so_result_natural_ask&srcg=so_result_natural_ask",
+          "rank": 5,
+          "score": null,
+          "snippet": "检索增强生成(RAG)等核心组件 开源免费:基于Apache 2.0协议开源,可自由商用 适用场景: 企业知识库构建 智能客服系统开发 垂直领域问答机器人 大模型应用原型验证 技术亮点:...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "**结论**：WeKnora 采用 **MIT 许可证**，属于宽松型开源许可，允许自由使用、修改、商用和再分发。\n\n**依据**：\n- 网页证据明确指出，WeKnora 是腾讯开源的项目，采用 MIT 许可证，用户可以自由使用、修改甚至商业化 [1][2]。\n- 该许可证意味着你无需为使用项目本身付费，但部署运行需自备计算资源，并自行配置大语言模型和嵌入模型的 API 密钥（可能产生相应费用）[1]。\n\n**可执行建议**：\n- 若需商用或二次开发，MIT 许可证下可直接进行，但建议保留原版权声明。\n- 部署时注意：项目本身免费，但运行依赖服务器算力和模型 API 调用费用，请提前评估成本 [1]。\n- 如需获取源码，可通过 `git clone https://github.com/Tencent/WeKnora.git` 拉取 [1]。\n\n> 注：以上信息来自公开网页证据，未涉及项目内部知识库内容。",
+    "references": [
+      {
+        "label": "WeKnora-代码号",
+        "target": "https://www.ebingou.cn/gongju/19652.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.ebingou.cn/gongju/19652.html",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "腾讯居然把他们那个知识库引擎开源了。名字叫:WeKnora而且采用的是MIT许可证,就是你可以自由的改,也能商用。虽然没有直接说,但是WeKnora很可能就是...",
+        "target": "https://sina.cn/news/detail/5208979646973436.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://sina.cn/news/detail/5208979646973436.html",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "WeKnora",
+        "target": "http://www.kao8.cc/login",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://www.kao8.cc/login",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-FR-0007",
+  "trace_id": "asrun_bad504dbd2dc4765",
+  "captured_at": "2026-09-01T07:52:23.370744"
+}

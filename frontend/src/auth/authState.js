@@ -11,8 +11,8 @@ const initialSession = getStoredAuthSession()
 const hasValidInitialSession = isAuthSessionValid(initialSession)
 
 export const authState = reactive({
-  initialized: false,
-  authEnabled: false,
+  initialized: hasValidInitialSession,
+  authEnabled: hasValidInitialSession,
   authenticated: hasValidInitialSession,
   userId: hasValidInitialSession ? initialSession.userId || '' : '',
   username: hasValidInitialSession ? initialSession.username || '' : '',

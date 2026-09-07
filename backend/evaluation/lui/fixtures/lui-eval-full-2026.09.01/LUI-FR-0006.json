@@ -1,0 +1,135 @@
+{
+  "run": {
+    "run_id": "asrun_8b4d04e32e2248d4",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 47049,
+    "first_token_ms": 15385,
+    "queue_wait_ms": 1198,
+    "prompt_tokens": 3842,
+    "completion_tokens": 281,
+    "total_tokens": 4123,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "764e33da3a33bf2d",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": true,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "explainability_required"
+          ],
+          "category": "complex",
+          "confidence": 0.58,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3842,
+        "completion_tokens": 281,
+        "total_tokens": 4123
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "**结论**：当前知识库检索未返回任何结果，无法基于知识库给出 PVDF 介电常数的具体数值。\n\n**依据**：\n- 本次检索使用 WeKnora 向量检索（provider: `weknora`，检索层级 `vector`），查询“基于知识库回答 PVDF 介电常数”时返回 `status: no_results`，命中数为 0，未应用重排（rerank 未启用）。\n- 检索目标系统为 `e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3`，未产生候选结果，因此没有可引用的知识库证据。\n\n**降级说明**：由于知识库无命中，本次回答无法提供项目内事实依据，也不应编造 PVDF 介电常数的数值。建议：\n1. 确认所选知识库体系（system_id）是否已正确索引包含 PVDF 介电常数相关内容的文档；\n2. 尝试更换检索关键词（如“PVDF 相对介电常数”“聚偏氟乙烯 介电性能”）或切换其他知识库体系后重试；\n3. 若需外部参考，可另行查询公开文献，但需注意与项目内事实区分。\n\n如需，我可以帮你重新发起一次检索或调整查询词。",
+    "references": [
+      {
+        "label": "知识库 RAG/KG 设计",
+        "target": "doc/knowledge-base-rag-kg-upgrade-plan.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "no_results"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-FR-0006",
+  "trace_id": "asrun_8b4d04e32e2248d4",
+  "captured_at": "2026-09-01T07:52:23.340572"
+}

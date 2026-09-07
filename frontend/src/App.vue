@@ -1,6 +1,6 @@
 <script setup>
 import { ElMessage } from 'element-plus'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Fold, Expand, SwitchButton,
@@ -172,6 +172,23 @@ function handleAuthExpired() {
   router.replace({ path: '/login', query: { redirect: route.fullPath } })
 }
 
+/**
+ * 在异步认证初始化完成后补执行路由角色守卫。
+ *
+ * 首次整页加载时路由可能先于 /auth/me 返回而放行受保护路由；
+ * 初始化完成后需要按真实角色回退，避免普通用户停留在配置页。
+ */
+function enforceRouteRoleAfterAuthInit() {
+  if (
+    authState.authEnabled &&
+    authState.initialized &&
+    route.meta.requiresRole &&
+    authState.role !== route.meta.requiresRole
+  ) {
+    router.replace('/dashboard')
+  }
+}
+
 onMounted(() => {
   window.addEventListener(AUTH_EXPIRED_EVENT_NAME, handleAuthExpired)
   currentDate.value = formatCurrentDate()
@@ -180,6 +197,12 @@ onMounted(() => {
   }, 60000)
   acceptPortalToken()
   initializeAuthState()
+
+  watch(
+    () => authState.initialized,
+    enforceRouteRoleAfterAuthInit,
+    { immediate: true },
+  )
 })
 
 onBeforeUnmount(() => {
@@ -251,6 +274,10 @@ onBeforeUnmount(() => {
           <el-menu-item v-if="canAccessAdmin" index="/admin">
             <el-icon><SetUp /></el-icon>
             <span>系统管理</span>
+          </el-menu-item>
+          <el-menu-item v-if="canAccessAdmin" index="/admin/lui-evaluation">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>评测报告</span>
           </el-menu-item>
         </el-menu>
       </div>

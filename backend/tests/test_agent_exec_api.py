@@ -1,0 +1,547 @@
+"""Agent 连接器管理 API 测试。"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+try:
+    from ._computation_test_utils import ComputationTestCase
+except ImportError:
+    from _computation_test_utils import ComputationTestCase
+
+from app.core.auth import build_access_token
+from app.core.config import settings
+from app.api.v1.endpoints import agent_exec as agent_exec_endpoint
+from app.infra.computation_repositories import AuditEventRepository
+from app.schemas.identity_runtime import UserRecord
+from app.schemas.agent_exec import (
+    AgentExecProviderProbeData,
+    AgentExecProviderReadiness,
+    AgentExecProviderResult,
+)
+from app.services.agent_exec_providers.registry import AgentExecProviderRegistry
+from app.services.agent_exec_service import AgentExecService
+from unittest.mock import patch
+
+
+SCHEMA = {"type": "object", "required": ["summary"]}
+
+
+class ApiProvider:
+    """API 测试用受控 provider。"""
+
+    supported_task_types = ("structured_file_task",)
+    description = "测试连接器"
+    attribution = "执行能力来自测试 CLI"
+
+    def __init__(self, provider_id: str) -> None:
+        self.provider_id = provider_id
+        self.display_name = "测试连接器"
+
+    def sandbox_summary(self) -> str:
+        """返回 sandbox 摘要。"""
+        return "read-only sandbox"
+
+    def config_source(self) -> str:
+        """返回脱敏配置来源。"""
+        return "环境变量（已脱敏）"
+
+    def readiness(self) -> AgentExecProviderReadiness:
+        """返回可用状态。"""
+        return AgentExecProviderReadiness(
+            provider_id=self.provider_id,
+            available=True,
+            reason_code="ready",
+            checked_at=datetime.now(timezone.utc),
+        )
+
+    def execute(self, *, task, workdir, timeout_seconds, should_cancel=None):
+        """返回成功结果。"""
+        return AgentExecProviderResult(
+            provider_id=self.provider_id,
+            success=True,
+            output={"summary": "ok"},
+        )
+
+    def probe(self) -> AgentExecProviderProbeData:
+        """返回显式探测结果。"""
+        return AgentExecProviderProbeData(
+            provider_id=self.provider_id,
+            readiness=self.readiness(),
+            binary_path="/opt/test/codex",
+            binary_sha256="a" * 64,
+            version="codex test 1.0",
+            sandbox_mode="read-only",
+        )
+
+
+class AgentExecApiTest(ComputationTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.provider_id = f"api-{uuid4().hex[:8]}"
+        self.provider = ApiProvider(self.provider_id)
+        registry = AgentExecProviderRegistry()
+        registry.register(self.provider)
+        self.original_service = agent_exec_endpoint.service
+        agent_exec_endpoint.service = AgentExecService(
+            registry=registry,
+            run_reader=lambda run_id: self._read_run(run_id),
+        )
+        self.original_upload_root = settings.upload_root
+        settings.upload_root = self.runtime_root / "uploads"
+        settings.upload_root.mkdir(parents=True, exist_ok=True)
+        self.original_workdir_root = settings.agent_exec_workdir_root
+        settings.agent_exec_workdir_root = self.runtime_root / "agent_exec"
+        self.runs: dict = {}
+
+        self.admin_token, _ = build_access_token("admin_api", "Admin", "admin")
+        self.user_token, _ = build_access_token("user_api", "User", "user")
+
+    def tearDown(self) -> None:
+        settings.upload_root = self.original_upload_root
+        settings.agent_exec_workdir_root = self.original_workdir_root
+        agent_exec_endpoint.service = self.original_service
+        super().tearDown()
+
+    def _read_run(self, run_id: str):
+        """读取测试内 run。"""
+        return self.runs.get(run_id)
+
+    def _enable_policy(self) -> None:
+        """启用测试连接器策略。"""
+        response = self.client.patch(
+            f"/api/v1/agent-exec/providers/{self.provider_id}/policy",
+            json={"enabled": True},
+            headers=self._admin_headers(),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def _authorize_user(self) -> None:
+        """显式启用连接器并允许普通用户调用。"""
+        response = self.client.patch(
+            f"/api/v1/agent-exec/providers/{self.provider_id}/policy",
+            json={
+                "enabled": True,
+                "allowed_roles": ["admin", "user"],
+                "requires_confirmation": False,
+            },
+            headers=self._admin_headers(),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def _admin_headers(self) -> dict:
+        """管理员请求头。"""
+        return {"Authorization": f"Bearer {self.admin_token}"}
+
+    def _user_headers(self) -> dict:
+        """普通用户请求头。"""
+        return {"Authorization": f"Bearer {self.user_token}"}
+
+    def _patch_user(self, enabled: bool = True):
+        """返回用户仓储 patch 上下文。"""
+        now = datetime.now(timezone.utc)
+
+        def fake_find(user_id: str) -> UserRecord | None:
+            """返回测试用户。"""
+            if user_id not in {"admin_api", "user_api"}:
+                return None
+            return UserRecord(
+                user_id=user_id,
+                username="Admin" if user_id == "admin_api" else "User",
+                password_hash="unused",
+                role="admin" if user_id == "admin_api" else "user",
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
+
+        return patch(
+            "app.infra.repositories.UserRepository.find_by_user_id",
+            side_effect=fake_find,
+        )
+
+    def _run_payload(self, **overrides) -> dict:
+        """构建 run 请求。"""
+        payload = {
+            "provider_id": self.provider_id,
+            "task_type": "structured_file_task",
+            "prompt": "summarize",
+            "output_schema": SCHEMA,
+            "timeout_seconds": 5,
+            "confirmed": True,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_providers_require_authentication_and_filter_user_by_policy(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            response = self.client.get("/api/v1/agent-exec/providers")
+            self.assertEqual(response.status_code, 401)
+
+            # 默认策略 admin-only：认证后的普通用户可访问接口，但目录为空。
+            response = self.client.get(
+                "/api/v1/agent-exec/providers", headers=self._user_headers()
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["data"], [])
+
+            response = self.client.get(
+                "/api/v1/agent-exec/providers", headers=self._admin_headers()
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()["data"]
+            card = next(item for item in data if item["provider_id"] == self.provider_id)
+            self.assertTrue(card["readiness"]["available"])
+            self.assertEqual(card["policy"]["enabled"], False)
+            self.assertIn("sandbox", card["sandbox_summary"])
+            self.assertNotIn("workdir", response.text)
+            self.assertNotIn("api_key", response.text.lower())
+
+            self._authorize_user()
+            response = self.client.get(
+                "/api/v1/agent-exec/providers", headers=self._user_headers()
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(
+                [item["provider_id"] for item in response.json()["data"]],
+                [self.provider_id],
+            )
+            user_card = response.json()["data"][0]
+            self.assertEqual(user_card["policy"]["updated_by"], "")
+            self.assertIsNone(user_card["policy"]["updated_at"])
+
+            response = self.client.get(
+                "/api/v1/agent-exec/providers", headers=self._admin_headers()
+            )
+            admin_card = next(
+                item
+                for item in response.json()["data"]
+                if item["provider_id"] == self.provider_id
+            )
+            self.assertEqual(admin_card["policy"]["updated_by"], "admin_api")
+
+    def test_policy_update_admin_only_and_scope_validation(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            response = self.client.patch(
+                f"/api/v1/agent-exec/providers/{self.provider_id}/policy",
+                json={"enabled": True},
+                headers=self._user_headers(),
+            )
+            self.assertEqual(response.status_code, 403)
+
+            response = self.client.patch(
+                f"/api/v1/agent-exec/providers/{self.provider_id}/policy",
+                json={"allowed_task_types": ["shell_task"]},
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(
+                response.json()["data"]["detail"]["reason_code"], "task_type_not_supported"
+            )
+
+            response = self.client.patch(
+                f"/api/v1/agent-exec/providers/{self.provider_id}/policy",
+                json={"enabled": True, "requires_confirmation": True},
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json()["data"]["enabled"])
+            events, _ = AuditEventRepository.list_events(
+                entity_type="agent_exec_provider",
+                entity_id=self.provider_id,
+                event_type="agent_exec.policy.updated",
+                page=1,
+                page_size=10,
+            )
+            self.assertTrue(events)
+            self.assertEqual(events[0]["actor_role"], "admin")
+
+    def test_create_run_policy_checked_and_sanitized(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            self._enable_policy()
+            # 未确认被拒绝
+            response = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(confirmed=False),
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(
+                response.json()["data"]["detail"]["reason_code"], "confirmation_required"
+            )
+
+            response = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(),
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            run = response.json()["data"]
+            self.assertEqual(run["status"], "completed")
+            self.runs[run["run_id"]] = run
+            self.assertNotIn(str(settings.agent_exec_workdir_root), response.text)
+
+    def test_authorized_user_run_requires_confirmation_and_audits_real_role(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            self._authorize_user()
+
+            unconfirmed = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(confirmed=False),
+                headers=self._user_headers(),
+            )
+            self.assertEqual(unconfirmed.status_code, 403)
+            self.assertEqual(
+                unconfirmed.json()["data"]["detail"]["reason_code"],
+                "confirmation_required",
+            )
+
+            created = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(confirmed=True),
+                headers=self._user_headers(),
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            run = created.json()["data"]
+            self.assertEqual(run["created_by"], "user_api")
+            self.assertEqual(run["actor_role"], "user")
+            self.assertEqual(run["policy_snapshot"]["updated_by"], "")
+            self.assertIsNone(run["policy_snapshot"]["updated_at"])
+            self.runs[run["run_id"]] = run
+
+            detail = self.client.get(
+                f"/api/v1/agent-exec/runs/{run['run_id']}",
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(detail.status_code, 200, detail.text)
+            events = detail.json()["data"]["events"]
+            self.assertTrue(events)
+            self.assertTrue(all(event["actor_role"] == "user" for event in events))
+
+            forbidden_detail = self.client.get(
+                f"/api/v1/agent-exec/runs/{run['run_id']}",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(forbidden_detail.status_code, 403)
+            forbidden_cancel = self.client.post(
+                f"/api/v1/agent-exec/runs/{run['run_id']}/cancel",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(forbidden_cancel.status_code, 403)
+            forbidden_quality = self.client.get(
+                "/api/v1/agent-exec/quality",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(forbidden_quality.status_code, 403)
+
+    def test_get_and_cancel_run_with_stable_terminal_state(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            self._enable_policy()
+            create_response = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(),
+                headers=self._admin_headers(),
+            )
+            run = create_response.json()["data"]
+            self.runs[run["run_id"]] = run
+
+            response = self.client.get(
+                f"/api/v1/agent-exec/runs/{run['run_id']}",
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            detail = response.json()["data"]
+            self.assertEqual(detail["run"]["status"], "completed")
+            self.assertGreaterEqual(len(detail["events"]), 3)
+            self.assertTrue(detail["policy_summary"]["enabled"])
+
+            cancel_response = self.client.post(
+                f"/api/v1/agent-exec/runs/{run['run_id']}/cancel",
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(cancel_response.status_code, 200)
+            self.assertEqual(cancel_response.json()["data"]["status"], "completed")
+
+            missing = self.client.get(
+                "/api/v1/agent-exec/runs/aer_missing",
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(missing.status_code, 404)
+
+    def test_unknown_provider_and_user_role_rejected(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            response = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(provider_id="missing"),
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(
+                response.json()["data"]["detail"]["reason_code"], "provider_not_registered"
+            )
+
+            response = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(),
+                headers=self._user_headers(),
+            )
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(
+                response.json()["data"]["detail"]["reason_code"], "role_not_allowed"
+            )
+
+    def test_quality_summary(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            self._enable_policy()
+            create_response = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(),
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(create_response.status_code, 200)
+
+            response = self.client.get(
+                "/api/v1/agent-exec/quality",
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            summary = response.json()["data"]
+            self.assertIn("success_rate", summary)
+            self.assertIn("timeout_count", summary)
+            self.assertIn("audit_error_count", summary)
+            self.assertEqual(summary["alert_level"], "none")
+
+    def test_provider_probe_admin_only(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            response = self.client.post(
+                f"/api/v1/agent-exec/providers/{self.provider_id}/probe",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(response.status_code, 403)
+
+            response = self.client.post(
+                f"/api/v1/agent-exec/providers/{self.provider_id}/probe",
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()["data"]
+            self.assertTrue(data["readiness"]["available"])
+            self.assertEqual(data["version"], "codex test 1.0")
+            self.assertEqual(len(data["binary_sha256"]), 64)
+
+    def test_run_list_admin_only_with_filters(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            self._enable_policy()
+            created = self.client.post(
+                "/api/v1/agent-exec/runs",
+                json=self._run_payload(),
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            run = created.json()["data"]
+
+            response = self.client.get(
+                "/api/v1/agent-exec/runs",
+                params={
+                    "provider_id": self.provider_id,
+                    "status": "completed",
+                    "created_after": "2000-01-01T00:00:00Z",
+                    "created_before": "2100-01-01T00:00:00Z",
+                    "page": 1,
+                },
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()["data"]
+            self.assertGreaterEqual(data["total"], 1)
+            self.assertIn(run["run_id"], [item["run_id"] for item in data["items"]])
+
+            invalid_window = self.client.get(
+                "/api/v1/agent-exec/runs",
+                params={
+                    "created_after": "2100-01-01T00:00:00Z",
+                    "created_before": "2000-01-01T00:00:00Z",
+                },
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(invalid_window.status_code, 400)
+
+            invalid = self.client.get(
+                "/api/v1/agent-exec/runs",
+                params={"status": "unknown"},
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(invalid.status_code, 400)
+
+            forbidden = self.client.get(
+                "/api/v1/agent-exec/runs",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(forbidden.status_code, 403)
+
+    def test_quality_summary_reads_all_pages(self) -> None:
+        """质量统计分页读取全量 run，避免固定 1000 条采样偏差。"""
+        from app.schemas.agent_exec import AgentExecRunData
+
+        def make_paginated_run(index: int) -> AgentExecRunData:
+            """构建分页测试 run。
+
+            Args:
+                index: 序号。
+
+            Returns:
+                最小 run 对象。
+            """
+            return AgentExecRunData(
+                run_id=f"aer_quality_{index}",
+                provider_id="fake",
+                task_type="structured_file_task",
+                status="completed",
+                created_by="admin",
+                created_at=datetime.now(timezone.utc),
+                policy_snapshot=agent_exec_endpoint.service.policy_service.get_policy("fake"),
+            )
+
+        def paged_list_runs(**kwargs):
+            """返回两页测试数据。
+
+            Args:
+                **kwargs: 兼容仓储查询参数。
+
+            Returns:
+                (当前页数据, 总数) 元组。
+            """
+            page = int(kwargs.get("page", 1))
+            if page == 1:
+                return [make_paginated_run(index) for index in range(500)], 501
+            return [make_paginated_run(500)], 501
+
+        with patch.object(
+            agent_exec_endpoint.AgentExecRunRepository,
+            "list_runs",
+            side_effect=paged_list_runs,
+        ):
+            runs = agent_exec_endpoint._list_runs_for_quality(
+                provider_id=None,
+                created_after=None,
+                created_before=None,
+            )
+
+        self.assertEqual(len(runs), 501)
+
+
+if __name__ == "__main__":
+    unittest.main()

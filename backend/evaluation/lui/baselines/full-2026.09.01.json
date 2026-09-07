@@ -1,0 +1,149 @@
+{
+  "evaluation_id": "lui-eval-full-2026.09.01",
+  "dataset_version": "2026.09.01",
+  "mode": "full",
+  "generated_at": "2026-09-01T08:01:58.849857+00:00",
+  "summary": {
+    "evaluated_tasks": 80,
+    "successful_tasks": 47,
+    "task_success_rate": 0.5875,
+    "skipped_tasks": [],
+    "missing_facts": []
+  },
+  "metrics": {
+    "m1": {
+      "label": "任务成功率",
+      "applicable": 80,
+      "passed": 47,
+      "explicit": 80,
+      "not_evaluable": 0,
+      "pass_rate": 0.5875,
+      "score_mean": 0.5375
+    },
+    "m2": {
+      "label": "工具调用正确率",
+      "applicable": 30,
+      "passed": 10,
+      "explicit": 30,
+      "not_evaluable": 0,
+      "pass_rate": 0.333333,
+      "score_mean": 0.833333
+    },
+    "m3": {
+      "label": "检索召回 Recall@K",
+      "applicable": 24,
+      "passed": 7,
+      "explicit": 24,
+      "not_evaluable": 0,
+      "pass_rate": 0.291667,
+      "score_mean": 0.291667
+    },
+    "m4": {
+      "label": "最终回答准确率",
+      "applicable": 56,
+      "passed": 40,
+      "explicit": 56,
+      "not_evaluable": 0,
+      "pass_rate": 0.714286,
+      "score_mean": 0.714286
+    },
+    "m5": {
+      "label": "幻觉率",
+      "applicable": 20,
+      "passed": 19,
+      "explicit": 20,
+      "not_evaluable": 0,
+      "pass_rate": 0.95,
+      "score_mean": 0.95
+    },
+    "m6": {
+      "label": "P50/P95 延迟",
+      "applicable": 80,
+      "passed": 1,
+      "explicit": 1,
+      "not_evaluable": 79,
+      "pass_rate": 1.0,
+      "score_mean": 0.956333
+    },
+    "m7": {
+      "label": "推理成本",
+      "applicable": 80,
+      "passed": 0,
+      "explicit": 0,
+      "not_evaluable": 80,
+      "pass_rate": null,
+      "score_mean": null
+    },
+    "m8": {
+      "label": "人工兜底比例",
+      "applicable": 80,
+      "passed": 69,
+      "explicit": 80,
+      "not_evaluable": 0,
+      "pass_rate": 0.8625,
+      "score_mean": 0.8625
+    }
+  },
+  "by_category": {
+    "failure_recovery": {
+      "tasks": 10,
+      "success": 5,
+      "success_rate": 0.5
+    },
+    "knowledge_retrieval": {
+      "tasks": 10,
+      "success": 8,
+      "success_rate": 0.8
+    },
+    "multi_turn": {
+      "tasks": 10,
+      "success": 8,
+      "success_rate": 0.8
+    },
+    "project_fact": {
+      "tasks": 10,
+      "success": 5,
+      "success_rate": 0.5
+    },
+    "refusal_boundary": {
+      "tasks": 10,
+      "success": 6,
+      "success_rate": 0.6
+    },
+    "tool_argument": {
+      "tasks": 10,
+      "success": 3,
+      "success_rate": 0.3
+    },
+    "tool_selection": {
+      "tasks": 10,
+      "success": 4,
+      "success_rate": 0.4
+    },
+    "web_retrieval": {
+      "tasks": 10,
+      "success": 8,
+      "success_rate": 0.8
+    }
+  },
+  "by_mode": {
+    "deep": {
+      "tasks": 11,
+      "success": 8,
+      "success_rate": 0.727273
+    },
+    "qa": {
+      "tasks": 69,
+      "success": 39,
+      "success_rate": 0.565217
+    }
+  },
+  "metadata": {
+    "facts_source": "captured",
+    "manual_review": null,
+    "model": "default_openai/deepseek-v4-flash",
+    "knowledge_base": "WeKnora binder library",
+    "tools": "5 active uploaded vertical models",
+    "manual_review_status": "pending"
+  }
+}

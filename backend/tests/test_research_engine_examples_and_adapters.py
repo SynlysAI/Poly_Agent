@@ -19,6 +19,7 @@ except ImportError:
     from _computation_test_utils import ComputationTestCase
 
 from app.schemas.research_engine import AlgorithmRunCreate
+from app.core.config import settings
 from app.schemas.knowledge import (
     KnowledgeGraphData,
     KnowledgeGraphNode,
@@ -78,7 +79,7 @@ class ResearchEngineAdapterTest(ComputationTestCase):
         old_base_url = os.environ.pop("WEKNORA_BASE_URL", None)
         os.environ["APP_ENV"] = "production"
         try:
-            with self.assertRaises(HTTPException) as ctx:
+            with patch.object(settings, "weknora_base_url", ""), self.assertRaises(HTTPException) as ctx:
                 self.service.create_algorithm_run(
                     AlgorithmRunCreate(
                         algorithm_id="weknora_adapter",

@@ -1,0 +1,122 @@
+{
+  "run": {
+    "run_id": "asrun_f2351f619e73452f",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 55112,
+    "first_token_ms": 33813,
+    "queue_wait_ms": 860,
+    "prompt_tokens": 3854,
+    "completion_tokens": 364,
+    "total_tokens": 4218,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_deep",
+      "purpose": "deep",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "complex",
+      "budget": {
+        "preset_id": "research_deep",
+        "compatibility_mode": "deep",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "ab7f4aa1e936ddd7",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "complex",
+        "effective_model_purpose": "deep",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 2,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3854,
+        "completion_tokens": 364,
+        "total_tokens": 4218
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "基于垂类预测服务的能力边界，给出以下三条使用建议：\n\n---\n\n### 1. 先确认服务配置，再发起预测\n垂类预测服务通过 `VERTICAL_PREDICTOR_URL` 环境变量指向模型服务，**未配置时接口会返回可操作错误**。建议在发起预测前先检查该环境变量是否已正确设置，避免因服务不可用导致任务失败。\n\n---\n\n### 2. 优先用于配方初筛与实验优先级排序\n该服务当前覆盖**含氟电解液配方性能预测**（预测第 1、4、20 周期放电比容量 DSC 和库仑效率）以及**聚合物 Tg 预测**等垂类场景。建议将其定位为**初筛工具**，用于在大量候选配方/材料中快速排序，而不是替代高精度实验或 DFT 计算。\n\n---\n\n### 3. 结合知识库与实验闭环使用\n垂类预测属于 `predictor` 类型算法，可嵌入 AutoResearch 的 `COMPUTE_PREDICT` 阶段。建议将预测结果与知识库检索（如 WeKnora 增强检索）交叉验证，并在 `EXPERIMENT_EXECUTION` 阶段用真实实验数据回填、迭代更新模型，形成\"预测 → 实验 → 更新\"的闭环。\n\n---\n\n**依据**：\n- 垂类预测服务调用契约依赖 `VERTICAL_PREDICTOR_URL`，未配置时返回可操作错误 [项目事实]\n- 含氟电解液配方预测用于配方初筛与实验优先级排序 [项目事实]\n- 预测结果可嵌入 AutoResearch 的 `COMPUTE_PREDICT` 阶段，与知识检索、实验执行形成闭环 [项目事实]",
+    "references": [],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "no_results"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-MT-0006",
+  "trace_id": "asrun_f2351f619e73452f",
+  "captured_at": "2026-09-01T07:52:24.059262"
+}

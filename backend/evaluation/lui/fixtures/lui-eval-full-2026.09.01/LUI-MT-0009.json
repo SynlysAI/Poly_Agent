@@ -1,0 +1,117 @@
+{
+  "run": {
+    "run_id": "asrun_e499ef3e21c7458b",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 32031,
+    "first_token_ms": 6504,
+    "queue_wait_ms": 197,
+    "prompt_tokens": 3791,
+    "completion_tokens": 469,
+    "total_tokens": 4260,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "78be12e8ad2b6157",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "multi_source_synthesis",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "complex_keyword"
+          ],
+          "category": "complex",
+          "confidence": 0.58,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3791,
+        "completion_tokens": 469,
+        "total_tokens": 4260
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [],
+  "message": {
+    "content": "# WeKnora 接入 PolyAgent 的场景分析\n\n## 结论\n\nWeKnora 适合作为 PolyAgent 的**知识检索增强底座**，主要接入**知识库检索**和**证据追溯**两大场景。\n\n## 依据\n\n根据项目事实，PolyAgent 已内置 `weknora_adapter`（WeKnora 知识增强检索）和 `knowledge_graph_adapter`（知识图谱子图检索）两个适配器，均通过 PolyAgent KnowledgeService 调用 WeKnora 检索结果：\n\n- **weknora_adapter**：通过 REST 调用 WeKnora API，未配置时明确返回服务不可用。\n- **knowledge_graph_adapter**：基于 WeKnora 检索结果合成子图，可选 WeKnora Neo4j 增强，供人工 Workflow 和 AutoResearch 证据追溯使用。\n\n## 可接入场景\n\n1. **知识库检索增强（Knowledge Retrieval）**\n   - 在 AutoResearch 的 `KNOWLEDGE_RETRIEVAL` 阶段，用 WeKnora 做语义检索，替代或补充传统关键词检索，提升材料/文献召回质量。\n\n2. **证据追溯（Evidence Tracing）**\n   - 结合 `knowledge_graph_adapter`，将 WeKnora 检索结果合成知识子图，为人工 Workflow 和 AutoResearch 的推荐结论提供可追溯的文献/知识来源。\n\n3. **垂类问答（QA）**\n   - 作为 LLM 的检索增强（RAG）底座，为项目内问答提供领域知识上下文，减少幻觉。\n\n## 可执行建议\n\n- 接入前需配置 `WEKNORA_BASE_URL` 指向 WeKnora API 服务，否则适配器会返回服务不可用。\n- 若需图谱增强，可配置 WeKnora Neo4j 以补充实体和关系。\n- 优先在 AutoResearch 的 `KNOWLEDGE_RETRIEVAL` 阶段试点，验证检索质量后再扩展到 QA 场景。\n\n> 注：WeKnora 本身是腾讯开源框架，具体能力细节（如索引类型、重排策略）不在项目事实范围内，建议以 WeKnora 官方文档为准。",
+    "references": [],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-MT-0009",
+  "trace_id": "asrun_e499ef3e21c7458b",
+  "captured_at": "2026-09-01T07:52:24.169455"
+}

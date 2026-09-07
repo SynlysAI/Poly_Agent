@@ -59,3 +59,33 @@ class TestAttributionApi:
         for source_name in ["PolySol", "PolyOmics", "PPPDB", "PolyID", "NanoMine"]:
             assert sources[source_name]["url"] is None
             assert sources[source_name]["logo_asset"] is None
+
+    def test_experiment_dispatch_attribution_exposes_external_source_only(self) -> None:
+        """实验下发公开来源牌只展示外部目标系统，不展示 PolyAgent 自身。"""
+        with TestClient(app) as client:
+            response = client.get("/api/v1/attributions/modules/experiment_dispatch")
+
+        assert response.status_code == 200, response.text
+        attributions = response.json()["data"]["attributions"]
+        assert [item["name"] for item in attributions] == ["SpecLabOS"]
+
+    def test_capability_center_attribution_covers_external_sources_only(self) -> None:
+        """AI 能力来源牌覆盖原模块外部来源，不新增 PolyAgent 自身来源。"""
+        with TestClient(app) as client:
+            response = client.get("/api/v1/attributions/modules/capability_center")
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["page_path"] == "/tools?tab=ai-ready"
+        assert data["title"] == "AI 能力"
+        sources = {item["name"]: item for item in data["attributions"]}
+        assert set(sources) == {
+            "ALchemist",
+            "Codex CLI",
+            "OpenAI-compatible provider",
+            "Ollama",
+            "Custom HTTP provider",
+        }
+        assert sources["ALchemist"]["organization"] == "NatLabRockies / NREL / NLR"
+        assert sources["Codex CLI"]["organization"] == "OpenAI"
+        assert all(item["visibility"] == "prominent" for item in sources.values())

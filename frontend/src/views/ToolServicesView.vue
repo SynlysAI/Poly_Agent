@@ -7,12 +7,24 @@ import {
 } from '@element-plus/icons-vue'
 import AttributionBanner from '../components/attribution/AttributionBanner.vue'
 import AttributionBadges from '../components/attribution/AttributionBadges.vue'
+import CapabilityCenterPanel from '../components/CapabilityCenterPanel.vue'
 import { authState } from '../auth/authState'
+import {
+  buildPolicyPayload,
+  buildTestRunPayload,
+  connectorStatus,
+  formatQualitySummary,
+  normalizePolicyForm,
+} from '../utils/agentConnectors'
 
 import {
   checkLlmModels,
   checkIntegrationConfig,
+  createAgentExecRun,
   getAlgorithm,
+  getAgentExecProviders,
+  getAgentExecQuality,
+  probeAgentExecProvider,
   getAssistantQualityMetrics,
   getApiErrorMessage,
   getIntegrationStatus,
@@ -23,6 +35,7 @@ import {
   listAlgorithms,
   listIntegrationConfigs,
   syncAgentTools,
+  updateAgentExecPolicy,
   updateAgentToolPolicy,
   updateLlmRouting,
   upsertIntegrationConfig,
@@ -47,7 +60,6 @@ const llmError = ref('')
 const llmExtrasError = ref('')
 const editVisible = ref(false)
 const editingServiceKey = ref('')
-const activeTab = ref(normalizeTab(route.query.tab))
 const statusDetailVisible = ref(false)
 const selectedServiceStatus = ref(null)
 const serviceGroupFilter = ref('all')
@@ -67,12 +79,37 @@ const configDetailVisible = ref(false)
 const selectedConfig = ref(null)
 const llmRouteForm = reactive({ qa: '', deep: '', report: '' })
 
-function normalizeTab(value) {
+const isAdmin = computed(() => (
+  authState.initialized && (authState.role === 'admin' || !authState.authEnabled)
+))
+const TOOL_TABS = [
+  'status', 'ai-ready', 'llm-models', 'agent-connectors', 'algorithms', 'agent-tools', 'configs',
+]
+const requestedTab = ref(normalizeRequestedTab(route.query.tab))
+const activeTab = ref(normalizeTab(route.query.tab))
+
+/**
+ * 只验证 URL 中的页签 key，不掺入当前认证状态。
+ *
+ * @param {string|string[]} value 路由 tab 参数。
+ * @returns {string} 合法的初始页签 key；缺省为状态页。
+ */
+function normalizeRequestedTab(value) {
   const tab = Array.isArray(value) ? value[0] : value
-  return ['status', 'algorithms', 'agent-tools', 'configs', 'llm-models'].includes(tab) ? tab : 'status'
+  return TOOL_TABS.includes(tab) ? tab : 'status'
 }
 
-const isAdmin = computed(() => authState.role === 'admin' || !authState.authEnabled)
+/**
+ * 按角色规范化工具服务页签。
+ *
+ * @param {string|string[]} value 路由中的 tab 参数。
+ * @returns {string} 当前角色可用的页签 ID；普通用户始终为 AI 能力。
+ */
+function normalizeTab(value) {
+  const tab = normalizeRequestedTab(value)
+  if (isAdmin.value && TOOL_TABS.includes(tab)) return tab
+  return 'ai-ready'
+}
 
 const visibleAgentTools = computed(() => {
   const keyword = agentToolFilter.value.trim().toLowerCase()
@@ -247,6 +284,132 @@ async function runAgentToolSync() {
     ElMessage.error(`一致性检查失败：${getApiErrorMessage(error)}`)
   } finally {
     syncingAgentTools.value = false
+  }
+}
+
+// ── Agent 连接器（受控外部 Agent 执行）──
+const agentConnectors = ref([])
+const agentConnectorLoading = ref(false)
+const agentConnectorError = ref('')
+const agentConnectorQuality = ref(null)
+const agentConnectorSaving = ref('')
+const agentConnectorProbing = ref('')
+const agentConnectorProbeResults = ref({})
+const agentConnectorPolicyForms = ref({})
+const testRunVisible = ref(false)
+const testRunCard = ref(null)
+const testRunLoading = ref(false)
+const testRunResult = ref(null)
+const testRunForm = reactive({
+  prompt: '',
+  timeoutSeconds: 60,
+  confirmed: false,
+})
+
+const connectorQualityText = computed(() => formatQualitySummary(agentConnectorQuality.value))
+
+const agentConnectorAttributions = [
+  {
+    key: 'codex-cli',
+    name: 'Codex CLI',
+    organization: 'OpenAI',
+    role: 'implementation_source',
+    visibility: 'prominent',
+    url: 'https://github.com/openai/codex',
+  },
+]
+
+async function loadAgentConnectors() {
+  if (!isAdmin.value) return
+  agentConnectorLoading.value = true
+  agentConnectorError.value = ''
+  try {
+    const [providers, quality] = await Promise.allSettled([
+      getAgentExecProviders(),
+      getAgentExecQuality(),
+    ])
+    if (providers.status === 'fulfilled') {
+      agentConnectors.value = providers.value || []
+      agentConnectorPolicyForms.value = Object.fromEntries(
+        agentConnectors.value.map((card) => [card.provider_id, normalizePolicyForm(card)]),
+      )
+    } else {
+      agentConnectors.value = []
+      agentConnectorError.value = `连接器目录加载失败：${getApiErrorMessage(providers.reason)}`
+    }
+    agentConnectorQuality.value = quality.status === 'fulfilled' ? quality.value : null
+  } finally {
+    agentConnectorLoading.value = false
+  }
+}
+
+async function saveConnectorPolicy(card) {
+  const form = agentConnectorPolicyForms.value[card.provider_id]
+  if (!form) return
+  agentConnectorSaving.value = `${card.provider_id}:policy`
+  try {
+    const updated = await updateAgentExecPolicy(card.provider_id, buildPolicyPayload(form))
+    const index = agentConnectors.value.findIndex((item) => item.provider_id === card.provider_id)
+    if (index >= 0) agentConnectors.value.splice(index, 1, { ...card, policy: updated })
+    agentConnectorPolicyForms.value = {
+      ...agentConnectorPolicyForms.value,
+      [card.provider_id]: normalizePolicyForm({ ...card, policy: updated }),
+    }
+    ElMessage.success('连接器策略已更新')
+  } catch (error) {
+    ElMessage.error(`策略更新失败：${getApiErrorMessage(error)}`)
+  } finally {
+    agentConnectorSaving.value = ''
+  }
+}
+
+/**
+ * 管理员显式探测连接器二进制版本与 readiness。
+ *
+ * @param {object} card 连接器卡片。
+ * @returns {Promise<void>} 探测完成或提示错误。
+ */
+async function probeConnector(card) {
+  agentConnectorProbing.value = card.provider_id
+  try {
+    const result = await probeAgentExecProvider(card.provider_id)
+    agentConnectorProbeResults.value = {
+      ...agentConnectorProbeResults.value,
+      [card.provider_id]: result,
+    }
+    ElMessage.success(`探测完成：${result.version || '版本未知'}`)
+  } catch (error) {
+    ElMessage.error(`连接器探测失败：${getApiErrorMessage(error)}`)
+  } finally {
+    agentConnectorProbing.value = ''
+  }
+}
+
+function openTestRun(card) {
+  testRunCard.value = card
+  testRunResult.value = null
+  testRunForm.prompt = ''
+  testRunForm.timeoutSeconds = 60
+  testRunForm.confirmed = false
+  testRunVisible.value = true
+}
+
+async function submitTestRun() {
+  if (!testRunCard.value) return
+  testRunLoading.value = true
+  try {
+    const payload = buildTestRunPayload({
+      providerId: testRunCard.value.provider_id,
+      prompt: testRunForm.prompt,
+      timeoutSeconds: testRunForm.timeoutSeconds,
+      confirmed: testRunForm.confirmed,
+    })
+    testRunResult.value = await createAgentExecRun(payload)
+    ElMessage.success(`测试 run 已结束：${testRunResult.value.status}`)
+  } catch (error) {
+    ElMessage.error(`测试 run 失败：${getApiErrorMessage(error)}`)
+  } finally {
+    testRunLoading.value = false
   }
 }
 
@@ -495,6 +658,35 @@ function qualityMetricType(metric) {
   if (['confirmation_conversion', 'tool_capable_model_usage', 'tool_proposal_rate'].includes(key)) return 'primary'
   return 'info'
 }
+
+/**
+ * 把预算分布字典转换为表格行。
+ *
+ * Args:
+ *   distribution: 后端返回的分类 / 档位分布字典。
+ *   label: 表格维度标签。
+ *
+ * Returns:
+ *   含维度、档位和样本数 的行列表。
+ */
+function budgetDistributionRows(distribution, label) {
+  return Object.entries(distribution || {}).map(([tier, count]) => ({
+    dimension: label,
+    tier,
+    count,
+  }))
+}
+
+/**构建动态计算预算四个维度的看板表格行。*/
+const budgetDashboardRows = computed(() => {
+  const budget = llmQualityMetrics.value?.budget || {}
+  return [
+    ...budgetDistributionRows(budget.classification_distribution, '分类'),
+    ...budgetDistributionRows(budget.model_tier_distribution, '模型'),
+    ...budgetDistributionRows(budget.retrieval_tier_distribution, '检索'),
+    ...budgetDistributionRows(budget.execution_tier_distribution, '执行'),
+  ]
+})
 
 function servicePrimaryDetail(row) {
   const details = row.details || {}
@@ -774,26 +966,43 @@ async function handleCheck(row) {
   }
 }
 
-onMounted(() => {
+/**
+ * 初始化管理员配置数据；必须等待认证状态确定后调用。
+ *
+ * @returns {void} 无返回值。
+ */
+function initializeAdminData() {
+  if (!isAdmin.value) return
   loadAll()
   loadAlgos()
   loadAgentToolItems()
+  loadAgentConnectors()
   loadLlmModels({ quiet: true })
   loadLlmExtras({ quiet: true })
-})
+}
+
+onMounted(initializeAdminData)
 
 watch(
   () => route.query.tab,
   (tab) => {
+    requestedTab.value = normalizeRequestedTab(tab)
     activeTab.value = normalizeTab(tab)
   },
 )
 
 watch(activeTab, (tab) => {
+  if (!authState.initialized) return
   const query = { ...route.query }
-  if (tab === 'status') delete query.tab
+  if (tab === 'ai-ready' || tab === 'status') delete query.tab
   else query.tab = tab
   if (JSON.stringify(query) !== JSON.stringify(route.query)) router.replace({ query })
+  if (tab === 'agent-connectors' && !agentConnectorLoading.value) loadAgentConnectors()
+})
+
+watch(isAdmin, () => {
+  activeTab.value = normalizeTab(requestedTab.value)
+  initializeAdminData()
 })
 </script>
 
@@ -802,19 +1011,20 @@ watch(activeTab, (tab) => {
     <header class="tools-page-header">
       <div>
         <h1>工具服务</h1>
-        <p>真实计算工具链、Mongo/artifact、SpecLabOS 和优化服务状态。</p>
+        <p>{{ isAdmin ? '统一管理 AI 能力目录、真实计算工具链、外部连接器、服务参数与 LLM 模型。' : '查看当前账号 AI Ready 的可调用能力；能力配置由管理员在相邻页签维护。' }}</p>
       </div>
       <div class="header-actions">
-        <el-tag size="large" :type="healthSummary.total > 0 && healthSummary.ready === healthSummary.total ? 'success' : 'warning'">
+        <el-tag v-if="isAdmin" size="large" :type="healthSummary.total > 0 && healthSummary.ready === healthSummary.total ? 'success' : 'warning'">
           核心服务 {{ healthSummary.ready }}/{{ healthSummary.total }}
         </el-tag>
-        <el-button :icon="Refresh" :loading="loadingStatus || loadingConfigs" @click="loadAll">刷新</el-button>
+        <el-button v-if="isAdmin" @click="activeTab = 'ai-ready'">查看 AI 能力</el-button>
+        <el-button v-if="isAdmin" :icon="Refresh" :loading="loadingStatus || loadingConfigs" @click="loadAll">刷新</el-button>
       </div>
     </header>
 
-    <AttributionBanner module-id="computation" label="工具支持" compact />
+    <AttributionBanner v-if="isAdmin" module-id="computation" label="工具支持" compact />
 
-    <section class="metric-grid" aria-label="工具服务关键指标">
+    <section v-if="isAdmin" class="metric-grid" aria-label="工具服务关键指标">
       <article v-for="stat in serviceHealthStats" :key="stat.label" class="metric-panel" :class="`metric-panel--${stat.tone}`">
         <el-icon><component :is="stat.icon" /></el-icon>
         <div>
@@ -826,7 +1036,7 @@ watch(activeTab, (tab) => {
     </section>
 
     <el-tabs v-model="activeTab" class="tools-tabs">
-      <el-tab-pane label="状态" name="status">
+      <el-tab-pane v-if="isAdmin" label="状态" name="status">
         <section class="tools-section" v-loading="loadingStatus">
           <div class="section-heading">
             <div>
@@ -889,163 +1099,13 @@ watch(activeTab, (tab) => {
           </div>
         </section>
       </el-tab-pane>
-
-      <el-tab-pane label="算法清单" name="algorithms">
+      <el-tab-pane label="AI 能力" name="ai-ready">
         <section class="tools-section">
-          <div class="section-heading">
-            <div><h2>算法清单</h2><p class="section-description">按接入类型浏览算法、调用方式和适用材料范围。</p></div>
-            <span>{{ filteredAlgos.length }} 项算法</span>
-          </div>
-          <div class="algo-filter-bar">
-            <el-select v-model="algoFilters.type" placeholder="算法类型" clearable style="width:130px">
-              <el-option v-for="item in algoTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
-            </el-select>
-            <el-select v-model="algoFilters.material_scope" placeholder="材料体系" clearable style="width:130px">
-              <el-option label="氟基" value="fluoropolymer" /><el-option label="碳基" value="carbon_polymer" /><el-option label="硅基" value="silicon_polymer" /><el-option label="通用" value="universal" />
-            </el-select>
-            <el-input v-model="algoFilters.keyword" placeholder="搜索算法" clearable style="width:220px" />
-            <el-button text @click="algoFilters.type = ''; algoFilters.material_scope = ''; algoFilters.keyword = ''">重置</el-button>
-            <el-button :icon="Refresh" :loading="algoLoading" @click="loadAlgos">刷新</el-button>
-          </div>
-          <div class="algo-summary-strip" aria-label="算法接入概览">
-            <span v-for="stat in algorithmStats" :key="stat.key"><strong>{{ stat.count }}</strong>{{ stat.label }}</span>
-          </div>
-          <div v-if="filteredAlgos.length" v-loading="algoLoading" class="algo-group-stack">
-            <section v-for="group in groupedAlgos.filter((item) => item.items.length)" :key="group.key" class="tools-group" :class="`tone-${group.tone}`">
-              <header class="tools-group-header"><div class="tools-group-title"><span class="tools-group-marker" aria-hidden="true"></span><div><h3>{{ group.label }}</h3><p>{{ group.hint }}</p></div></div><span class="tools-group-count">{{ group.items.length }} 项</span></header>
-              <div class="algo-list" role="list">
-                <article v-for="row in group.items" :key="row.algorithm_id" class="algo-list-row" role="listitem">
-                  <div class="algo-list-main"><strong>{{ row.name }}</strong><small>{{ row.algorithm_id }}</small><p>{{ row.description || '暂无描述' }}</p><div class="compact-tag-list"><el-tag size="small" :type="algoTypeTag(row.type)">{{ algoTypeLabel(row.type) }}</el-tag><el-tag v-for="item in materialScopeLabel(row.material_scope)" :key="item" size="small" effect="plain">{{ item }}</el-tag></div></div>
-                  <div class="algo-list-status"><el-tag size="small" :type="algoIntegrationTag(algoIntegrationKind(row))" effect="plain">{{ algoIntegrationLabel(algoIntegrationKind(row)) }}</el-tag><el-tag size="small" :type="algoStatusTag(row.status)" effect="plain">{{ algoStatusLabel(row.status) }}</el-tag><small>{{ row.call_method || '未标注调用方式' }}</small></div>
-                  <div class="algo-list-meta"><span>触发方式</span><div class="compact-tag-list"><el-tag v-for="item in triggerModeLabel(row.trigger_modes)" :key="item" size="small" effect="plain">{{ item }}</el-tag></div></div>
-                  <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(row)">详情</el-button>
-                </article>
-              </div>
-            </section>
-          </div>
-          <el-empty v-else-if="!algoLoading" description="暂无算法数据" />
+          <CapabilityCenterPanel />
         </section>
       </el-tab-pane>
-
-      <el-tab-pane label="算法工具" name="agent-tools">
+      <el-tab-pane v-if="isAdmin" label="LLM 模型" name="llm-models">
         <section class="tools-section">
-          <div class="section-heading">
-            <div>
-              <h2>算法工具</h2>
-              <p class="section-description">已部署垂类算法在对话 LUI 中的工具状态与调用策略。</p>
-            </div>
-            <span>{{ visibleAgentTools.length }} 项工具</span>
-          </div>
-          <div class="algo-filter-bar">
-            <el-input v-model="agentToolFilter" placeholder="搜索算法工具" clearable style="width:240px" />
-            <el-button :icon="Refresh" :loading="agentToolLoading" @click="loadAgentToolItems">刷新</el-button>
-            <el-button v-if="isAdmin" :icon="Check" :loading="syncingAgentTools" @click="runAgentToolSync">
-              一致性检查
-            </el-button>
-          </div>
-          <div v-loading="agentToolLoading" class="agent-tool-panel">
-            <el-table v-if="visibleAgentTools.length" :data="visibleAgentTools" class="agent-tool-table">
-              <el-table-column label="工具" min-width="240">
-                <template #default="{ row }">
-                  <div class="agent-tool-main">
-                    <strong>{{ row.name }}</strong>
-                    <small>{{ row.tool_id }}</small>
-                    <p>{{ row.description || '暂无描述' }}</p>
-                    <AttributionBadges
-                      v-if="row.framework_attributions?.length || row.method_attributions?.length || row.developer_attribution"
-                      :attributions="[
-                        ...(row.framework_attributions || []),
-                        ...(row.method_attributions || []),
-                        ...(row.developer_attribution ? [row.developer_attribution] : []),
-                      ]"
-                    />
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="版本 / 健康" width="130">
-                <template #default="{ row }">
-                  <div class="agent-tool-main">
-                    <strong>{{ row.version || '-' }}</strong>
-                    <small>{{ agentToolHealthLabel(row.health_status) }}</small>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="可用状态" width="150">
-                <template #default="{ row }">
-                  <div class="agent-tool-main">
-                    <el-tag size="small" :type="agentToolPhaseTag(row.phase)">{{ agentToolPhaseLabel(row.phase) }}</el-tag>
-                    <small v-if="row.unavailable_reason" :title="row.unavailable_reason">{{ row.unavailable_reason }}</small>
-                  </div>
-                </template>
-              </el-table-column>
-              <template v-if="isAdmin">
-                <el-table-column label="启用" width="86">
-                  <template #default="{ row }">
-                    <el-switch
-                      :model-value="row.policy.enabled"
-                      :disabled="row.phase === 'unavailable'"
-                      :loading="agentToolSaving === `${row.algorithm_id}:policy`"
-                      @change="(value) => updatePolicy(row, { enabled: value })"
-                    />
-                  </template>
-                </el-table-column>
-                <el-table-column label="允许角色" width="190">
-                  <template #default="{ row }">
-                    <el-select
-                      :model-value="row.policy.allowed_roles"
-                      multiple
-                      size="small"
-                      :disabled="row.phase === 'unavailable'"
-                      @change="(value) => updatePolicy(row, { allowed_roles: value })"
-                    >
-                      <el-option label="管理员" value="admin" />
-                      <el-option label="用户" value="user" />
-                    </el-select>
-                  </template>
-                </el-table-column>
-                <el-table-column label="确认执行" width="110">
-                  <template #default="{ row }">
-                    <el-switch
-                      :model-value="row.policy.requires_confirmation"
-                      :disabled="row.phase === 'unavailable'"
-                      @change="(value) => updatePolicy(row, { requires_confirmation: value })"
-                    />
-                  </template>
-                </el-table-column>
-              </template>
-              <el-table-column label="输入 / 输出" min-width="210">
-                <template #default="{ row }">
-                  <div class="agent-tool-main">
-                    <small>输入：{{ Object.keys(row.input_schema?.fields || {}).join(', ') || '-' }}</small>
-                    <small>输出：{{ Object.keys(row.output_schema?.fields || {}).join(', ') || '-' }}</small>
-                  </div>
-                </template>
-              </el-table-column>
-            </el-table>
-            <el-empty v-if="!visibleAgentTools.length && !agentToolLoading" description="暂无算法工具" />
-          </div>
-        </section>
-      </el-tab-pane>
-
-      <el-tab-pane label="配置" name="configs">
-        <section class="tools-section">
-          <div class="section-heading"><div><h2>服务配置</h2><p class="section-description">管理手动接入配置；运行状态以状态页实时检查为准。</p></div><span>{{ configs.length }} 项配置</span></div>
-          <el-alert v-if="configError" :title="configError" type="warning" :closable="false" class="config-alert" />
-          <div v-else v-loading="loadingConfigs" class="config-list">
-            <article v-for="row in configs" :key="row.service_key" class="config-list-row">
-              <div class="config-list-main"><strong>{{ row.display_name || row.service_key }}</strong><small>{{ row.service_key }} · {{ row.service_type }}</small></div>
-              <div class="config-list-status"><el-tag size="small" :type="statusTag(configDisplayStatus(row))">{{ statusLabel(configDisplayStatus(row)) }}</el-tag><small>{{ configStatusSource(row) }}</small></div>
-              <div class="config-list-summary"><span>{{ configSummaryText(row) }}</span><small>{{ row.last_error_summary || configSecondaryText(row) }}</small></div>
-              <div class="config-list-enabled"><span>手动启用</span><el-switch :model-value="row.enabled" :loading="actionLoading === `${row.service_key}:toggle`" @change="(value) => toggleEnabled(row, value)" /></div>
-              <div class="config-actions"><el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button><el-button text type="primary" size="small" :icon="Check" :loading="actionLoading === `${row.service_key}:check`" @click="handleCheck(row)">检查配置</el-button><el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button></div>
-            </article>
-          </div>
-        </section>
-      </el-tab-pane>
-
-      <el-tab-pane label="LLM 模型" name="llm-models">
-        <section class="tools-section">
-            <AttributionBanner module-id="llm" label="模型服务来自" compact />
             <div class="llm-toolbar">
               <div>
                 <h4>LLM 模型选择</h4>
@@ -1086,6 +1146,31 @@ watch(activeTab, (tab) => {
                     <el-table-column prop="denominator" label="分母" width="80" align="right" />
                     <el-table-column prop="target" label="目标" min-width="150" />
                   </el-table>
+                </div>
+                <div v-if="budgetDashboardRows.length" class="llm-context-distribution">
+                  <div class="llm-routing-head">
+                    <div>
+                      <strong>动态计算预算观测</strong>
+                      <span>
+                        决策 {{ llmQualityMetrics.budget.total_decisions || 0 }} 条 ·
+                        用户覆盖 {{ ((llmQualityMetrics.budget.user_override_coverage || 0) * 100).toFixed(2) }}% ·
+                        回退 {{ ((llmQualityMetrics.budget.fallback_rate || 0) * 100).toFixed(2) }}%
+                      </span>
+                    </div>
+                  </div>
+                  <el-table :data="budgetDashboardRows" size="small" border>
+                    <el-table-column prop="dimension" label="维度" width="90" />
+                    <el-table-column prop="tier" label="档位" min-width="180">
+                      <template #default="{ row }">
+                        <code>{{ row.tier }}</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="count" label="样本数" width="100" align="right" />
+                  </el-table>
+                  <p class="llm-quality-note">
+                    发布门槛：{{ llmQualityMetrics.budget.release_gate?.reason }}。
+                    {{ llmQualityMetrics.budget.release_gate?.rollback }}。
+                  </p>
                 </div>
                 <div v-if="llmQualityMetrics.context_token_distribution?.sections?.length" class="llm-context-distribution">
                   <div class="llm-routing-head">
@@ -1243,6 +1328,280 @@ watch(activeTab, (tab) => {
             </div>
         </section>
       </el-tab-pane>
+      <el-tab-pane v-if="isAdmin" label="Agent 连接器" name="agent-connectors">
+        <section class="tools-section">
+          <div class="section-heading">
+            <div>
+              <h2>Agent 连接器</h2>
+              <p class="section-description">受控外部 Agent 文件任务：默认关闭、仅显式输入输出、强制确认执行；执行判定以后端为准。</p>
+            </div>
+            <span>
+              最近成功率 {{ connectorQualityText.successRate }} · 平均耗时 {{ connectorQualityText.duration }} · {{ connectorQualityText.alert }}
+            </span>
+          </div>
+          <el-alert
+            v-if="agentConnectorError"
+            :title="agentConnectorError"
+            type="warning"
+            :closable="false"
+            class="connector-alert"
+          />
+          <div v-loading="agentConnectorLoading" class="connector-list">
+            <article v-for="card in agentConnectors" :key="card.provider_id" class="connector-card">
+              <header class="connector-card-head">
+                <div>
+                  <strong>{{ card.display_name }}</strong>
+                  <small>{{ card.provider_id }}</small>
+                </div>
+                <el-tag :type="connectorStatus(card).tag">{{ connectorStatus(card).label }}</el-tag>
+              </header>
+              <p v-if="connectorStatus(card).reason" class="connector-reason">
+                {{ connectorStatus(card).reason }}
+              </p>
+              <dl class="connector-meta">
+                <div>
+                  <dt>支持任务</dt>
+                  <dd>{{ (card.supported_task_types || []).join('、') || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>Sandbox</dt>
+                  <dd>{{ card.sandbox_summary || '-' }}</dd>
+                </div>
+                <div>
+                  <dt>配置来源</dt>
+                  <dd>{{ card.config_source || '-' }}</dd>
+                </div>
+                <div v-if="agentConnectorProbeResults[card.provider_id]">
+                  <dt>探测版本</dt>
+                  <dd>{{ agentConnectorProbeResults[card.provider_id].version || '未知' }}</dd>
+                </div>
+                <div v-if="agentConnectorProbeResults[card.provider_id]">
+                  <dt>版本门槛</dt>
+                  <dd>
+                    {{ agentConnectorProbeResults[card.provider_id].minimum_version || '-' }}
+                    /
+                    {{ agentConnectorProbeResults[card.provider_id].version_supported ? '满足' : '未满足' }}
+                  </dd>
+                </div>
+                <div v-if="agentConnectorProbeResults[card.provider_id]">
+                  <dt>二进制摘要</dt>
+                  <dd>{{ (agentConnectorProbeResults[card.provider_id].binary_sha256 || '').slice(0, 12) || '-' }}</dd>
+                </div>
+              </dl>
+              <AttributionBanner
+                label="执行能力来自"
+                :attributions="agentConnectorAttributions"
+                compact
+                embedded
+              />
+              <div class="connector-policy">
+                <h4>调用策略</h4>
+                <el-form label-width="92px" label-position="left" class="connector-policy-form">
+                  <el-form-item label="启用">
+                    <el-switch v-model="agentConnectorPolicyForms[card.provider_id].enabled" />
+                  </el-form-item>
+                  <el-form-item label="允许角色">
+                    <el-select v-model="agentConnectorPolicyForms[card.provider_id].allowed_roles" multiple>
+                      <el-option label="管理员" value="admin" />
+                      <el-option label="用户" value="user" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="任务类型">
+                    <el-select
+                      v-model="agentConnectorPolicyForms[card.provider_id].allowed_task_types"
+                      multiple
+                    >
+                      <el-option
+                        v-for="taskType in card.supported_task_types || []"
+                        :key="taskType"
+                        :label="taskType"
+                        :value="taskType"
+                      />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="强制确认">
+                    <el-switch v-model="agentConnectorPolicyForms[card.provider_id].requires_confirmation" />
+                  </el-form-item>
+                </el-form>
+                <div class="connector-actions">
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :loading="agentConnectorSaving === `${card.provider_id}:policy`"
+                    @click="saveConnectorPolicy(card)"
+                  >
+                    保存策略
+                  </el-button>
+                  <el-button
+                    size="small"
+                    :loading="agentConnectorProbing === card.provider_id"
+                    @click="probeConnector(card)"
+                  >
+                    显式探测
+                  </el-button>
+                  <el-button size="small" :disabled="connectorStatus(card).kind !== 'ready'" @click="openTestRun(card)">
+                    受控测试
+                  </el-button>
+                </div>
+              </div>
+            </article>
+            <el-empty
+              v-if="!agentConnectors.length && !agentConnectorLoading"
+              description="暂无已注册连接器"
+            />
+          </div>
+        </section>
+      </el-tab-pane>
+      <el-tab-pane v-if="isAdmin" label="算法清单" name="algorithms">
+        <section class="tools-section">
+          <div class="section-heading">
+            <div><h2>算法清单</h2><p class="section-description">按接入类型浏览算法、调用方式和适用材料范围。</p></div>
+            <span>{{ filteredAlgos.length }} 项算法</span>
+          </div>
+          <div class="algo-filter-bar">
+            <el-select v-model="algoFilters.type" placeholder="算法类型" clearable style="width:130px">
+              <el-option v-for="item in algoTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+            <el-select v-model="algoFilters.material_scope" placeholder="材料体系" clearable style="width:130px">
+              <el-option label="氟基" value="fluoropolymer" /><el-option label="碳基" value="carbon_polymer" /><el-option label="硅基" value="silicon_polymer" /><el-option label="通用" value="universal" />
+            </el-select>
+            <el-input v-model="algoFilters.keyword" placeholder="搜索算法" clearable style="width:220px" />
+            <el-button text @click="algoFilters.type = ''; algoFilters.material_scope = ''; algoFilters.keyword = ''">重置</el-button>
+            <el-button :icon="Refresh" :loading="algoLoading" @click="loadAlgos">刷新</el-button>
+          </div>
+          <div class="algo-summary-strip" aria-label="算法接入概览">
+            <span v-for="stat in algorithmStats" :key="stat.key"><strong>{{ stat.count }}</strong>{{ stat.label }}</span>
+          </div>
+          <div v-if="filteredAlgos.length" v-loading="algoLoading" class="algo-group-stack">
+            <section v-for="group in groupedAlgos.filter((item) => item.items.length)" :key="group.key" class="tools-group" :class="`tone-${group.tone}`">
+              <header class="tools-group-header"><div class="tools-group-title"><span class="tools-group-marker" aria-hidden="true"></span><div><h3>{{ group.label }}</h3><p>{{ group.hint }}</p></div></div><span class="tools-group-count">{{ group.items.length }} 项</span></header>
+              <div class="algo-list" role="list">
+                <article v-for="row in group.items" :key="row.algorithm_id" class="algo-list-row" role="listitem">
+                  <div class="algo-list-main"><strong>{{ row.name }}</strong><small>{{ row.algorithm_id }}</small><p>{{ row.description || '暂无描述' }}</p><div class="compact-tag-list"><el-tag size="small" :type="algoTypeTag(row.type)">{{ algoTypeLabel(row.type) }}</el-tag><el-tag v-for="item in materialScopeLabel(row.material_scope)" :key="item" size="small" effect="plain">{{ item }}</el-tag></div></div>
+                  <div class="algo-list-status"><el-tag size="small" :type="algoIntegrationTag(algoIntegrationKind(row))" effect="plain">{{ algoIntegrationLabel(algoIntegrationKind(row)) }}</el-tag><el-tag size="small" :type="algoStatusTag(row.status)" effect="plain">{{ algoStatusLabel(row.status) }}</el-tag><small>{{ row.call_method || '未标注调用方式' }}</small></div>
+                  <div class="algo-list-meta"><span>触发方式</span><div class="compact-tag-list"><el-tag v-for="item in triggerModeLabel(row.trigger_modes)" :key="item" size="small" effect="plain">{{ item }}</el-tag></div></div>
+                  <el-button text type="primary" size="small" :icon="ViewIcon" @click="showAlgoDetail(row)">详情</el-button>
+                </article>
+              </div>
+            </section>
+          </div>
+          <el-empty v-else-if="!algoLoading" description="暂无算法数据" />
+        </section>
+      </el-tab-pane>
+      <el-tab-pane v-if="isAdmin" label="算法工具" name="agent-tools">
+        <section class="tools-section">
+          <div class="section-heading">
+            <div>
+              <h2>算法工具</h2>
+              <p class="section-description">已部署垂类算法在对话 LUI 中的工具状态与调用策略。</p>
+            </div>
+            <span>{{ visibleAgentTools.length }} 项工具</span>
+          </div>
+          <div class="algo-filter-bar">
+            <el-input v-model="agentToolFilter" placeholder="搜索算法工具" clearable style="width:240px" />
+            <el-button :icon="Refresh" :loading="agentToolLoading" @click="loadAgentToolItems">刷新</el-button>
+            <el-button v-if="isAdmin" :icon="Check" :loading="syncingAgentTools" @click="runAgentToolSync">
+              一致性检查
+            </el-button>
+          </div>
+          <div v-loading="agentToolLoading" class="agent-tool-panel">
+            <el-table v-if="visibleAgentTools.length" :data="visibleAgentTools" class="agent-tool-table">
+              <el-table-column label="工具" min-width="240">
+                <template #default="{ row }">
+                  <div class="agent-tool-main">
+                    <strong>{{ row.name }}</strong>
+                    <small>{{ row.tool_id }}</small>
+                    <p>{{ row.description || '暂无描述' }}</p>
+                    <AttributionBadges
+                      v-if="row.framework_attributions?.length || row.method_attributions?.length || row.developer_attribution"
+                      :attributions="[
+                        ...(row.framework_attributions || []),
+                        ...(row.method_attributions || []),
+                        ...(row.developer_attribution ? [row.developer_attribution] : []),
+                      ]"
+                    />
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="版本 / 健康" width="130">
+                <template #default="{ row }">
+                  <div class="agent-tool-main">
+                    <strong>{{ row.version || '-' }}</strong>
+                    <small>{{ agentToolHealthLabel(row.health_status) }}</small>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="可用状态" width="150">
+                <template #default="{ row }">
+                  <div class="agent-tool-main">
+                    <el-tag size="small" :type="agentToolPhaseTag(row.phase)">{{ agentToolPhaseLabel(row.phase) }}</el-tag>
+                    <small v-if="row.unavailable_reason" :title="row.unavailable_reason">{{ row.unavailable_reason }}</small>
+                  </div>
+                </template>
+              </el-table-column>
+              <template v-if="isAdmin">
+                <el-table-column label="启用" width="86">
+                  <template #default="{ row }">
+                    <el-switch
+                      :model-value="row.policy.enabled"
+                      :disabled="row.phase === 'unavailable'"
+                      :loading="agentToolSaving === `${row.algorithm_id}:policy`"
+                      @change="(value) => updatePolicy(row, { enabled: value })"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column label="允许角色" width="190">
+                  <template #default="{ row }">
+                    <el-select
+                      :model-value="row.policy.allowed_roles"
+                      multiple
+                      size="small"
+                      :disabled="row.phase === 'unavailable'"
+                      @change="(value) => updatePolicy(row, { allowed_roles: value })"
+                    >
+                      <el-option label="管理员" value="admin" />
+                      <el-option label="用户" value="user" />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="确认执行" width="110">
+                  <template #default="{ row }">
+                    <el-switch
+                      :model-value="row.policy.requires_confirmation"
+                      :disabled="row.phase === 'unavailable'"
+                      @change="(value) => updatePolicy(row, { requires_confirmation: value })"
+                    />
+                  </template>
+                </el-table-column>
+              </template>
+              <el-table-column label="输入 / 输出" min-width="210">
+                <template #default="{ row }">
+                  <div class="agent-tool-main">
+                    <small>输入：{{ Object.keys(row.input_schema?.fields || {}).join(', ') || '-' }}</small>
+                    <small>输出：{{ Object.keys(row.output_schema?.fields || {}).join(', ') || '-' }}</small>
+                  </div>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-if="!visibleAgentTools.length && !agentToolLoading" description="暂无算法工具" />
+          </div>
+        </section>
+      </el-tab-pane>
+      <el-tab-pane v-if="isAdmin" label="服务配置" name="configs">
+        <section class="tools-section">
+          <div class="section-heading"><div><h2>服务配置</h2><p class="section-description">管理手动接入配置；运行状态以状态页实时检查为准。</p></div><span>{{ configs.length }} 项配置</span></div>
+          <el-alert v-if="configError" :title="configError" type="warning" :closable="false" class="config-alert" />
+          <div v-else v-loading="loadingConfigs" class="config-list">
+            <article v-for="row in configs" :key="row.service_key" class="config-list-row">
+              <div class="config-list-main"><strong>{{ row.display_name || row.service_key }}</strong><small>{{ row.service_key }} · {{ row.service_type }}</small></div>
+              <div class="config-list-status"><el-tag size="small" :type="statusTag(configDisplayStatus(row))">{{ statusLabel(configDisplayStatus(row)) }}</el-tag><small>{{ configStatusSource(row) }}</small></div>
+              <div class="config-list-summary"><span>{{ configSummaryText(row) }}</span><small>{{ row.last_error_summary || configSecondaryText(row) }}</small></div>
+              <div class="config-list-enabled"><span>手动启用</span><el-switch :model-value="row.enabled" :loading="actionLoading === `${row.service_key}:toggle`" @change="(value) => toggleEnabled(row, value)" /></div>
+              <div class="config-actions"><el-button text type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button><el-button text type="primary" size="small" :icon="Check" :loading="actionLoading === `${row.service_key}:check`" @click="handleCheck(row)">检查配置</el-button><el-button text type="primary" size="small" :icon="ViewIcon" @click="showConfigDetail(row)">详情</el-button></div>
+            </article>
+          </div>
+        </section>
+      </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="editVisible" :title="currentConfig?.display_name || editingServiceKey" width="680px">
@@ -1273,6 +1632,46 @@ watch(activeTab, (tab) => {
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="saveConfig">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="testRunVisible"
+      :title="`受控测试：${testRunCard?.display_name || ''}`"
+      width="560px"
+    >
+      <el-alert
+        type="info"
+        :closable="false"
+        class="connector-alert"
+        title="测试仍走服务端 policy 校验；请确认连接器、任务类型、输入清单、输出 Schema、超时与输出限制。"
+      />
+      <el-form label-position="top">
+        <el-form-item label="任务说明">
+          <el-input
+            v-model="testRunForm.prompt"
+            type="textarea"
+            :rows="4"
+            placeholder="例如：总结当前输入文件的主要结论"
+          />
+        </el-form-item>
+        <el-form-item label="超时（秒）">
+          <el-input-number v-model="testRunForm.timeoutSeconds" :min="1" :max="3600" />
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="testRunForm.confirmed">
+            我已确认本次外部 Agent 文件任务的输入、输出和限制
+          </el-checkbox>
+        </el-form-item>
+      </el-form>
+      <el-descriptions v-if="testRunResult" :column="1" border size="small" class="connector-result">
+        <el-descriptions-item label="Run ID">{{ testRunResult.run_id }}</el-descriptions-item>
+        <el-descriptions-item label="状态">{{ testRunResult.status }}</el-descriptions-item>
+        <el-descriptions-item label="错误">{{ testRunResult.error_code || '-' }}</el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="testRunVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="testRunLoading" @click="submitTestRun">执行测试</el-button>
       </template>
     </el-dialog>
 
@@ -1338,7 +1737,7 @@ watch(activeTab, (tab) => {
 .tools-view {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
   min-height: calc(100vh - 96px);
 }
 
@@ -1363,8 +1762,15 @@ watch(activeTab, (tab) => {
 }
 
 .tools-page-header h1 {
-  font-size: 24px;
+  font-size: 26px;
+  font-weight: 700;
   line-height: 1.2;
+  letter-spacing: -0.3px;
+}
+
+.tools-page-header {
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--app-border-soft);
 }
 
 .tools-page-header p,
@@ -1372,7 +1778,8 @@ watch(activeTab, (tab) => {
 .tools-group-header p {
   margin: 6px 0 0;
   color: var(--app-ink-muted);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .header-actions {
@@ -1396,11 +1803,17 @@ watch(activeTab, (tab) => {
   gap: 12px;
   min-height: 86px;
   overflow: hidden;
-  padding: 14px;
-  border: 1px solid var(--app-card-border);
-  border-radius: var(--app-radius-sm);
+  padding: 18px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-lg);
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: var(--app-card-shadow);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  transition: box-shadow 0.22s ease, transform 0.22s ease;
+}
+
+.metric-panel:hover {
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
 }
 
 .metric-panel::before {
@@ -1426,11 +1839,11 @@ watch(activeTab, (tab) => {
 
 .tools-section {
   min-width: 0;
-  padding: 16px;
-  border: 1px solid var(--app-card-border);
-  border-radius: var(--app-radius-sm);
+  padding: 20px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-lg);
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: var(--app-card-shadow);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
 .tools-section h2 { font-size: 20px; }
@@ -1450,7 +1863,7 @@ watch(activeTab, (tab) => {
 .tools-filter.tone-coral.active { border-left: 3px solid #be5a35; }
 .tools-filter.tone-violet.active { border-left: 3px solid #7c3aed; }
 .tools-group-stack, .algo-group-stack { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.tools-group { overflow: hidden; border: 1px solid var(--app-border-soft); border-left: 3px solid var(--app-border); border-radius: var(--app-radius-sm); background: #fff; }
+.tools-group { overflow: hidden; border: 1px solid var(--app-border-soft); border-left: 3px solid var(--app-border); border-radius: var(--app-radius-lg); background: #fff; }
 .tools-group.tone-blue { border-left-color: #2563eb; }
 .tools-group.tone-teal { border-left-color: #0f766e; }
 .tools-group.tone-amber { border-left-color: #d97706; }
@@ -1654,6 +2067,92 @@ watch(activeTab, (tab) => {
   margin-bottom: 12px;
 }
 
+.connector-alert {
+  margin-bottom: 12px;
+}
+
+.connector-list {
+  display: grid;
+  gap: 14px;
+}
+
+.connector-card {
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.connector-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connector-card-head strong {
+  display: block;
+  color: var(--app-ink);
+  font-size: 15px;
+}
+
+.connector-card-head small {
+  display: block;
+  margin-top: 2px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.connector-reason {
+  margin: 8px 0 0;
+  color: #b45309;
+  font-size: 13px;
+}
+
+.connector-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.connector-meta dt {
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.connector-meta dd {
+  margin: 2px 0 0;
+  color: var(--app-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connector-policy {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.connector-policy h4 {
+  margin: 0 0 8px;
+  color: var(--app-ink);
+  font-size: 13px;
+}
+
+.connector-policy-form {
+  max-width: 460px;
+}
+
+.connector-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.connector-result {
+  margin-top: 12px;
+}
+
 .config-summary-line {
   display: block;
   max-width: 100%;
@@ -1670,6 +2169,13 @@ watch(activeTab, (tab) => {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+}
+
+.llm-routing-head strong,
+.llm-provider-head strong,
+.llm-routing-head span,
+.llm-provider-head span {
+  display: block;
 }
 
 .llm-toolbar h4 {
@@ -1696,7 +2202,7 @@ watch(activeTab, (tab) => {
 .llm-model-panel {
   min-height: 280px;
   display: grid;
-  gap: 14px;
+  gap: 18px;
   margin-top: 12px;
 }
 
@@ -1780,6 +2286,11 @@ watch(activeTab, (tab) => {
 .llm-schema-section {
   min-width: 0;
   overflow-x: auto;
+}
+
+.llm-routing-head + .llm-quality-metrics,
+.llm-routing-head + .llm-schema-section {
+  margin-top: 12px;
 }
 
 .llm-quality-metrics + .llm-context-distribution,

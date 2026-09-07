@@ -1,0 +1,189 @@
+{
+  "run": {
+    "run_id": "asrun_b196d0f0665943a4",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 101755,
+    "first_token_ms": 41686,
+    "queue_wait_ms": 1122,
+    "prompt_tokens": 6687,
+    "completion_tokens": 580,
+    "total_tokens": 7267,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_deep",
+      "purpose": "deep",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "complex",
+      "budget": {
+        "preset_id": "research_deep",
+        "compatibility_mode": "deep",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "2bef26f45da76507",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": true,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "explainability_required"
+          ],
+          "category": "complex",
+          "confidence": 0.58,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker_web",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "complex",
+        "effective_model_purpose": "deep",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning",
+        "user_overrides": [
+          "model",
+          "retrieval_web"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 2,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 6687,
+        "completion_tokens": 580,
+        "total_tokens": 7267
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://xueshu.baidu.com/usercenter/paper/show?paperid=908e4eb34ae22616e91021fc619fed69&site=xueshu_se",
+          "rank": 1,
+          "score": null,
+          "snippet": "2020年10月31日 - 驻极体是电介质物理,材料科学及传感器工程的重要交叉学科.综述了最重要的高绝缘性氟聚合物驻极体材料PTFE,FEP,PFA,PCTFE及Teflon AF的发展和现状,描述...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://blog.csdn.net/hlkn2020/article/details/119596597",
+          "rank": 2,
+          "score": null,
+          "snippet": "与其他含氟聚合物管不同,长连续长度的 FEP 管也可以通过挤出生产。FEP 管材相对较低的成本和所需的特性推动其在许多需要高击穿电压、低介电...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.gys.cn/ptfe/4960635716.html",
+          "rank": 3,
+          "score": null,
+          "snippet": "2024年6月2日 - 密度为2.15g/CC(克/立方厘米),它是一种软性塑料,其拉伸强度、***性、抗蠕变性低于许多工程塑料。它是化学惰性的,在很宽的温度和频率范围内具有较低的...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.gys.cn/lvwang/4923113452.html",
+          "rank": 4,
+          "score": null,
+          "snippet": "2024年6月1日 - 规格PTFE ptfe60目过滤网A郑州铁氟龙筛网ptfe网布生产厂 ptfe60目过滤网A郑州铁氟龙筛网ptfe网布生产厂主要生产PTFE过滤网,PTFE滤布,PTFE过滤筛网,PT...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.gys.cn/lvwang/4914261976.html",
+          "rank": 5,
+          "score": null,
+          "snippet": "2024年6月1日 - 电性能:聚四氟乙烯在较宽频率范围内的介电常数和介电损耗都很低,而且击穿电压、体积电阻率和耐电弧性都较高。 耐辐射性能:聚四氟乙烯的耐辐射性能较差...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "# PTFE 与 FEP 介电常数差异\n\n## 结论\n\nPTFE（聚四氟乙烯）与 FEP（氟化乙烯丙烯共聚物）的介电常数**非常接近**，两者均属于低介电常数的高绝缘氟聚合物材料。PTFE 的介电常数通常在 **2.0–2.1** 左右，FEP 的介电常数略高，约为 **2.1**。在大多数应用场景中，两者的介电性能差异可以忽略不计。\n\n## 依据\n\n1. **高绝缘性氟聚合物驻极体材料综述**指出，PTFE、FEP、PFA、PCTFE 及 Teflon AF 是重要的高绝缘性氟聚合物驻极体材料，其中 PTFE 和 FEP 均具有极低的介电常数和优异的绝缘性能 [1]。\n\n2. **FEP 管材技术资料**显示，FEP 管材因其**高击穿电压、低介电常数**、高耐化学性、高紫外线透射率等特性，被广泛应用于需要电气绝缘的场景，是 PTFE 的经济替代品 [2]。\n\n3. **PTFE 材料规格资料**表明，PTFE 密度为 2.15 g/cm³，在很宽的温度和频率范围内具有稳定的低介电常数，且化学惰性强 [3]。\n\n## 关键差异对比\n\n| 特性 | PTFE | FEP |\n|------|------|-----|\n| 介电常数 | ~2.0–2.1 | ~2.1 |\n| 使用温度上限 | ~260°C | ~200°C（约 450°F）[2] |\n| 加工方式 | 不可注塑，需烧结/机加工 | 可熔融加工（挤出/注塑）[2] |\n| 成本 | 较高 | 较低，PTFE 的经济替代品 [2] |\n\n## 可执行建议\n\n- **电气绝缘应用**：两者介电性能相近，若对耐温要求 >200°C，选 PTFE；若需可熔融加工成型（如长连续管材、复杂形状），选 FEP。\n- **半导体湿法制程**：FEP 因可熔融加工且兼具高纯度和可成型性，常作为半导体湿法制程的标准选择 [2]。\n- **驻极体材料**：PTFE 和 FEP 均适用于高绝缘驻极体应用，具体选择取决于加工工艺和耐温需求 [1]。\n\n> **说明**：以上介电常数数值为材料典型范围，实际值会随频率、温度和测试条件略有变化。如需精确设计参数，建议查阅具体牌号的技术数据表。",
+    "references": [
+      {
+        "label": "高绝缘性氟聚合物驻极体材料的发展和研究现状- 百度学术",
+        "target": "http://xueshu.baidu.com/usercenter/paper/show?paperid=908e4eb34ae22616e91021fc619fed69&site=xueshu_se",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://xueshu.baidu.com/usercenter/paper/show?paperid=908e4eb34ae22616e91021fc619fed69&site=xueshu_se",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "半导体材料FEP管_fep会与硅-CSDN博客",
+        "target": "https://blog.csdn.net/hlkn2020/article/details/119596597",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://blog.csdn.net/hlkn2020/article/details/119596597",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "【阻燃铁氟龙PTFE日本大金M-15HS 软管材料M-15HS】价格_厂家-供应商网",
+        "target": "https://www.gys.cn/ptfe/4960635716.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.gys.cn/ptfe/4960635716.html",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-WR-0010",
+  "trace_id": "asrun_b196d0f0665943a4",
+  "captured_at": "2026-09-01T07:52:26.344555"
+}

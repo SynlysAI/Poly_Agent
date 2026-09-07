@@ -1,0 +1,271 @@
+{
+  "run": {
+    "run_id": "asrun_d1337209582d4df0",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 62581,
+    "first_token_ms": 21316,
+    "queue_wait_ms": 1672,
+    "prompt_tokens": 8591,
+    "completion_tokens": 647,
+    "total_tokens": 9238,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "64dfa0f7dfcc92d9",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "multi_source_synthesis",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 1,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "complex_keyword",
+            "high_risk_signal",
+            "selected_tools"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 96,
+        "prompt_tokens": 7446,
+        "total_tokens": 7542,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      },
+      {
+        "prompt_tokens": 8591,
+        "completion_tokens": 647,
+        "total_tokens": 9238
+      }
+    ]
+  },
+  "tool_calls": [
+    {
+      "call_id": "atc_ce6da65413e44856",
+      "tool_id": "algorithm:pi_synthesis_mock",
+      "function_name": "algorithm_pi_synthesis_mock_b6e07499944d",
+      "raw_arguments": "{\"diamine\": \"ODA\", \"diamine_solubility\": 4, \"dianhydride\": \"PMDA\", \"dianhydride_solubility\": 3, \"inert_atmosphere_status\": true, \"solvent\": \"NMP\", \"water_content_status\": \"low\"}",
+      "arguments": {
+        "diamine": "ODA",
+        "dianhydride": "PMDA",
+        "solvent": "NMP",
+        "diamine_solubility": 4,
+        "dianhydride_solubility": 3,
+        "water_content_status": "low",
+        "inert_atmosphere_status": true
+      },
+      "missing_fields": [],
+      "arguments_parse_error": null,
+      "phase": "completed",
+      "error": null,
+      "duration_ms": 1300,
+      "proposal_usage": {
+        "completion_tokens": 96,
+        "prompt_tokens": 7446,
+        "total_tokens": 7542,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://00i.net/bm/63067.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "聚酰亚胺薄膜又是一种新型的耐高温有机聚合物薄膜 ,是由均苯四甲酸二酐(PMDA)和二氨基二苯醚(ODA)在极强性溶剂二甲基乙酰胺(DMAC)中经缩聚并流涎成膜,再经亚胺... 聚酰亚胺...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.renrendoc.com/paper/108667899.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "这种聚酰亚胺由于具有刚直的主链且不溶于有机溶剂,而且还不熔融,所以是用特殊的两步合成法合成制造的。即是用均苯四甲酸酐PMDA和二苯醚二胺ODA为原料,合成可溶...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.sohu.com/a/289736200_816970",
+          "rank": 3,
+          "score": null,
+          "snippet": "缩聚型聚酰亚胺:以DMF、DMAC、NMP等强极性溶剂,经低温缩聚,形成聚酰胺酸,再经成膜或者纺丝后,高温脱水,形成聚酰亚胺;或以乙酐或叔胺类催化...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://xueqiu.com/7826229931/396520212",
+          "rank": 4,
+          "score": null,
+          "snippet": "2026年6月24日 - PI浆料,全称为聚酰亚胺(Polyimide,简称PI)浆料,是一种以聚酰亚胺树脂为核心成分,添加溶剂、填料、助剂等物质混合制成的糊状功能性材料,主要用于制备各...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://d.wanfangdata.com.cn/periodical/xdtlytz202110003",
+          "rank": 5,
+          "score": null,
+          "snippet": "采用分子动力学模拟方法对均苯型PMDA/ODA聚酰亚胺聚合物的关键性能进行了模拟.结果 表明:聚合物模型分别经过298 K、200 ps NVT和NPT的动...",
+          "used_in_answer": false
+        }
+      ]
+    },
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://00i.net/bm/63067.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "聚酰亚胺薄膜又是一种新型的耐高温有机聚合物薄膜 ,是由均苯四甲酸二酐(PMDA)和二氨基二苯醚(ODA)在极强性溶剂二甲基乙酰胺(DMAC)中经缩聚并流涎成膜,再经亚胺... 聚酰亚胺...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.renrendoc.com/paper/108667899.html",
+          "rank": 2,
+          "score": null,
+          "snippet": "这种聚酰亚胺由于具有刚直的主链且不溶于有机溶剂,而且还不熔融,所以是用特殊的两步合成法合成制造的。即是用均苯四甲酸酐PMDA和二苯醚二胺ODA为原料,合成可溶...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.sohu.com/a/289736200_816970",
+          "rank": 3,
+          "score": null,
+          "snippet": "缩聚型聚酰亚胺:以DMF、DMAC、NMP等强极性溶剂,经低温缩聚,形成聚酰胺酸,再经成膜或者纺丝后,高温脱水,形成聚酰亚胺;或以乙酐或叔胺类催化...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://xueqiu.com/7826229931/396520212",
+          "rank": 4,
+          "score": null,
+          "snippet": "2026年6月24日 - PI浆料,全称为聚酰亚胺(Polyimide,简称PI)浆料,是一种以聚酰亚胺树脂为核心成分,添加溶剂、填料、助剂等物质混合制成的糊状功能性材料,主要用于制备各...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://d.wanfangdata.com.cn/periodical/xdtlytz202110003",
+          "rank": 5,
+          "score": null,
+          "snippet": "采用分子动力学模拟方法对均苯型PMDA/ODA聚酰亚胺聚合物的关键性能进行了模拟.结果 表明:聚合物模型分别经过298 K、200 ps NVT和NPT的动...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "## 聚酰亚胺（ODA + PMDA + NMP）合成难度评估\n\n**结论：总难度评分 80/100，属于高难度合成体系，置信度 0.85，适用域内（IN_DOMAIN）。**\n\n---\n\n### 一、评分构成\n\n| 维度 | 得分 | 说明 |\n|------|------|------|\n| 反应性 R | 27 | 二胺基础 15 + 二酐基础 12，无额外修正 |\n| 热/化学 H | 20 | 二胺 6 + 二酐 6 + 构象 4 + 不对称 4 |\n| 溶解度/粘度 S | 22 | 单体 9 + 聚合物 7 + 粘度 6 |\n| 不确定性 U | 11 | 水敏感 4 + 氧化 2 + 热 2 + 凝胶 3 |\n| **化学难度 C** | **47** | R + H |\n| **物理执行难度 P** | **33** | S + U |\n| **总难度 D** | **80** | R(27)+H(20)+S(22)+U(11)=80 ✓ |\n\n---\n\n### 二、风险标签\n\n- **POOR_SOLUBILITY**（溶解性差）\n- **FAST_VISCOSITY**（粘度上升快）\n- **OXIDATION_RISK**（氧化风险）\n- **HIGH_STERIC**（高空间位阻）\n\n---\n\n### 三、推荐工艺参数\n\n| 参数 | 值 |\n|------|-----|\n| 工艺编号 | PI-P08 |\n| 温度 | 55 °C |\n| 反应时间 | 42 h |\n| 溶剂体积 | 60 mL |\n\n---\n\n### 四、可执行建议\n\n1. **控制水分**：体系对水敏感（U_water=4），建议在惰性气氛下操作，溶剂 NMP 使用前需严格除水。\n2. **粘度管理**：FAST_VISCOSITY 提示聚合过程中粘度上升快，建议采用低温缩聚（55°C 已较低），并考虑分批加料或稀释策略。\n3. **氧化防护**：OXIDATION_RISK 提示需惰性气氛保护（如 N₂/Ar）。\n4. **溶解性预判**：POOR_SOLUBILITY 提示 ODA/PMDA 在 NMP 中溶解性一般，建议提前验证单体溶解情况，必要时升温助溶。\n\n---\n\n**背景说明**：ODA（二氨基二苯醚）与 PMDA（均苯四甲酸二酐）在强极性溶剂（如 NMP、DMAC）中经低温缩聚生成聚酰胺酸，再经亚胺化得到聚酰亚胺，这是经典的 PI 两步合成路线 [1][3]。本评估由 PI 合成难度评分 Mock 接口（确定性评分）生成，评分规则来自随服务分发的 `PI_synthesis_difficulty_scoring_rules_v1.0.json`。",
+    "references": [
+      {
+        "label": "PI是什么? 聚酰亚胺树脂(polyimide 简称PI) 耐高温耐磨原材料 , 聚酰亚胺是什么材料 - 苗坤旺离型膜",
+        "target": "http://00i.net/bm/63067.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://00i.net/bm/63067.html",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "聚酰亚胺基础知识-(横田力男)",
+        "target": "https://www.renrendoc.com/paper/108667899.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.renrendoc.com/paper/108667899.html",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "【新材料】工程塑料中的 黄金 ----聚酰亚胺(Polyimide)_性能",
+        "target": "https://www.sohu.com/a/289736200_816970",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.sohu.com/a/289736200_816970",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 1,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-TA-0005",
+  "trace_id": "asrun_773d097a75e24a1d",
+  "captured_at": "2026-09-01T07:52:25.237752"
+}

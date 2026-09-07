@@ -66,7 +66,7 @@ import {
   mergeToolCalls,
   normalizeToolCall,
   parseToolArguments,
-  replaceToolCall,
+  replaceToolCallInMessages,
   normalizeSchemaArguments,
   shouldContinueToolCall,
   toolArgumentSourceText,
@@ -94,14 +94,9 @@ import {
   capabilitySourceLabel,
   contextSectionRows,
   contextToolRows,
-  contextUsageRing,
-  DEFAULT_CONTEXT_WINDOW,
   formatContextWindow,
-  formatConversationUsageDetail,
-  formatTokenCount,
   formatUsage,
   normalizeUsageSummary,
-  resolveContextTokenEstimate,
   modelMetaLabel,
   normalizeAssistantRoute,
   routeCapabilityLabels,
@@ -324,35 +319,6 @@ const selectedToolSummary = computed(() =>
   (agentTools.value || []).filter((tool) => selectedToolIds.value.includes(tool.tool_id)),
 )
 const conversationStarted = computed(() => messages.value.some((item) => item.role === 'user'))
-const conversationUsageDetail = computed(() => formatConversationUsageDetail(conversationUsage.value))
-const latestContextManifestMessage = computed(() => {
-  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
-    const message = messages.value[index]
-    if (message.role !== 'assistant') continue
-    const manifest = messageContextManifest(message)
-    if (manifest) return { manifest, createdAt: message.created_at || '' }
-  }
-  return null
-})
-const latestContextEstimate = computed(() => {
-  return resolveContextTokenEstimate({
-    manifestEstimate: latestContextManifestMessage.value?.manifest?.context?.token_estimate,
-    manifestCreatedAt: latestContextManifestMessage.value?.createdAt,
-    compaction: sessionControlState.value?.compaction,
-  })
-})
-const selectedModelContextWindow = computed(() =>
-  Number(selectedModel.value?.contextWindow || DEFAULT_CONTEXT_WINDOW),
-)
-const contextRingState = computed(() =>
-  contextUsageRing(latestContextEstimate.value, selectedModelContextWindow.value),
-)
-const contextRingTooltip = computed(() => {
-  const contextLine = contextRingState.value.visible
-    ? `上下文已用 ${contextRingState.value.percent}% · ~${formatTokenCount(latestContextEstimate.value)} / ${formatTokenCount(selectedModelContextWindow.value)}`
-    : ''
-  return [contextLine, conversationUsageDetail.value].filter(Boolean).join('\n')
-})
 
 const currentSuggestions = computed(() => {
   const latestAssistant = [...messages.value].reverse().find((item) => item.role === 'assistant')
@@ -733,6 +699,26 @@ function requestCommandCatalog(options = {}) {
   void loadCommandCatalog(options)
 }
 
+/**
+ * 判断当前模型选择是否来自用户显式选择。
+ *
+ * Returns:
+ *   用户、URL 或已持久化手动选择返回 true；默认 route/fallback 不覆盖预算路由。
+ */
+function isExplicitModelSelection() {
+  return ['user', 'url', 'chat'].includes(modelSelectionOrigin.value)
+}
+
+/**
+ * 构建可持久化的模型选择。
+ *
+ * Returns:
+ *   显式选择返回 provider/model；默认路由选择返回空对象。
+ */
+function persistableModelContext() {
+  return isExplicitModelSelection() ? (selectedModelContext() || {}) : {}
+}
+
 function removeAgentTool(toolId) {
   manualSelectedToolIds.value = manualSelectedToolIds.value.filter((item) => item !== toolId)
   excludedAutoToolIds.value = [...new Set([...excludedAutoToolIds.value, toolId])]
@@ -741,7 +727,8 @@ function removeAgentTool(toolId) {
 
 function chatOptionsPayload() {
   return {
-    model: selectedModelContext() || {},
+    model: persistableModelContext(),
+    model_selection_origin: modelSelectionOrigin.value || 'route',
     mode: chatMode.value,
     knowledge_base_ids: selectedKnowledgeBaseIds.value,
     knowledge_base_names: selectedKnowledgeBases.value.map((item) => item.name),
@@ -889,9 +876,14 @@ function startToolCallStream(message, call) {
     if (!toolCallStreams.has(call.call_id)) return
     try {
       const updated = await getAssistantToolCall(call.call_id)
-      replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+      replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
       if (['completed', 'failed', 'canceled'].includes(updated.phase)) {
         stopToolCallStream(call.call_id)
+        if (updated.continuation_run_id) {
+          await refreshActiveRun()
+        } else if (updated.continuation_state === 'pending' || updated.continuation_state === 'scheduled') {
+          window.setTimeout(refreshActiveRun, 4000)
+        }
         if (updated.phase === 'completed' && shouldContinueToolCall(updated) && !continuedToolCalls.has(call.call_id)) {
           continuedToolCalls.add(call.call_id)
           await continueToolCall(updated.call_id)
@@ -915,11 +907,25 @@ function hasToolCallResultData(call) {
 async function backfillCompletedToolCall(message, call) {
   if (!call?.call_id || hasToolCallResultData(call)) return
   try {
-    const updated = await getAssistantToolCall(call.call_id)
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+      const updated = await getAssistantToolCall(call.call_id)
+      replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
   } catch {
     // 保留会话中的持久化状态，等待下一次完整加载或用户操作。
   }
+}
+
+/**
+ * 把异步工具快照写回当前消息列表中的最新消息对象。
+ *
+ * Args:
+ *   message: 发起异步操作时捕获的消息，可能已被 SSE 快照替换。
+ *   updated: 服务端返回的最新工具调用。
+ *
+ * Returns:
+ *   实际被更新的消息对象。
+ */
+function replaceLiveToolCall(message, updated) {
+  return replaceToolCallInMessages(messages.value, message, updated)
 }
 
 async function loadChat(chatKey) {
@@ -942,6 +948,7 @@ async function loadChat(chatKey) {
         startToolCallStream(message, call)
       }
     }
+    modelSelectionOrigin.value = data.model_selection_origin || 'chat'
     selectDefaultModelForMode(data.model || {})
     scrollToBottom()
     await Promise.all([
@@ -1744,6 +1751,7 @@ function buildAssistantContext(extra = {}) {
     knowledge_base_id: selectedKnowledgeBases.value[0]?.system_id || '',
     knowledge_base_name: selectedKnowledgeBases.value[0]?.name || '',
     model: selectedModelContext(),
+    model_selection_origin: modelSelectionOrigin.value || 'route',
     chat_id: chatId.value,
     message_id: userMessageId.value,
     selected_tool_ids: selectedToolIds.value,
@@ -1934,7 +1942,7 @@ async function updateToolCallArguments(message, call) {
   }
   try {
     const updated = await updateAssistantToolCallInput(call.call_id, { arguments: result.arguments })
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+    replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     ElMessage.success('参数已更新')
   } catch (error) {
     ElMessage.error(`参数更新失败：${getApiErrorMessage(error)}`)
@@ -1948,7 +1956,7 @@ async function uploadToolCallAsset(message, call, assetKey, event) {
   formData.append(assetKey, file)
   try {
     const updated = await uploadAssistantToolCallInput(call.call_id, formData)
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+    replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     ElMessage.success('附件已上传')
   } catch (error) {
     ElMessage.error(`附件上传失败：${getApiErrorMessage(error)}`)
@@ -1966,7 +1974,7 @@ async function confirmToolCall(message, call) {
   confirmingCallId.value = call.call_id
   try {
     const updated = await confirmAssistantToolCall(call.call_id, payload.payload)
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+    replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     if (['queued', 'running'].includes(updated.phase)) {
       startToolCallStream(message, updated)
       ElMessage.info(updated.phase === 'queued' ? '算法已提交，正在排队' : '算法运行中')
@@ -1978,7 +1986,7 @@ async function confirmToolCall(message, call) {
     const missingFields = Array.isArray(detail?.missing_fields) ? detail.missing_fields : []
     const missingAssets = Array.isArray(detail?.missing_assets) ? detail.missing_assets : []
     if (detail?.code === 'TOOL_INPUT_REQUIRED' || missingFields.length || missingAssets.length) {
-      replaceToolCall(message, {
+      replaceLiveToolCall(message, {
         ...call,
         phase: 'awaiting_input',
         missing_fields: missingFields,
@@ -1997,7 +2005,7 @@ async function confirmToolCall(message, call) {
 async function cancelToolCall(message, call) {
   try {
     const updated = await cancelAssistantToolCall(call.call_id)
-    replaceToolCall(message, updated)
+    replaceLiveToolCall(message, updated)
     ElMessage.info('算法调用已取消')
   } catch (error) {
     ElMessage.error(`取消失败：${getApiErrorMessage(error)}`)
@@ -2013,7 +2021,7 @@ async function retryToolCall(message, call) {
       arguments: call.arguments || {},
       input_asset_refs: call.input_asset_refs || {},
     })
-    replaceToolCall(message, created)
+    replaceLiveToolCall(message, created)
     ElMessage.success('已重新发起算法调用')
   } catch (error) {
     ElMessage.error(`重新发起失败：${getApiErrorMessage(error)}`)
@@ -3276,31 +3284,6 @@ watch(
             >
               取消回答
             </el-button>
-            <el-tooltip
-              placement="top"
-              :disabled="!contextRingState.visible"
-              :content="contextRingTooltip"
-            >
-              <button
-                v-if="contextRingState.visible"
-                type="button"
-                class="context-ring-trigger"
-                :aria-label="`上下文已使用 ${contextRingState.percent}%`"
-              >
-                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                  <circle class="context-ring-track" cx="8" cy="8" r="6" />
-                  <circle
-                    class="context-ring-fill"
-                    :class="`context-ring-fill--${contextRingState.tone}`"
-                    cx="8"
-                    cy="8"
-                    r="6"
-                    :stroke-dasharray="contextRingState.dashArray"
-                    transform="rotate(-90 8 8)"
-                  />
-                </svg>
-              </button>
-            </el-tooltip>
             <el-button
               type="primary"
               circle
@@ -4070,45 +4053,6 @@ h1 {
   grid-template-columns: 24px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
-}
-
-.context-ring-trigger {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--app-ink-muted);
-  cursor: default;
-}
-
-.context-ring-track {
-  fill: none;
-  stroke: var(--app-border-soft);
-  stroke-width: 2;
-}
-
-.context-ring-fill {
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-  transition: stroke 0.15s ease, stroke-dasharray 0.15s ease;
-}
-
-.context-ring-fill--safe {
-  stroke: var(--app-primary-active);
-}
-
-.context-ring-fill--warning {
-  stroke: #d97706;
-}
-
-.context-ring-fill--danger {
-  stroke: #dc2626;
 }
 
 .composer-mark {

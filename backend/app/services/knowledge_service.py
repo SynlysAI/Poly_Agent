@@ -220,7 +220,10 @@ class KnowledgeService:
         except httpx.HTTPStatusError as exc:
             raise HTTPException(status_code=exc.response.status_code, detail="WeKnora Wiki 图谱查询失败") from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"WeKnora Wiki 图谱查询失败：{type(exc).__name__}") from exc
+            raise HTTPException(
+                status_code=400,
+                detail="WeKnora Wiki 图谱暂不可用，请输入实体或关键词后重试",
+            ) from exc
         return self._graph_from_wiki_graph(base_url, system_id, raw, query="", limit=500)
 
     def get_subgraph(self, system_id: str, *, query: str | None = None, limit: int = 30) -> KnowledgeGraphData:

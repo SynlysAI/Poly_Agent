@@ -2,11 +2,61 @@
 
 from __future__ import annotations
 
+from app.schemas.assistant_budget import (
+    AssistantPreset,
+    BudgetPolicy,
+    ClassificationPolicy,
+    ExecutionPolicy,
+)
+
+
 RESEARCH_QA_PRESET_ID = "research_qa"
 RESEARCH_DEEP_PRESET_ID = "research_deep"
 ASSISTANT_PRESET_IDS = frozenset(
     {RESEARCH_QA_PRESET_ID, RESEARCH_DEEP_PRESET_ID},
 )
+CLASSIFICATION_POLICY = ClassificationPolicy(
+    simple_keywords=("入口", "在哪里", "怎么打开", "是什么", "列表", "状态"),
+    complex_keywords=("比较", "对比", "综合", "分析", "推导", "方案", "评估", "多来源", "冲突"),
+    high_risk_keywords=("执行算法", "运行算法", "提交", "删除", "覆盖", "正式报告", "发布"),
+    explainability_keywords=("解释", "依据", "来源", "可解释", "为什么"),
+)
+BUDGET_POLICY = BudgetPolicy(
+    default_mode="shadow",
+    model_purposes={"simple": "qa", "complex": "deep", "high_risk": "deep"},
+    retrieval_tiers={
+        "simple": "vector",
+        "complex": "hybrid_reranker",
+        "high_risk": "hybrid_reranker",
+    },
+    execution_tiers={
+        "simple": "one_shot",
+        "complex": "planning",
+        "high_risk": "planning_verification_human",
+    },
+    allow_deep_simple_downgrade=True,
+)
+EXECUTION_POLICY = ExecutionPolicy()
+ASSISTANT_PRESETS: dict[str, AssistantPreset] = {
+    RESEARCH_QA_PRESET_ID: AssistantPreset(
+        preset_id=RESEARCH_QA_PRESET_ID,
+        mode="qa",
+        route_purpose="qa",
+        display_name="科研问答",
+        classification_policy=CLASSIFICATION_POLICY,
+        budget_policy=BUDGET_POLICY,
+        execution_policy=EXECUTION_POLICY,
+    ),
+    RESEARCH_DEEP_PRESET_ID: AssistantPreset(
+        preset_id=RESEARCH_DEEP_PRESET_ID,
+        mode="deep",
+        route_purpose="deep",
+        display_name="深度科研",
+        classification_policy=CLASSIFICATION_POLICY,
+        budget_policy=BUDGET_POLICY,
+        execution_policy=EXECUTION_POLICY,
+    ),
+}
 
 
 def normalize_assistant_mode(mode: str | None) -> str:
@@ -26,7 +76,12 @@ def assistant_preset_from_mode(mode: str | None) -> str:
     Returns:
         权威科研 Preset ID；无效值和旧版兜底值回落到 `research_qa`。
     """
-    return RESEARCH_DEEP_PRESET_ID if normalize_assistant_mode(mode) == "deep" else RESEARCH_QA_PRESET_ID
+    normalized = normalize_assistant_mode(mode)
+    return (
+        RESEARCH_DEEP_PRESET_ID
+        if normalized == "deep"
+        else RESEARCH_QA_PRESET_ID
+    )
 
 
 def assistant_mode_from_preset(preset_id: str | None) -> str:
@@ -69,3 +124,18 @@ def assistant_route_purpose(preset_id: str | None) -> str:
         `research_deep` 返回 `deep`，其余返回 `qa`。
     """
     return "deep" if assistant_mode_from_preset(preset_id) == "deep" else "qa"
+
+
+def get_assistant_preset(preset_id: str | None) -> AssistantPreset:
+    """返回权威科研 Preset 契约。
+
+    Args:
+        preset_id: 科研 Preset ID。
+
+    Returns:
+        有效 Preset 契约；无效值回退到 `research_qa`。
+    """
+    return ASSISTANT_PRESETS.get(
+        str(preset_id or "").strip().lower(),
+        ASSISTANT_PRESETS[RESEARCH_QA_PRESET_ID],
+    )

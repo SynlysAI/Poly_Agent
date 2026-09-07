@@ -1,0 +1,122 @@
+{
+  "run": {
+    "run_id": "asrun_306155136ecb4cb0",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 29043,
+    "first_token_ms": 13271,
+    "queue_wait_ms": 1009,
+    "prompt_tokens": 3765,
+    "completion_tokens": 191,
+    "total_tokens": 3956,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "4f95f2865d8860de",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3765,
+        "completion_tokens": 191,
+        "total_tokens": 3956
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "web",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    }
+  ],
+  "message": {
+    "content": "根据项目事实，垂类预测服务（`vertical_predictor_adapter`）的 `material_family` 参数**没有在项目配置中列出具体支持的取值**。\n\n**依据：**\n- 算法注册表中 `vertical_predictor_adapter` 的描述为“垂类性质预测服务调用契约；未配置模型服务时返回可操作错误”，未包含 `material_family` 的取值枚举。\n- 项目事实中也没有其他字段定义该参数的取值范围。\n\n**建议：**\n1. 查看该服务的 API 契约文档或模型服务的配置说明，确认 `material_family` 的合法取值。\n2. 如果模型服务已配置，可尝试调用接口并观察返回的错误信息，通常会提示支持的取值。\n3. 若需要，可联系模型服务提供方获取参数定义。\n\n如果你能提供该服务的接口文档或模型配置信息，我可以帮你进一步确认。",
+    "references": [],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "no_results"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0008",
+  "trace_id": "asrun_306155136ecb4cb0",
+  "captured_at": "2026-09-01T04:27:30.414913"
+}

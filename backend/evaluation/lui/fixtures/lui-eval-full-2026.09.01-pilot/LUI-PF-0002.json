@@ -1,0 +1,134 @@
+{
+  "run": {
+    "run_id": "asrun_4a2db53ce80447b9",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 31014,
+    "first_token_ms": 10692,
+    "queue_wait_ms": 507,
+    "prompt_tokens": 3763,
+    "completion_tokens": 318,
+    "total_tokens": 4081,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "2523528553117a1d",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3763,
+        "completion_tokens": 318,
+        "total_tokens": 4081
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [],
+  "message": {
+    "content": "当 AutoResearch 时间线出现 `blocked_approval` 状态时，需要人工审批后才能继续后续流程。具体处理方式如下：\n\n## 处理步骤\n\n1. **进入审批入口**：点击时间线中的审批按钮，或直接访问任务中心页面：\n   - 路径：`/tasks/center?module_id=research-engine&status=blocked_approval`\n\n2. **填写审批原因**：在审批弹窗中填写审批意见/原因。\n\n3. **做出决策**：选择 **批准** 或 **拒绝**。\n\n## 需要审批的阶段\n\n以下 3 个阶段会触发 `blocked_approval` 门控：\n\n- **PROBLEM_SPEC**（问题定义）\n- **RECOMMENDATION_ASK**（推荐请求）\n- **EXPERIMENT_EXECUTION**（实验执行）\n\n## 完整阶段流程\n\nAutoResearch 的 ResearchRun 按以下顺序执行，其中上述 3 个阶段会暂停等待审批：\n\n```\nPROBLEM_SPEC → KNOWLEDGE_RETRIEVAL → STRUCTURE_FEATURE → COMPUTE_PREDICT → RECOMMENDATION_ASK → HUMAN_REVIEW → EXPERIMENT_EXECUTION → RESULT_TELL → MODEL_UPDATE → ARCHIVE_LEARNING\n```\n\n## 建议\n\n- 审批前先查看该阶段产生的中间结果，确认符合预期后再批准。\n- 若结果不符合预期，可选择拒绝并填写原因，系统会据此调整后续流程。",
+    "references": [
+      {
+        "label": "ResearchEngine 算法清单",
+        "target": "/research-engine",
+        "type": "route",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      },
+      {
+        "label": "AutoResearch 运行说明",
+        "target": "doc/autoresearch-user-guide.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0002",
+  "trace_id": "asrun_4a2db53ce80447b9",
+  "captured_at": "2026-09-01T04:27:30.308039"
+}

@@ -1,0 +1,344 @@
+# 环境口径已切换到真实 WeKnora 与 active 垂类模型。
+- id: LUI-TA-0001
+  category: tool_argument
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: '预测 SMILES C=C(F)F 的 Tg。工具参数 JSON 只能为 {"smiles": "C=C(F)F"}。'
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test
+      arguments: &id001
+        smiles: C=C(F)F
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ta-0001
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ta-0001
+      tool_id: algorithm:polymer_tg_knn_upload_test
+      arguments: *id001
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 工具参数与 Golden 完全一致，执行完成。
+    escalation:
+      confirmations: 1
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0002
+  category: tool_argument
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 在温度 25°C 下预测 SMILES C=C(F)F。
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments: &id002
+        smiles: C=C(F)F
+        temperature_c: 25
+      argument_tolerance:
+        temperature_c:
+          kind: absolute
+          value: 0.5
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ta-0002
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ta-0002
+      tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments: *id002
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 工具参数与 Golden 完全一致，执行完成。
+    escalation:
+      confirmations: 1
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0003
+  category: tool_argument
+  difficulty: easy
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: '预测 SMILES C=C(F)Cl 的 Tg。工具参数 JSON 只能为 {"smiles": "C=C(F)Cl"}。'
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_ui
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test_ui
+      arguments: &id003
+        smiles: C=C(F)Cl
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ta-0003
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ta-0003
+      tool_id: algorithm:polymer_tg_knn_upload_test_ui
+      arguments: *id003
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 工具参数与 Golden 完全一致，执行完成。
+    escalation:
+      confirmations: 1
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0004
+  category: tool_argument
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 提交配方 EVAL-FEC-DME-001：task_type=electrolyte，LiTFSI 1 mol/L，FEC/DME=1/1。
+  context:
+    selected_tool_ids:
+    - algorithm:electrolyte_formulation_predictor
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:electrolyte_formulation_predictor
+      arguments: &id004
+        formulations: &id006
+        - formula_id: EVAL-FEC-DME-001
+          task_type: electrolyte
+          lithium_salt: LiTFSI
+          lithium_salt_mol_L: 1
+          electrolyte_component_1: FEC
+          electrolyte_component_1_mol_ratio: 1
+          electrolyte_component_2: DME
+          electrolyte_component_2_mol_ratio: 1
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ta-0004
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ta-0004
+      tool_id: algorithm:electrolyte_formulation_predictor
+      arguments: *id004
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 工具参数与 Golden 完全一致，执行完成。
+    escalation:
+      confirmations: 1
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0005
+  category: tool_argument
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 评估聚酰亚胺体系：二胺 ODA，二酐 PMDA，溶剂 NMP。
+  context:
+    selected_tool_ids:
+    - algorithm:pi_synthesis_mock
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:pi_synthesis_mock
+      arguments: &id005
+        diamine: ODA
+        dianhydride: PMDA
+        solvent: NMP
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture:
+    run:
+      run_id: fixture-run-ta-0005
+      status: completed
+      duration_ms: 6200
+      first_token_ms: 1100
+      total_tokens: 2600
+    tool_calls:
+    - call_id: fixture-call-ta-0005
+      tool_id: algorithm:pi_synthesis_mock
+      arguments: *id005
+      phase: completed
+      duration_ms: 1800
+      proposal_usage:
+        total_tokens: 720
+    message:
+      content: 工具参数与 Golden 完全一致，执行完成。
+    escalation:
+      confirmations: 1
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0006
+  category: tool_argument
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 聚酰亚胺评分补充：diamine_solubility=4，dianhydride_solubility=3，水分 low，惰性气氛 true。
+  context:
+    selected_tool_ids:
+    - algorithm:pi_synthesis_mock
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:pi_synthesis_mock
+      arguments:
+        diamine: ODA
+        dianhydride: PMDA
+        solvent: NMP
+        diamine_solubility: 4
+        dianhydride_solubility: 3
+        water_content_status: low
+        inert_atmosphere_status: true
+      argument_tolerance:
+        diamine_solubility:
+          kind: absolute
+          value: 0.1
+        dianhydride_solubility:
+          kind: absolute
+          value: 0.1
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0007
+  category: tool_argument
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: '预测 SMILES C=C(F)Cl 的 Tg。工具参数 JSON 只能为 {"smiles": "C=C(F)Cl"}。'
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test
+      arguments:
+        smiles: C=C(F)Cl
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0008
+  category: tool_argument
+  difficulty: medium
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 在 40°C 环境下预测 SMILES O-[Si](C)(C)。
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_manual
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test_manual
+      arguments:
+        smiles: O-[Si](C)(C)
+        temperature_c: 40
+      argument_tolerance:
+        temperature_c:
+          kind: absolute
+          value: 1
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0009
+  category: tool_argument
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: '预测 SMILES C=C(C)C 的 Tg。工具参数 JSON 只能为 {"smiles": "C=C(C)C"}。'
+  context:
+    selected_tool_ids:
+    - algorithm:polymer_tg_knn_upload_test_ui
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:polymer_tg_knn_upload_test_ui
+      arguments:
+        smiles: C=C(C)C
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。
+- id: LUI-TA-0010
+  category: tool_argument
+  difficulty: hard
+  mode: qa
+  requires_model_capability: tool_calling
+  messages:
+  - role: user
+    content: 传入完整电解液配方数组，配方号 EVAL-FEC-DME-001。
+  context:
+    selected_tool_ids:
+    - algorithm:electrolyte_formulation_predictor
+  expected:
+    task_success: true
+    tool_calls:
+    - tool_id: algorithm:electrolyte_formulation_predictor
+      arguments:
+        formulations: *id006
+    escalation:
+      level: confirmation
+      reason: active 垂类工具默认要求参数确认；评测驱动器自动确认后续答。
+  fixture: null
+  notes: 参数口径来自 active 版本 input_schema 与包内 sample_input。

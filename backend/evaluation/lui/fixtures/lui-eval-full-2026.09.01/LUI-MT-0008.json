@@ -1,0 +1,196 @@
+{
+  "run": {
+    "run_id": "asrun_aa2a7ba1b4c9475c",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 31454,
+    "first_token_ms": 15591,
+    "queue_wait_ms": 388,
+    "prompt_tokens": 5718,
+    "completion_tokens": 242,
+    "total_tokens": 5960,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "153945c97cd986b5",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "multi_source_synthesis",
+          "explainability_required": true,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "complex_keyword",
+            "explainability_required"
+          ],
+          "category": "complex",
+          "confidence": 0.67,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model",
+          "knowledge_base"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 5718,
+        "completion_tokens": 242,
+        "total_tokens": 5960
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [
+    {
+      "source": "knowledge",
+      "status": "no_results",
+      "duration_ms": null,
+      "results": []
+    },
+    {
+      "source": "web",
+      "status": "searched",
+      "duration_ms": null,
+      "results": [
+        {
+          "id": "http://www.xjishu.com/en/021/y110964.html",
+          "rank": 1,
+          "score": null,
+          "snippet": "2026年2月2日 - 11.Effect of heat treatment on properties of ASTM S30432 austenitic heat resistant steel热处理对ASTMS30432奥氏体耐热钢性能的影响 12.Properti...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.x-mol.com/paper/1798957715726856192?recommendPaper=1348382520278671360",
+          "rank": 2,
+          "score": null,
+          "snippet": "2024年6月3日 - thermal stability of mixed Sn–Pb PSCs. AlN is introduced to increase the thermal conductivity of the perovskite layer and the entire device...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.pipixue.com/ti/c051d39d377c470093b7b8eb6aef9f60.html",
+          "rank": 3,
+          "score": null,
+          "snippet": "2020年12月31日 - heat resistant 举一反三 【单选题】记账之后发现会计凭证无误,账簿记录中所记金额大于应记金额,适用于( ) A.划线更正法 B.补充登记法 C.红字更正法 D...",
+          "used_in_answer": true
+        },
+        {
+          "id": "https://www.iciba.com/word?w=heat-resistant",
+          "rank": 4,
+          "score": null,
+          "snippet": "To make this machine, we need some heat resistant steel plates. 我们需要一些耐高温钢板来生产这种机器. 期刊摘选 In this paper , research progress in the heat resistant modification ...",
+          "used_in_answer": false
+        },
+        {
+          "id": "https://www.redsant.com/Plastic-Injection-Machine-Band-Heater-Heat-Resistant-Cover-Made-in-China-pd47524964.html",
+          "rank": 5,
+          "score": null,
+          "snippet": "A. Lower surface temperature; Less heat release; More safe. B. Sectional installation, Easy disassembly and reusable. C. High temperature resistant metal buckle...",
+          "used_in_answer": false
+        }
+      ]
+    }
+  ],
+  "message": {
+    "content": "**结论**：PEEK 与 PI 的耐热等级对比，需基于知识库中 PEEK 的 Tg 数据（约 150°C）与 PI 的耐热性能进行判断。\n\n**依据**：\n- 知识库中 PEEK 的 Tg 约 150°C（来源：kb:pt-peek-tg）。\n- 网页证据显示，PI（聚酰亚胺）树脂常用于提升材料的耐热性，例如“The Effect of PI Resin on the Heat Resistance of Anaerobic Adhesive”表明 PI 可增强耐热性能 [1]。\n- 网页证据还提到，PI 基材料的热分解温度通常高于基于 TDI 的聚氨酯，说明 PI 具有较好的耐热性 [1]。\n\n**可执行建议**：\n- 若需精确对比两者的耐热等级（如连续使用温度、热分解温度），建议查阅知识库中 PI 的 Tg 或热分解温度数据，或参考材料标准（如 UL 温度等级）。\n- 若知识库中无 PI 的耐热数据，可结合网页证据或材料手册进行补充对比。",
+    "references": [
+      {
+        "label": "耐热性能,heat resistance英语短句,例句大全",
+        "target": "http://www.xjishu.com/en/021/y110964.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "http://www.xjishu.com/en/021/y110964.html",
+        "rank": 1,
+        "score": null
+      },
+      {
+        "label": "Thermal Shock-Resistant Aluminum Nitride Improves Thermal Stability of Mixed Sn–Pb Perovskite Solar Cells,ACS Sustainable Chemistry & Engineering - X-...",
+        "target": "https://www.x-mol.com/paper/1798957715726856192?recommendPaper=1348382520278671360",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.x-mol.com/paper/1798957715726856192?recommendPaper=1348382520278671360",
+        "rank": 2,
+        "score": null
+      },
+      {
+        "label": "heat resistantA.耐寒的B.耐酸的C.耐热的D.耐碱的..._皮皮学",
+        "target": "https://www.pipixue.com/ti/c051d39d377c470093b7b8eb6aef9f60.html",
+        "type": "web",
+        "source": "web",
+        "source_id": "https://www.pipixue.com/ti/c051d39d377c470093b7b8eb6aef9f60.html",
+        "rank": 3,
+        "score": null
+      }
+    ],
+    "answer_mode": "web_grounded",
+    "answer_scope": "web",
+    "retrieval_status": "searched"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-MT-0008",
+  "trace_id": "asrun_aa2a7ba1b4c9475c",
+  "captured_at": "2026-09-01T07:52:24.137319"
+}

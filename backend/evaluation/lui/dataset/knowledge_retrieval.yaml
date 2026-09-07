@@ -1,0 +1,381 @@
+# 知识库检索分桶：使用真实 WeKnora 粘结剂资料库，relevant_id 为实际 knowledge_id。
+- id: LUI-KR-0001
+  category: knowledge_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+  - role: user
+    content: 根据知识库说明，PVDF-HFP 在二次电池中有哪些用途？
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - 2447679b-bfee-4f30-811f-4d892a8cc6ad
+    answer:
+      type: rubric
+      must_include:
+      - PVDF-HFP
+      - 粘结剂
+      - 隔膜
+    hallucination:
+      require_citations: true
+  fixture:
+    run:
+      run_id: fixture-run-kr-0001
+      status: completed
+      duration_ms: 4200
+      first_token_ms: 900
+      total_tokens: 2100
+    retrievals:
+    - source: knowledge
+      status: searched
+      duration_ms: 350
+      results:
+      - id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+        score: 0.95
+        snippet: PVDF-HFP is widely used as a binder and a component of separators
+          in secondary batteries.
+        used_in_answer: true
+      - id: 8ef99540-5f80-46b7-a5e7-580e24f4431d
+        rank: 2
+        score: 0.71
+        snippet: PVDF-HFP/SiO2 nanocomposite electrolyte.
+        used_in_answer: false
+    message:
+      content: 知识库说明 PVDF-HFP 在二次电池中广泛用作粘结剂，并可作为隔膜组分，原因是其机械与电化学稳定性较好。
+      references:
+      - label: PVDF-HFP 用途
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0002
+  category: knowledge_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+  - role: user
+    content: 知识库提到 PAA 线性结构会带来什么限制？
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - 388c0708-1989-4f0c-bb59-5c0cf075f0da
+    answer:
+      type: rubric
+      must_include:
+      - PAA
+      - 线性结构
+      - 粘附力
+    hallucination:
+      require_citations: true
+  fixture:
+    run:
+      run_id: fixture-run-kr-0002
+      status: completed
+      duration_ms: 3900
+      first_token_ms: 860
+      total_tokens: 2000
+    retrievals:
+    - source: knowledge
+      status: searched
+      duration_ms: 300
+      results:
+      - id: 388c0708-1989-4f0c-bb59-5c0cf075f0da
+        rank: 1
+        score: 0.96
+        snippet: PAA 的线性结构限制了粘附力，长期循环中涂层易剥离。
+        used_in_answer: true
+    message:
+      content: 知识库指出 PAA 虽是水溶性环保粘结剂，但线性结构限制粘附力，长期循环中涂层容易剥离。
+      references:
+      - label: PAA 结构限制
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 388c0708-1989-4f0c-bb59-5c0cf075f0da
+        rank: 1
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0003
+  category: knowledge_retrieval
+  difficulty: hard
+  mode: deep
+  messages:
+  - role: user
+    content: 对比知识库中 PVDF-HFP 与纤维素纳米纤维作为电池粘结剂的定位差异，并给出依据文档。
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - 2447679b-bfee-4f30-811f-4d892a8cc6ad
+    answer:
+      type: rubric
+      must_include:
+      - PVDF-HFP
+      - 纤维素纳米纤维
+      - 粘结剂
+    hallucination:
+      require_citations: true
+  fixture:
+    run:
+      run_id: fixture-run-kr-0003
+      status: completed
+      duration_ms: 8200
+      first_token_ms: 1400
+      total_tokens: 4100
+    retrievals:
+    - source: knowledge
+      status: searched
+      duration_ms: 620
+      results:
+      - id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+        score: 0.93
+        snippet: PVDF-HFP widely used as a binder and separator component.
+        used_in_answer: true
+      - id: 1157c0b6-ba02-4dfc-8e49-86d64e31fd26
+        rank: 2
+        score: 0.9
+        snippet: CNF 作为水性油墨粘合剂替代 PVdF 与 NMP。
+        used_in_answer: true
+    message:
+      content: PVDF-HFP 是二次电池中常用的聚合物粘结剂和隔膜组分；纤维素纳米纤维则面向水性油墨与绿色制造，可替代传统含氟粘结剂和有机溶剂。
+      references:
+      - label: PVDF-HFP
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 2447679b-bfee-4f30-811f-4d892a8cc6ad
+        rank: 1
+      - label: CNF 水性油墨
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 1157c0b6-ba02-4dfc-8e49-86d64e31fd26
+        rank: 2
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0004
+  category: knowledge_retrieval
+  difficulty: easy
+  mode: qa
+  messages:
+  - role: user
+    content: 知识库中 PE 隔膜的熔点是多少？
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - 388c0708-1989-4f0c-bb59-5c0cf075f0da
+    answer:
+      type: rubric
+      must_include:
+      - PE
+      - '135'
+    hallucination:
+      require_citations: true
+  fixture:
+    run:
+      run_id: fixture-run-kr-0004
+      status: completed
+      duration_ms: 3500
+      first_token_ms: 780
+      total_tokens: 1800
+    retrievals:
+    - source: knowledge
+      status: searched
+      duration_ms: 280
+      results:
+      - id: 388c0708-1989-4f0c-bb59-5c0cf075f0da
+        rank: 1
+        score: 0.94
+        snippet: 传统 PE 隔膜熔点低（135°C），导致热稳定性差。
+        used_in_answer: true
+    message:
+      content: 知识库说明传统 PE 隔膜的熔点约为 135°C，因此热稳定性较差。
+      references:
+      - label: PE 熔点
+        target: /knowledge?system_id=e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+        type: knowledge
+        source_id: 388c0708-1989-4f0c-bb59-5c0cf075f0da
+        rank: 1
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0005
+  category: knowledge_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+  - role: user
+    content: 知识库提到纤维素纳米纤维粘结剂如何让电池制造更环保？
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - 1157c0b6-ba02-4dfc-8e49-86d64e31fd26
+    answer:
+      type: rubric
+      must_include:
+      - 水性油墨
+      - NMP
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0006
+  category: knowledge_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+  - role: user
+    content: 知识库列举了哪些水系负极粘结剂？
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - 1eeb602a-e6a8-4cec-88ec-8f0b10d75225
+    answer:
+      type: rubric
+      must_include:
+      - CMC
+      - SBR
+      - PAA
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0007
+  category: knowledge_retrieval
+  difficulty: hard
+  mode: deep
+  messages:
+  - role: user
+    content: 总结知识库中 CMC 用于硅负极时的分子作用与局限。
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - 7c6ae808-d64c-4aa9-81ea-e1a15e69a8fe
+    answer:
+      type: rubric
+      must_include:
+      - CMC
+      - 酯键
+      - 体积
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0008
+  category: knowledge_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+  - role: user
+    content: 知识库中硅负极体积变化对粘结剂提出什么挑战？
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - a56d1936-b062-4b9a-be4e-20bf4e016e90
+    answer:
+      type: rubric
+      must_include:
+      - 硅负极
+      - 体积变化
+      - 粘结剂
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0009
+  category: knowledge_retrieval
+  difficulty: medium
+  mode: qa
+  messages:
+  - role: user
+    content: 知识库说粘结剂通常占锂离子电池总重量的多少？
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - e16cb4d1-5546-48cd-a138-c9a6dcd0223b
+    answer:
+      type: rubric
+      must_include:
+      - '3'
+      - '5'
+      - 重量
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。
+- id: LUI-KR-0010
+  category: knowledge_retrieval
+  difficulty: hard
+  mode: deep
+  messages:
+  - role: user
+    content: 基于知识库综述说明 NMP 溶剂的环境风险与替代方向。
+  context:
+    use_knowledge_base: true
+    knowledge_base_ids:
+    - e698c2e9-3ca6-4380-a4c0-dd349a9e9cb3
+  expected:
+    task_success: true
+    retrieval:
+      source: knowledge
+      relevant_ids:
+      - a56d1936-b062-4b9a-be4e-20bf4e016e90
+    answer:
+      type: rubric
+      must_include:
+      - NMP
+      - 环境
+      - 水系
+    hallucination:
+      require_citations: true
+  fixture: null
+  notes: 真实 WeKnora 粘结剂资料库录制口径。

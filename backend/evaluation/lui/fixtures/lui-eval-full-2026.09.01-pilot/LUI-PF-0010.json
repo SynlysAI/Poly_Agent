@@ -1,0 +1,117 @@
+{
+  "run": {
+    "run_id": "asrun_8da77bfdbbf64418",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 32141,
+    "first_token_ms": 13087,
+    "queue_wait_ms": 687,
+    "prompt_tokens": 3821,
+    "completion_tokens": 327,
+    "total_tokens": 4148,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_deep",
+      "purpose": "deep",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "complex",
+      "budget": {
+        "preset_id": "research_deep",
+        "compatibility_mode": "deep",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "f95c44aa7d2e2a46",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": true,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "explainability_required"
+          ],
+          "category": "complex",
+          "confidence": 0.58,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "complex",
+        "effective_model_purpose": "deep",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 2,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3821,
+        "completion_tokens": 327,
+        "total_tokens": 4148
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [],
+  "message": {
+    "content": "根据项目配置，LUI 对话模型的配置来源与提供商标识如下：\n\n## 结论\n\nLUI 对话模型由 **Default chat model**（provider_id: `default_openai`）提供，当前路由到 **deepseek-v4-flash** 模型。\n\n## 依据\n\n- **提供商标识**：`default_openai`（OpenAI 兼容协议，`openai_compatible`）\n- **模型标识**：`deepseek-v4-flash`\n- **配置来源**：环境变量 `LLM_API_KEY`（已配置），Base URL 指向 `10.26.15.52:30081/.../v1`\n- **能力**：chat、fast、reasoning、structured_json、tool_calling，上下文窗口 200,000 tokens\n\n## 其他可用提供商\n\n项目中还配置了以下备用提供商：\n\n| 提供商 | 模型 | 状态 |\n|--------|------|------|\n| `glm_chat` | glm-52 | 已配置 API Key |\n| `qwen_reasoning_backup` | Qwen3.6-35B-A3B | 已配置 API Key |\n| `local_ollama` | 无模型 | 未配置（无 API Key） |\n\n## 可执行建议\n\n- 当前 deep 模式路由固定使用 `default_openai` / `deepseek-v4-flash`，无需额外操作。\n- 如需切换模型，可在 LLM 路由配置中调整 `deep` 路由的 provider/model 指向。",
+    "references": [],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "model",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-PF-0010",
+  "trace_id": "asrun_8da77bfdbbf64418",
+  "captured_at": "2026-09-01T04:27:30.446211"
+}

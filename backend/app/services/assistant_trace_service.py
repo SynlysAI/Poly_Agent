@@ -595,6 +595,45 @@ class AssistantTraceProjectionService:
                     details=self._event_details(event, command_id=data.get("command_id")),
                 )
 
+            if event_type.startswith("budget."):
+                classification = dict(data.get("classification") or {})
+                safe_classification = {
+                    "category": classification.get("category"),
+                    "confidence": classification.get("confidence"),
+                    "fallback_reason": classification.get("fallback_reason"),
+                }
+                self._upsert(
+                    accumulator,
+                    step_id=f"budget:{event.get('run_id') or event_id}",
+                    step_type="control",
+                    title="动态计算预算",
+                    summary=(
+                        f"{data.get('effective_model_tier') or 'unknown'} 模型 · "
+                        f"{data.get('effective_retrieval_tier') or 'unknown'} 检索 · "
+                        f"{data.get('effective_execution_tier') or 'unknown'} 执行"
+                    ),
+                    status="success",
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        result_summary={
+                            "release_mode": data.get("release_mode"),
+                            "rollout_eligible": data.get("rollout_eligible"),
+                            "classification": safe_classification,
+                            "recommended": data.get("recommended") or {},
+                            "effective_model_tier": data.get("effective_model_tier"),
+                            "effective_retrieval_tier": data.get("effective_retrieval_tier"),
+                            "effective_execution_tier": data.get("effective_execution_tier"),
+                            "user_overrides": data.get("user_overrides") or [],
+                            "safety_guards": data.get("safety_guards") or [],
+                            "fallback_reason": data.get("fallback_reason"),
+                            "cost": data.get("cost") or {},
+                            "route": data.get("route") or {},
+                        },
+                    ),
+                )
+
             if event_type == "permission.decision":
                 decision = str(data.get("decision") or "denied")
                 reason = str(data.get("reason") or "")
@@ -785,6 +824,71 @@ class AssistantTraceProjectionService:
                     ref=ref,
                     parent_step_id=f"retrieval:{source}:{digest}",
                     details={"result_summary": {"references": len(data.get("references") or [])}},
+                )
+            elif event_type == "retrieval.result":
+                source = str(data.get("source") or "knowledge")
+                digest = str(data.get("query_digest") or event_id)
+                entries = data.get("results") or []
+                used_count = sum(1 for item in entries if bool(item.get("used_in_answer")))
+                self._upsert(
+                    accumulator,
+                    step_id=f"retrieval-result:{source}:{digest}",
+                    step_type="tool_result",
+                    title="检索结果",
+                    summary=f"返回 {len(entries)} 条稳定结果条目，{used_count} 条用于回答",
+                    status="success",
+                    timestamp=timestamp,
+                    ref=ref,
+                    parent_step_id=f"retrieval:{source}:{digest}",
+                    details={
+                        "result_summary": {
+                            "entry_count": len(entries),
+                            "used_in_answer_count": used_count,
+                            "entries": entries,
+                        }
+                    },
+                )
+
+            if event_type.startswith("agent_exec."):
+                agent_run_id = str(data.get("run_id") or event_id)
+                provider_id = str(data.get("provider_id") or "")
+                step_status = "running"
+                summary = "外部 Agent 文件任务已受理"
+                if event_type == "agent_exec.provider_ready":
+                    summary = "外部 Agent 连接器已就绪"
+                elif event_type == "agent_exec.started":
+                    summary = "外部 Agent 正在受限 workdir 内执行"
+                elif event_type == "agent_exec.completed":
+                    step_status = "success"
+                    summary = "外部 Agent 任务已完成"
+                elif event_type in {
+                    "agent_exec.failed",
+                    "agent_exec.cancelled",
+                    "agent_exec.policy.rejected",
+                    "agent_exec.provider_unavailable",
+                }:
+                    step_status = "failed"
+                    summary = (
+                        self._safe_text(data.get("message"), 180)
+                        or self._safe_text(data.get("error_message"), 180)
+                        or "外部 Agent 任务未执行成功"
+                    )
+                self._upsert(
+                    accumulator,
+                    step_id=f"agent_exec:{agent_run_id}",
+                    step_type="agent_exec",
+                    title="外部 Agent 文件任务",
+                    summary=summary,
+                    status=step_status,
+                    timestamp=timestamp,
+                    ref=ref,
+                    details=self._event_details(
+                        event,
+                        command_id=data.get("command_id"),
+                        result_summary={"provider_id": provider_id},
+                    ),
+                    started_at=None if step_status in {"success", "failed"} else timestamp,
+                    ended_at=timestamp if step_status in {"success", "failed"} else None,
                 )
 
             if event_type == "llm.request.started":

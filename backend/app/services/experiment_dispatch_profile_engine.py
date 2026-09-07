@@ -10,9 +10,11 @@ from app.schemas.experiment_dispatch_profile import (
     DispatchEvaluationResult,
     DispatchMappingTrace,
     DispatchTargetDefinition,
+    DispatchSecurityEvent,
     DispatchTransform,
     DispatchValueSource,
     ExperimentDispatchProfile,
+    FieldSecurityPolicy,
 )
 
 
@@ -42,6 +44,7 @@ class ExperimentDispatchProfileEngine:
         trace: list[DispatchMappingTrace] = []
         warnings: list[str] = []
         errors: list[str] = []
+        security_events: list[DispatchSecurityEvent] = []
 
         self._validate_source_contract(profile, context, errors)
         target_fields = {item.path: item for item in target.fields}
@@ -103,13 +106,14 @@ class ExperimentDispatchProfileEngine:
             if branch.stop_on_match:
                 break
 
-        self._validate_target(target, payload, errors)
+        self._validate_target(target, payload, errors, warnings, security_events)
         return DispatchEvaluationResult(
             payload=payload,
             trace=trace,
             matched_rules=matched_rules,
             warnings=[item for item in warnings if item],
             errors=[item for item in errors if item],
+            security_events=security_events,
             is_valid=not errors,
         )
 
@@ -208,7 +212,15 @@ class ExperimentDispatchProfileEngine:
         message = f"无法解析必填目标字段 {path}"
         (warnings if policy == "warn" else errors).append(message)
 
-    def _validate_target(self, target: DispatchTargetDefinition, payload: dict[str, Any], errors: list[str]) -> None:
+    def _validate_target(
+        self,
+        target: DispatchTargetDefinition,
+        payload: dict[str, Any],
+        errors: list[str],
+        warnings: list[str],
+        security_events: list[DispatchSecurityEvent],
+    ) -> None:
+        """执行 target 类型与配置级安全策略校验。"""
         for field in target.fields:
             value = self.resolve_pointer(payload, field.path)
             if value is _MISSING and field.default_value is not None:
@@ -220,6 +232,122 @@ class ExperimentDispatchProfileEngine:
                 continue
             if not self._matches_type(value, field.value_type):
                 errors.append(f"目标字段 {field.path} 类型应为 {field.value_type}")
+        self._validate_target_security(target, payload, errors, warnings, security_events)
+
+    @staticmethod
+    def _security_policies(target: DispatchTargetDefinition) -> dict[str, FieldSecurityPolicy]:
+        """合并 target 级与字段内联安全策略，内联策略优先生效。"""
+        policies: dict[str, FieldSecurityPolicy] = {}
+        if target.security_policy:
+            policies.update({item.path: item for item in target.security_policy.field_policies})
+        policies.update({item.path: item.security for item in target.fields if item.security})
+        return policies
+
+    @classmethod
+    def _validate_target_security(
+        cls,
+        target: DispatchTargetDefinition,
+        payload: dict[str, Any],
+        errors: list[str],
+        warnings: list[str],
+        security_events: list[DispatchSecurityEvent],
+    ) -> None:
+        """按配置校验 payload 的写入权限、数值边界与枚举白名单。"""
+        policies = cls._security_policies(target)
+        policy_version = target.security_policy.version if target.security_policy else target.version
+        for path in cls._payload_paths(payload):
+            policy = cls._matching_policy(policies, path)
+            if policy is not None:
+                allowed = policy.write_allowed
+            elif target.security_policy is not None:
+                allowed = target.security_policy.default_write_allowed
+            else:
+                allowed = True
+            if not allowed:
+                message = f"目标字段 {path} 被安全策略禁止写入"
+                errors.append(message)
+                security_events.append(DispatchSecurityEvent(
+                    event_type="write_denied",
+                    path=path,
+                    severity="error",
+                    message=message,
+                    policy_version=policy_version,
+                    audit_level=policy.audit_level if policy else "default",
+                ))
+                continue
+            if policy is None or path != policy.path:
+                continue
+            value = cls.resolve_pointer(payload, path)
+            if policy.boundary is not None and not cls._matches_boundary(value, policy.boundary):
+                message = policy.boundary.message or f"目标字段 {path} 超出配置边界"
+                cls._record_security_violation(
+                    policy, path, message, "boundary_exceeded", errors, warnings, security_events, policy_version,
+                )
+            if policy.allowed_values is not None and value not in policy.allowed_values:
+                message = f"目标字段 {path} 不在枚举白名单内"
+                cls._record_security_violation(
+                    policy, path, message, "value_not_allowed", errors, warnings, security_events, policy_version,
+                )
+
+    @staticmethod
+    def _record_security_violation(
+        policy: FieldSecurityPolicy,
+        path: str,
+        message: str,
+        event_type: str,
+        errors: list[str],
+        warnings: list[str],
+        security_events: list[DispatchSecurityEvent],
+        policy_version: str,
+    ) -> None:
+        """按策略严重级别记录安全违规。"""
+        severity = "warning" if policy.violation_policy == "warn" else "error"
+        (warnings if severity == "warning" else errors).append(message)
+        security_events.append(DispatchSecurityEvent(
+            event_type=event_type,
+            path=path,
+            severity=severity,
+                    message=message,
+                    policy_version=policy_version,
+                    audit_level=policy.audit_level,
+                ))
+
+    @staticmethod
+    def _payload_paths(value: Any, pointer: str = "") -> list[str]:
+        """递归收集 payload 中实际写入的 JSON Pointer 路径。"""
+        paths = [pointer] if pointer else []
+        if isinstance(value, dict):
+            for key, item in value.items():
+                escaped = str(key).replace("~", "~0").replace("/", "~1")
+                paths.extend(ExperimentDispatchProfileEngine._payload_paths(item, f"{pointer}/{escaped}"))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                paths.extend(ExperimentDispatchProfileEngine._payload_paths(item, f"{pointer}/{index}"))
+        return paths
+
+    @staticmethod
+    def _matching_policy(policies: dict[str, FieldSecurityPolicy], path: str) -> FieldSecurityPolicy | None:
+        """查找能覆盖当前路径的最具体安全策略。"""
+        candidates = [
+            policy_path for policy_path in policies
+            if path == policy_path or path.startswith(f"{policy_path}/")
+        ]
+        if not candidates:
+            return None
+        return policies[max(candidates, key=len)]
+
+    @staticmethod
+    def _matches_boundary(value: Any, boundary) -> bool:
+        """校验数值是否满足闭开边界配置。"""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return True
+        if boundary.min is not None:
+            if value < boundary.min or (value == boundary.min and not boundary.min_inclusive):
+                return False
+        if boundary.max is not None:
+            if value > boundary.max or (value == boundary.max and not boundary.max_inclusive):
+                return False
+        return True
 
     @staticmethod
     def _cast(value: Any, value_type: str):

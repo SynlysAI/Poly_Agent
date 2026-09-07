@@ -1,0 +1,125 @@
+{
+  "run": {
+    "run_id": "asrun_4810d357eed34e13",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 39183,
+    "first_token_ms": 7982,
+    "queue_wait_ms": 408,
+    "prompt_tokens": 3767,
+    "completion_tokens": 347,
+    "total_tokens": 4114,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "5d2afd2a0afc3930",
+          "query_complexity": "complex",
+          "risk_level": "low",
+          "evidence_need": "grounded_answer",
+          "explainability_required": false,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 0,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [],
+          "category": "complex",
+          "confidence": 0.45,
+          "fallback_reason": "classification_uncertain"
+        },
+        "recommended_model_tier": "complex",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "one_shot",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 1,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "prompt_tokens": 3767,
+        "completion_tokens": 347,
+        "total_tokens": 4114
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [],
+  "message": {
+    "content": "根据项目事实，**在 `/dialogue` 中无法直接执行 xTB/CREST 单点能计算任务**——`/dialogue` 是对话界面，不提供计算执行入口。\n\n## 结论\nxTB/CREST 计算必须通过**计算任务提交**（`computation_submit_adapter`）发起，而不是在对话中直接运行。\n\n## 依据\n- 计算任务统一由 `computation_submit_adapter` 委托给 ComputationService 创建 `ComputationRun`，支持三种 workflow：`LOCAL_STRUCTURE`、`LOCAL_XTB`、`ORCA_COMPUTE_ENGINE_LASER`。\n- 其中 `LOCAL_XTB` 对应 xTB 半经验计算（基于 CREST 构象搜索 + xTB 能量计算，支持 GFN2/GFN1/GFN0-xTB）。\n- 运行时依赖系统 `xTB` + `CREST` 可执行文件，当前环境中两者均可用（CREST 3.0.2、xTB 已安装）。\n\n## 可执行建议\n1. 在对话中描述你的分子（SMILES）和目标（如单点能、构象搜索），由我帮你**构造并提交计算任务**。\n2. 计算实际在后台 worker（`worker-local-real`）上执行，结果会回传到任务中心。\n3. 如需查看进度或结果，请前往**任务中心**查看对应 `ComputationRun` 的状态。\n\n如果你有具体的 SMILES 或计算参数，我可以直接帮你发起 `LOCAL_XTB` 计算任务。",
+    "references": [
+      {
+        "label": "计算 Workflow 使用说明",
+        "target": "doc/computation-workflows-user-guide.md",
+        "type": "doc",
+        "source": null,
+        "source_id": null,
+        "rank": null,
+        "score": null
+      }
+    ],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-RB-0009",
+  "trace_id": "asrun_4810d357eed34e13",
+  "captured_at": "2026-09-01T07:52:24.925337"
+}

@@ -46,6 +46,9 @@ def list_users() -> ApiResponse[AdminUserListData]:
             organization=user.organization,
             role=user.role,
             status=user.status,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+            last_login_at=user.last_login_at,
         )
         for user in users
     ]
@@ -92,10 +95,8 @@ def create_invite_code(
     Returns:
         新建的邀请码信息。
     """
-    if not current_user:
-        raise HTTPException(status_code=401, detail="未登录或登录已失效")
-
     now = datetime.now()
+    actor_user_id = str(current_user.get("user_id") or "system") if current_user else "system"
     invite_record = InviteCodeRecord(
         invite_id=f"invite_{uuid4().hex[:12]}",
         invite_code=secrets.token_urlsafe(12),
@@ -104,7 +105,7 @@ def create_invite_code(
         expires_at=now + timedelta(hours=payload.expires_hours),
         max_uses=payload.max_uses,
         used_count=0,
-        created_by=current_user["user_id"],
+            created_by=actor_user_id,
         created_at=now,
         updated_at=now,
     )

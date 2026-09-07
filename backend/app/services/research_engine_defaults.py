@@ -15,6 +15,7 @@ from app.schemas.research_engine import (
     AlgorithmType,
     MaterialScope,
     ResearchStageKey,
+    StagePlanPolicy,
     StageGate,
     TriggerSource,
 )
@@ -264,6 +265,13 @@ DEFAULT_STAGE_CONTRACTS: dict[ResearchStageKey, StageGate] = {
         },
     ),
 }
+
+for _stage_key, _stage_contract in DEFAULT_STAGE_CONTRACTS.items():
+    _stage_contract.plan_policy = StagePlanPolicy(
+        require_plan=True,
+        generation_mode="rule",
+        block_on_drift=True,
+    )
 
 
 # =============================================================================

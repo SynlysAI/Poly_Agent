@@ -1,7 +1,8 @@
 # 大装置 Agent 编排与受限执行设计（ALS 范式）
 
 日期：2026-08-20
-状态：架构设计建议 / 待评审
+评审日期：2026-08-27
+状态：已评审 / 已收尾（2026-09-07；few-shot 灰度增强已拆出独立后续计划）
 适用范围：ResearchEngine 编排器、产品内助手工具注入、计算适配器、实验下发与统一安全层
 
 前置与参考：
@@ -11,6 +12,110 @@
 - ResearchEngine 技术方案：`doc/research-engine-and-auto-research-design.md`
 - 实验下发设计：`doc/experiment-dispatch.md`
 - 借鉴分析原文：ALS「大装置 Agent」对 Poly Agent 设计的借鉴分析（本设计依据其优先级建议展开高、中优先级五项）
+
+## 0. 评审记录与 P0 实施状态
+
+### 0.1 评审结论
+
+- **总体通过**：Plan-first 与动态能力选择确实是当前 ResearchEngine 规模化的优先补齐项，且可以完全叠加在既有 Stage/Gate、算法目录和审计链路上，不引入任意脚本执行通道。
+- **时序修正**：`RECOMMENDATION_ASK` 的既有语义是“先产出候选，再让人审批候选”。因此 P0 落地为「调用工具前生成计划 → 按计划执行受管工具 → 携带计划与核验结果进入 blocked_approval」，而不是在产出候选前直接阻断。
+- **选择策略修正**：动态能力筛选必须保留「用户显式选择优先」；P0 先对前端自动选择候选做确定性规则评估、schema token 预算裁剪和事件留痕，few-shot LLM 二元分类作为后续灰度增强，避免首次落地引入额外模型失败面。
+- **兼容策略**：`ResearchStageRun.plan`、`StageGate.plan_policy` 与 `StageGateDecision.plan_review` 均为可选字段，旧数据可继续反序列化；新生成的 StageRun 默认启用规则式计划。
+
+### 0.2 P0 实施清单
+
+#### Plan-first 显式依赖计划
+
+- [x] 新增 `PlanDependency` / `PlanStep` / `StageExecutionPlan` / `StagePlanPolicy` 契约，并挂到 `ResearchStageRun.plan`。
+- [x] 默认 StageContract 启用 `require_plan=true`、`generation_mode=rule`、`block_on_drift=true`。
+- [x] `_advance_stages` 在任何阶段工具调用前生成计划，写入 `plan_generated` 审计事件。
+- [x] `_run_stage_algorithm` 回写实际输入快照；阶段执行后记录工具、输入与制品覆盖的「计划 vs 实际」核验结果。
+- [x] `approve_stage` / `reject_stage` 返回并持久化计划审查结果，审批决策携带 `plan_review`；受管工具步骤发生 `mismatched` 时按 `block_on_drift` 阻断审批。
+- [x] 覆盖 Gate 阻塞计划、审批核验、工具阶段一致性和拒绝留痕测试。
+- [x] 提供拒绝后的显式「重生成计划」API 与前端操作；旧计划与拒绝决策写入 `checkpoint_data.plan_history`，新计划为 draft，Run/Stage 保持 failed，不自动重试。
+
+#### 动态能力选择
+
+- [x] 新增 `CapabilityRelevanceItem` / `CapabilityRelevanceAssessment` 契约。
+- [x] 新增 `CapabilityRelevanceService`：中英文轻量分词、泛化词降权、领域词匹配、置信度排序。
+- [x] 用户显式 `selected_tool_ids` 受保护；仅自动选择候选按相关性筛选。
+- [x] 按 `estimate_native_tool_schema_tokens` 做原生 schema 预算裁剪，预算由 `ASSISTANT_TOOL_SCHEMA_TOKEN_BUDGET` 配置。
+- [x] 助手事件流写入 `tool.relevance.assessed` 与 `context.assembled.capability_relevance`。
+- [x] 工具调用 `source_context` 保存筛选模式、注入/裁剪清单和 token 预算摘要。
+- [x] 覆盖相关性、显式优先、预算裁剪和 SSE 工具注入回归测试。
+
+#### 动态能力选择后续灰度增强
+
+- [x] 按评审结论将 few-shot LLM 二元分类与线上准确率回放指标拆出为独立后续计划：[plan-capability-relevance-fewshot-upgrade.md](plan-capability-relevance-fewshot-upgrade.md)（不纳入本设计验收）。
+
+### 0.3 验证记录
+
+- 2026-08-27：新增 Plan-first 专项测试、能力相关性测试和助手 SSE 集成测试；针对性用例通过。
+- 2026-08-27：ResearchEngine 服务/API/E2E/Schema/适配器回归 303 项通过；本机环境导致的 WeKnora 未配置测试隔离问题已单独修复并通过。
+- 2026-08-27：助手工具编排、上下文装配、助手 API 与能力相关性回归 57 项通过；来源标注 API 回归通过。
+- 2026-08-27：补齐拒绝后显式重生成计划 API 与前端操作；Plan-first 专项回归 6 项通过，覆盖历史留痕、不自动重试与 API 链路；前端 Vite 生产构建通过。
+- 2026-08-28：按 ALS“受限工具访问 + 可审计执行”要求复核 Plan 15 执行内核：输入从受管根逐级安全打开并同描述符校验 / 哈希 / 复制，输出与结果文件拒绝 symlink / 硬链接 / FIFO / 设备文件 / 可执行位；仅接受 `workspace_write` 受限语义；落地全局并发、每用户活跃 run、429 语义、本地终态 CAS、`audit_error` 标记与 Mongo 唯一索引接线。agent_exec 专项 67 项测试通过。
+- 2026-08-28：完整后端回归 952 项通过 / 1 项跳过；能力中心与 Agent 连接器前端纯函数测试、Vite 生产构建和默认关闭应用导入验证通过。
+
+### 0.4 P1 实施清单
+
+#### 统一安全层
+
+- [x] 新增 `BoundaryLimit` / `FieldSecurityPolicy` / `TargetSecurityPolicy` 契约，支持写入白/黑名单、数值边界、枚举白名单与 error/warn 两档违规策略。
+- [x] `ExperimentDispatchProfileEngine._validate_target` 在类型校验后执行安全策略校验，并把安全命中写入结构化 `security_events`。
+- [x] 新增 SpecLabOS target 独立安全策略配置文件，并通过种子加载流程绑定到对应 target 契约。
+- [x] 安全校验事件写入统一审计链，覆盖 blocked 与 warning 两类事件。
+
+#### 只读/可写双模式
+
+- [x] `AdapterContext` 新增默认兼容的 `access_mode` 与预留 `sandbox_profile` 字段。
+- [x] 计算 worker 在登记 artifacts 前执行访问模式核验，`read_only` 下写入、持久化或外部下发声明会返回失败结果。
+- [x] 实验 dispatch preview 返回 `read_only` 执行快照；确认 `preview_digest` 后的保存/下发返回 `writable` 执行快照。
+- [x] 确认后的 `ExperimentDispatchManifest` 写入统一 artifact 链。
+
+#### P1 验证记录
+
+- 2026-08-27：新增统一安全层与受限执行专项测试；下发引擎、下发服务、计算 MVP、计算服务、本地 Structure/xtb adapter 与 ResearchEngine adapter 相关回归 67 项通过。
+- 2026-08-27：完整后端测试运行 842 项通过、1 项跳过；21 项 DataCatalog/Report/KnowledgeBase API 失败为本机认证配置导致的 401 环境差异。显式关闭认证后复跑相关模块，73 项通过、4 项子测试通过，仅剩既有 WeKnora graph 降级语义用例失败，与 P1 改动无交集。
+
+### 0.5 P2 实施清单
+
+#### NL 驱动参数解析器
+
+- [x] 新增 `AtomicIntent` / `NLDispatchProfileCandidate` / `NLDispatchParseResult` 与解析请求契约。
+- [x] 新增 `NLDispatchParser`：支持中英文关键字段、显式 manual key、多 profile 推荐评分与常见温度/时间/体积单位归一。
+- [x] 解析层只读取声明为 `allow_override` 的映射字段，不猜测系统字段或上游算法输出；未匹配意图进入 `unresolved`，不静默填充。
+- [x] 新增 `POST /experiment-dispatch-nl-parses`，候选 profile 先经过访问权限与 Run 兼容性过滤。
+- [x] profile evaluation 接入 NL 上下文：解析值仅生成 `manual_values` 候选，用户显式输入优先；`preview_digest` 覆盖 NL 原文、解析结果、有效人工值与最终 payload。
+- [x] 解析与最终安全预览分别写入 `experiment_dispatch.nl_parsed` / `experiment_dispatch.nl_evaluated` 统一审计事件。
+- [x] NL 产出一律继续经过 contract 校验、transforms、branches 阻断与 `TargetSecurityPolicy` 校验，安全等级不降级。
+- [x] 实验方案转发台新增自然语言输入、解析回填、profile 推荐、未解析意图确认与解析结果提示；未确认前不能预览或下发。
+- [x] 修复 target 种子目录把 `.security.v1.json` 误按 target 契约加载的问题，独立安全策略可按版本命名稳定加载。
+
+#### P2 验证记录
+
+- 2026-08-27：新增 NL 解析专项测试 4 项，覆盖多 profile 推荐、单位归一、未解析意图保留、解析进入 evaluate、安全边界阻断、双审计与 preview_digest 确认保存链路。
+- 2026-08-27：下发 NL、引擎、配置服务、受限执行与 legacy dispatch 相关回归 31 项通过；前端 experiment-dispatch 工具测试与 Vite 生产构建通过。
+- 2026-08-27：来源标注 API 回归 2 项通过；实验下发公开来源牌仅保留 SpecLabOS 外部服务来源，不再展示 PolyAgent 自身卡片。
+- 2026-08-27：真实浏览器冒烟通过：PI Run 解析实验名称/备注，未匹配温度条件要求人工确认，确认后生成 SpecLabOS 只读预览，控制台无错误。
+- 2026-08-27：完整后端测试 849 项通过、1 项跳过；21 项 DataCatalog/Report/KnowledgeBase API 失败仍为本机认证配置导致的 401 环境差异。显式关闭认证后复跑相关模块，73 项通过，仅剩既有 WeKnora graph 降级语义用例失败，与 P2 改动无交集。
+
+### 0.6 2026-08-28 受限执行安全收口复核
+
+- [x] 拒绝 `full_access` 请求语义，外部 Agent 文件任务仅允许 `workspace_write` 受限执行。
+- [x] 输入复制基于 `O_NOFOLLOW + O_NONBLOCK` 文件描述符完成 stat、哈希与写入，声明大小 / 哈希不符即失败。
+- [x] 输出 artifact 与 result.json 拒绝 symlink、硬链接、可执行位和扫描期间变更，避免引用或逃逸 workdir。
+- [x] 增加全局并发、每用户活跃 run、429 与资源拒绝审计，避免外部执行资源耗尽。
+- [x] 增加单进程终态 CAS 与“取消后迟到成功”测试，保持 `cancelled` 稳定终态。
+- [x] 增加审计失败 `audit_error` 标记、结构化日志和质量摘要计数，保持执行事实可观测。
+- [x] Mongo 首访 / 启动 / 部署索引接线，并新增管理员 run 分页查询。
+
+### 0.7 2026-09-07 收尾记录
+
+- [x] Plan-first 逻辑按“分而治之”精炼：从 `research_engine_orchestrator.py` 拆出纯逻辑模块 `research_engine_plan.py`（计划策略判定、步骤元数据、依赖解析、计划构造、核验与 Gate 审查准备），编排器保留持久化、审计与访问控制并薄委托；API、Schema、DB、前端与审计事件字段零变更。
+- [x] 新增纯函数专项测试 `backend/tests/test_research_engine_plan.py`（13 项，覆盖策略判定、步骤映射、依赖来源优先级、计划构造、matched/mismatched 核验与 Gate 审查准备）。
+- [x] few-shot 灰度增强拆出为独立后续计划，本设计主线全部关闭。
+- 收尾验证：Plan-first 公共行为回归 6 项、纯函数专项 13 项、ResearchEngine 服务/API/E2E/Schema/适配器扩展回归 359 项全部通过。
 
 ## 1. 背景与判断
 
@@ -431,9 +536,9 @@ class NLDispatchParseResult(BaseModel):
 - 落地 `AdapterContext.access_mode` 分级与 dispatch preview/create 对齐（4.3）。
 - 收益：安全从分散收敛为配置级统一；执行分级与现有确认机制对齐。
 
-### P2：NL 驱动参数解析器（体验升级，分阶段）
+### P2：NL 驱动参数解析器（体验升级，已落地）
 
-- 落地 `NLDispatchParser`，先支持单 profile 关键字段解析，再扩展多 profile 推荐（4.5）。
+- [x] 落地 `NLDispatchParser`，支持关键字段解析、单位归一与多 profile 推荐（4.5）。
 - 收益：从「手选 profile + 手填参数」走向「自然语言驱动」，安全不降级。
 
 ## 6. 验收标准

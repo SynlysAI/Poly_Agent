@@ -1,0 +1,125 @@
+{
+  "run": {
+    "run_id": "asrun_7651061ab3d24e6c",
+    "status": "completed",
+    "stage": "completed",
+    "error": null,
+    "duration_ms": 30839,
+    "first_token_ms": 27744,
+    "queue_wait_ms": 1558,
+    "prompt_tokens": null,
+    "completion_tokens": null,
+    "total_tokens": null,
+    "provider_id": "default_openai",
+    "model_id": "deepseek-v4-flash",
+    "route": {
+      "preset_id": "research_qa",
+      "purpose": "qa",
+      "route_reason": "user_selected",
+      "requested_provider_id": "default_openai",
+      "requested_model_id": "deepseek-v4-flash",
+      "provider_id": "default_openai",
+      "provider_type": "openai_compatible",
+      "model_id": "deepseek-v4-flash",
+      "capabilities": [
+        "chat",
+        "fast",
+        "reasoning",
+        "structured_json",
+        "tool_calling"
+      ],
+      "capability_source": "configured",
+      "tool_protocol": "openai_chat_tools",
+      "supports_parallel_tool_calls": null,
+      "context_window": 200000,
+      "max_output_tokens": null,
+      "reasoning_model_available": true,
+      "model_tier": "simple",
+      "budget": {
+        "preset_id": "research_qa",
+        "compatibility_mode": "qa",
+        "release_mode": "shadow",
+        "rollout_eligible": false,
+        "classification": {
+          "query_digest": "2a32e55df5de215b",
+          "query_complexity": "complex",
+          "risk_level": "high",
+          "evidence_need": "grounded_answer",
+          "explainability_required": true,
+          "user_constraint": "balanced",
+          "prior_evidence_conflict": false,
+          "selected_tool_count": 1,
+          "plan_mode": false,
+          "permission_mode": "workspace_write",
+          "signals": [
+            "high_risk_signal",
+            "selected_tools",
+            "explainability_required"
+          ],
+          "category": "high_risk",
+          "confidence": 0.86,
+          "fallback_reason": null
+        },
+        "recommended_model_tier": "high_risk",
+        "recommended_model_purpose": "deep",
+        "recommended_retrieval_tier": "hybrid_reranker",
+        "recommended_execution_tier": "planning_verification_human",
+        "effective_model_tier": "simple",
+        "effective_model_purpose": "qa",
+        "effective_retrieval_tier": "vector",
+        "effective_execution_tier": "planning_verification_human",
+        "user_overrides": [
+          "model"
+        ],
+        "safety_guards": [
+          "rbac_and_tool_policy_priority",
+          "user_model_priority",
+          "tool_confirmation_priority",
+          "human_verification_required",
+          "high_risk_no_downgrade",
+          "human_verification_required"
+        ],
+        "fallback_reason": "shadow_observation",
+        "decision_duration_ms": 1,
+        "cost": {
+          "estimated_model_calls": 3,
+          "estimated_retrieval_calls": 1,
+          "estimated_web_fetch_pages": 0,
+          "prompt_tokens": null,
+          "completion_tokens": null,
+          "total_tokens": null
+        }
+      }
+    },
+    "usage_events": [
+      {
+        "completion_tokens": 333,
+        "prompt_tokens": 4372,
+        "total_tokens": 4705,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": null
+      }
+    ]
+  },
+  "tool_calls": [],
+  "retrievals": [],
+  "message": {
+    "content": "我来帮你创建优化推荐。根据项目事实，优化推荐算法有多个可用选项。让我先确认你的具体需求。\n\n在创建优化推荐前，我需要了解你的目标。项目中有以下优化推荐相关算法可用：\n\n**演示算法（demo_algorithms）**\n- **BO/MOBO 优化推荐**（`mobo_mock`，REST）：基于贝叶斯优化/多目标贝叶斯优化的候选推荐，支持单目标和多目标优化\n\n**生产算法（production_adapters）**\n- **Alchemist BO/MOBO 优化推荐**（`mobo_alchemist_adapter`，REST）：调用 Alchemist session/variable/experiment/model/acquisition API 生成 BO/MOBO 推荐\n\n关于你提到的\"失败时解释原因，不要静默吞掉错误\"，项目事实中有一个明确的依据：\n\n> **垂类性质预测服务**（`vertical_predictor_adapter`）：\"未配置模型服务时返回可操作错误。\"\n\n这说明项目设计上要求：当服务未配置或调用失败时，应**返回可操作的错误信息**，而不是静默失败。\n\n---\n\n为了帮你创建优化推荐，请告诉我：\n\n1. **使用哪个算法**？演示用的 `mobo_mock`，还是生产环境的 `mobo_alchemist_adapter`？\n2. **优化目标**是什么（单目标还是多目标）？\n3. **输入参数**（如候选空间、目标变量等）是什么？\n\n如果你希望我直接调用某个算法来生成推荐，请明确指定算法和参数，我会发起调用。",
+    "references": [],
+    "answer_mode": "llm_project_grounded",
+    "answer_scope": "project",
+    "retrieval_status": "not_needed"
+  },
+  "escalation": {
+    "confirmations": 0,
+    "param_completions": 0,
+    "permission_blocked": false,
+    "awaiting_input_terminal": false,
+    "dead_letter": false,
+    "user_canceled": false,
+    "needed_retry": false
+  },
+  "task_id": "LUI-FR-0009",
+  "trace_id": "asrun_7651061ab3d24e6c",
+  "captured_at": "2026-09-01T07:52:23.434091"
+}

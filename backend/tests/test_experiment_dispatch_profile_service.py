@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import sys
+import json
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -329,6 +331,65 @@ class ExperimentDispatchProfileServiceTest(TestCase):
                 }
             ],
         )
+
+    def test_seed_loader_ignores_versioned_security_files(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            target_directory = root / "config" / "experiment_dispatch_targets"
+            profile_directory = root / "config" / "experiment_dispatch_profiles"
+            target_directory.mkdir(parents=True)
+            profile_directory.mkdir(parents=True)
+            (target_directory / "generic.v1.json").write_text(
+                json.dumps({
+                    "schema_version": "experiment_dispatch_target.v1",
+                    "target_id": "seed_generic",
+                    "version": "1.0.0",
+                    "name": "Seed generic",
+                    "fields": [{"path": "/result", "value_type": "number"}],
+                }),
+                encoding="utf-8",
+            )
+            (target_directory / "generic.security.v1.json").write_text(
+                json.dumps({
+                    "schema_version": "experiment_dispatch_target_security.v1",
+                    "target_id": "seed_generic",
+                    "version": "1.0.0",
+                    "field_policies": [
+                        {"path": "/result", "boundary": {"min": 0, "max": 100}}
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            (profile_directory / "mapping.v1.json").write_text(
+                json.dumps({
+                    "schema_version": "experiment_dispatch_profile.v1",
+                    "profile_id": "seed_mapping",
+                    "version": "1.0.0",
+                    "name": "Seed mapping",
+                    "status": "published",
+                    "visibility": "public",
+                    "owner_id": "system",
+                    "target_id": "seed_generic",
+                    "target_version": "1.0.0",
+                    "mappings": [{
+                        "target_path": "/result",
+                        "source": {"kind": "constant", "value": 42},
+                    }],
+                    "created_by": "system",
+                }),
+                encoding="utf-8",
+            )
+            original_backend_root = settings.backend_root
+            settings.backend_root = root
+            try:
+                seeded_service = ExperimentDispatchProfileService(seed_enabled=True)
+                seeded_service._ensure_seed_data()
+                target = seeded_service.get_target("seed_generic", "1.0.0")
+            finally:
+                settings.backend_root = original_backend_root
+
+        self.assertIsNotNone(target.security_policy)
+        self.assertEqual(target.security_policy.field_policies[0].path, "/result")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@ from app.schemas.experiment_dispatch import (
 from app.schemas.experiment_dispatch_profile import (
     DispatchTargetDefinition,
     DispatchTargetListData,
+    ExperimentDispatchNLParseRequest,
+    NLDispatchParseResult,
     ExperimentDispatchCandidateListData,
     ExperimentDispatchProfile,
     ExperimentDispatchProfileCloneRequest,
@@ -43,6 +45,23 @@ def _actor_user_id(current_user: dict[str, str] | None) -> str:
 
 def _is_admin(current_user: dict[str, str] | None) -> bool:
     return bool(current_user and current_user.get("role") == "admin")
+
+
+@router.post(
+    "/experiment-dispatch-nl-parses",
+    response_model=ApiResponse[NLDispatchParseResult],
+)
+def parse_experiment_dispatch_natural_language(
+    payload: ExperimentDispatchNLParseRequest,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[NLDispatchParseResult]:
+    """把自然语言实验条件解析为 manual_values 候选并写入审计。"""
+    data = experiment_dispatch_profile_service.parse_natural_language(
+        payload,
+        actor_user_id=_actor_user_id(current_user),
+        is_admin=_is_admin(current_user),
+    )
+    return ApiResponse(code=0, message="ok", data=data)
 
 
 @router.get("/experiment-dispatch-profiles", response_model=ApiResponse[ExperimentDispatchProfileListData])
