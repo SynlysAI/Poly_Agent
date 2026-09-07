@@ -12,10 +12,8 @@ import {
   paginateRows,
 } from '../../utils/verticalPredictionJson.mjs'
 import {
-  buildReadableTextLines,
-  classifyReadableText,
+  buildReadableSections,
   formatReadableFormula,
-  formatReadableTitle,
   isReadableText,
 } from '../../utils/verticalPredictionReadable.mjs'
 import { downloadArtifact, getApiErrorMessage } from '../../api/polyAgentApi'
@@ -305,7 +303,16 @@ function buildEvidence(output, prediction, main, hiddenKeys = new Set()) {
     for (const [key, value] of Object.entries(prediction)) {
       if (hiddenKeys.has(key)) continue
       if (skippedPredictionKeys.has(key)) continue
-      routeEvidenceValue(key, value, predictionMetrics, listSections, tableSections, otherSections, readableSections)
+      routeEvidenceValue(
+        key,
+        value,
+        predictionMetrics,
+        listSections,
+        tableSections,
+        otherSections,
+        readableSections,
+        readableHintFor(key),
+      )
     }
     if (predictionMetrics.length) {
       metricSections.push({ title: '预测附加信息', entries: predictionMetrics })
@@ -326,7 +333,16 @@ function buildEvidence(output, prediction, main, hiddenKeys = new Set()) {
   for (const [key, value] of Object.entries(output)) {
     if (hiddenKeys.has(key)) continue
     if (key === 'prediction' || semanticObjectKeys.includes(key)) continue
-    routeEvidenceValue(key, value, topLevelMetrics, listSections, tableSections, otherSections, readableSections)
+    routeEvidenceValue(
+      key,
+      value,
+      topLevelMetrics,
+      listSections,
+      tableSections,
+      otherSections,
+      readableSections,
+      readableHintFor(key),
+    )
   }
   if (topLevelMetrics.length) {
     metricSections.push({ title: '其他指标', entries: topLevelMetrics })
@@ -335,10 +351,19 @@ function buildEvidence(output, prediction, main, hiddenKeys = new Set()) {
   return { metricSections, listSections, tableSections, otherSections, readableSections }
 }
 
-function routeEvidenceValue(key, value, metricEntries, listSections, tableSections, otherSections, readableSections) {
+function routeEvidenceValue(
+  key,
+  value,
+  metricEntries,
+  listSections,
+  tableSections,
+  otherSections,
+  readableSections,
+  hint = {},
+) {
   if (isScalar(value)) {
     if (isReadableText(key, value)) {
-      appendReadableSection(key, value, readableSections)
+      appendReadableSection(key, value, readableSections, hint)
       return
     }
     metricEntries.push({ key, label: formatLabel(key), value })
@@ -356,7 +381,8 @@ function routeEvidenceValue(key, value, metricEntries, listSections, tableSectio
   }
   if (isPlainObject(value) && Object.keys(value).length && Object.values(value).every((item) => isScalar(item))) {
     for (const entry of objectEntries(value, key)) {
-      if (isReadableText(entry.key, entry.value)) appendReadableSection(entry.key, entry.value, readableSections)
+      const entryHint = readableHintFor(entry.key)
+      if (isReadableText(entry.key, entry.value)) appendReadableSection(entry.key, entry.value, readableSections, entryHint)
       else metricEntries.push(entry)
     }
     return
@@ -366,14 +392,13 @@ function routeEvidenceValue(key, value, metricEntries, listSections, tableSectio
   }
 }
 
-function appendReadableSection(key, value, readableSections) {
-  const kind = classifyReadableText(key, value)
-  readableSections.push({
-    key,
-    kind,
-    title: formatReadableTitle(key, kind),
-    lines: buildReadableTextLines(value),
-  })
+function appendReadableSection(key, value, readableSections, hint = {}) {
+  readableSections.push(...buildReadableSections(key, value, hint))
+}
+
+function readableHintFor(key) {
+  const hint = outputUiHints.value?.[String(key || '')] || null
+  return hint ? { kind: hint.display, title: hint.title } : {}
 }
 
 function buildTableSection(key, rows) {
@@ -993,7 +1018,9 @@ function stringifyJson(value) {
   font-family: var(--app-mono-font);
   font-size: 15px;
   line-height: 1.65;
-  white-space: pre-wrap;
+  white-space: pre;
+  overflow-x: auto;
+  tab-size: 2;
 }
 
 .readable-lines {
@@ -1022,6 +1049,7 @@ function stringifyJson(value) {
   font-weight: 650;
 }
 
+.readable-card-formula,
 .readable-card-recipe {
   grid-column: 1 / -1;
 }
