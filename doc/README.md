@@ -13,6 +13,7 @@
 | 使用实验优化 | [optimization-workflow-user-guide.md](optimization-workflow-user-guide.md) | [compute-engine-computation-product-design.md](compute-engine-computation-product-design.md) |
 | 使用 AutoResearch | [autoresearch-user-guide.md](autoresearch-user-guide.md) | [research-engine-progress-and-plan.md](research-engine-progress-and-plan.md) |
 | 查看与调用 AI 能力 | [capability-center-user-guide.md](capability-center-user-guide.md) | [agent-connector-user-guide.md](agent-connector-user-guide.md) |
+| 了解工具服务收尾用法 | [../docs/tips/plan-15-17-tools-capability-agent-governance-experience-guide.md](../docs/tips/plan-15-17-tools-capability-agent-governance-experience-guide.md) | [agent-connector-user-guide.md](agent-connector-user-guide.md) |
 | 上传垂类算法 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) |
 | 配置远程接口模型 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) |
 | 了解知识库服务 | [knowledge-base-rag-kg-product-design.md](knowledge-base-rag-kg-product-design.md) | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) |
@@ -40,6 +41,7 @@
 | [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | `/dialogue` Slash Command、会话控制、动态计算预算、统一回放与来源说明 |
 | [agent-connector-user-guide.md](agent-connector-user-guide.md) | Agent 连接器的默认安全策略、管理员配置、LUI 暴露规则、安全边界与审计说明 |
 | [capability-center-user-guide.md](capability-center-user-guide.md) | `/tools?tab=ai-ready` AI 能力的角色视角、三个能力分组、连接器确认、来源与治理边界 |
+| [../docs/tips/plan-15-17-tools-capability-agent-governance-experience-guide.md](../docs/tips/plan-15-17-tools-capability-agent-governance-experience-guide.md) | Plan 15–17 收尾后的工具服务入口、管理员检查、连接器安全边界、外部网关排障与回归命令 |
 
 ## 产品与架构设计
 
@@ -88,9 +90,9 @@
 | [research-engine-plan-12-product-positioning-evolution.md](research-engine-plan-12-product-positioning-evolution.md) | PI Agent / DSH / Codex 时代的产品定位、生态位与演进路线 |
 | [research-engine-plan-13-lui-agent-evaluation-plan.md](research-engine-plan-13-lui-agent-evaluation-plan.md) | LUI Agent 八项指标评估体系：任务成功、工具调用、检索召回、回答准确、幻觉、延迟、成本与人工兜底 |
 | [research-engine-plan-14-lui-dynamic-compute-budget-plan.md](research-engine-plan-14-lui-dynamic-compute-budget-plan.md) | LUI 动态计算预算已完成：Query 分类、Model Router、RAG 分层、执行分级、影子观测与灰度回滚；默认保持影子模式 |
-| [research-engine-plan-15-agent-exec-provider-seam-workplan.md](research-engine-plan-15-agent-exec-provider-seam-workplan.md) | 受控外部 Agent 执行 Provider Seam 与 Agent 连接器治理：readiness、独立 workdir、Codex MVP、连接器策略、Audit / Trace 与管理 API |
-| [research-engine-plan-16-capability-center-and-permission-governance-workplan.md](research-engine-plan-16-capability-center-and-permission-governance-workplan.md) | 历史已完成的 Agent 能力中心与权限治理：独立 `/capabilities` 入口、Skill allowlist 目录、`/admin` 用户与邀请码管理 UI；入口目标态由 Plan 17 取代 |
-| [research-engine-plan-17-unified-tool-services-and-capability-governance-workplan.md](research-engine-plan-17-unified-tool-services-and-capability-governance-workplan.md) | 工具服务统一入口与 AI 能力目录整合：移除独立能力入口与 LLM 能力分组，Agent 连接器配置收敛到 `/tools`，并承接 Plan 15 生产化收口 |
+| [research-engine-plan-15-agent-exec-provider-seam-workplan.md](research-engine-plan-15-agent-exec-provider-seam-workplan.md) | 已关闭的受控外部 Agent 执行 Provider Seam 与 Agent 连接器治理：readiness、独立 workdir、Codex MVP、连接器策略、Audit / Trace 与管理 API |
+| [research-engine-plan-16-capability-center-and-permission-governance-workplan.md](research-engine-plan-16-capability-center-and-permission-governance-workplan.md) | 已关闭的历史基线：Agent 能力中心与权限治理、Skill allowlist 目录、`/admin` 用户与邀请码管理 UI；独立入口目标态由 Plan 17 取代 |
+| [research-engine-plan-17-unified-tool-services-and-capability-governance-workplan.md](research-engine-plan-17-unified-tool-services-and-capability-governance-workplan.md) | 已关闭的工具服务统一入口与 AI 能力目录整合：移除独立能力入口与 LLM 能力分组，Agent 连接器配置收敛到 `/tools`，并完成 Plan 15 生产化收口 |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |
 
 ## 部署、工具链与治理

@@ -1,8 +1,8 @@
 # Plan 16：Agent 能力中心与权限治理工作计划
 
-> 状态：历史已完成 / 全量验证通过；独立 `/capabilities` 入口目标态已由 Plan 17 取代
+> 状态：已关闭（历史方案全量验证通过；独立 `/capabilities` 入口目标态已由 Plan 17 统一 `/tools` 入口取代并完成验收）
 >
-> 日期：2026-08-28
+> 日期：2026-08-28（初稿与验收）；2026-09-07（关闭：确认 Plan 17 统一入口整合完成）
 >
 > 评审基线：`develop` 分支提交 `bac4d3b`。
 >
@@ -17,7 +17,7 @@
 >
 > 本轮执行约束：仅修订本文档，不修改后端代码、前端代码、测试代码或配置文件；文档修订单独提交。后续实现必须按第 8 节阶段推进，每完成一个阶段同步更新复选框和状态记录，并创建独立提交。
 >
-> 取代说明（2026-09-07）：本文的独立 `/capabilities` 路由、四分组含 LLM、`/tools` admin-only 方案已完成历史验收，但不再是目标态。[Plan 17](research-engine-plan-17-unified-tool-services-and-capability-governance-workplan.md) 统一入口为 `/tools`：普通用户只看到“AI 能力”页签，管理员另见六个配置页签；AI 能力仅保留对话工具、外部 Agent 连接器与报告 Skill，移除 LLM 分组和配置跳转。本文已完成任务、测试与状态记录保留为历史事实。
+> 取代说明（2026-09-07）：本文的独立 `/capabilities` 路由、四分组含 LLM、`/tools` admin-only 方案已完成历史验收，但不再是目标态。[Plan 17](research-engine-plan-17-unified-tool-services-and-capability-governance-workplan.md) 统一入口为 `/tools`：普通用户只看到“AI 能力”页签，管理员另见“状态、LLM 模型、Agent 连接器、算法清单、算法工具、服务配置”等配置页签；AI 能力仅保留对话工具、外部 Agent 连接器与报告 Skill，移除 LLM 分组和配置跳转。本文已完成任务、测试与状态记录保留为历史事实；后续入口状态以 Plan 17 收尾版为准。
 
 ## 1. 摘要
 
@@ -156,7 +156,7 @@ PolyAgent 的可调用能力目前分散在多个模块：外部服务集成、�
   - user 由服务端 policy 校验角色、enabled、task type 和 readiness。
   - user 请求必须 `confirmed=true`。
 - `PATCH /providers/{id}/policy`、run 详情、取消和质量汇总继续 admin-only。
-- Plan 15 P15-H 生产化缺口不因本计划关闭；上线时管理员应维持默认 admin-only，待容量与审计策略满足要求后再开放 user。
+- Plan 15 P15-H 生产化项已由 Plan 17 P17-D 收口；开放 user 前仍必须确认 readiness、策略、审计、容量与回滚路径满足要求。
 
 ## 5. 后端聚合契约
 
@@ -389,7 +389,7 @@ make test-backend
 | catalog 与模块状态不一致 | 用户看到过期能力 | 实时读取事实源，不缓存权威状态 |
 | 聚合视图泄漏敏感配置 | 泄漏 secret、路径或 prompt | 契约白名单字段 + 服务端脱敏 + 响应断言 |
 | 普通用户开放外部执行后滥用 | 外部任务风险扩大 | 默认 admin-only；显式策略授权；user 强制确认；服务端限额与审计 |
-| Plan 15 P15-H 未完成 | 并发、审计和多实例生产风险未收口 | 开放 user 由管理员显式配置；生产化缺口继续在 Plan 15 跟踪 |
+| Agent 执行生产化边界被误判 | 开放 user 后出现并发、审计或多实例风险 | Plan 15 P15-H 已由 Plan 17 收口；开放前仍需显式检查 readiness、策略、审计、容量、单进程约束与回滚路径 |
 | Skill 目录被误解为插件市场 | 安全边界漂移 | 只展示服务端 pipeline allowlist，不做上传、扫描和动态加载 |
 | 用户管理引入角色编辑 | 破坏 MVP 权限模型 | 只允许禁用/启用非 admin 用户；邀请码固定 user 角色 |
 | `/tools` admin 守卫影响旧链接 | 普通用户旧链接体验变化 | 回退工作台；公共算法入口 `/tools/alchemist` 保持可用 |
@@ -423,3 +423,4 @@ make test-backend
 - 2026-08-27（第二版修订）：明确 `/capabilities` 与 `/tools` 为两个独立入口；配置面与调用面分离，数据单向流动。
 - 2026-08-28：基于 `develop@bac4d3b` 复核代码现状，修正 Plan 15 已落地、`/tools` 已有 6 个 tab、连接器配置面已存在等过期基线；记录“策略允许的普通用户可调用连接器且必须确认”的决策；重排任务、测试、兼容、风险与完成定义。本轮仅修改本文档，未修改任何业务代码、前端代码、测试代码或配置文件。
 - 2026-09-07：本文保留为历史完成基线；独立 `/capabilities` 入口与 LLM 能力分组目标态由 Plan 17 取代，后续入口整合状态以 Plan 17 为准。
+- 2026-09-07（计划关闭）：Plan 17 已完成 `/tools` 统一入口、三分组 AI 能力目录、角色权限拆分、兼容跳转、来源标注、前端全量、生产构建和 E2E 验收。本文的只读聚合、脱敏、显式授权与逐次确认原则继续生效；独立入口和 LLM 分组不再恢复。日常体验见 `docs/tips/plan-15-17-tools-capability-agent-governance-experience-guide.md`。

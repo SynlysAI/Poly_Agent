@@ -1,8 +1,8 @@
 # Plan 17：工具服务统一入口、AI Ready 能力目录与 Agent 执行生产化整合工作计划
 
-> 状态：进行中（仅剩真实 Codex sandbox 出口实测与外部模型凭证恢复后的全量 dialogue E2E）
+> 状态：已完成并关闭（统一入口、三分组 AI 能力目录、Agent 执行生产化、专项 / 全量回归、生产构建和 E2E 均已验收；真实结构化任务曾受外部模型网关 `/v1/responses` 404 阻塞，已记录为环境依赖而非代码待办）
 >
-> 日期：2026-09-07
+> 日期：2026-09-07（创建、实施与最终收尾）
 >
 > 评审基线：`develop` 分支提交 `8e20fcd`。
 >
@@ -11,7 +11,7 @@
 > - [research-engine-plan-16-capability-center-and-permission-governance-workplan.md](research-engine-plan-16-capability-center-and-permission-governance-workplan.md)
 > - [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md)
 >
-> 整合说明：本计划承接 Plan 15 P15-A–P15-G 之外的全部生产化收口项，并取代 Plan 16 的独立 `/capabilities` 入口目标态。Plan 15 与 Plan 16 的已完成验收事实不回滚；后续以本文作为唯一活跃跟踪文档。
+> 整合说明：本计划承接 Plan 15 P15-A–P15-G 之外的全部生产化收口项，并取代 Plan 16 的独立 `/capabilities` 入口目标态。Plan 15 与 Plan 16 的已完成验收事实不回滚；本文收尾后三个计划均关闭，后续新增问题另立变更或运维记录。
 
 ## 1. 摘要与决策
 
@@ -55,6 +55,8 @@ PolyAgent 的能力入口收敛到“工具服务”`/tools`。普通用户进�
 - 不把 LLM Provider 从“LLM 模型”管理页签迁走，不改变对话模型选择器。
 
 ## 3. 当前基线与差距
+
+> 收尾说明：下表为 2026-09-07 创建计划时的基线；P17-A–P17-E 已全部完成，表中差距不再表示当前待办。
 
 | 区域 | 当前状态 | Plan 17 差距 |
 | --- | --- | --- |
@@ -199,3 +201,4 @@ npm --prefix frontend run build
 - 2026-09-07（readiness 收口）：Codex 显式探测新增最低版本门槛（默认 `0.149.1`）与 `version_supported` 结论，管理员卡片显示“最低版本 / 是否满足”；真实 `codex-cli 0.149.1` sandbox 集成测试验证 `read-only` profile 下 workdir 写入与仅监听 `127.0.0.1` 的本地 HTTP 出口均被拒绝。真实结构化任务链路已实际执行并暴露外部网关阻塞：本地模型配置指向 `/v1/responses`，网关返回 404“不支持的端点”，因此该子链路不能判为通过；同时修复 Codex 子进程 stdin 未关闭导致的误读附加输入，并把非零退出诊断合并 stdout / stderr 关键事件。
 - 2026-09-07（最终回归收口）：修复 dialogue 工具确认的一个前端状态竞态——模型提议 run 失败后 SSE 可能替换消息对象，确认闭包更新旧引用导致后端已完成而卡片仍停留待确认；现在按 `message_id` 写回当前消息并补纯函数测试。真实 Codex 结构化任务的外部网关仍为 `/v1/responses` 404 阻塞，按要求不伪造通过。后端全量 1067 项通过 / 3 项跳过；前端全部 24 类 `test:*` 脚本与生产构建通过；`make test-e2e` 中 dialogue 真实模型链路、响应式、控制面、工作台与能力 / 权限 E2E 全部通过。
 - 2026-09-07（默认入口回归修复）：工具服务初始页签恢复按角色计算：管理员点击导航进入 `/tools` 时直接选中“状态”，普通用户仍默认进入“AI 能力”；显式 `ai-ready` 深链保持可用。E2E 补充默认状态页断言，脚本语法检查、前端生产构建和本地浏览器点击验证通过。
+- 2026-09-07（计划关闭）：确认 P17-A–P17-E 全部完成：`/tools` 是唯一工具服务入口，`/capabilities` 仅保留兼容跳转；AI 能力仅含对话工具、Agent 连接器与报告 Skill 三组；LLM 目录和配置跳转移除；普通用户默认无管理 API 请求；Agent 执行具备保留清理、重启恢复、单进程约束、RLIMIT、审计补写、外部告警、时间窗 / provider 观测和显式真实 CLI 集成测试。真实 Codex sandbox 出口实测通过；外部模型网关仍需在其支持 `/v1/responses` 或完成正确端点配置后重跑显式集成测试，该依赖不阻塞本计划关闭。日常体验见 `docs/tips/plan-15-17-tools-capability-agent-governance-experience-guide.md`。
