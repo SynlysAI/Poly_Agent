@@ -1,8 +1,8 @@
 # Plan 13：LUI Agent 评估与八项指标体系工作计划
 
-> 状态：已评审 / Phase 0–5 完成；Phase 6 full 事实首跑完成，人工抽检待完成
+> 状态：已收尾 / Phase 0–6 代码链路与 full 自动基线完成；M4/M5 人工抽检转后续质量任务
 >
-> 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）/ 2026-09-01（Phase 6 真实环境复跑）
+> 日期：2026-08-18（初稿）/ 2026-08-28（评审并启动实施）/ 2026-09-01（Phase 6 真实环境复跑）/ 2026-09-07（收尾并冻结边界）
 >
 > 前置文档：
 > - [research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md](research-engine-plan-08-lui-runtime-and-tool-calling-workplan.md)
@@ -575,6 +575,22 @@ Phase 2 验证记录（2026-08-28）：
 2. **KR 环境缺口**：Golden 依赖的知识库（如 `kb-fluoro-handbook`）在当前环境不存在，WeKnora 返回 404，M3 Recall=0；模型如实拒答，部分 M4 因拿不到证据失败。全量前需先接入真实知识库，禁止为对答案伪造知识库。
 3. **TS 工具口径冲突**：Golden 期望 `vertical_predictor_adapter / weknora_adapter / mobo_alchemist_adapter` 可作为 LUI 工具，但产品 `agent_tool_service` 仅放行 `capability_group=vertical_algorithm` 且要求 active 版本；三个内置适配器均无版本记录，且 weknora/mobo 分组为 knowledge/wetlab_optimization。需要产品决策：要么把三个适配器纳入 LUI 可调用目录（涉及权限边界评审），要么工具题改用环境已激活垂类工具并递增数据集版本。
 
+### Phase 7：2026-09-07 收尾与边界冻结
+
+**收尾决策**
+
+- [x] 冻结本计划交付口径：Golden Set、M1–M8 判定器、smoke / full 报告、管理员报告页、录制事实驱动器、生产只读采样与自动判定 full 基线已完成。
+- [x] 将 full 模式 M4/M5 人工抽检转为后续质量任务：`reports/full-manual-review-sheet.json` 保留 16 条待复核记录，不回填空结论、不伪造人工一致率。
+- [x] 冻结 `baselines/full-2026.09.01.json` 的解释口径：该基线仅代表自动判定结果；人工抽检完成并汇入结论前，不生成或命名为人工验收版 full 基线。
+- [x] 冻结职责边界：本计划负责评测资产、质量事实与回归门禁；full 首跑暴露的工具提案参数、escalation 持久化、检索排序与项目事实回答问题转入对应产品缺陷任务处理。
+- [x] 重申计算任务排除边界：xTB / CREST / ORCA / ComputeEngine 完整计算任务不纳入本评测；LUI 工具题继续只评估非计算工具的提案、确认、补参、权限与续答行为。
+
+**后续质量任务入口**
+
+1. 复核 `backend/evaluation/lui/reports/full-manual-review-sheet.json` 中 16 条 M4/M5 样本，补齐 `agree`、`reason_category` 与 `comment`。
+2. 使用既有 manual review 汇总流程计算人工一致率；只有达到抽检门槛后，才允许基于同一 `evaluation_id` 与 `dataset_version` 生成人工验收版 full 基线。
+3. full 基线中的产品缺陷另建任务跟踪，禁止通过修改 Golden 答案、删除失败样本或扩大 tolerance 掩盖。
+
 ## 9. 测试与验证命令
 
 ```bash
@@ -637,3 +653,4 @@ PYTHONPATH=backend conda run -n poly_agent python scripts/sample_lui_production_
 - 2026-09-01：追加 Phase 6 并完成代码侧四项：修复评测三字段经提案→确认→续答的透传丢失；新增 `scripts/run_lui_capture.py` 录制驱动器（只自动确认参数齐全提案）；`run_lui_eval.py` 支持 `--metadata`；评测报告入口补后端 403/200 与 e2e 守卫回归。试点、全量与 full 基线待环境执行后勾选。
 - 2026-09-01：试点首跑完成（后端 1031 项测试、e2e、smoke 门禁均通过；服务已滚动加载新代码）：KR+PF 20/20 执行与抓取全通并产出真实 M6/M7；KR 知识库缺失与 TS 工具目录口径冲突两个环境缺口已记录，全量暂缓待决策。驱动器补充 API 错误 detail 透出与对应测试。
 - 2026-09-01：完成 Phase 6 真实环境复跑：KR 切换 ready WeKnora 粘结剂资料库，TS/TA 切换 5 个 active 垂类模型，数据集版本递增 `2026.09.01`；80/80 full 事实抓取成功，落自动判定 full 基线。M4/M5 人工抽检与产品质量残留另行跟进。
+- 2026-09-07：收尾并冻结边界：Phase 0–6 代码链路与 full 自动判定基线完成；16 条 M4/M5 人工抽检记录保留为后续质量任务，不阻塞本计划关闭但阻塞人工验收版 full 基线；full 首跑暴露的产品缺陷按所属模块另行处理，计算任务继续排除在评测范围外。

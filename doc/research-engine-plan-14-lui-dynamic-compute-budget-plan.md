@@ -1,8 +1,8 @@
 # Plan 14：LUI 动态计算预算与分级路由工作计划
 
-> 状态：已完成 / 默认保持影子观测，灰度开关默认 0%
+> 状态：已完成并关闭 / 功能冻结；默认影子观测，灰度开关默认 0%
 >
-> 日期：2026-08-19（2026-08-28 完成更新）
+> 日期：2026-08-19（初稿）/ 2026-08-28（完成更新）/ 2026-09-07（收尾并冻结边界）
 >
 > 前置文档：
 > - [research-engine-plan-10-slash-command-and-agent-control-workplan.md](research-engine-plan-10-slash-command-and-agent-control-workplan.md)
@@ -147,7 +147,7 @@ High-risk → Planning + Verification + Human
 
 ## 6. 分阶段行动计划
 
-> 本节是后续独立代码计划的行动框架，当前全部未开始。每完成一项，必须同步更新复选框与状态记录；实施前应先回填当时的代码基线和依赖提交。
+> 本节保留历史行动框架，P14-A–P14-F 已完成。每完成一项，必须同步更新复选框与状态记录；后续阈值或默认档位变更不得在本计划内静默扩写，应另立变更记录。
 
 ### P14-A. 预算契约与观测设计
 
@@ -197,6 +197,14 @@ High-risk → Planning + Verification + Human
 - [x] 根据评估结果调优分类阈值和档位映射，所有默认档位变更保留实验记录和回放样本。（2026-08-28 `budget-routing-cases.json` 5 类回放样本）
 - [x] 更新 `/dialogue` 用户指南，解释自动预算、用户覆盖、延迟 / 成本预期与高风险审批，不夸大为无限制自主 Agent。（2026-08-28 `dialogue-slash-command-guide.md`）
 
+### P14-F. 2026-09-07 收尾与功能冻结
+
+- [x] 冻结本计划拥有的能力边界：确定性 Query 分类、模型 / 检索 / 执行档位、预算决策 Trace、质量看板，以及 `shadow` / `disabled` / `enabled`、用户 allowlist 与百分比灰度配置。
+- [x] 冻结安全职责边界：RBAC、审批、Permission Mode、AgentTool policy、来源标注和用户显式选择仍归既有安全与用户控制模块所有；预算策略只提供默认建议，不得覆盖以上规则。
+- [x] 冻结发布默认值：`ASSISTANT_BUDGET_MODE=shadow`、`ASSISTANT_BUDGET_ROLLOUT_PERCENT=0`。扩大灰度属于运维发布决策，必须具备双档指标对比、审计记录与回滚方案。
+- [x] 冻结后续调优入口：分类阈值、默认模型档位、Hybrid 升级条件或执行档位变化必须基于 Plan 13 指标对比，另立实验 / 变更记录并保留回放样本。
+- [x] 本计划关闭后不再扩写运行时实现；与预算观测无直接关系的产品缺陷、权限治理或 Agent 执行能力演进由后续计划承接。
+
 ## 7. 验收标准
 
 - [x] 文档定义动态计算预算原则，并能把 Simple / Complex / High-risk 查询映射到两个 Preset 的模型、检索与执行策略。
@@ -225,3 +233,4 @@ High-risk → Planning + Verification + Human
 - 2026-08-28：完成 P14-A–P14-E。新增 `AssistantPreset` 策略契约、确定性 Query Classifier、保守 Model Router、Hybrid + deterministic rerank、执行安全兜底、`budget.decision` Trace、质量看板、shadow / 灰度 / 回滚配置、5 类回放样本与用户指南；默认 `ASSISTANT_BUDGET_MODE=shadow`、`ASSISTANT_BUDGET_ROLLOUT_PERCENT=0`，不改变线上默认模型与检索行为。
 - 2026-08-28：验证通过：后端全量 1010 passed / 1 skipped；前端 `vite build` 通过；Plan 13 smoke 基线门禁 PASS（37 条任务，任务成功率 100%）。新增 `test_assistant_dynamic_budget.py` 覆盖契约、影子 / 灰度、用户覆盖、高风险不降档、异常回退、混合检索降级、Trace 隐私与看板。
 - 2026-08-29：评审加固：灰度身份只信任服务端认证上下文，按用户级稳定哈希分组，未认证请求不进入百分比灰度；预算决策读取会话控制状态时校验会话归属并忽略请求侧伪造状态；Hybrid 检索分词支持中文二元词，提升中文查询召回与重排效果。新增对应回归测试。
+- 2026-09-07：收尾并冻结功能边界：P14-A–P14-F 完成；默认保持 `shadow + 0%`，扩大灰度需另立发布决策与 Plan 13 双档指标对比。RBAC、审批、Permission Mode、AgentTool policy 与用户显式选择继续优先于预算策略，后续阈值或默认档位调整另立变更记录。
