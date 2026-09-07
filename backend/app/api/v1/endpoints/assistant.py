@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from app.core.auth import get_current_user, get_current_user_with_query_token, require_admin
 from app.core.config import settings
 from app.infra.assistant_command_repositories import AssistantCommandRunRepository
+from app.infra.lui_evaluation_repositories import LuiEvaluationJobRepository
 from app.schemas.agent_tools import (
     AssistantToolCall,
     AssistantToolCallConfirm,
@@ -45,6 +46,11 @@ from app.schemas.assistant_trace import (
     AssistantTraceBatchData,
     AssistantTraceData,
 )
+from app.schemas.lui_evaluation import (
+    LuiEvaluationRun,
+    LuiEvaluationRunListData,
+    LuiEvaluationRunRequest,
+)
 from app.schemas.common import ApiResponse
 from app.services.assistant_service import chat_assistant
 from app.services.assistant_service import stream_chat_assistant
@@ -55,6 +61,7 @@ from app.services.assistant_quality_service import build_quality_metrics
 from app.services.assistant_run_service import assistant_run_service
 from app.services.assistant_trace_service import assistant_trace_service
 from app.services.lui_evaluation_service import load_baseline_summary
+from app.services.lui_evaluation_run_service import lui_evaluation_run_service
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -448,6 +455,64 @@ def lui_evaluation_baseline_summary(
         message="ok",
         data=load_baseline_summary(mode=mode),
     )
+
+
+@router.post(
+    "/lui-evaluation/runs",
+    response_model=ApiResponse[LuiEvaluationRun],
+    dependencies=[Depends(require_admin)],
+)
+def create_lui_evaluation_run(
+    payload: LuiEvaluationRunRequest,
+    current_user: dict[str, str] | None = Depends(get_current_user),
+) -> ApiResponse[LuiEvaluationRun]:
+    """创建并启动一次 LUI Agent 评测。"""
+    created_by = current_user.get("username") if current_user else "system"
+    document = lui_evaluation_run_service.create_job(payload, created_by=created_by)
+    return ApiResponse(code=0, message="ok", data=LuiEvaluationRun.model_validate(document))
+
+
+@router.get(
+    "/lui-evaluation/runs/latest",
+    response_model=ApiResponse[LuiEvaluationRun | None],
+    dependencies=[Depends(require_admin)],
+)
+def get_latest_lui_evaluation_run() -> ApiResponse[LuiEvaluationRun | None]:
+    """查询最近一次 LUI 评测任务，用于页面刷新后恢复进度。"""
+    document = LuiEvaluationJobRepository.find_latest()
+    data = LuiEvaluationRun.model_validate(document) if document else None
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.get(
+    "/lui-evaluation/runs",
+    response_model=ApiResponse[LuiEvaluationRunListData],
+    dependencies=[Depends(require_admin)],
+)
+def list_lui_evaluation_runs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> ApiResponse[LuiEvaluationRunListData]:
+    """分页查询 LUI 评测任务历史。"""
+    documents, total = LuiEvaluationJobRepository.list_jobs(page=page, page_size=page_size)
+    data = LuiEvaluationRunListData(
+        items=[LuiEvaluationRun.model_validate(item) for item in documents],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+    return ApiResponse(code=0, message="ok", data=data)
+
+
+@router.post(
+    "/lui-evaluation/runs/{job_id}/cancel",
+    response_model=ApiResponse[LuiEvaluationRun],
+    dependencies=[Depends(require_admin)],
+)
+def cancel_lui_evaluation_run(job_id: str) -> ApiResponse[LuiEvaluationRun]:
+    """取消运行中的 LUI 评测任务。"""
+    document = lui_evaluation_run_service.cancel_job(job_id)
+    return ApiResponse(code=0, message="ok", data=LuiEvaluationRun.model_validate(document))
 
 
 @router.post("/chat", response_model=ApiResponse[AssistantChatResponse])

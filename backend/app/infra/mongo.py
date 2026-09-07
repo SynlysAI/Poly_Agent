@@ -246,6 +246,11 @@ def get_report_artifacts_collection() -> Collection:
     return get_database()["report_artifacts"]
 
 
+def get_lui_evaluation_jobs_collection() -> Collection:
+    """获取 LUI 评测手动运行任务集合。"""
+    return get_database()["lui_evaluation_jobs"]
+
+
 def get_alchemist_sessions_collection() -> Collection:
     """获取 alchemist_sessions 集合。"""
     return get_database()["alchemist_sessions"]

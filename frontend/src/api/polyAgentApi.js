@@ -641,6 +641,30 @@ export function getLuiEvaluationSummary(mode = 'smoke') {
     .then(unwrapResponse)
 }
 
+/** 手动触发 LUI Agent 评测 */
+export function runLuiEvaluation(payload) {
+  return apiClient.post('/assistant/lui-evaluation/runs', payload).then(unwrapResponse)
+}
+
+/** 查询最近一次 LUI Agent 评测任务 */
+export function getLatestLuiEvaluationRun() {
+  return apiClient.get('/assistant/lui-evaluation/runs/latest').then(unwrapResponse)
+}
+
+/** 分页查询 LUI Agent 评测任务历史 */
+export function listLuiEvaluationRuns({ page = 1, pageSize = 20 } = {}) {
+  return apiClient
+    .get('/assistant/lui-evaluation/runs', { params: { page, page_size: pageSize } })
+    .then(unwrapResponse)
+}
+
+/** 取消运行中的 LUI Agent 评测任务 */
+export function cancelLuiEvaluationRun(jobId) {
+  return apiClient
+    .post(`/assistant/lui-evaluation/runs/${encodeURIComponent(jobId)}/cancel`)
+    .then(unwrapResponse)
+}
+
 // ── ResearchEngine API ──
 
 // ── ProblemSpec ──

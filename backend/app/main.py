@@ -150,6 +150,16 @@ async def app_lifespan(app: FastAPI):
         app_logger.exception("LUI 热路径 MongoDB 索引初始化失败")
 
     try:
+        from app.infra.lui_evaluation_repositories import LuiEvaluationJobRepository
+        from app.services.lui_evaluation_run_service import LuiEvaluationRunService
+
+        LuiEvaluationJobRepository.ensure_indexes()
+        stale_jobs = LuiEvaluationRunService().fail_stale_jobs()
+        app_logger.info("LUI 评测任务启动维护完成：处理 %d 个遗留任务", len(stale_jobs))
+    except Exception:
+        app_logger.exception("LUI 评测任务启动维护失败")
+
+    try:
         from app.infra.agent_exec_repositories import (
             ensure_agent_exec_repository_indexes,
         )

@@ -1,13 +1,40 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { DataAnalysis, Refresh } from '@element-plus/icons-vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { DataAnalysis, Refresh, VideoPlay } from '@element-plus/icons-vue'
 
-import { getApiErrorMessage, getLuiEvaluationSummary } from '../api/polyAgentApi'
+import {
+  cancelLuiEvaluationRun,
+  getApiErrorMessage,
+  getLatestLuiEvaluationRun,
+  getLlmModels,
+  getLlmRouting,
+  getLuiEvaluationSummary,
+  runLuiEvaluation,
+} from '../api/polyAgentApi'
+
+const RUN_ACTIVE_STATUSES = new Set(['queued', 'capturing', 'evaluating'])
+const RUN_STATUS_LABELS = {
+  queued: '排队中',
+  capturing: '录制中',
+  evaluating: '评测中',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+}
 
 const loading = ref(false)
 const mode = ref('smoke')
 const summary = ref(null)
+const runDialogVisible = ref(false)
+const runSubmitting = ref(false)
+const cancelling = ref(false)
+const activeRun = ref(null)
+const runForm = reactive({ mode: 'smoke', provider_id: '', model_id: '' })
+const modelCatalog = ref({ providers: [], routing: {} })
+const modelOptionsLoading = ref(false)
+const logContainer = ref(null)
+let runPollingTimer = null
 
 const metricRows = computed(() => {
   const metrics = summary.value?.metrics || {}
@@ -29,10 +56,179 @@ const manualReviewRows = computed(() => {
   return Object.entries(metrics).map(([key, row]) => ({ key, ...row }))
 })
 
+const providerOptions = computed(() => modelCatalog.value.providers || [])
+const modelOptions = computed(() => {
+  const provider = providerOptions.value.find(item => item.provider_id === runForm.provider_id)
+  return provider?.models || []
+})
+const runRunning = computed(() => Boolean(activeRun.value && RUN_ACTIVE_STATUSES.has(activeRun.value.status)))
+const runProgressPercent = computed(() => {
+  const progress = activeRun.value?.progress
+  if (!progress?.total) return activeRun.value ? 5 : 0
+  return Math.min(100, Math.round(((progress.done || 0) / progress.total) * 100))
+})
+const runStageText = computed(() => {
+  const run = activeRun.value
+  if (!run) return ''
+  if (run.status === 'capturing') {
+    const total = run.progress?.total || 80
+    return `录制中 ${run.progress?.done || 0}/${total}`
+  }
+  if (run.status === 'evaluating') return '评测中'
+  return RUN_STATUS_LABELS[run.status] || run.status
+})
+const runModelText = computed(() => {
+  const run = activeRun.value
+  if (run?.mode !== 'full' || !run.provider_id || !run.model_id) return '—'
+  return `${run.provider_id}/${run.model_id}`
+})
+
 /** 格式化比率为百分比文本。 */
 function formatRate(value) {
   if (value === null || value === undefined) return '—'
   return `${(value * 100).toFixed(2)}%`
+}
+
+/** 展示任务状态标签颜色。 */
+function runStatusType(status) {
+  if (status === 'completed') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'cancelled') return 'info'
+  return 'primary'
+}
+
+/** 格式化任务时间。 */
+function formatRunTime(value) {
+  return (value || '').replace('T', ' ').slice(0, 19)
+}
+
+/** 打开运行配置对话框并恢复当前默认模型。 */
+async function openRunDialog() {
+  runDialogVisible.value = true
+  runForm.mode = 'smoke'
+  runForm.provider_id = ''
+  runForm.model_id = ''
+  await loadModelOptions()
+}
+
+/** 加载可选模型并取当前默认路由作为初始值。 */
+async function loadModelOptions() {
+  modelOptionsLoading.value = true
+  try {
+    const [catalog, routing] = await Promise.all([getLlmModels(), getLlmRouting()])
+    modelCatalog.value = catalog || { providers: [], routing: {} }
+    const defaultRoute = routing?.qa
+    if (defaultRoute?.provider_id && defaultRoute?.model_id) {
+      runForm.provider_id = defaultRoute.provider_id
+      runForm.model_id = defaultRoute.model_id
+    }
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, '加载模型配置失败'))
+  } finally {
+    modelOptionsLoading.value = false
+  }
+}
+
+/** 切换 provider 后修正模型默认值。 */
+function handleProviderChange() {
+  runForm.model_id = modelOptions.value[0]?.model_id || ''
+}
+
+/** 提交评测任务，full 模式额外要求二次确认。 */
+async function submitRun() {
+  if (runForm.mode === 'full') {
+    try {
+      await ElMessageBox.confirm(
+        'full 模式将执行 80 条任务并调用真实模型链路，耗时可能约 1 小时、消耗真实模型额度；要求服务器已配置评测账号，且 MongoDB 与 assistant run worker 正在运行。',
+        '确认运行 full 评测',
+        { type: 'warning', confirmButtonText: '确认运行', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
+  runSubmitting.value = true
+  try {
+    const payload = { mode: runForm.mode }
+    if (runForm.mode === 'full') {
+      payload.provider_id = runForm.provider_id
+      payload.model_id = runForm.model_id
+    }
+    activeRun.value = await runLuiEvaluation(payload)
+    runDialogVisible.value = false
+    startRunPolling()
+    ElMessage.success('评测任务已启动')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, '启动评测失败'))
+  } finally {
+    runSubmitting.value = false
+  }
+}
+
+/** 启动最新任务轮询，终态后自动刷新报告。 */
+function startRunPolling() {
+  stopRunPolling()
+  runPollingTimer = setInterval(pollLatestRun, 5000)
+}
+
+/** 停止任务轮询。 */
+function stopRunPolling() {
+  if (!runPollingTimer) return
+  clearInterval(runPollingTimer)
+  runPollingTimer = null
+}
+
+/** 查询最新任务并处理终态刷新。 */
+async function pollLatestRun() {
+  try {
+    const latest = await getLatestLuiEvaluationRun()
+    if (!latest) return
+    activeRun.value = latest
+    if (!RUN_ACTIVE_STATUSES.has(latest.status)) {
+      stopRunPolling()
+      mode.value = latest.mode
+      await loadSummary()
+      if (latest.status === 'completed') ElMessage.success('评测完成，报告已刷新')
+      if (latest.status === 'failed') ElMessage.error(latest.error || '评测失败')
+      if (latest.status === 'cancelled') ElMessage.info('评测已取消')
+    }
+    await scrollLogToBottom()
+  } catch (error) {
+    console.warn('查询 LUI 评测任务失败', error)
+  }
+}
+
+/** 页面加载时恢复未完成任务的进度。 */
+async function restoreActiveRun() {
+  try {
+    const latest = await getLatestLuiEvaluationRun()
+    activeRun.value = latest
+    if (RUN_ACTIVE_STATUSES.has(latest?.status)) startRunPolling()
+  } catch {
+    activeRun.value = null
+  }
+}
+
+/** 取消当前任务。 */
+async function cancelRun() {
+  const job = activeRun.value
+  if (!job) return
+  cancelling.value = true
+  try {
+    activeRun.value = await cancelLuiEvaluationRun(job.job_id)
+    stopRunPolling()
+    ElMessage.info('已发送取消请求')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, '取消评测失败'))
+  } finally {
+    cancelling.value = false
+  }
+}
+
+/** 将日志滚动区定位到底部。 */
+async function scrollLogToBottom() {
+  await nextTick()
+  if (logContainer.value) logContainer.value.scrollTop = logContainer.value.scrollHeight
 }
 
 /** 指标通过率标签颜色。 */
@@ -56,7 +252,12 @@ async function loadSummary() {
   }
 }
 
-onMounted(loadSummary)
+onMounted(async () => {
+  await restoreActiveRun()
+  await loadSummary()
+})
+
+onBeforeUnmount(stopRunPolling)
 </script>
 
 <template>
@@ -76,8 +277,106 @@ onMounted(loadSummary)
             <el-option label="full 完整集" value="full" />
           </el-select>
           <el-button :icon="Refresh" :loading="loading" @click="loadSummary">刷新</el-button>
+          <el-button
+            type="primary"
+            :icon="VideoPlay"
+            :disabled="runRunning"
+            @click="openRunDialog"
+          >
+            运行评测
+          </el-button>
         </div>
       </div>
+
+      <el-dialog v-model="runDialogVisible" title="运行 LUI Agent 评测" width="520px">
+        <el-form label-width="88px" :loading="modelOptionsLoading">
+          <el-form-item label="评测模式">
+            <el-radio-group v-model="runForm.mode">
+              <el-radio-button label="smoke">smoke</el-radio-button>
+              <el-radio-button label="full">full</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+          <el-alert
+            v-if="runForm.mode === 'smoke'"
+            title="离线 fixture，不调用真实模型，秒级完成。"
+            type="info"
+            show-icon
+            :closable="false"
+          />
+          <template v-else>
+            <el-alert
+              title="80 条任务走真实链路，耗时可能约 1 小时并消耗真实模型额度。"
+              type="warning"
+              show-icon
+              :closable="false"
+              class="run-dialog-alert"
+            />
+            <el-form-item label="Provider">
+              <el-select v-model="runForm.provider_id" @change="handleProviderChange">
+                <el-option
+                  v-for="provider in providerOptions"
+                  :key="provider.provider_id"
+                  :value="provider.provider_id"
+                  :label="provider.display_name || provider.provider_id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="Model">
+              <el-select v-model="runForm.model_id">
+                <el-option
+                  v-for="model in modelOptions"
+                  :key="model.model_id"
+                  :value="model.model_id"
+                  :label="model.display_name || model.model_id"
+                />
+              </el-select>
+            </el-form-item>
+          </template>
+        </el-form>
+        <template #footer>
+          <el-button @click="runDialogVisible = false">取消</el-button>
+          <el-button
+            type="primary"
+            :loading="runSubmitting"
+            :disabled="runForm.mode === 'full' && (!runForm.provider_id || !runForm.model_id)"
+            @click="submitRun"
+          >
+            启动
+          </el-button>
+        </template>
+      </el-dialog>
+
+      <el-card v-if="activeRun" class="run-card" shadow="never">
+        <div class="run-card-header">
+          <div class="run-card-title">
+            <el-tag :type="runStatusType(activeRun.status)">{{ runStageText }}</el-tag>
+            <strong>{{ activeRun.mode.toUpperCase() }}</strong>
+            <span>模型：{{ runModelText }}</span>
+            <span>批次：{{ activeRun.evaluation_id }}</span>
+          </div>
+          <el-button
+            v-if="runRunning"
+            size="small"
+            type="danger"
+            plain
+            :loading="cancelling"
+            @click="cancelRun"
+          >
+            取消
+          </el-button>
+        </div>
+        <el-progress :percentage="runProgressPercent" :stroke-width="10" />
+        <div class="run-card-meta">
+          <span>任务：{{ activeRun.progress?.current_task || '—' }}</span>
+          <span>创建：{{ formatRunTime(activeRun.created_at) }}</span>
+          <span v-if="activeRun.error" class="run-error">{{ activeRun.error }}</span>
+        </div>
+        <div ref="logContainer" class="run-log">
+          <div v-for="(line, index) in activeRun.log_tail" :key="index" class="run-log-line">
+            {{ line }}
+          </div>
+        </div>
+      </el-card>
 
       <div v-loading="loading" class="panel-body">
         <el-alert
@@ -214,6 +513,72 @@ onMounted(loadSummary)
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.run-card {
+  margin-bottom: 16px;
+  border: 1px solid #d9e8ff;
+  border-radius: var(--app-radius-md);
+}
+
+.run-card :deep(.el-card__body) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.run-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.run-card-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--app-ink);
+  font-size: 14px;
+}
+
+.run-card-title span {
+  color: var(--app-ink-muted);
+  font-size: 13px;
+}
+
+.run-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--app-ink-muted);
+  font-size: 12px;
+}
+
+.run-error {
+  color: var(--el-color-danger);
+}
+
+.run-log {
+  height: 180px;
+  overflow: auto;
+  padding: 10px;
+  background: #0f172a;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.run-log-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.run-dialog-alert {
+  margin: 0 0 16px;
 }
 
 .lui-eval-alert {
