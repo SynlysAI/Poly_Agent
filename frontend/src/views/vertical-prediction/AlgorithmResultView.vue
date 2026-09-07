@@ -11,6 +11,13 @@ import {
   buildBatchHighlights as buildAllBatchHighlights,
   paginateRows,
 } from '../../utils/verticalPredictionJson.mjs'
+import {
+  buildReadableTextLines,
+  classifyReadableText,
+  formatReadableFormula,
+  formatReadableTitle,
+  isReadableText,
+} from '../../utils/verticalPredictionReadable.mjs'
 import { downloadArtifact, getApiErrorMessage } from '../../api/polyAgentApi'
 import { downloadArtifactToBrowser } from '../../utils/artifactDownload.mjs'
 import { authState } from '../../auth/authState'
@@ -152,6 +159,7 @@ const hasStructuredContent = computed(() => Boolean(
   evidence.value.metricSections.length ||
   evidence.value.listSections.length ||
   evidence.value.tableSections.length ||
+  evidence.value.readableSections.length ||
   evidence.value.otherSections.length ||
   artifactRows.value.length,
 ))
@@ -283,6 +291,7 @@ function buildEvidence(output, prediction, main, hiddenKeys = new Set()) {
   const listSections = []
   const tableSections = []
   const otherSections = []
+  const readableSections = []
   const topLevelMetrics = []
   const skippedPredictionKeys = new Set([
     ...metaPredictionKeys,
@@ -296,7 +305,7 @@ function buildEvidence(output, prediction, main, hiddenKeys = new Set()) {
     for (const [key, value] of Object.entries(prediction)) {
       if (hiddenKeys.has(key)) continue
       if (skippedPredictionKeys.has(key)) continue
-      routeEvidenceValue(key, value, predictionMetrics, listSections, tableSections, otherSections)
+      routeEvidenceValue(key, value, predictionMetrics, listSections, tableSections, otherSections, readableSections)
     }
     if (predictionMetrics.length) {
       metricSections.push({ title: '预测附加信息', entries: predictionMetrics })
@@ -317,17 +326,21 @@ function buildEvidence(output, prediction, main, hiddenKeys = new Set()) {
   for (const [key, value] of Object.entries(output)) {
     if (hiddenKeys.has(key)) continue
     if (key === 'prediction' || semanticObjectKeys.includes(key)) continue
-    routeEvidenceValue(key, value, topLevelMetrics, listSections, tableSections, otherSections)
+    routeEvidenceValue(key, value, topLevelMetrics, listSections, tableSections, otherSections, readableSections)
   }
   if (topLevelMetrics.length) {
     metricSections.push({ title: '其他指标', entries: topLevelMetrics })
   }
 
-  return { metricSections, listSections, tableSections, otherSections }
+  return { metricSections, listSections, tableSections, otherSections, readableSections }
 }
 
-function routeEvidenceValue(key, value, metricEntries, listSections, tableSections, otherSections) {
+function routeEvidenceValue(key, value, metricEntries, listSections, tableSections, otherSections, readableSections) {
   if (isScalar(value)) {
+    if (isReadableText(key, value)) {
+      appendReadableSection(key, value, readableSections)
+      return
+    }
     metricEntries.push({ key, label: formatLabel(key), value })
     return
   }
@@ -342,12 +355,25 @@ function routeEvidenceValue(key, value, metricEntries, listSections, tableSectio
     }
   }
   if (isPlainObject(value) && Object.keys(value).length && Object.values(value).every((item) => isScalar(item))) {
-    metricEntries.push(...objectEntries(value, key))
+    for (const entry of objectEntries(value, key)) {
+      if (isReadableText(entry.key, entry.value)) appendReadableSection(entry.key, entry.value, readableSections)
+      else metricEntries.push(entry)
+    }
     return
   }
   if (isComplexValue(value) || !isEmptyValue(value)) {
     otherSections.push({ title: formatLabel(key), data: value })
   }
+}
+
+function appendReadableSection(key, value, readableSections) {
+  const kind = classifyReadableText(key, value)
+  readableSections.push({
+    key,
+    kind,
+    title: formatReadableTitle(key, kind),
+    lines: buildReadableTextLines(value),
+  })
 }
 
 function buildTableSection(key, rows) {
@@ -550,6 +576,30 @@ function stringifyJson(value) {
             <span>{{ entry.label }}</span>
             <strong>{{ formatScalar(entry.value) }}</strong>
           </div>
+        </div>
+      </section>
+
+      <section
+        v-if="evidence.readableSections.length"
+        class="result-section readable-result-section"
+        aria-label="结构化输出说明"
+      >
+        <div class="readable-card-grid">
+          <article
+            v-for="section in evidence.readableSections"
+            :key="section.key"
+            class="readable-card"
+            :class="`readable-card-${section.kind}`"
+          >
+            <h5>{{ section.title }}</h5>
+            <p v-if="section.kind === 'formula'" class="readable-formula">{{ formatReadableFormula(section.lines.map(line => line.text).join('\n')) }}</p>
+            <div v-else class="readable-lines">
+              <p v-for="(line, index) in section.lines" :key="index" class="readable-line">
+                <strong v-if="line.label">{{ line.label }}：</strong>
+                <span>{{ line.text }}</span>
+              </p>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -901,6 +951,79 @@ function stringifyJson(value) {
   margin: 0 0 8px;
   color: var(--app-ink);
   font-size: 14px;
+}
+
+.readable-result-section {
+  align-items: start;
+}
+
+.readable-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.readable-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--app-stat-border);
+  border-radius: var(--app-radius-sm);
+  background: #fff;
+  text-align: left;
+}
+
+.readable-card h5 {
+  margin: 0 0 8px;
+  color: var(--app-ink);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.readable-formula,
+.readable-lines {
+  margin: 0;
+  padding: 0;
+  color: var(--app-ink-body);
+  overflow-wrap: anywhere;
+}
+
+.readable-formula {
+  font-family: var(--app-mono-font);
+  font-size: 15px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.readable-lines {
+  font-family: var(--app-font-family);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.readable-line {
+  display: block;
+  margin: 0 0 7px;
+}
+
+.readable-line:last-child {
+  margin-bottom: 0;
+}
+
+.readable-line strong,
+.readable-line span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.readable-line strong {
+  color: var(--app-ink);
+  font-weight: 650;
+}
+
+.readable-card-recipe {
+  grid-column: 1 / -1;
 }
 
 .result-section :deep(.el-collapse-item__header),
