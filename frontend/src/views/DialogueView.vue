@@ -94,14 +94,9 @@ import {
   capabilitySourceLabel,
   contextSectionRows,
   contextToolRows,
-  contextUsageRing,
-  DEFAULT_CONTEXT_WINDOW,
   formatContextWindow,
-  formatConversationUsageDetail,
-  formatTokenCount,
   formatUsage,
   normalizeUsageSummary,
-  resolveContextTokenEstimate,
   modelMetaLabel,
   normalizeAssistantRoute,
   routeCapabilityLabels,
@@ -324,35 +319,6 @@ const selectedToolSummary = computed(() =>
   (agentTools.value || []).filter((tool) => selectedToolIds.value.includes(tool.tool_id)),
 )
 const conversationStarted = computed(() => messages.value.some((item) => item.role === 'user'))
-const conversationUsageDetail = computed(() => formatConversationUsageDetail(conversationUsage.value))
-const latestContextManifestMessage = computed(() => {
-  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
-    const message = messages.value[index]
-    if (message.role !== 'assistant') continue
-    const manifest = messageContextManifest(message)
-    if (manifest) return { manifest, createdAt: message.created_at || '' }
-  }
-  return null
-})
-const latestContextEstimate = computed(() => {
-  return resolveContextTokenEstimate({
-    manifestEstimate: latestContextManifestMessage.value?.manifest?.context?.token_estimate,
-    manifestCreatedAt: latestContextManifestMessage.value?.createdAt,
-    compaction: sessionControlState.value?.compaction,
-  })
-})
-const selectedModelContextWindow = computed(() =>
-  Number(selectedModel.value?.contextWindow || DEFAULT_CONTEXT_WINDOW),
-)
-const contextRingState = computed(() =>
-  contextUsageRing(latestContextEstimate.value, selectedModelContextWindow.value),
-)
-const contextRingTooltip = computed(() => {
-  const contextLine = contextRingState.value.visible
-    ? `上下文已用 ${contextRingState.value.percent}% · ~${formatTokenCount(latestContextEstimate.value)} / ${formatTokenCount(selectedModelContextWindow.value)}`
-    : ''
-  return [contextLine, conversationUsageDetail.value].filter(Boolean).join('\n')
-})
 
 const currentSuggestions = computed(() => {
   const latestAssistant = [...messages.value].reverse().find((item) => item.role === 'assistant')
@@ -3318,31 +3284,6 @@ watch(
             >
               取消回答
             </el-button>
-            <el-tooltip
-              placement="top"
-              :disabled="!contextRingState.visible"
-              :content="contextRingTooltip"
-            >
-              <button
-                v-if="contextRingState.visible"
-                type="button"
-                class="context-ring-trigger"
-                :aria-label="`上下文已使用 ${contextRingState.percent}%`"
-              >
-                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                  <circle class="context-ring-track" cx="8" cy="8" r="6" />
-                  <circle
-                    class="context-ring-fill"
-                    :class="`context-ring-fill--${contextRingState.tone}`"
-                    cx="8"
-                    cy="8"
-                    r="6"
-                    :stroke-dasharray="contextRingState.dashArray"
-                    transform="rotate(-90 8 8)"
-                  />
-                </svg>
-              </button>
-            </el-tooltip>
             <el-button
               type="primary"
               circle
@@ -4112,45 +4053,6 @@ h1 {
   grid-template-columns: 24px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
-}
-
-.context-ring-trigger {
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--app-ink-muted);
-  cursor: default;
-}
-
-.context-ring-track {
-  fill: none;
-  stroke: var(--app-border-soft);
-  stroke-width: 2;
-}
-
-.context-ring-fill {
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-  transition: stroke 0.15s ease, stroke-dasharray 0.15s ease;
-}
-
-.context-ring-fill--safe {
-  stroke: var(--app-primary-active);
-}
-
-.context-ring-fill--warning {
-  stroke: #d97706;
-}
-
-.context-ring-fill--danger {
-  stroke: #dc2626;
 }
 
 .composer-mark {
