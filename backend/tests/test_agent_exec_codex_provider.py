@@ -237,6 +237,7 @@ class CodexProviderTest(unittest.TestCase):
         self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
         self.assertIn("--skip-git-repo-check", command)
         env_keys = set(captured.get("env", {}))
+        self.assertIs(captured.get("stdin"), subprocess.DEVNULL)
         self.assertLessEqual(
             env_keys,
             {"PATH", "HOME", "LANG", "LC_ALL", "TERM", "CODEX_API_KEY"},

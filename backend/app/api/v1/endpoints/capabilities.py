@@ -36,6 +36,6 @@ def list_capability_catalog(
         current_user: 当前登录用户；本地演示模式为空并按管理员处理。
 
     Returns:
-        四个固定分组的能力中心目录。
+        三个固定分组的 AI 能力目录。
     """
     return ApiResponse(code=0, message="ok", data=catalog_service.get_catalog(current_user))

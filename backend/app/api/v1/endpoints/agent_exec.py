@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import get_current_user, require_admin
+from app.core.time import utc_now
 from app.infra.computation_repositories import AuditEventRepository
 from app.infra.agent_exec_repositories import AgentExecRunRepository
 from app.schemas.agent_exec import (
+    AgentExecAuditRecoveryData,
     AgentExecExecutionRequest,
     AgentExecLuiToolData,
     AgentExecPolicyUpdateRequest,
     AgentExecProviderConnection,
+    AgentExecProviderProbeData,
     AgentExecProviderPolicy,
     AgentExecQualitySummaryData,
     AgentExecRunCreateRequest,
@@ -21,6 +26,7 @@ from app.schemas.agent_exec import (
     AgentExecTaskRequest,
 )
 from app.schemas.common import ApiResponse
+from app.services.agent_exec_alert_service import AgentExecAlertService
 from app.services.agent_exec_policy_service import AgentExecPolicyRejected
 from app.services.agent_exec_service import (
     AgentExecRequestError,
@@ -30,6 +36,38 @@ from app.services.agent_exec_service import (
 
 router = APIRouter(prefix="/agent-exec", tags=["agent-exec"])
 service = AgentExecService()
+
+
+def _list_runs_for_quality(
+    *,
+    provider_id: str | None,
+    created_after: datetime | None,
+    created_before: datetime | None,
+) -> list[AgentExecRunData]:
+    """分页读取质量统计所需的全量 run。
+
+    Args:
+        provider_id: provider 过滤条件。
+        created_after: 创建时间下界。
+        created_before: 创建时间上界。
+
+    Returns:
+        时间窗内的全部 run 列表。
+    """
+    runs: list = []
+    page = 1
+    while True:
+        items, total = AgentExecRunRepository.list_runs(
+            provider_id=provider_id,
+            created_after=created_after,
+            created_before=created_before,
+            page=page,
+            page_size=500,
+        )
+        runs.extend(items)
+        if len(runs) >= total:
+            return runs
+        page += 1
 
 
 def _actor(current_user: dict[str, str] | None) -> tuple[str, str]:
@@ -145,6 +183,34 @@ def list_providers(
     return ApiResponse(code=0, message="ok", data=data)
 
 
+@router.post(
+    "/providers/{provider_id}/probe",
+    response_model=ApiResponse[AgentExecProviderProbeData],
+    dependencies=[Depends(require_admin)],
+)
+def probe_provider(provider_id: str) -> ApiResponse[AgentExecProviderProbeData]:
+    """管理员显式探测连接器二进制版本与 readiness。
+
+    Args:
+        provider_id: provider 唯一标识。
+
+    Returns:
+        包含 readiness、路径、摘要与版本的探测结果。
+    """
+    provider = service.registry.get(provider_id)
+    if provider is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason_code": "provider_not_registered", "message": "连接器不存在"},
+        )
+    if not hasattr(provider, "probe"):
+        raise HTTPException(
+            status_code=501,
+            detail={"reason_code": "provider_probe_unsupported", "message": "该连接器不支持显式探测"},
+        )
+    return ApiResponse(code=0, message="ok", data=provider.probe())
+
+
 @router.patch(
     "/providers/{provider_id}/policy",
     response_model=ApiResponse[AgentExecProviderPolicy],
@@ -227,6 +293,8 @@ def list_runs(
     provider_id: str | None = Query(default=None, min_length=1, max_length=120),
     status: str | None = Query(default=None, min_length=1, max_length=32),
     chat_id: str | None = Query(default=None, min_length=1, max_length=120),
+    created_after: datetime | None = Query(default=None),
+    created_before: datetime | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> ApiResponse[AgentExecRunListData]:
@@ -236,6 +304,8 @@ def list_runs(
         provider_id: provider 过滤条件。
         status: run 状态过滤条件。
         chat_id: 会话过滤条件。
+        created_after: 创建时间下界。
+        created_before: 创建时间上界。
         page: 页码。
         page_size: 每页数量。
 
@@ -253,10 +323,20 @@ def list_runs(
             status_code=400,
             detail={"reason_code": "status_invalid", "message": "run 状态无效"},
         )
+    if created_after is not None and created_before is not None and created_after > created_before:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "reason_code": "time_window_invalid",
+                "message": "created_after 不能晚于 created_before",
+            },
+        )
     items, total = AgentExecRunRepository.list_runs(
         provider_id=provider_id,
         status=status,
         chat_id=chat_id,
+        created_after=created_after,
+        created_before=created_before,
         page=page,
         page_size=page_size,
     )
@@ -311,6 +391,31 @@ def get_run(run_id: str) -> ApiResponse[AgentExecRunDetailData]:
 
 
 @router.post(
+    "/runs/{run_id}/audit/retry",
+    response_model=ApiResponse[AgentExecAuditRecoveryData],
+    dependencies=[Depends(require_admin)],
+)
+def retry_run_audit(run_id: str) -> ApiResponse[AgentExecAuditRecoveryData]:
+    """管理员补写缺失的 run 生命周期审计事件。"""
+    try:
+        run, recovered = service.recover_audit_events(run_id)
+    except AgentExecRequestError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"reason_code": exc.reason_code, "message": exc.message},
+        ) from exc
+    return ApiResponse(
+        code=0,
+        message="ok",
+        data=AgentExecAuditRecoveryData(
+            run=run,
+            recovered_event_types=recovered,
+            recovered_at=utc_now(),
+        ),
+    )
+
+
+@router.post(
     "/runs/{run_id}/cancel",
     response_model=ApiResponse[AgentExecRunData],
     dependencies=[Depends(require_admin)],
@@ -332,13 +437,55 @@ def cancel_run(run_id: str) -> ApiResponse[AgentExecRunData]:
     response_model=ApiResponse[AgentExecQualitySummaryData],
     dependencies=[Depends(require_admin)],
 )
-def quality_summary() -> ApiResponse[AgentExecQualitySummaryData]:
-    """管理员查看连接器 run 质量摘要。"""
-    runs, _ = AgentExecRunRepository.list_runs(page=1, page_size=1000)
+def quality_summary(
+    provider_id: str | None = Query(default=None, min_length=1, max_length=120),
+    created_after: datetime | None = Query(default=None),
+    created_before: datetime | None = Query(default=None),
+) -> ApiResponse[AgentExecQualitySummaryData]:
+    """管理员查看连接器 run 质量摘要。
+
+    Args:
+        provider_id: provider 过滤条件。
+        created_after: 统计窗口下界。
+        created_before: 统计窗口上界。
+
+    Returns:
+        时间窗与 provider 维度的质量摘要。
+    """
+    if created_after is not None and created_before is not None and created_after > created_before:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "reason_code": "time_window_invalid",
+                "message": "created_after 不能晚于 created_before",
+            },
+        )
+    runs = _list_runs_for_quality(
+        provider_id=provider_id,
+        created_after=created_after,
+        created_before=created_before,
+    )
     completed = sum(1 for item in runs if item.status == "completed")
     failed = sum(1 for item in runs if item.status == "failed")
     cancelled = sum(1 for item in runs if item.status == "cancelled")
     durations = [item.duration_ms for item in runs if item.duration_ms is not None]
+    failure_rate = (failed / len(runs)) if runs else 0.0
+    timeout_rate = (
+        sum(1 for item in runs if item.error_code == "timeout") / len(runs)
+        if runs
+        else 0.0
+    )
+    alert_reasons: list[str] = []
+    alert_level: str = "none"
+    if any(item.audit_error for item in runs):
+        alert_reasons.append("audit_error_present")
+        alert_level = "critical"
+    if failure_rate >= 0.5 or timeout_rate >= 0.3:
+        alert_reasons.append("failure_or_timeout_rate_high")
+        alert_level = "critical"
+    elif failure_rate >= 0.2 or timeout_rate >= 0.1:
+        alert_reasons.append("failure_or_timeout_rate_elevated")
+        alert_level = "warning"
     summary = AgentExecQualitySummaryData(
         total_runs=len(runs),
         completed=completed,
@@ -359,6 +506,23 @@ def quality_summary() -> ApiResponse[AgentExecQualitySummaryData]:
         avg_duration_ms=(
             int(sum(durations) / len(durations)) if durations else None
         ),
+        window_started_at=created_after,
+        window_ended_at=created_before,
+        provider_id=provider_id,
+        alert_level=alert_level,  # type: ignore[arg-type]
+        alert_reasons=alert_reasons,
+    )
+    AgentExecAlertService.emit(
+        level=alert_level,
+        title="agent_exec run 质量异常",
+        reasons=alert_reasons,
+        context={
+            "provider_id": provider_id,
+            "total_runs": summary.total_runs,
+            "failure_rate": failure_rate,
+            "timeout_rate": timeout_rate,
+            "audit_error_count": summary.audit_error_count,
+        },
     )
     return ApiResponse(code=0, message="ok", data=summary)
 

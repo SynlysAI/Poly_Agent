@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
+import re
+import resource
 import signal
 import shutil
 import stat
@@ -15,6 +18,7 @@ from typing import Callable
 
 from app.core.config import settings
 from app.schemas.agent_exec import (
+    AgentExecProviderProbeData,
     AgentExecProviderReadiness,
     AgentExecProviderResult,
     AgentExecTaskRequest,
@@ -48,6 +52,7 @@ class CodexAgentExecProvider:
             process_factory: 可注入的进程工厂，测试时用于 mock subprocess.Popen。
         """
         self._process_factory = process_factory or subprocess.Popen
+        self._use_process_limits = process_factory is None
 
     def sandbox_summary(self) -> str:
         """返回连接器卡片展示的 sandbox 摘要。"""
@@ -96,6 +101,14 @@ class CodexAgentExecProvider:
         Returns:
             结构化 readiness 结果。
         """
+        config_errors = list(getattr(settings, "agent_exec_config_errors", []))
+        if config_errors:
+            return AgentExecProviderReadiness.unavailable(
+                provider_id=self.provider_id,
+                reason_code="agent_exec_config_invalid",
+                message="agent_exec 配置非法，已回落安全默认值",
+                details={"config_errors": config_errors},
+            )
         if not settings.agent_exec_enabled:
             return AgentExecProviderReadiness.unavailable(
                 provider_id=self.provider_id,
@@ -141,14 +154,103 @@ class CodexAgentExecProvider:
                 reason_code="credentials_missing",
                 message="缺少 CODEX_API_KEY 或本地模型配置",
             )
+        binary_path = Path(binary)
         return AgentExecProviderReadiness(
             provider_id=self.provider_id,
             available=True,
             reason_code="ready",
             message="Codex 连接器就绪",
             checked_at=self._now(),
-            details={"sandbox_mode": mode, "binary": Path(binary).name},
+            details={
+                "sandbox_mode": mode,
+                "binary": binary_path.name,
+                "binary_sha256": self._file_sha256(binary_path),
+            },
         )
+
+    def probe(self) -> AgentExecProviderProbeData:
+        """管理员显式探测二进制版本，不执行任何文件任务。
+
+        Returns:
+            包含 readiness、路径、摘要与版本的探测结果。
+        """
+        readiness = self.readiness()
+        binary = shutil.which(settings.agent_exec_codex_bin)
+        data = AgentExecProviderProbeData(
+            provider_id=self.provider_id,
+            readiness=readiness,
+            binary_path=str(Path(binary).resolve()) if binary else "",
+            binary_sha256=self._file_sha256(Path(binary)) if binary else "",
+            minimum_version=settings.agent_exec_codex_min_version,
+            version_supported=False,
+            sandbox_mode=settings.agent_exec_codex_sandbox_mode,
+        )
+        if not readiness.available:
+            data.warnings.append(readiness.message)
+            return data
+        try:
+            process = self._process_factory(
+                [str(Path(binary).resolve()), "--version"],
+                cwd=str(settings.project_root),
+                env={"PATH": os.environ.get("PATH", ""), "LANG": os.environ.get("LANG", "C")},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            stdout, stderr = process.communicate(timeout=10)
+            if process.returncode == 0:
+                data.version = " ".join((stdout or "").split())[:500]
+                actual_version = self.parse_version(data.version)
+                minimum_version = self.parse_version(data.minimum_version)
+                if actual_version is None:
+                    data.warnings.append(f"无法从版本输出解析 Codex 版本：{data.version}")
+                elif minimum_version is not None:
+                    data.version_supported = actual_version >= minimum_version
+                    if not data.version_supported:
+                        data.warnings.append(
+                            f"Codex 版本不满足最低要求：{data.version} < "
+                            f"{data.minimum_version}"
+                        )
+            else:
+                data.warnings.append(f"codex --version 退出码 {process.returncode}")
+        except Exception as exc:
+            data.warnings.append(f"版本探测失败：{exc}")
+        return data
+
+    @staticmethod
+    def parse_version(value: str) -> tuple[int, int, int] | None:
+        """解析 Codex CLI 输出中的语义化版本。
+
+        Args:
+            value: `codex --version` 的原始输出或配置版本字符串。
+
+        Returns:
+            `(major, minor, patch)`；无法解析时返回 None。
+        """
+        match = re.search(r"(?:^|[^\d.])(\d+)\.(\d+)\.(\d+)", value or "")
+        if match is None:
+            return None
+        return tuple(int(part) for part in match.groups())
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        """计算文件 SHA-256 摘要。
+
+        Args:
+            path: 待摘要文件。
+
+        Returns:
+            十六进制摘要；读取失败时返回空字符串。
+        """
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError:
+            return ""
+        return digest.hexdigest()
 
     @staticmethod
     def _codex_home_ready(home: Path) -> bool:
@@ -245,7 +347,7 @@ class CodexAgentExecProvider:
                 "codex_nonzero_exit",
                 (
                     f"codex exec 退出码 {returncode}："
-                    f"{self._digest(stderr_text)}"
+                    f"{self._digest((stdout_text or '') + (stderr_text or ''))}"
                 ),
             )
         try:
@@ -354,14 +456,20 @@ class CodexAgentExecProvider:
         Raises:
             AgentExecProviderError: 超时或被服务端取消。
         """
+        process_options = {
+            "cwd": str(workdir),
+            "env": env,
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "start_new_session": True,
+        }
+        if self._use_process_limits:
+            process_options["preexec_fn"] = self._make_process_limits(timeout_seconds)
         process = self._process_factory(
             command,
-            cwd=str(workdir),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
+            **process_options,
         )
         deadline = time.monotonic() + timeout_seconds
         while True:
@@ -382,6 +490,28 @@ class CodexAgentExecProvider:
                 raise AgentExecProviderError(
                     "timeout", f"codex exec 超过 {timeout_seconds}s 超时"
                 )
+
+    @staticmethod
+    def _make_process_limits(timeout_seconds: int):
+        """构建子进程资源限制函数。
+
+        Args:
+            timeout_seconds: 任务超时时间。
+
+        Returns:
+            应用 CPU、内存与输出文件 RLIMIT 的 preexec 函数。
+        """
+        cpu_seconds = timeout_seconds + settings.agent_exec_process_cpu_extra_seconds
+
+        def apply_limits() -> None:
+            """在子进程内设置操作系统资源限制。"""
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+            memory = settings.agent_exec_process_memory_bytes
+            resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+            output_limit = max(settings.agent_exec_max_output_bytes * 2, 1024 * 1024)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
+
+        return apply_limits
 
     @staticmethod
     def _terminate(process: subprocess.Popen[str]) -> None:

@@ -35,6 +35,7 @@ TOOL_NAME = "PI 合成难度评分 Mock"
 TOOL_ID = "algorithm:pi_synthesis_mock"
 PROMPT = "请使用PI合成难度评分工具，评估 ODA 和 PMDA 在 NMP 中缩聚的合成难度，溶剂状态为 dry"
 VIEWPORTS = ((320, 800), (768, 900), (1440, 900))
+SLOW_MODEL_TIMEOUT_MS = 600_000
 
 
 def load_env_file(path: pathlib.Path) -> dict[str, str]:
@@ -192,12 +193,12 @@ def run_real_model_flow(page) -> None:
     page.get_by_role("button", name="确认执行").first.click()
 
     completed_card = page.locator(".tool-call-card.tool-call-completed")
-    completed_card.first.wait_for(state="visible", timeout=300_000)
+    completed_card.first.wait_for(state="visible", timeout=SLOW_MODEL_TIMEOUT_MS)
 
     assistant_bubbles = page.locator(".chat-message-assistant .chat-bubble-text")
-    expect(assistant_bubbles.last).to_contain_text("难度", timeout=300_000)
+    expect(assistant_bubbles.last).to_contain_text("难度", timeout=SLOW_MODEL_TIMEOUT_MS)
 
-    expect(trace).to_contain_text("任务完成", timeout=300_000)
+    expect(trace).to_contain_text("任务完成", timeout=SLOW_MODEL_TIMEOUT_MS)
     expect(trace).to_contain_text("算法结果", timeout=30_000)
     assert not page.locator(".execution-trace", has_text="Chain of Thought").count(), "Trace 不应暴露内部推理"
     step_ids = page.eval_on_selector_all(

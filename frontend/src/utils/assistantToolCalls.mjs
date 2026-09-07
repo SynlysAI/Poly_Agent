@@ -216,6 +216,21 @@ export function replaceToolCall(message, updated) {
 }
 
 /**
+ * 在当前消息列表中查找异步操作捕获的消息，并把工具快照写回最新对象。
+ *
+ * @param {Array<object>} messages 当前渲染使用的消息列表。
+ * @param {object} message 异步操作发起时的消息引用，可能已被 SSE 替换。
+ * @param {object} updated 服务端返回的最新工具调用。
+ * @returns {object} 实际被更新的消息对象。
+ */
+export function replaceToolCallInMessages(messages, message, updated) {
+  const target = (Array.isArray(messages) ? messages : []).find(
+    (item) => item.message_id && item.message_id === message?.message_id,
+  ) || message
+  return replaceToolCall(target, updated)
+}
+
+/**
  * 构建垂类预测运行详情的深链路由。
  */
 export function toolCallRunDetailRoute(call) {

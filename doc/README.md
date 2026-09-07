@@ -12,7 +12,7 @@
 | 使用计算工作流 | [computation-workflows-user-guide.md](computation-workflows-user-guide.md) | [compute-engine-computation-progress-and-plan.md](compute-engine-computation-progress-and-plan.md) |
 | 使用实验优化 | [optimization-workflow-user-guide.md](optimization-workflow-user-guide.md) | [compute-engine-computation-product-design.md](compute-engine-computation-product-design.md) |
 | 使用 AutoResearch | [autoresearch-user-guide.md](autoresearch-user-guide.md) | [research-engine-progress-and-plan.md](research-engine-progress-and-plan.md) |
-| 查看与调用 Agent 能力 | [capability-center-user-guide.md](capability-center-user-guide.md) | [agent-connector-user-guide.md](agent-connector-user-guide.md) |
+| 查看与调用 AI 能力 | [capability-center-user-guide.md](capability-center-user-guide.md) | [agent-connector-user-guide.md](agent-connector-user-guide.md) |
 | 上传垂类算法 | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) |
 | 配置远程接口模型 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | [algorithm-upload-user-guide.md](algorithm-upload-user-guide.md) |
 | 了解知识库服务 | [knowledge-base-rag-kg-product-design.md](knowledge-base-rag-kg-product-design.md) | [polyagent-attribution-source-matrix.md](polyagent-attribution-source-matrix.md) |
@@ -39,7 +39,7 @@
 | [vertical-model-interface-user-guide.md](vertical-model-interface-user-guide.md) | HTTP/FastAPI/MCP 远程接口模型的配置、测试、激活、调用和安全边界 |
 | [dialogue-slash-command-guide.md](dialogue-slash-command-guide.md) | `/dialogue` Slash Command、会话控制、动态计算预算、统一回放与来源说明 |
 | [agent-connector-user-guide.md](agent-connector-user-guide.md) | Agent 连接器的默认安全策略、管理员配置、LUI 暴露规则、安全边界与审计说明 |
-| [capability-center-user-guide.md](capability-center-user-guide.md) | `/capabilities` 能力目录的角色视角、四个能力分组、连接器确认、来源与治理边界 |
+| [capability-center-user-guide.md](capability-center-user-guide.md) | `/tools?tab=ai-ready` AI 能力的角色视角、三个能力分组、连接器确认、来源与治理边界 |
 
 ## 产品与架构设计
 
@@ -61,7 +61,8 @@
 |------|------|
 | [plan-polymer-inverse-design-and-property-prediction-demo.md](plan-polymer-inverse-design-and-property-prediction-demo.md) | 聚合物自然语言逆向设计与性质预测 Demo 落地计划：三阶段参考评估、逆向设计、性质预测与候选结构 demo |
 | [plan-multi-site-collaborative-optimization-fedbo-pilot.md](plan-multi-site-collaborative-optimization-fedbo-pilot.md) | 多站点协同实验优化与联邦贝叶斯 FedBO 试点计划：参考解读、产品边界、架构预案与分阶段落地 |
-| [plan-als-orchestration-and-bounded-execution.md](plan-als-orchestration-and-bounded-execution.md) | 大装置 Agent 编排与受限执行设计（ALS 范式）：Plan-first 显式依赖计划、动态能力选择、只读/可写双模式、统一安全层、NL 驱动参数解析器 |
+| [plan-als-orchestration-and-bounded-execution.md](plan-als-orchestration-and-bounded-execution.md) | 大装置 Agent 编排与受限执行设计（ALS 范式，已收尾）：Plan-first 显式依赖计划、动态能力选择、只读/可写双模式、统一安全层、NL 驱动参数解析器 |
+| [plan-capability-relevance-fewshot-upgrade.md](plan-capability-relevance-fewshot-upgrade.md) | 动态能力选择 few-shot LLM 二元分类灰度增强后续计划：影子评估、规则兜底、线上准确率回放指标与回滚开关 |
 | [plan-ssrl-agent-honing-and-closed-loop-execution.md](plan-ssrl-agent-honing-and-closed-loop-execution.md) | 智能体打磨与闭环执行设计（SSRL 范式）：虚拟打磨环境、双层提示词、图像化观测、会话级持久与短期记忆、被动转发安全模式、工作流级鲁棒性基准 |
 
 ## 进度、计划与验收
@@ -88,7 +89,8 @@
 | [research-engine-plan-13-lui-agent-evaluation-plan.md](research-engine-plan-13-lui-agent-evaluation-plan.md) | LUI Agent 八项指标评估体系：任务成功、工具调用、检索召回、回答准确、幻觉、延迟、成本与人工兜底 |
 | [research-engine-plan-14-lui-dynamic-compute-budget-plan.md](research-engine-plan-14-lui-dynamic-compute-budget-plan.md) | LUI 动态计算预算已完成：Query 分类、Model Router、RAG 分层、执行分级、影子观测与灰度回滚；默认保持影子模式 |
 | [research-engine-plan-15-agent-exec-provider-seam-workplan.md](research-engine-plan-15-agent-exec-provider-seam-workplan.md) | 受控外部 Agent 执行 Provider Seam 与 Agent 连接器治理：readiness、独立 workdir、Codex MVP、连接器策略、Audit / Trace 与管理 API |
-| [research-engine-plan-16-capability-center-and-permission-governance-workplan.md](research-engine-plan-16-capability-center-and-permission-governance-workplan.md) | Agent 能力中心与权限治理：新建 `/capabilities` 独立入口（Agent 能力调用目录），`/tools` 收窄为配置中心，Skill allowlist 目录、`/admin` 用户与邀请码管理 UI |
+| [research-engine-plan-16-capability-center-and-permission-governance-workplan.md](research-engine-plan-16-capability-center-and-permission-governance-workplan.md) | 历史已完成的 Agent 能力中心与权限治理：独立 `/capabilities` 入口、Skill allowlist 目录、`/admin` 用户与邀请码管理 UI；入口目标态由 Plan 17 取代 |
+| [research-engine-plan-17-unified-tool-services-and-capability-governance-workplan.md](research-engine-plan-17-unified-tool-services-and-capability-governance-workplan.md) | 工具服务统一入口与 AI 能力目录整合：移除独立能力入口与 LLM 能力分组，Agent 连接器配置收敛到 `/tools`，并承接 Plan 15 生产化收口 |
 | [algorithm-upload-p0-assessment-and-roadmap.md](algorithm-upload-p0-assessment-and-roadmap.md) | 垂类模型自动上传与部署生产化评估 |
 
 ## 部署、工具链与治理

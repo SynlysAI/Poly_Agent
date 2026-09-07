@@ -70,13 +70,16 @@ test('测试 run 请求必须显式确认且参数合法', () => {
 })
 
 test('质量摘要格式化', () => {
-  assert.deepEqual(formatQualitySummary(null), { successRate: '暂无数据', duration: '暂无数据' })
   assert.deepEqual(
-    formatQualitySummary({ success_rate: 0.856, avg_duration_ms: 1530 }),
-    { successRate: '86%', duration: '1.5s' },
+    formatQualitySummary(null),
+    { successRate: '暂无数据', duration: '暂无数据', alert: '告警未知' },
   )
   assert.deepEqual(
-    formatQualitySummary({ success_rate: 1, avg_duration_ms: 90 }),
-    { successRate: '100%', duration: '90ms' },
+    formatQualitySummary({ success_rate: 0.856, avg_duration_ms: 1530 }),
+    { successRate: '86%', duration: '1.5s', alert: '告警未知' },
+  )
+  assert.deepEqual(
+    formatQualitySummary({ success_rate: 1, avg_duration_ms: 90, alert_level: 'none' }),
+    { successRate: '100%', duration: '90ms', alert: '告警无' },
   )
 })

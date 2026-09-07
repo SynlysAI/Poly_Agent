@@ -18,7 +18,11 @@ from app.core.config import settings
 from app.api.v1.endpoints import agent_exec as agent_exec_endpoint
 from app.infra.computation_repositories import AuditEventRepository
 from app.schemas.identity_runtime import UserRecord
-from app.schemas.agent_exec import AgentExecProviderReadiness, AgentExecProviderResult
+from app.schemas.agent_exec import (
+    AgentExecProviderProbeData,
+    AgentExecProviderReadiness,
+    AgentExecProviderResult,
+)
 from app.services.agent_exec_providers.registry import AgentExecProviderRegistry
 from app.services.agent_exec_service import AgentExecService
 from unittest.mock import patch
@@ -61,6 +65,17 @@ class ApiProvider:
             provider_id=self.provider_id,
             success=True,
             output={"summary": "ok"},
+        )
+
+    def probe(self) -> AgentExecProviderProbeData:
+        """返回显式探测结果。"""
+        return AgentExecProviderProbeData(
+            provider_id=self.provider_id,
+            readiness=self.readiness(),
+            binary_path="/opt/test/codex",
+            binary_sha256="a" * 64,
+            version="codex test 1.0",
+            sandbox_mode="read-only",
         )
 
 
@@ -405,6 +420,26 @@ class AgentExecApiTest(ComputationTestCase):
             self.assertIn("success_rate", summary)
             self.assertIn("timeout_count", summary)
             self.assertIn("audit_error_count", summary)
+            self.assertEqual(summary["alert_level"], "none")
+
+    def test_provider_probe_admin_only(self) -> None:
+        settings.auth_enabled = True
+        with self._patch_user():
+            response = self.client.post(
+                f"/api/v1/agent-exec/providers/{self.provider_id}/probe",
+                headers=self._user_headers(),
+            )
+            self.assertEqual(response.status_code, 403)
+
+            response = self.client.post(
+                f"/api/v1/agent-exec/providers/{self.provider_id}/probe",
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()["data"]
+            self.assertTrue(data["readiness"]["available"])
+            self.assertEqual(data["version"], "codex test 1.0")
+            self.assertEqual(len(data["binary_sha256"]), 64)
 
     def test_run_list_admin_only_with_filters(self) -> None:
         settings.auth_enabled = True
@@ -420,13 +455,29 @@ class AgentExecApiTest(ComputationTestCase):
 
             response = self.client.get(
                 "/api/v1/agent-exec/runs",
-                params={"provider_id": self.provider_id, "status": "completed", "page": 1},
+                params={
+                    "provider_id": self.provider_id,
+                    "status": "completed",
+                    "created_after": "2000-01-01T00:00:00Z",
+                    "created_before": "2100-01-01T00:00:00Z",
+                    "page": 1,
+                },
                 headers=self._admin_headers(),
             )
             self.assertEqual(response.status_code, 200, response.text)
             data = response.json()["data"]
             self.assertGreaterEqual(data["total"], 1)
             self.assertIn(run["run_id"], [item["run_id"] for item in data["items"]])
+
+            invalid_window = self.client.get(
+                "/api/v1/agent-exec/runs",
+                params={
+                    "created_after": "2100-01-01T00:00:00Z",
+                    "created_before": "2000-01-01T00:00:00Z",
+                },
+                headers=self._admin_headers(),
+            )
+            self.assertEqual(invalid_window.status_code, 400)
 
             invalid = self.client.get(
                 "/api/v1/agent-exec/runs",
@@ -440,6 +491,56 @@ class AgentExecApiTest(ComputationTestCase):
                 headers=self._user_headers(),
             )
             self.assertEqual(forbidden.status_code, 403)
+
+    def test_quality_summary_reads_all_pages(self) -> None:
+        """质量统计分页读取全量 run，避免固定 1000 条采样偏差。"""
+        from app.schemas.agent_exec import AgentExecRunData
+
+        def make_paginated_run(index: int) -> AgentExecRunData:
+            """构建分页测试 run。
+
+            Args:
+                index: 序号。
+
+            Returns:
+                最小 run 对象。
+            """
+            return AgentExecRunData(
+                run_id=f"aer_quality_{index}",
+                provider_id="fake",
+                task_type="structured_file_task",
+                status="completed",
+                created_by="admin",
+                created_at=datetime.now(timezone.utc),
+                policy_snapshot=agent_exec_endpoint.service.policy_service.get_policy("fake"),
+            )
+
+        def paged_list_runs(**kwargs):
+            """返回两页测试数据。
+
+            Args:
+                **kwargs: 兼容仓储查询参数。
+
+            Returns:
+                (当前页数据, 总数) 元组。
+            """
+            page = int(kwargs.get("page", 1))
+            if page == 1:
+                return [make_paginated_run(index) for index in range(500)], 501
+            return [make_paginated_run(500)], 501
+
+        with patch.object(
+            agent_exec_endpoint.AgentExecRunRepository,
+            "list_runs",
+            side_effect=paged_list_runs,
+        ):
+            runs = agent_exec_endpoint._list_runs_for_quality(
+                provider_id=None,
+                created_after=None,
+                created_before=None,
+            )
+
+        self.assertEqual(len(runs), 501)
 
 
 if __name__ == "__main__":

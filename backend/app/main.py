@@ -159,7 +159,23 @@ async def app_lifespan(app: FastAPI):
     except Exception:
         app_logger.exception("agent_exec MongoDB 索引初始化失败")
 
+    try:
+        from app.services.agent_exec_service import AgentExecService
+
+        maintenance_service = AgentExecService()
+        recovered = maintenance_service.recover_interrupted_runs()
+        cleaned = maintenance_service.cleanup_terminal_workdirs()
+        app_logger.info(
+            "agent_exec 启动维护完成：恢复 %d 个非终态 run，清理 %d 个终态 workdir",
+            len(recovered),
+            len(cleaned),
+        )
+    except Exception:
+        app_logger.exception("agent_exec 启动恢复或清理失败")
+
     async def stale_reaper_loop() -> None:
+        nonlocal next_agent_exec_cleanup
+
         logger_reaper.info(
             "stale-run reaper started (interval=%ds, heartbeat_threshold=%ds, wallclock_factor=%.1f)",
             settings.stale_reaper_interval_seconds,
@@ -168,7 +184,10 @@ async def app_lifespan(app: FastAPI):
         )
         while not stop_event.is_set():
             try:
-                await asyncio.sleep(settings.stale_reaper_interval_seconds)
+                await asyncio.sleep(min(
+                    settings.stale_reaper_interval_seconds,
+                    settings.agent_exec_cleanup_interval_seconds,
+                ))
                 if stop_event.is_set():
                     break
                 from app.services.computation_service import ComputationService
@@ -181,9 +200,19 @@ async def app_lifespan(app: FastAPI):
                 recovered = assistant_run_service.requeue_stale()
                 if recovered:
                     logger_reaper.info("assistant stale-run reaper: requeued %d runs", recovered)
+                if time.monotonic() >= next_agent_exec_cleanup:
+                    from app.services.agent_exec_service import AgentExecService
+
+                    cleaned = AgentExecService().cleanup_terminal_workdirs()
+                    if cleaned:
+                        logger_reaper.info("agent_exec retention cleanup: removed %d workdirs", len(cleaned))
+                    next_agent_exec_cleanup = (
+                        time.monotonic() + settings.agent_exec_cleanup_interval_seconds
+                    )
             except Exception:
                 logger_reaper.exception("stale-run reaper loop error")
 
+    next_agent_exec_cleanup = time.monotonic()
     reaper_task = asyncio.create_task(stale_reaper_loop())
     try:
         yield

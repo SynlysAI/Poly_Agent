@@ -18,7 +18,6 @@ const item = (id, overrides = {}) => ({
   reason: null,
   policy: { allowed_roles: ['admin', 'user'], requires_confirmation: true, viewer_can_invoke: true, scope_note: 'safe' },
   invocation: { kind: 'dialogue_tool', method: 'navigate', target: '/dialogue?toolIds=x' },
-  config_path: '/tools?tab=agent-tools',
   attributions: [{ name: 'ALchemist', role: 'method_reference' }],
   input_schema: { secret: true },
   output_schema: { secret: true },
@@ -43,7 +42,6 @@ test('normalizeCapabilityCatalog 只保留公开白名单字段', () => {
     dialogue_tools: { group_id: 'dialogue_tools', title: '对话工具', description: 'x', status: 'available', total_count: 1, invocable_count: 1, unavailable_reason: null, items: [item('tool')] },
     agent_connectors: { group_id: 'agent_connectors', title: '外部 Agent 连接器', description: 'x', status: 'unavailable', total_count: 0, invocable_count: 0, unavailable_reason: '暂无', items: [] },
     report_skills: { group_id: 'report_skills', title: '报告 Skill', description: 'x', status: 'partial', total_count: 2, invocable_count: 1, unavailable_reason: 'x', items: [] },
-    llm_capabilities: { group_id: 'llm_capabilities', title: 'LLM 能力', description: 'x', status: 'available', total_count: 1, invocable_count: 1, unavailable_reason: null, items: [] },
     api_key: 'secret',
   })
   assert.equal(data.viewer_role, 'user')
@@ -51,9 +49,10 @@ test('normalizeCapabilityCatalog 只保留公开白名单字段', () => {
   assert.equal(data.dialogue_tools.items[0].policy.viewer_can_invoke, true)
   assert.equal(data.dialogue_tools.items[0].attributions[0].name, 'ALchemist')
   assert.deepEqual(Object.keys(data.dialogue_tools.items[0]).sort(), [
-    'attributions', 'config_path', 'description', 'id', 'invocation',
-    'module_id', 'name', 'policy', 'reason', 'status',
+    'attributions', 'description', 'id', 'invocation', 'module_id',
+    'name', 'policy', 'reason', 'status',
   ])
+  assert.equal('llm_capabilities' in data, false)
 })
 
 test('visibleCapabilityItems 管理员看全部，普通用户只看可调用项', () => {

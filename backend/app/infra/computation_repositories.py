@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -64,6 +64,32 @@ def _matches(document: dict[str, Any], filters: dict[str, Any]) -> bool:
                     if not any(item in value for item in allowed):
                         return False
                 elif value not in allowed:
+                    return False
+            if "$gte" in expected:
+                expected_value = expected["$gte"]
+                if isinstance(expected_value, datetime) and expected_value.tzinfo is not None:
+                    expected_value = expected_value.astimezone(timezone.utc).replace(tzinfo=None)
+                comparison_value = (
+                    _coerce_datetime(value)
+                    if isinstance(expected_value, datetime)
+                    else value
+                )
+                if isinstance(comparison_value, datetime) and comparison_value.tzinfo is not None:
+                    comparison_value = comparison_value.astimezone(timezone.utc).replace(tzinfo=None)
+                if not (comparison_value is not None and comparison_value >= expected_value):
+                    return False
+            if "$lte" in expected:
+                expected_value = expected["$lte"]
+                if isinstance(expected_value, datetime) and expected_value.tzinfo is not None:
+                    expected_value = expected_value.astimezone(timezone.utc).replace(tzinfo=None)
+                comparison_value = (
+                    _coerce_datetime(value)
+                    if isinstance(expected_value, datetime)
+                    else value
+                )
+                if isinstance(comparison_value, datetime) and comparison_value.tzinfo is not None:
+                    comparison_value = comparison_value.astimezone(timezone.utc).replace(tzinfo=None)
+                if not (comparison_value is not None and comparison_value <= expected_value):
                     return False
         elif isinstance(expected, set):
             if value not in expected:

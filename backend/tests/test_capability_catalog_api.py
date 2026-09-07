@@ -26,7 +26,6 @@ from app.schemas.capabilities import (
     CapabilityPolicySummary,
 )
 from app.schemas.identity_runtime import UserRecord
-from app.schemas.llm_models import LLMModelCatalogData, LLMModelInfo, LLMProviderInfo
 from app.services.agent_exec_providers.registry import AgentExecProviderRegistry
 from app.services.agent_exec_service import AgentExecService
 from app.services.capability_catalog_service import CapabilityCatalogService
@@ -109,51 +108,12 @@ class CapabilityCatalogApiTest(ComputationTestCase):
         self.original_catalog_service = capabilities_endpoint.catalog_service
         self.catalog_service = CapabilityCatalogService(
             agent_exec_service=AgentExecService(registry=registry, run_reader=lambda _: None),
-            llm_model_service=self._fake_llm_service(),
         )
         capabilities_endpoint.catalog_service = self.catalog_service
 
     def tearDown(self) -> None:
         capabilities_endpoint.catalog_service = self.original_catalog_service
         super().tearDown()
-
-    @staticmethod
-    def _fake_llm_service():
-        """构建只返回脱敏目录的 LLM 服务替身。
-
-        Returns:
-            带 get_catalog 方法的轻量对象。
-        """
-
-        class FakeLLMService:
-            """不访问配置文件的 LLM 服务替身。"""
-
-            @staticmethod
-            def get_catalog(*, probe: bool = False) -> LLMModelCatalogData:
-                """返回固定脱敏目录。
-
-                Args:
-                    probe: 兼容调用参数。
-
-                Returns:
-                固定 LLM catalog。
-                """
-                return LLMModelCatalogData(
-                    providers=[
-                        LLMProviderInfo(
-                            provider_id="test-openai",
-                            display_name="Test OpenAI",
-                            provider_type="openai_compatible",
-                            base_url_configured=True,
-                            base_url_label="internal host",
-                            api_key_configured=True,
-                            status="available",
-                            models=[LLMModelInfo(model_id="greet", display_name="Greeting")],
-                        )
-                    ]
-                )
-
-        return FakeLLMService()
 
     def test_local_demo_mode_returns_admin_catalog_without_sensitive_fields(self) -> None:
         response = self.client.get("/api/v1/capabilities/catalog")
@@ -167,21 +127,18 @@ class CapabilityCatalogApiTest(ComputationTestCase):
                     data["dialogue_tools"]["group_id"],
                     data["agent_connectors"]["group_id"],
                     data["report_skills"]["group_id"],
-                    data["llm_capabilities"]["group_id"],
                 ]
             ),
-            ["dialogue_tools", "agent_connectors", "report_skills", "llm_capabilities"],
+            ["dialogue_tools", "agent_connectors", "report_skills"],
         )
+        self.assertNotIn("llm_capabilities", data)
         connector = next(
             item for item in data["agent_connectors"]["items"] if item["id"] == self.provider_id
         )
         self.assertEqual(connector["status"], "disabled")
         self.assertFalse(connector["policy"]["viewer_can_invoke"])
-        llm = data["llm_capabilities"]["items"][0]
-        self.assertEqual(llm["id"], "test-openai:greet")
-        self.assertEqual(llm["invocation"]["target"], "/dialogue?providerId=test-openai&modelId=greet")
         raw = response.text.lower()
-        for forbidden in ("api_key", "base_url", "http://", "workdir", "prompt"):
+        for forbidden in ("api_key", "base_url", "http://", "workdir", "prompt", "config_path"):
             self.assertNotIn(forbidden, raw)
 
     def test_catalog_requires_authentication_when_auth_enabled(self) -> None:
@@ -251,23 +208,25 @@ class CapabilityCatalogApiTest(ComputationTestCase):
         self.assertTrue(user_item.policy.requires_confirmation)
 
     def test_single_source_failure_only_marks_its_group_unavailable(self) -> None:
-        original = self.catalog_service._llm_group
-        self.catalog_service._llm_group = lambda **_: (_ for _ in ()).throw(RuntimeError("secret path"))
+        original = self.catalog_service._report_skill_group
+        self.catalog_service._report_skill_group = lambda **_: (
+            _ for _ in ()
+        ).throw(RuntimeError("secret path"))
         try:
             data = self.catalog_service.get_catalog({"user_id": "user", "role": "user"})
         finally:
-            self.catalog_service._llm_group = original
-        self.assertEqual(data.llm_capabilities.status, "unavailable")
-        self.assertEqual(data.llm_capabilities.unavailable_reason, "能力源读取失败：RuntimeError")
-        self.assertEqual(data.report_skills.group_id, "report_skills")
+            self.catalog_service._report_skill_group = original
+        self.assertEqual(data.report_skills.status, "unavailable")
+        self.assertEqual(data.report_skills.unavailable_reason, "能力源读取失败：RuntimeError")
+        self.assertEqual(data.agent_connectors.group_id, "agent_connectors")
         self.assertNotEqual(
-            data.report_skills.unavailable_reason,
+            data.agent_connectors.unavailable_reason,
             "能力源读取失败：RuntimeError",
         )
 
     def test_group_aggregation_counts_available_and_invocable_items(self) -> None:
         group = CapabilityCatalogService._group(
-            "llm_capabilities",
+            "report_skills",
             "测试",
             "测试",
             [make_item("a"), make_item("b", status="unavailable"), make_item("c", can_invoke=False)],

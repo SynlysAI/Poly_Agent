@@ -45,7 +45,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 | **Knowledge Base** | `/knowledge` | WeKnora 问答、证据清单和 Neo4j 增强检索子图 | 通过 WeKnora API 接入；Neo4j 图谱增强可选 |
 | **Data Catalog** | `/database/data-catalog`、`/data-catalog` | 材料数据资产浏览、检索和只读外部数据接入 | 资产库使用 `poly_data` 与 MinIO |
 | **助手与报告** | `/dialogue`、ResearchEngine 报告面板 | 基于项目事实导航、垂类算法工具调用、Slash Command 控制、统一回放、历史会话和结构化报告生成 | 算法工具仅来自已部署且 active 的垂类算法；支持 OpenAI、Ollama、Edison、Codex 和自定义 HTTP provider |
-| **基础工作台与能力治理** | `/dashboard`、`/tasks/center`、`/capabilities`、`/tools`、`/admin` | 统一任务视图、Agent 能力目录与调用确认、集成配置和管理 | 与 AI4MS 门户共享认证体系；`/tools` 收窄为管理员配置入口 |
+| **基础工作台与能力治理** | `/dashboard`、`/tasks/center`、`/tools`、`/admin` | 统一任务视图、AI 能力目录与调用确认、集成配置和管理 | 与 AI4MS 门户共享认证体系；普通用户在 `/tools` 仅见 AI 能力，管理员另见状态、LLM 模型、Agent 连接器、算法清单、算法工具与服务配置页签 |
 
 ### 模块细节
 
@@ -69,7 +69,7 @@ Poly Agent 位于 AI4MS 门户和具体算法/实验工具之间，承担任务�
 | Data Catalog | ✅ 基础可用 | 目录浏览、筛选和资产读取可用 |
 | 认证、助手、任务中心 | ✅ 基础可用 | HMAC token、门户 SSO、对话历史、垂类算法工具调用和跨模块任务视图可用；真实模型/算法服务依赖环境配置 |
 | LUI 动态计算预算 | ✅ 已完成 / 影子观测 | Query 分类、模型路由、RAG 分层、执行分级、影子观测与灰度回滚已落地；默认不改变线上行为，待双档对比后启用 |
-| Agent 连接器与能力中心 | ✅ 已完成 / 生产化收口中 | 受控外部 Agent 执行安全内核、连接器策略、逐次确认与审计可用；`/capabilities` 能力目录、Skill allowlist、用户与邀请码治理可用；Plan 15 P15-H 生产化收口进行中 |
+| Agent 连接器与 AI 能力 | ✅ 已完成 / 生产化收口中 | 受控外部 Agent 执行安全内核、连接器策略、逐次确认与审计可用；`/tools?tab=ai-ready` 三分组能力目录、Skill allowlist、用户与邀请码治理可用；Plan 17 生产化收口进行中 |
 | 真实 ORCA/HPC/AiiDA/SpecLabOS | 📋 规划中 | 通过 integration config 和 adapter 契约逐步接入 |
 
 ### 下一阶段优先级

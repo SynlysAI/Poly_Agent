@@ -60,7 +60,7 @@ class CapabilityInvocation(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["dialogue_tool", "agent_connector", "report_skill", "llm_model"]
+    kind: Literal["dialogue_tool", "agent_connector", "report_skill"]
     method: Literal["navigate", "api"]
     target: str
 
@@ -78,7 +78,6 @@ class CapabilityCatalogItem(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
     policy: CapabilityPolicySummary
     invocation: CapabilityInvocation
-    config_path: str = ""
     attributions: list[AttributionItem] = Field(default_factory=list)
 
 
@@ -87,7 +86,7 @@ class CapabilityCatalogGroup(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    group_id: Literal["dialogue_tools", "agent_connectors", "report_skills", "llm_capabilities"]
+    group_id: Literal["dialogue_tools", "agent_connectors", "report_skills"]
     title: str = Field(min_length=1, max_length=120)
     description: str = Field(min_length=1, max_length=500)
     status: CapabilityGroupStatus
@@ -108,7 +107,6 @@ class CapabilityCatalogData(BaseModel):
     dialogue_tools: CapabilityCatalogGroup
     agent_connectors: CapabilityCatalogGroup
     report_skills: CapabilityCatalogGroup
-    llm_capabilities: CapabilityCatalogGroup
 
 
 class CapabilityRelevanceItem(BaseModel):

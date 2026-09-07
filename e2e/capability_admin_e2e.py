@@ -120,16 +120,18 @@ def open_page(playwright, frontend_url: str, token: str, path: str, wait_selecto
         wait_selector: 页面主元素选择器。
 
     Returns:
-        (browser, page, errors) 元组。
+        (browser, page, errors, requests) 元组。
     """
     browser = playwright.chromium.launch(headless=True)
     page = browser.new_page(viewport={"width": 1440, "height": 900})
     errors: list[str] = []
+    requests: list[str] = []
     page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
     page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on("request", lambda request: requests.append(request.url))
     page.goto(f"{frontend_url}{path}#token={token}", wait_until="domcontentloaded", timeout=60_000)
     page.locator(wait_selector).wait_for(state="visible", timeout=60_000)
-    return browser, page, errors
+    return browser, page, errors, requests
 
 
 def assert_no_console_errors(errors: list[str]) -> None:
@@ -161,14 +163,17 @@ def verify_admin_capability_page(page) -> None:
     """验证管理员能力目录内容。
 
     Args:
-        page: 已打开 /capabilities 的页面。
+        page: 已打开 /tools?tab=ai-ready 的页面。
     """
-    expect(page.get_by_role("heading", name="能力中心")).to_be_visible()
-    expect(page.locator(".module-source")).to_contain_text("OpenAI")
-    for title in ("对话工具", "外部 Agent 连接器", "报告 Skill", "LLM 能力"):
+    expect(page.get_by_role("heading", name="AI 能力目录")).to_be_visible()
+    for title in ("对话工具", "外部 Agent 连接器", "报告 Skill"):
         expect(page.locator(".group-heading h2", has_text=title)).to_be_visible()
-    expect(page.locator(".capability-card").first).to_be_visible()
-    expect(page.locator(".capability-card", has_text="Codex Agent 连接器").first).to_be_visible()
+    assert page.locator(".group-heading h2", has_text="LLM 能力").count() == 0
+    expect(page.locator(".capability-card").first).to_be_visible(timeout=60_000)
+    codex_card = page.locator(".capability-card", has_text="Codex Agent 连接器").first
+    expect(codex_card).to_be_visible(timeout=60_000)
+    expect(codex_card.locator(".source-badges")).to_contain_text("Codex CLI")
+    assert page.locator("button", has_text="前往配置").count() == 0
 
 
 def verify_admin_tools_and_admin_pages(page) -> None:
@@ -181,9 +186,16 @@ def verify_admin_tools_and_admin_pages(page) -> None:
     page.locator(".tools-view").wait_for(state="visible", timeout=60_000)
     tabs = page.locator(".el-tabs__item").all_inner_texts()
     assert [item.strip() for item in tabs] == [
-        "状态", "算法清单", "算法工具", "Agent 连接器", "配置", "LLM 模型"
+        "状态", "AI 能力", "LLM 模型", "Agent 连接器", "算法清单", "算法工具", "服务配置"
     ], f"/tools tab 回归: {tabs}"
-    expect(page.get_by_role("button", name="查看能力中心")).to_be_visible()
+    expect(page.get_by_role("tab", name="状态")).to_have_attribute("aria-selected", "true")
+    expect(page.get_by_role("heading", name="服务状态")).to_be_visible()
+    assert not page.url.endswith("?tab=status"), "状态页作为默认页时不应追加 tab 参数"
+    expect(page.get_by_role("button", name="查看 AI 能力")).to_be_visible()
+    page.get_by_role("tab", name="Agent 连接器").click()
+    expect(page.get_by_role("heading", name="Agent 连接器")).to_be_visible()
+    expect(page.get_by_role("button", name="显式探测").first).to_be_visible(timeout=60_000)
+    expect(page.get_by_role("button", name="保存策略").first).to_be_visible(timeout=60_000)
 
     page.goto(f"{FRONTEND_URL}/admin", wait_until="domcontentloaded")
     page.locator(".panel-title", has_text="系统管理").wait_for(state="visible", timeout=60_000)
@@ -202,7 +214,7 @@ def verify_user_capability_page(page) -> None:
     """验证普通用户能力目录与路由守卫。
 
     Args:
-        page: 已打开 /capabilities 的普通用户页面。
+        page: 已打开 /tools?tab=ai-ready 的普通用户页面。
     """
     expect(page.locator(".permission-panel")).to_contain_text("普通用户")
     assert page.locator("button", has_text="前往配置").count() == 0, "普通用户不应看到配置跳转"
@@ -211,11 +223,18 @@ def verify_user_capability_page(page) -> None:
         "默认策略下普通用户不应看到外部连接器"
     )
 
-    page.goto(f"{FRONTEND_URL}/tools", wait_until="domcontentloaded")
-    print(f"INFO user /tools url={page.url}")
-    page.locator(".dashboard-view").wait_for(state="visible", timeout=60_000)
-    assert page.url.startswith(f"{FRONTEND_URL}/dashboard"), "普通用户 /tools 应回退工作台"
+    page.goto(f"{FRONTEND_URL}/tools?tab=agent-connectors", wait_until="domcontentloaded")
+    page.locator(".tools-view").wait_for(state="visible", timeout=60_000)
+    tabs = page.locator(".el-tabs__item").all_inner_texts()
+    assert [item.strip() for item in tabs] == ["AI 能力"], f"普通用户 /tools tab 越权: {tabs}"
+    expect(page.get_by_role("heading", name="AI 能力目录")).to_be_visible()
 
+def verify_user_admin_route_guards(page) -> None:
+    """验证普通用户不能进入管理路由。
+
+    Args:
+        page: 已登录普通用户的页面。
+    """
     page.goto(f"{FRONTEND_URL}/admin", wait_until="domcontentloaded")
     print(f"INFO user /admin url={page.url}")
     page.locator(".dashboard-view").wait_for(state="visible", timeout=60_000)
@@ -247,8 +266,8 @@ def main() -> int:
     screenshots.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as playwright:
-        browser, page, errors = open_page(
-            playwright, FRONTEND_URL, admin_token, "/capabilities", ".capability-view"
+        browser, page, errors, _ = open_page(
+            playwright, FRONTEND_URL, admin_token, "/tools?tab=ai-ready", ".capability-view"
         )
         try:
             verify_admin_capability_page(page)
@@ -258,11 +277,23 @@ def main() -> int:
         finally:
             browser.close()
 
-        browser, page, errors = open_page(
-            playwright, FRONTEND_URL, user_token, "/capabilities", ".capability-view"
+        browser, page, errors, requests = open_page(
+            playwright, FRONTEND_URL, user_token, "/tools?tab=ai-ready", ".capability-view"
         )
         try:
             verify_user_capability_page(page)
+            management_requests = [
+                url for url in requests
+                if any(path in url for path in (
+                    "/agent-tools/registry", "/agent-exec/providers", "/llm/models",
+                    "/integrations", "/algorithms",
+                ))
+            ]
+            assert not management_requests, f"普通用户触发管理 API: {management_requests}"
+            verify_user_admin_route_guards(page)
+            page.goto(f"{FRONTEND_URL}/capabilities", wait_until="domcontentloaded")
+            page.locator(".tools-view").wait_for(state="visible", timeout=60_000)
+            assert page.url.startswith(f"{FRONTEND_URL}/tools"), "旧 /capabilities 链接应跳转工具服务"
             for width, height in VIEWPORTS:
                 page.set_viewport_size({"width": width, "height": height})
                 page.wait_for_timeout(300)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -108,6 +109,8 @@ class AgentExecRunRepository(BaseRepository):
         status: str | None = None,
         chat_id: str | None = None,
         created_by: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[AgentExecRunData], int]:
@@ -118,6 +121,8 @@ class AgentExecRunRepository(BaseRepository):
             status: 状态过滤。
             chat_id: 会话过滤。
             created_by: 创建者过滤，用于 owner 校验。
+            created_after: 创建时间下界。
+            created_before: 创建时间上界。
             page: 页码。
             page_size: 每页数量。
 
@@ -133,6 +138,11 @@ class AgentExecRunRepository(BaseRepository):
             filters["chat_id"] = chat_id
         if created_by:
             filters["created_by"] = created_by
+        if created_after is not None:
+            filters["created_at"] = {"$gte": created_after}
+        if created_before is not None:
+            filters.setdefault("created_at", {})
+            filters["created_at"]["$lte"] = created_before
         documents, total = cls.list_all(
             filters, sort_field="created_at", reverse=True, page=page, page_size=page_size
         )

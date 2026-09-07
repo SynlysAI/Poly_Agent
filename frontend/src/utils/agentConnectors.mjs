@@ -108,7 +108,7 @@ export function buildTestRunPayload({ providerId, prompt, timeoutSeconds, confir
  * 格式化质量摘要文本。
  *
  * @param {object} summary 质量摘要。
- * @returns {{successRate: string, duration: string}} 展示文本。
+ * @returns {{successRate: string, duration: string, alert: string}} 展示文本。
  */
 export function formatQualitySummary(summary) {
   const rate = summary?.success_rate
@@ -119,5 +119,6 @@ export function formatQualitySummary(summary) {
   const duration = avg === null || avg === undefined
     ? '暂无数据'
     : avg >= 1000 ? `${(avg / 1000).toFixed(1)}s` : `${avg}ms`
-  return { successRate, duration }
+  const alertLevels = { none: '告警无', warning: '告警：警告', critical: '告警：严重' }
+  return { successRate, duration, alert: alertLevels[summary?.alert_level] || '告警未知' }
 }

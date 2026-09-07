@@ -11,6 +11,7 @@ import stat
 import threading
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from app.infra.agent_exec_repositories import (
     AgentExecProviderPolicyRepository,
     AgentExecRunRepository,
 )
+from app.infra.computation_repositories import AuditEventRepository
 from app.schemas.agent_exec import (
     AgentExecArtifactData,
     AgentExecExecutionRequest,
@@ -40,6 +42,7 @@ from app.services.agent_exec_providers.base import (
 )
 from app.services.agent_exec_providers.registry import AgentExecProviderRegistry
 from app.services.agent_exec_providers.codex import CodexAgentExecProvider
+from app.services.agent_exec_alert_service import AgentExecAlertService
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
@@ -235,6 +238,156 @@ class AgentExecService:
             run 列表；持久化读取由仓储层补充。
         """
         return list(self._runs.values())
+
+    def recover_interrupted_runs(self) -> list[AgentExecRunData]:
+        """服务启动时把持久化非终态 run 恢复为稳定失败终态。
+
+        Returns:
+            本次恢复的 run 列表。
+        """
+        recovered: list[AgentExecRunData] = []
+        for status in ("requested", "running"):
+            page = 1
+            while True:
+                rows, total = AgentExecRunRepository.list_runs(
+                    status=status,
+                    page=page,
+                    page_size=500,
+                )
+                for run in rows:
+                    if run.status in TERMINAL_STATUSES:
+                        continue
+                    now = utc_now()
+                    started = self._utc_naive(run.started_at or run.created_at)
+                    updated = run.model_copy(
+                        update={
+                            "status": "failed",
+                            "error_code": "restart_recovered",
+                            "error_message": "服务重启，非终态外部 Agent 任务已安全恢复为失败",
+                            "finished_at": now,
+                            "duration_ms": int((now - started).total_seconds() * 1000),
+                        }
+                    )
+                    self._save_run(updated)
+                    self._emit(
+                        "agent_exec.restart.recovered",
+                        updated,
+                        previous_status=status,
+                    )
+                    recovered.append(updated)
+                if page * 500 >= total:
+                    break
+                page += 1
+        return recovered
+
+    def cleanup_terminal_workdirs(self) -> list[str]:
+        """按保留窗口与数量上限清理终态 run workdir。
+
+        Returns:
+            本次成功清理的 run ID 列表。
+        """
+        root = settings.agent_exec_workdir_root
+        if not root.exists():
+            return []
+        terminal_runs: dict[str, AgentExecRunData] = {}
+        for status in ("completed", "failed", "cancelled"):
+            page = 1
+            while True:
+                rows, total = AgentExecRunRepository.list_runs(
+                    status=status,
+                    page=page,
+                    page_size=500,
+                )
+                for run in rows:
+                    terminal_runs[run.run_id] = run
+                if page * 500 >= total:
+                    break
+                page += 1
+        terminal: list[tuple[Path, AgentExecRunData, datetime]] = []
+        for path in root.iterdir():
+            if not path.is_dir() or not path.name.startswith("aer_"):
+                continue
+            run = terminal_runs.get(path.name)
+            if run is None:
+                continue
+            timestamp = self._utc_naive(run.finished_at or run.created_at)
+            terminal.append((path, run, timestamp))
+        terminal.sort(key=lambda entry: entry[2], reverse=True)
+        cutoff = utc_now() - timedelta(hours=settings.agent_exec_workdir_retention_hours)
+        cleaned: list[str] = []
+        for index, (path, run, timestamp) in enumerate(terminal):
+            expired = timestamp <= cutoff
+            over_limit = index >= settings.agent_exec_max_retained_workdirs
+            if not (expired or over_limit):
+                continue
+            self._remove_path(path)
+            if not path.exists():
+                cleaned.append(run.run_id)
+                self._emit(
+                    "agent_exec.workdir.cleaned",
+                    run,
+                    reason="retention_expired" if expired else "retention_limit",
+                )
+        return cleaned
+
+    def recover_audit_events(self, run_id: str) -> tuple[AgentExecRunData, list[str]]:
+        """补写缺失的生命周期审计事件并清除可恢复的 audit_error。
+
+        Args:
+            run_id: run ID。
+
+        Returns:
+            (恢复后的 run, 本次补写事件类型) 元组。
+
+        Raises:
+            AgentExecRequestError: run 不存在。
+        """
+        run = self._get_run_or_raise(run_id)
+        had_audit_error = run.audit_error
+        events: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            event_page, total = AuditEventRepository.list_events(
+                entity_type="agent_exec_run",
+                entity_id=run_id,
+                event_type=None,
+                page=page,
+                page_size=500,
+            )
+            events.extend(event_page)
+            if page * 500 >= total:
+                break
+            page += 1
+        existing_types = {str(item.get("event_type") or "") for item in events}
+        expected: list[tuple[str, dict[str, Any]]] = [("agent_exec.requested", {})]
+        if run.started_at is not None:
+            expected.append(("agent_exec.started", {}))
+        if run.status in TERMINAL_STATUSES:
+            terminal_event = f"agent_exec.{run.status}"
+            metadata = (
+                {"error_code": run.error_code}
+                if run.status == "failed" and run.error_code
+                else {}
+            )
+            expected.append((terminal_event, metadata))
+
+        recovered = []
+        for event_type, metadata in expected:
+            if event_type in existing_types:
+                continue
+            self._emit(event_type, run, **metadata)
+            recovered.append(event_type)
+
+        if run.audit_error:
+            run = run.model_copy(update={"audit_error": False})
+            self._save_run(run)
+        if recovered or had_audit_error:
+            self._emit(
+                "agent_exec.audit.recovered",
+                run,
+                recovered_event_types=recovered,
+            )
+        return run, recovered
 
     def lui_tool(self, *, role: str) -> AgentExecLuiToolData | None:
         """返回 LUI 专用工具描述符；任一条件不满足即不暴露。
@@ -979,6 +1132,20 @@ class AgentExecService:
         workdir.mkdir(parents=True, mode=0o700, exist_ok=False)
         return workdir
 
+    @staticmethod
+    def _utc_naive(value: datetime) -> datetime:
+        """把持久化层可能返回的 aware / naive 时间统一为 UTC-naive。
+
+        Args:
+            value: datetime 值。
+
+        Returns:
+            与 utc_now 可直接比较的 datetime。
+        """
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
     def _resolve_source(self, source_object_id: str) -> Path:
         """解析服务端受管输入来源。
 
@@ -1260,6 +1427,16 @@ class AgentExecService:
                     "agent_exec audit_error state persist failed (run_id=%s)",
                     run.run_id,
                 )
+        AgentExecAlertService.emit(
+            level="critical",
+            title="agent_exec 审计写入失败",
+            reasons=["audit_event_write_failed"],
+            context={
+                "run_id": updated.run_id,
+                "provider_id": updated.provider_id,
+                "status": updated.status,
+            },
+        )
 
     def _emit_policy_rejected(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -285,34 +286,86 @@ class Settings:
             "on",
         }
 
-        # 受控外部 Agent 执行（agent_exec）配置，默认关闭
-        self.agent_exec_enabled: bool = os.getenv("AGENT_EXEC_ENABLED", "false").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        # 受控外部 Agent 执行（agent_exec）配置，默认关闭。
+        # 非法配置不阻断应用启动，而是记录诊断并让 provider 返回 unavailable。
+        self.agent_exec_config_errors: list[str] = []
+        self.agent_exec_enabled: bool = self._env_bool("AGENT_EXEC_ENABLED", False)
         self.agent_exec_workdir_root: Path = self._resolve_project_path(
             os.getenv("AGENT_EXEC_WORKDIR_ROOT", str(self.runtime_root / "agent_exec"))
         )
-        self.agent_exec_timeout_seconds: int = int(os.getenv("AGENT_EXEC_TIMEOUT_SECONDS", "600"))
-        self.agent_exec_max_input_bytes: int = int(
-            os.getenv("AGENT_EXEC_MAX_INPUT_BYTES", str(10 * 1024 * 1024))
+        self.agent_exec_timeout_seconds: int = self._env_int(
+            "AGENT_EXEC_TIMEOUT_SECONDS", 600, minimum=1, maximum=3600
         )
-        self.agent_exec_max_output_bytes: int = int(
-            os.getenv("AGENT_EXEC_MAX_OUTPUT_BYTES", str(10 * 1024 * 1024))
+        self.agent_exec_max_input_bytes: int = self._env_int(
+            "AGENT_EXEC_MAX_INPUT_BYTES", 10 * 1024 * 1024, minimum=1, maximum=1024**3
         )
-        self.agent_exec_max_files: int = int(os.getenv("AGENT_EXEC_MAX_FILES", "20"))
-        self.agent_exec_max_concurrency: int = int(
-            os.getenv("AGENT_EXEC_MAX_CONCURRENCY", "2")
+        self.agent_exec_max_output_bytes: int = self._env_int(
+            "AGENT_EXEC_MAX_OUTPUT_BYTES", 10 * 1024 * 1024, minimum=1, maximum=1024**3
         )
-        self.agent_exec_max_active_runs_per_user: int = int(
-            os.getenv("AGENT_EXEC_MAX_ACTIVE_RUNS_PER_USER", "1")
+        self.agent_exec_max_files: int = self._env_int(
+            "AGENT_EXEC_MAX_FILES", 20, minimum=1, maximum=1000
         )
+        self.agent_exec_max_concurrency: int = self._env_int(
+            "AGENT_EXEC_MAX_CONCURRENCY", 2, minimum=1, maximum=64
+        )
+        self.agent_exec_max_active_runs_per_user: int = self._env_int(
+            "AGENT_EXEC_MAX_ACTIVE_RUNS_PER_USER", 1, minimum=1, maximum=100
+        )
+        self.agent_exec_workdir_retention_hours: int = self._env_int(
+            "AGENT_EXEC_WORKDIR_RETENTION_HOURS", 24, minimum=0, maximum=24 * 365
+        )
+        self.agent_exec_max_retained_workdirs: int = self._env_int(
+            "AGENT_EXEC_MAX_RETAINED_WORKDIRS", 100, minimum=1, maximum=100_000
+        )
+        self.agent_exec_cleanup_interval_seconds: int = self._env_int(
+            "AGENT_EXEC_CLEANUP_INTERVAL_SECONDS", 3600, minimum=60, maximum=86_400
+        )
+        self.agent_exec_process_memory_bytes: int = self._env_int(
+            "AGENT_EXEC_PROCESS_MEMORY_BYTES",
+            2 * 1024**3,
+            minimum=16 * 1024**2,
+            maximum=64 * 1024**3,
+        )
+        self.agent_exec_process_cpu_extra_seconds: int = self._env_int(
+            "AGENT_EXEC_PROCESS_CPU_EXTRA_SECONDS", 10, minimum=0, maximum=300
+        )
+        self.agent_exec_deployment_mode: str = os.getenv(
+            "AGENT_EXEC_DEPLOYMENT_MODE", "single_process"
+        ).strip().lower() or "single_process"
+        if self.agent_exec_deployment_mode != "single_process":
+            self.agent_exec_config_errors.append(
+                "AGENT_EXEC_DEPLOYMENT_MODE 目前仅支持 single_process；多实例需先落地跨进程终态 CAS"
+            )
+        for worker_env in ("WEB_CONCURRENCY", "GUNICORN_WORKERS"):
+            raw_workers = os.getenv(worker_env, "").strip()
+            if not raw_workers:
+                continue
+            try:
+                workers = int(raw_workers)
+            except ValueError:
+                self.agent_exec_config_errors.append(f"{worker_env} 必须是整数")
+                continue
+            if workers != 1:
+                self.agent_exec_config_errors.append(
+                    f"{worker_env}={workers} 与 agent_exec 单进程终态约束冲突"
+                )
+        self.agent_exec_alert_webhook_url: str = os.getenv(
+            "AGENT_EXEC_ALERT_WEBHOOK_URL", ""
+        ).strip()
         self.agent_exec_codex_bin: str = os.getenv("AGENT_EXEC_CODEX_BIN", "codex").strip() or "codex"
         self.agent_exec_codex_sandbox_mode: str = (
             os.getenv("AGENT_EXEC_CODEX_SANDBOX_MODE", "read-only").strip() or "read-only"
         )
+        self.agent_exec_codex_min_version: str = (
+            os.getenv("AGENT_EXEC_CODEX_MIN_VERSION", "0.149.1").strip()
+            or "0.149.1"
+        )
+        if re.fullmatch(r"\d+\.\d+\.\d+", self.agent_exec_codex_min_version) is None:
+            self.agent_exec_config_errors.append(
+                "AGENT_EXEC_CODEX_MIN_VERSION 必须是 X.Y.Z 语义化版本，"
+                f"当前为 {self.agent_exec_codex_min_version!r}"
+            )
+            self.agent_exec_codex_min_version = "0.149.1"
         self.agent_exec_codex_api_key: str = os.getenv(
             "AGENT_EXEC_CODEX_API_KEY", os.getenv("CODEX_API_KEY", "")
         )
@@ -323,6 +376,8 @@ class Settings:
             if agent_exec_codex_home_raw
             else None
         )
+        if self.agent_exec_workdir_root == self.project_root:
+            self.agent_exec_config_errors.append("AGENT_EXEC_WORKDIR_ROOT 不能指向项目根目录")
 
         # 统一认证（AI4MS）配置；认证库与业务库分离时显式配置 AUTH_MONGODB_URI。
         self.auth_mongodb_uri: str = os.getenv("AUTH_MONGODB_URI", "").strip()
@@ -375,6 +430,61 @@ class Settings:
         if target_path.is_absolute():
             return target_path
         return (self.project_root / target_path).resolve()
+
+    def _env_bool(self, name: str, default: bool) -> bool:
+        """解析布尔环境变量并记录非法配置。
+
+        Args:
+            name: 环境变量名。
+            default: 变量缺失或非法时使用的安全默认值。
+
+        Returns:
+            解析后的布尔值；非法输入回落默认值并进入配置诊断。
+        """
+        raw = os.getenv(name)
+        if raw is None or not raw.strip():
+            return default
+        value = raw.strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+        self.agent_exec_config_errors.append(f"{name} 必须是布尔值，当前为 {raw!r}")
+        return default
+
+    def _env_int(
+        self,
+        name: str,
+        default: int,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        """解析带范围限制的整数环境变量。
+
+        Args:
+            name: 环境变量名。
+            default: 安全默认值。
+            minimum: 允许的最小值。
+            maximum: 允许的最大值。
+
+        Returns:
+            合法整数；非法或越界时回落默认值并进入配置诊断。
+        """
+        raw = os.getenv(name)
+        if raw is None or not raw.strip():
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            self.agent_exec_config_errors.append(f"{name} 必须是整数，当前为 {raw!r}")
+            return default
+        if value < minimum or value > maximum:
+            self.agent_exec_config_errors.append(
+                f"{name} 必须在 [{minimum}, {maximum}] 范围内，当前为 {value}"
+            )
+            return default
+        return value
 
     @staticmethod
     def _parse_csv(raw_value: str) -> list[str]:

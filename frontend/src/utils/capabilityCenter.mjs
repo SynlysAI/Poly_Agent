@@ -6,7 +6,6 @@ export const CAPABILITY_GROUP_ORDER = [
   'dialogue_tools',
   'agent_connectors',
   'report_skills',
-  'llm_capabilities',
 ]
 
 /**
@@ -69,7 +68,6 @@ export function publicItem(raw) {
       scope_note: String(source.policy?.scope_note || ''),
     },
     invocation: { ...source.invocation },
-    config_path: String(source.config_path || ''),
     attributions: Array.isArray(source.attributions)
       ? source.attributions.map((item) => ({
         name: String(item?.name || ''),

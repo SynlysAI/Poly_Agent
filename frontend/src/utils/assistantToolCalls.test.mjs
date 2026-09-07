@@ -9,6 +9,7 @@ import {
   normalizeToolCall,
   parseToolArguments,
   replaceToolCall,
+  replaceToolCallInMessages,
   toolCallRunDetailRoute,
   toolArgumentSourceText,
   toolPhaseLabel,
@@ -192,6 +193,24 @@ replaceToolCall(message, {
 assert.equal(message.tool_calls.length, 1)
 assert.equal(message.tool_calls[0].phase, 'completed')
 assert.equal(message.tool_calls[0].result_summary.score, 0.91)
+
+// SSE 失败恢复可能替换 message 对象；异步确认结果必须写回当前列表中的同 ID 消息。
+const staleMessage = {
+  message_id: 'msg-live',
+  tool_calls: [{ call_id: 'atc-live', phase: 'awaiting_confirmation' }],
+}
+const liveMessage = {
+  message_id: 'msg-live',
+  tool_calls: [{ call_id: 'atc-live', phase: 'awaiting_confirmation' }],
+}
+const updatedMessage = replaceToolCallInMessages(
+  [{ message_id: 'msg-other', tool_calls: [] }, liveMessage],
+  staleMessage,
+  { call_id: 'atc-live', phase: 'completed', result_summary: { score: 80 } },
+)
+assert.equal(updatedMessage, liveMessage)
+assert.equal(staleMessage.tool_calls[0].phase, 'awaiting_confirmation')
+assert.equal(liveMessage.tool_calls[0].phase, 'completed')
 
 // 已进入执行/结束状态的调用不允许被重放的旧事件降级回待确认。
 const racingMessage = { role: 'user', tool_calls: [] }

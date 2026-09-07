@@ -162,6 +162,20 @@ class AgentExecProviderConnection(BaseModel):
     policy: AgentExecProviderPolicy
 
 
+class AgentExecProviderProbeData(BaseModel):
+    """管理员显式探测的外部 Agent provider 事实。"""
+
+    provider_id: str
+    readiness: AgentExecProviderReadiness
+    binary_path: str = ""
+    binary_sha256: str = ""
+    version: str = ""
+    minimum_version: str = ""
+    version_supported: bool = False
+    sandbox_mode: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
 class AgentExecPolicyUpdateRequest(BaseModel):
     """管理员更新连接器策略的请求体。"""
 
@@ -193,6 +207,14 @@ class AgentExecRunDetailData(BaseModel):
     policy_summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentExecAuditRecoveryData(BaseModel):
+    """一次审计补写结果。"""
+
+    run: AgentExecRunData
+    recovered_event_types: list[str] = Field(default_factory=list)
+    recovered_at: datetime
+
+
 class AgentExecRunListData(BaseModel):
     """管理员 run 分页列表。"""
 
@@ -216,6 +238,11 @@ class AgentExecQualitySummaryData(BaseModel):
     total_input_bytes: int = 0
     total_output_bytes: int = 0
     avg_duration_ms: int | None = None
+    window_started_at: datetime | None = None
+    window_ended_at: datetime | None = None
+    provider_id: str | None = None
+    alert_level: Literal["none", "warning", "critical"] = "none"
+    alert_reasons: list[str] = Field(default_factory=list)
 
 
 class AgentExecLuiToolData(BaseModel):

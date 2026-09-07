@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 
-import AttributionBadges from '../components/attribution/AttributionBadges.vue'
+import AttributionBadges from './attribution/AttributionBadges.vue'
 import {
   createAgentExecRun,
   getApiErrorMessage,
@@ -41,7 +41,6 @@ const groupMeta = {
   dialogue_tools: { title: '对话工具', description: '从研发引擎派生并可在问答中调用的算法工具。' },
   agent_connectors: { title: '外部 Agent 连接器', description: '由服务端策略治理的受控结构化文件任务。' },
   report_skills: { title: '报告 Skill', description: '仅来自服务端 pipeline allowlist，不读取本地 Skill。' },
-  llm_capabilities: { title: 'LLM 能力', description: '脱敏 provider 与模型能力，可进入对话选择调用。' },
 }
 
 const groups = computed(() => CAPABILITY_GROUP_ORDER.map((key) => {
@@ -194,7 +193,6 @@ function invocationLabel(item) {
     dialogue_tool: '对话工具',
     agent_connector: '结构化文件任务',
     report_skill: '报告 pipeline',
-    llm_model: '模型路由',
   }
   return map[item.invocation.kind] || item.invocation.kind
 }
@@ -206,8 +204,8 @@ onMounted(loadCatalog)
   <div class="capability-view">
     <header class="capability-header">
       <div>
-        <h1>能力中心</h1>
-        <p>实时查看 agent 当前可调用的工具、外部连接器、报告 Skill 与模型能力；这里只读展示，不修改配置。</p>
+        <h2>AI 能力目录</h2>
+        <p>实时查看当前账号可调用的对话工具、外部 Agent 连接器与报告 Skill；这里只做展示和调用，不修改配置。</p>
       </div>
       <el-button type="primary" :icon="Refresh" :loading="loading" @click="loadCatalog">刷新目录</el-button>
     </header>
@@ -237,12 +235,12 @@ onMounted(loadCatalog)
       <article>
         <span>当前视角</span>
         <strong>{{ permissionSummary.roleLabel }}</strong>
-        <small>{{ catalog.is_admin ? '可查看不可用原因并跳转工具配置中心' : '仅显示策略允许且可调用的能力' }}</small>
+        <small>{{ catalog.is_admin ? '可查看不可用原因，配置在相邻管理页签' : '仅显示策略允许且可调用的能力' }}</small>
       </article>
       <article>
         <span>可见能力</span>
         <strong>{{ permissionSummary.total }}</strong>
-        <small>实时来自四个模块事实源</small>
+        <small>实时来自三个模块事实源</small>
       </article>
       <article>
         <span>可调用</span>
@@ -320,13 +318,6 @@ onMounted(loadCatalog)
             >
               {{ capabilityAction(item).label }}
             </el-button>
-            <el-button
-              v-if="catalog.is_admin && item.config_path"
-              size="small"
-              @click="router.push(item.config_path)"
-            >
-              前往配置
-            </el-button>
           </footer>
         </article>
       </div>
@@ -374,32 +365,30 @@ onMounted(loadCatalog)
 /* —— 简洁高级风格：与其他页面边距保持一致 —— */
 .capability-view {
   display: grid;
-  gap: 28px;
+  gap: 18px;
 }
 
-/* 页头 */
+/* 与工具服务页签内部标题保持一致 */
 .capability-header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--app-border-soft);
+  gap: 12px;
 }
 
-.capability-header h1 {
+.capability-header h2 {
   margin: 0;
   color: var(--app-ink);
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: -0.3px;
+  letter-spacing: 0;
 }
 
 .capability-header p {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   color: var(--app-ink-muted);
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.55;
   max-width: 640px;
 }
 
@@ -588,10 +577,6 @@ onMounted(loadCatalog)
 }
 
 @media (max-width: 700px) {
-  .capability-view {
-    gap: 22px;
-  }
-
   .capability-header,
   .group-heading {
     align-items: stretch;

@@ -1460,6 +1460,10 @@ export function updateAgentExecPolicy(providerId, payload) {
   return apiClient.patch(`/agent-exec/providers/${encodeURIComponent(providerId)}/policy`, payload).then(unwrapResponse)
 }
 
+export function probeAgentExecProvider(providerId) {
+  return apiClient.post(`/agent-exec/providers/${encodeURIComponent(providerId)}/probe`).then(unwrapResponse)
+}
+
 export function createAgentExecRun(payload) {
   return apiClient.post('/agent-exec/runs', payload).then(unwrapResponse)
 }

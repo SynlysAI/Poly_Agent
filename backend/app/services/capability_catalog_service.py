@@ -16,11 +16,9 @@ from app.schemas.capabilities import (
     CapabilityInvocation,
     CapabilityPolicySummary,
 )
-from app.schemas.llm_models import LLMModelCatalogData, LLMProviderInfo
 from app.schemas.reports import ReportReadinessData
 from app.services.agent_exec_service import AgentExecService
 from app.services.agent_tool_service import AgentToolService
-from app.services.llm_model_service import LLMModelService
 from app.services.report_service import SUPPORTED_PIPELINES, ReportService
 from app.services.report_skill_orchestrator import ReportSkillOrchestrator
 
@@ -41,13 +39,6 @@ REPORT_PROVIDER_LABELS = {
     "mock": "PolyAgent Mock provider",
 }
 
-LLM_PROVIDER_LABELS = {
-    "openai_compatible": "OpenAI-compatible provider",
-    "ollama": "Ollama",
-    "custom_http": "Custom HTTP provider",
-}
-
-
 class CapabilityCatalogService:
     """从各模块事实源实时构建只读能力目录。"""
 
@@ -57,12 +48,10 @@ class CapabilityCatalogService:
         agent_tool_service: AgentToolService | None = None,
         agent_exec_service: AgentExecService | None = None,
         report_service: ReportService | None = None,
-        llm_model_service: LLMModelService | None = None,
     ) -> None:
         self.agent_tool_service = agent_tool_service or AgentToolService()
         self.agent_exec_service = agent_exec_service or AgentExecService()
         self.report_service = report_service or ReportService()
-        self.llm_model_service = llm_model_service or LLMModelService()
 
     def get_catalog(self, current_user: dict[str, str] | None) -> CapabilityCatalogData:
         """构建当前用户可见的能力中心目录。
@@ -71,7 +60,7 @@ class CapabilityCatalogService:
             current_user: 当前登录用户；本地演示模式为空并按管理员处理。
 
         Returns:
-            四个固定能力分组组成的安全目录。
+            三个固定能力分组组成的安全目录。
         """
         role = "admin" if not current_user else str(current_user.get("role") or "user")
         if role not in {"admin", "user"}:
@@ -92,10 +81,6 @@ class CapabilityCatalogService:
             report_skills=self._safe_group(
                 "report_skills",
                 lambda: self._report_skill_group(is_admin=is_admin),
-            ),
-            llm_capabilities=self._safe_group(
-                "llm_capabilities",
-                lambda: self._llm_group(is_admin=is_admin),
             ),
         )
 
@@ -189,7 +174,6 @@ class CapabilityCatalogService:
                 method="navigate",
                 target=f"/dialogue?{urlencode({'toolIds': item.tool_id})}",
             ),
-            config_path="/tools?tab=agent-tools" if is_admin else "",
             attributions=[source for source in attributions if source],
         )
 
@@ -276,7 +260,6 @@ class CapabilityCatalogService:
                 method="api",
                 target="agent-exec/runs",
             ),
-            config_path="/tools?tab=agent-connectors" if is_admin else "",
             attributions=[
                 AttributionItem(
                     name=source_name,
@@ -367,7 +350,6 @@ class CapabilityCatalogService:
                 method="navigate",
                 target=f"/research-engine?{urlencode({'skillPipelineId': pipeline_id})}",
             ),
-            config_path="/tools?tab=status" if is_admin else "",
             attributions=[
                 AttributionItem(
                     name=source_name,
@@ -380,96 +362,6 @@ class CapabilityCatalogService:
         if not is_admin and status != "available":
             return item.model_copy(update={"policy": item.policy.model_copy(update={"viewer_can_invoke": False})})
         return item
-
-    def _llm_group(self, *, is_admin: bool) -> CapabilityCatalogGroup:
-        """从脱敏 LLM 目录构建模型能力分组。
-
-        Args:
-            is_admin: 是否管理员。
-
-        Returns:
-            LLM 能力分组。
-        """
-        catalog: LLMModelCatalogData = self.llm_model_service.get_catalog(probe=False)
-        items = [
-            self._llm_item(
-                provider,
-                model_id=str(model.model_id),
-                display_name=str(model.display_name),
-                is_admin=is_admin,
-            )
-            for provider in catalog.providers
-            for model in provider.models
-        ]
-        if not is_admin:
-            items = [item for item in items if item.status in {"available", "degraded"}]
-        return self._group(
-            "llm_capabilities",
-            "LLM 能力",
-            "面向问答与报告路由的脱敏 provider 与模型能力。",
-            items,
-        )
-
-    @staticmethod
-    def _llm_item(
-        provider: LLMProviderInfo,
-        *,
-        model_id: str,
-        display_name: str,
-        is_admin: bool,
-    ) -> CapabilityCatalogItem:
-        """构建一个 LLM 模型能力卡片。
-
-        Args:
-            provider: 脱敏 provider 元数据。
-            model_id: 模型 ID。
-            display_name: 模型展示名。
-            is_admin: 是否管理员。
-
-        Returns:
-            LLM 能力卡片。
-        """
-        if provider.status == "available":
-            status = "available"
-            reason = None
-        elif provider.status == "degraded":
-            status = "degraded"
-            reason = "；".join(provider.warnings) or "provider 处于降级状态"
-        elif provider.status == "not_configured":
-            status = "disabled"
-            reason = "；".join(provider.warnings) or "provider 未配置"
-        else:
-            status = "unavailable"
-            reason = "；".join(provider.warnings) or "provider 不可用"
-        source_name = LLM_PROVIDER_LABELS.get(provider.provider_type, provider.display_name)
-        return CapabilityCatalogItem(
-            id=f"{provider.provider_id}:{model_id}",
-            name=f"{provider.display_name} / {display_name}",
-            description="模型路由能力，用于问答、深度分析、报告与摘要。",
-            module_id="llm-models",
-            status=status,  # type: ignore[arg-type]
-            reason=reason,
-            policy=CapabilityPolicySummary(
-                allowed_roles=["admin", "user"],
-                requires_confirmation=False,
-                viewer_can_invoke=status in {"available", "degraded"},
-                scope_note="provider 配置保持脱敏；模型选择进入问答对话。",
-            ),
-            invocation=CapabilityInvocation(
-                kind="llm_model",
-                method="navigate",
-                target=f"/dialogue?{urlencode({'providerId': provider.provider_id, 'modelId': model_id})}",
-            ),
-            config_path="/tools?tab=llm-models" if is_admin else "",
-            attributions=[
-                AttributionItem(
-                    name=source_name,
-                    role="dependency",
-                    description="模型服务协议或运行时来源。",
-                    visibility="prominent",
-                )
-            ],
-        )
 
     @staticmethod
     def _group(
@@ -530,7 +422,6 @@ class CapabilityCatalogService:
                 "dialogue_tools": "对话工具",
                 "agent_connectors": "外部 Agent 连接器",
                 "report_skills": "报告 Skill",
-                "llm_capabilities": "LLM 能力",
             }.get(group_id, group_id),
             description="该分组读取失败，已与其他能力源隔离。",
             status="unavailable",

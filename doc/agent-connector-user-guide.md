@@ -21,16 +21,18 @@ Agent 连接器用于把 Codex CLI 这类外部执行能力接入 PolyAgent，�
    - `AGENT_EXEC_CODEX_API_KEY`（或已有 `CODEX_API_KEY`），或配置 `AGENT_EXEC_CODEX_MODEL` 使用本地模型
    - 可选：`AGENT_EXEC_TIMEOUT_SECONDS`、`AGENT_EXEC_MAX_INPUT_BYTES`、`AGENT_EXEC_MAX_OUTPUT_BYTES`、`AGENT_EXEC_MAX_FILES`
    - 可选：`AGENT_EXEC_MAX_CONCURRENCY`、`AGENT_EXEC_MAX_ACTIVE_RUNS_PER_USER`；超过限制时返回 429，不会排队堆积请求
-2. 进入 `/tools` 的“Agent 连接器”区域查看 Codex 卡片与 readiness 状态。
+   - 可选：`AGENT_EXEC_CODEX_MIN_VERSION=0.149.1`；探测结果低于该版本时在管理员页签显示“未满足”
+2. 进入 `/tools?tab=agent-connectors` 查看 Codex 卡片与 readiness 状态。
 3. 启用连接器策略，按需调整允许角色、任务类型与确认要求；策略变更会写入审计。
-4. 需要验证时可发起受控测试 run；run 状态、事件与 artifact 清单可在详情中查看，`GET /agent-exec/runs` 支持按 provider、状态和会话分页筛选。
-5. 配置完成后可在 `/capabilities` 查看最终能力可见性；配置仍以 `/tools` 为唯一事实源。
+4. 使用“显式探测”查看 Codex 二进制版本、最低版本门槛与 SHA-256 摘要；该操作只执行 `codex --version`，不发起文件任务。
+5. 需要验证时可发起受控测试 run；run 状态、事件与 artifact 清单可在详情中查看，`GET /agent-exec/runs` 支持按 provider、状态、会话与时间窗分页筛选。
+6. 配置完成后可在 `/tools?tab=ai-ready` 查看最终能力可见性；策略配置仍以 Agent 连接器页签为唯一入口。
 
 ## 3.1 普通用户开放流程
 
 1. 管理员确认 provider readiness 通过，并在 `/tools?tab=agent-connectors` 启用连接器。
 2. 将 `allowed_roles` 显式加入 `user`；仅改 `requires_confirmation=false` 不会开放普通用户。
-3. 普通用户进入 `/capabilities`，仅会看到该连接器；readiness 不满足时仍显示不可用。
+3. 普通用户进入 `/tools?tab=ai-ready`，仅会看到该连接器；readiness 不满足时仍显示不可用。
 4. 普通用户发起任务时必须每次勾选确认。即使策略关闭确认要求，服务端仍强制 `confirmed=true`。
 5. run 详情、列表、取消和质量汇总仍仅管理员可访问；普通用户响应会隐藏 policy 更新者，普通 run 的 actor role、policy snapshot、事件与 trace 仍可被管理员追溯。
 
@@ -58,12 +60,25 @@ Agent 连接器用于把 Codex CLI 这类外部执行能力接入 PolyAgent，�
 
 每次请求、readiness、开始、完成、失败、取消和策略变更都会写入统一审计；带会话上下文时同步进入 Plan 09/10 Trace，可在会话回放中查看“外部 Agent 文件任务”步骤。事件不记录完整 prompt、凭据、环境变量或 hidden reasoning。审计写入失败时 run 会标记 `audit_error` 并记录结构化错误日志，质量摘要提供计数。
 
+管理员可调用 `POST /agent-exec/runs/{run_id}/audit/retry` 补写缺失的 requested / started / terminal 事件；补写成功后清除 `audit_error`，并记录 `agent_exec.audit.recovered`。配置 `AGENT_EXEC_ALERT_WEBHOOK_URL` 后，`audit_error`、失败率或超时率异常会以结构化 JSON 发送到外部告警系统；webhook 故障只记录日志，不影响业务 run。
+
+## 6.1 生产运行边界
+
+- 当前 agent_exec 显式约束单进程部署：`AGENT_EXEC_DEPLOYMENT_MODE` 仅支持 `single_process`，`WEB_CONCURRENCY` / `GUNICORN_WORKERS` 必须为 1；否则连接器 readiness 返回结构化配置错误。
+- run workdir 默认保留 24 小时，最多保留 100 个终态目录；可通过 `AGENT_EXEC_WORKDIR_RETENTION_HOURS`、`AGENT_EXEC_MAX_RETAINED_WORKDIRS` 和 `AGENT_EXEC_CLEANUP_INTERVAL_SECONDS` 调整。服务启动与周期任务会清理过期目录并写 `agent_exec.workdir.cleaned` 审计。
+- 服务重启时，持久化的 requested / running run 会恢复为 failed / `restart_recovered`，并写 `agent_exec.restart.recovered` 审计。
+- 真实 Codex 子进程受 CPU 时间、地址空间和输出文件 RLIMIT 限制；并发、每用户活跃 run、输入输出大小和文件数仍由服务端强制校验。
+- Codex CLI 最低版本默认 `0.149.1`。显式集成测试包含一条不依赖模型凭证的 sandbox 出口探测：在 `read-only` permission profile 中尝试写 workdir 文件并访问仅监听 `127.0.0.1` 的本地 HTTP 服务，两者都必须被拒绝。
+- 生产磁盘应启用静态加密，并将 `AGENT_EXEC_WORKDIR_ROOT` 放在受管存储上；备份策略必须排除 secret，恢复演练需同时校验 run 状态、审计事件和 artifact 清单。清理采用目录删除，满足敏感输入输出的销毁要求。
+- 上线前执行 `make init-mongo-indexes`，并核对 `agent_exec_runs.run_id`、`agent_exec_artifacts.(run_id,path)` 和 `agent_exec_provider_policies.provider_id` 唯一索引。
+- 显式开启 `AGENT_EXEC_CODEX_INTEGRATION_ENABLED=true` 后运行真实 CLI 集成测试，验证 readiness、二进制摘要、版本和 `read-only` sandbox 最小结构化任务；凭证或网关不可用时记录外部阻塞，不得用 mock 伪装通过。
+
 ## 7. 来源标注
 
 连接器卡片展示“执行能力来自 Codex CLI”的来源标注。PolyAgent 负责策略治理、workdir、审计与追溯，不声明内置或复制 Codex；外部 provider 是可选能力，系统在 provider 缺失时继续走既有本地路径。
 
 ## 8. 相关入口
 
-- 能力目录：`/capabilities`
+- AI 能力目录：`/tools?tab=ai-ready`
 - 策略配置：`/tools?tab=agent-connectors`
 - 用户与邀请码治理：`/admin`

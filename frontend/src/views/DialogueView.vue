@@ -66,7 +66,7 @@ import {
   mergeToolCalls,
   normalizeToolCall,
   parseToolArguments,
-  replaceToolCall,
+  replaceToolCallInMessages,
   normalizeSchemaArguments,
   shouldContinueToolCall,
   toolArgumentSourceText,
@@ -910,7 +910,7 @@ function startToolCallStream(message, call) {
     if (!toolCallStreams.has(call.call_id)) return
     try {
       const updated = await getAssistantToolCall(call.call_id)
-      replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+      replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
       if (['completed', 'failed', 'canceled'].includes(updated.phase)) {
         stopToolCallStream(call.call_id)
         if (updated.continuation_run_id) {
@@ -941,11 +941,25 @@ function hasToolCallResultData(call) {
 async function backfillCompletedToolCall(message, call) {
   if (!call?.call_id || hasToolCallResultData(call)) return
   try {
-    const updated = await getAssistantToolCall(call.call_id)
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+      const updated = await getAssistantToolCall(call.call_id)
+      replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
   } catch {
     // 保留会话中的持久化状态，等待下一次完整加载或用户操作。
   }
+}
+
+/**
+ * 把异步工具快照写回当前消息列表中的最新消息对象。
+ *
+ * Args:
+ *   message: 发起异步操作时捕获的消息，可能已被 SSE 快照替换。
+ *   updated: 服务端返回的最新工具调用。
+ *
+ * Returns:
+ *   实际被更新的消息对象。
+ */
+function replaceLiveToolCall(message, updated) {
+  return replaceToolCallInMessages(messages.value, message, updated)
 }
 
 async function loadChat(chatKey) {
@@ -1962,7 +1976,7 @@ async function updateToolCallArguments(message, call) {
   }
   try {
     const updated = await updateAssistantToolCallInput(call.call_id, { arguments: result.arguments })
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+    replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     ElMessage.success('参数已更新')
   } catch (error) {
     ElMessage.error(`参数更新失败：${getApiErrorMessage(error)}`)
@@ -1976,7 +1990,7 @@ async function uploadToolCallAsset(message, call, assetKey, event) {
   formData.append(assetKey, file)
   try {
     const updated = await uploadAssistantToolCallInput(call.call_id, formData)
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+    replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     ElMessage.success('附件已上传')
   } catch (error) {
     ElMessage.error(`附件上传失败：${getApiErrorMessage(error)}`)
@@ -1994,7 +2008,7 @@ async function confirmToolCall(message, call) {
   confirmingCallId.value = call.call_id
   try {
     const updated = await confirmAssistantToolCall(call.call_id, payload.payload)
-    replaceToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
+    replaceLiveToolCall(message, { ...updated, schema_fields: normalizeSchemaArguments(updated) })
     if (['queued', 'running'].includes(updated.phase)) {
       startToolCallStream(message, updated)
       ElMessage.info(updated.phase === 'queued' ? '算法已提交，正在排队' : '算法运行中')
@@ -2006,7 +2020,7 @@ async function confirmToolCall(message, call) {
     const missingFields = Array.isArray(detail?.missing_fields) ? detail.missing_fields : []
     const missingAssets = Array.isArray(detail?.missing_assets) ? detail.missing_assets : []
     if (detail?.code === 'TOOL_INPUT_REQUIRED' || missingFields.length || missingAssets.length) {
-      replaceToolCall(message, {
+      replaceLiveToolCall(message, {
         ...call,
         phase: 'awaiting_input',
         missing_fields: missingFields,
@@ -2025,7 +2039,7 @@ async function confirmToolCall(message, call) {
 async function cancelToolCall(message, call) {
   try {
     const updated = await cancelAssistantToolCall(call.call_id)
-    replaceToolCall(message, updated)
+    replaceLiveToolCall(message, updated)
     ElMessage.info('算法调用已取消')
   } catch (error) {
     ElMessage.error(`取消失败：${getApiErrorMessage(error)}`)
@@ -2041,7 +2055,7 @@ async function retryToolCall(message, call) {
       arguments: call.arguments || {},
       input_asset_refs: call.input_asset_refs || {},
     })
-    replaceToolCall(message, created)
+    replaceLiveToolCall(message, created)
     ElMessage.success('已重新发起算法调用')
   } catch (error) {
     ElMessage.error(`重新发起失败：${getApiErrorMessage(error)}`)

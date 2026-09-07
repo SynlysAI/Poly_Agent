@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Fold, Expand, SwitchButton,
-  Monitor, DataAnalysis, Histogram, Collection, SetUp, Aim, MagicStick, Grid,
+  Monitor, DataAnalysis, Histogram, Collection, SetUp, Aim, MagicStick,
 } from '@element-plus/icons-vue'
 
 import { getAuthStatus, getApiErrorMessage, getCurrentUser } from './api/polyAgentApi'
@@ -50,7 +50,6 @@ const HEADER_SECTION_ROUTE_MAP = {
   '数据管理': '/database/data-catalog',
   '湿实验优化': '/tasks/submit',
   '研发引擎': '/research-engine',
-  '能力中心': '/capabilities',
   '工具服务': '/tools',
   '系统管理': '/admin',
 }
@@ -77,7 +76,6 @@ const activeMenu = computed(() => {
   if (current.startsWith('/optimization')) return '/tasks/submit'
   // 问答对话归入工作台
   if (current.startsWith('/dialogue')) return '/dashboard'
-  if (current.startsWith('/capabilities')) return '/capabilities'
   if (current.startsWith('/admin')) return '/admin'
   return current
 })
@@ -265,11 +263,7 @@ onBeforeUnmount(() => {
             <el-icon><Collection /></el-icon>
             <span>知识库</span>
           </el-menu-item>
-          <el-menu-item index="/capabilities">
-            <el-icon><Grid /></el-icon>
-            <span>能力中心</span>
-          </el-menu-item>
-          <el-menu-item v-if="canAccessAdmin" index="/tools">
+          <el-menu-item index="/tools">
             <el-icon><SetUp /></el-icon>
             <span>工具服务</span>
           </el-menu-item>
