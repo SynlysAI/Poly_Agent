@@ -12,6 +12,11 @@ import { acceptPortalToken, authState, clearAuthSession, setAuthEnabled, setAuth
 import FeedbackButton from './components/FeedbackButton.vue'
 import GuideButton from './components/GuideButton.vue'
 import { formatAppDate } from './utils/datetime'
+import {
+  APP_VERSION_FALLBACK,
+  buildAppReleaseUrl,
+  normalizeAppVersion,
+} from './utils/appVersion.mjs'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,7 +26,8 @@ const currentDate = ref(formatCurrentDate())
 const isAuthPage = computed(() => route.path === '/login' || route.path === '/register')
 const authBootstrapping = ref(true)
 const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
-const APP_VERSION = '0.1.0'
+const APP_VERSION = normalizeAppVersion(__APP_VERSION__, APP_VERSION_FALLBACK)
+const APP_RELEASE_URL = buildAppReleaseUrl(APP_VERSION)
 const BRAND_LOGO_SRC = '/brand/JG-logo.png'
 const BRAND_PARTNER_TEXT = '智储大装置｜嘉庚实验室｜厦门大学｜苏州实验室｜浦江实验室'
 let currentDateTimer = null
@@ -283,12 +289,26 @@ onBeforeUnmount(() => {
       </div>
       <div class="sidebar-version" :class="{ collapsed: sidebarCollapsed }">
         <template v-if="sidebarCollapsed">
-          <span class="sidebar-version-mini">{{ APP_VERSION }}</span>
+          <a
+            :href="APP_RELEASE_URL"
+            class="sidebar-version-link sidebar-version-mini"
+            target="_blank"
+            rel="noopener noreferrer"
+            :aria-label="`查看 Poly Agent v${APP_VERSION} 发布说明`"
+            :title="`查看 v${APP_VERSION} 发布说明`"
+          >v{{ APP_VERSION }}</a>
         </template>
         <template v-else>
           <div class="sidebar-version-top">
             <span class="sidebar-version-label">版本</span>
-            <span class="sidebar-version-badge">v{{ APP_VERSION }}</span>
+            <a
+              :href="APP_RELEASE_URL"
+              class="sidebar-version-link sidebar-version-badge"
+              target="_blank"
+              rel="noopener noreferrer"
+              :aria-label="`查看 Poly Agent v${APP_VERSION} 发布说明`"
+              :title="`查看 v${APP_VERSION} 发布说明`"
+            >v{{ APP_VERSION }}</a>
           </div>
           <div class="sidebar-meta-inline">
             <span class="sidebar-meta-inline-label">合作单位</span>
