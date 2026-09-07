@@ -2,7 +2,7 @@
 
 日期：2026-08-20
 评审日期：2026-08-27
-状态：已评审 / P0-P2 主线已落地（few-shot 灰度增强后续单独推进；2026-08-28 完成受限执行安全收口复核）
+状态：已评审 / 已收尾（2026-09-07；few-shot 灰度增强已拆出独立后续计划）
 适用范围：ResearchEngine 编排器、产品内助手工具注入、计算适配器、实验下发与统一安全层
 
 前置与参考：
@@ -46,7 +46,7 @@
 
 #### 动态能力选择后续灰度增强
 
-- [ ] 将规则分类升级为可灰度的 few-shot LLM 二元分类，并增加线上准确率回放指标（按评审结论不纳入 P0 首次落地验收）。
+- [x] 按评审结论将 few-shot LLM 二元分类与线上准确率回放指标拆出为独立后续计划：[plan-capability-relevance-fewshot-upgrade.md](plan-capability-relevance-fewshot-upgrade.md)（不纳入本设计验收）。
 
 ### 0.3 验证记录
 
@@ -109,6 +109,13 @@
 - [x] 增加单进程终态 CAS 与“取消后迟到成功”测试，保持 `cancelled` 稳定终态。
 - [x] 增加审计失败 `audit_error` 标记、结构化日志和质量摘要计数，保持执行事实可观测。
 - [x] Mongo 首访 / 启动 / 部署索引接线，并新增管理员 run 分页查询。
+
+### 0.7 2026-09-07 收尾记录
+
+- [x] Plan-first 逻辑按“分而治之”精炼：从 `research_engine_orchestrator.py` 拆出纯逻辑模块 `research_engine_plan.py`（计划策略判定、步骤元数据、依赖解析、计划构造、核验与 Gate 审查准备），编排器保留持久化、审计与访问控制并薄委托；API、Schema、DB、前端与审计事件字段零变更。
+- [x] 新增纯函数专项测试 `backend/tests/test_research_engine_plan.py`（13 项，覆盖策略判定、步骤映射、依赖来源优先级、计划构造、matched/mismatched 核验与 Gate 审查准备）。
+- [x] few-shot 灰度增强拆出为独立后续计划，本设计主线全部关闭。
+- 收尾验证：Plan-first 公共行为回归 6 项、纯函数专项 13 项、ResearchEngine 服务/API/E2E/Schema/适配器扩展回归 359 项全部通过。
 
 ## 1. 背景与判断
 

@@ -1,6 +1,8 @@
 # ALS 编排与受限执行改进体验指南（Plan-first 验证 · 功能入口 · 环境配置）
 
-> 适用范围：大装置 Agent 编排与受限执行设计（ALS 范式）落地后的界面体验验证，覆盖 Plan-first 执行计划、自然语言参数解析、只读/可写双模式、统一安全层与动态能力选择五项改进。
+> 适用范围：大装置 Agent 编排与受限执行设计（ALS 范式，已收尾）落地后的界面体验验证，覆盖 Plan-first 执行计划、自然语言参数解析、只读/可写双模式、统一安全层与动态能力选择五项改进。
+>
+> 2026-09-07 收尾说明：Plan-first 逻辑已拆分到独立纯逻辑模块（`backend/app/services/research_engine_plan.py`），API、Schema、DB、前端与审计字段零变更，本指南全部体验路径与验证结论继续有效。
 
 ## 一、环境配置
 
@@ -91,6 +93,8 @@ tail -100 /tmp/poly_agent_frontend.log
 
 主要体现在助手对话中：注入给模型的工具已按任务相关性筛选。用户感受是「回答更准、不容易乱调工具」，界面上无专门面板；开发者视角可在 SSE 事件流中看到 `tool.relevance.assessed` 留痕。
 
+当前线上为**规则式基线**（分词 + 领域词匹配 + 置信度排序）；few-shot LLM 二元分类为独立后续计划，默认关闭、尚未上线，体验时不应感知到模型分类调用。
+
 ## 三、建议体验顺序
 
 1. **先去实验方案转发台试自然语言解析**（约 5 分钟可看完整闭环）；
@@ -99,6 +103,7 @@ tail -100 /tmp/poly_agent_frontend.log
 
 ## 四、相关文档
 
-- 设计方案：`doc/plan-als-orchestration-and-bounded-execution.md`
-- ResearchEngine 技术方案：`doc/research-engine-and-auto-research-design.md`
-- 实验下发设计：`doc/experiment-dispatch.md`
+- 设计方案（已收尾）：[plan-als-orchestration-and-bounded-execution.md](../../doc/plan-als-orchestration-and-bounded-execution.md)
+- few-shot 灰度增强后续计划：[plan-capability-relevance-fewshot-upgrade.md](../../doc/plan-capability-relevance-fewshot-upgrade.md)
+- ResearchEngine 技术方案：[research-engine-and-auto-research-design.md](../../doc/research-engine-and-auto-research-design.md)
+- 实验下发设计：[experiment-dispatch.md](../../doc/experiment-dispatch.md)

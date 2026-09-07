@@ -30,8 +30,6 @@ from app.infra.research_engine_repositories import (
 from app.schemas.research_engine import (
     AlgorithmRunCreate,
     GateDecision,
-    PlanDependency,
-    PlanStep,
     ResearchRun,
     ResearchRunCreate,
     ResearchRunListData,
@@ -55,6 +53,14 @@ from app.services.research_engine_defaults import (
     P0_GATE_STAGES,
     get_default_stage_contract,
     is_p0_gate_stage,
+)
+from app.services.research_engine_plan import (
+    build_stage_execution_plan,
+    planned_input_fields,
+    prepare_gate_plan_review,
+    stage_blocks_plan_drift,
+    stage_requires_plan,
+    verify_stage_plan,
 )
 
 
@@ -483,7 +489,7 @@ class ResearchEngineOrchestrator:
                 self._save_stage_runs(run_id, stage_runs)
 
             # Plan-first：所有需要执行的动作先生成可审查计划，再进入工具调用。
-            if self._stage_requires_plan(sr) and not sr.get("plan"):
+            if stage_requires_plan(sr) and not sr.get("plan"):
                 self._generate_stage_plan(
                     doc=doc,
                     stage_run=sr,
@@ -637,34 +643,14 @@ class ResearchEngineOrchestrator:
         """
         stage_key = stage_run["stage_key"]
         algorithm_id = self._stage_algorithm_id(stage_key)
-        gate = stage_run.get("gate") or {}
-        artifact_policy = gate.get("artifact_policy") or {}
         input_fields = self._planned_input_fields(doc, stage_run, algorithm_id)
-        dependencies = [
-            self._build_plan_dependency(doc, stage_run, field)
-            for field in input_fields
-        ]
-        step_kind = self._plan_step_kind(algorithm_id)
-        plan = StageExecutionPlan(
+        plan = build_stage_execution_plan(
+            doc=doc,
+            stage_run=stage_run,
+            algorithm_id=algorithm_id,
+            input_fields=input_fields,
             plan_id=self._new_id("plan"),
-            research_run_id=doc["run_id"],
-            stage_key=stage_key,
-            stage_run_id=stage_run["stage_run_id"],
-            steps=[
-                PlanStep(
-                    step_key=f"{stage_key.lower()}:primary",
-                    kind=step_kind,
-                    tool_ref=algorithm_id,
-                    inputs=dependencies,
-                    expected_artifacts=list(artifact_policy.get("required_artifacts") or []),
-                    triggers_dispatch=False,
-                    safety_note=self._plan_safety_note(stage_key, algorithm_id),
-                )
-            ],
-            data_sensitivity="internal",
             generated_at=utc_now(),
-            generated_by="rule",
-            review_status="draft",
         )
         stage_run["plan"] = plan.model_dump(mode="json")
         self._save_stage_runs(doc["run_id"], doc.get("stage_runs", []))
@@ -704,119 +690,12 @@ class ResearchEngineOrchestrator:
         Returns:
             去重后的输入字段列表。
         """
-        if algorithm_id is None:
-            gate = stage_run.get("gate") or {}
-            return list(dict.fromkeys(gate.get("required_inputs") or []))
-        return list(
-            dict.fromkeys(
-                self._build_stage_algorithm_input(doc, stage_run, algorithm_id)
-            )
+        algorithm_input = (
+            self._build_stage_algorithm_input(doc, stage_run, algorithm_id)
+            if algorithm_id is not None
+            else None
         )
-
-    def _build_plan_dependency(self, doc: dict, stage_run: dict, field: str) -> PlanDependency:
-        """把一个输入字段解析为可追溯的计划依赖。
-
-        Args:
-            doc: ResearchRun 文档。
-            stage_run: 当前 StageRun 文档。
-            field: 输入字段名。
-
-        Returns:
-            计划依赖声明。
-        """
-        upstream = self._find_upstream_output(doc, stage_run, field)
-        if upstream:
-            return PlanDependency(
-                field=field,
-                source_kind="stage_output",
-                source_ref=upstream["stage_run_id"],
-                source_path=field,
-                required=True,
-            )
-        problem_spec_fields = {
-            "problem_spec_id",
-            "problem_spec_snapshot",
-            "material_family",
-            "target_properties",
-            "variables",
-            "objectives",
-            "smiles",
-        }
-        if field in problem_spec_fields:
-            return PlanDependency(
-                field=field,
-                source_kind="problem_spec",
-                source_ref=doc.get("problem_spec_id"),
-                source_path=field,
-                required=True,
-            )
-        return PlanDependency(field=field, source_kind="manual", required=True)
-
-    @staticmethod
-    def _find_upstream_output(doc: dict, stage_run: dict, field: str) -> dict | None:
-        """从最近的已完成上游阶段查找指定输出字段。
-
-        Args:
-            doc: ResearchRun 文档。
-            stage_run: 当前 StageRun 文档。
-            field: 输出字段名。
-
-        Returns:
-            命中的上游 StageRun；未命中返回 None。
-        """
-        stage_runs = doc.get("stage_runs", [])
-        current_index = next(
-            (
-                index
-                for index, item in enumerate(stage_runs)
-                if item.get("stage_run_id") == stage_run.get("stage_run_id")
-            ),
-            len(stage_runs),
-        )
-        for item in reversed(stage_runs[:current_index]):
-            if item.get("status") not in {"completed", "skipped"}:
-                continue
-            gate = item.get("gate") or {}
-            if field in (gate.get("expected_outputs") or []):
-                return item
-        return None
-
-    @staticmethod
-    def _stage_requires_plan(stage_run: dict) -> bool:
-        """判断当前阶段契约是否要求生成执行计划。"""
-        gate = stage_run.get("gate") or {}
-        policy = gate.get("plan_policy") or {}
-        return bool(policy.get("require_plan", False))
-
-    @staticmethod
-    def _stage_blocks_plan_drift(stage_run: dict) -> bool:
-        """判断计划与实际执行漂移时是否阻断审批。"""
-        gate = stage_run.get("gate") or {}
-        policy = gate.get("plan_policy") or {}
-        return bool(policy.get("block_on_drift", False))
-
-    @staticmethod
-    def _plan_step_kind(algorithm_id: str | None) -> str:
-        """把算法 ID 映射为受限计划步骤类型。"""
-        if algorithm_id == "weknora_adapter":
-            return "knowledge"
-        if algorithm_id in {
-            "polymer_descriptor_mock",
-            "computation_submit_adapter",
-            "mobo_alchemist_adapter",
-            "mobo_mock",
-        }:
-            return "computation"
-        return "manual_review"
-
-    @staticmethod
-    def _plan_safety_note(stage_key: str, algorithm_id: str | None) -> str:
-        """生成供 Gate 审查的步骤安全提示。"""
-        if stage_key == "EXPERIMENT_EXECUTION":
-            return "实验下发仍受既有确认机制约束；本阶段不得绕过审批直接提交外部任务。"
-        if algorithm_id is None:
-            return "本步骤只做人工审查或平台内状态更新，不调用外部工具。"
-        return f"仅允许调用受管算法 '{algorithm_id}'，输入输出均写入审计追踪。"
+        return planned_input_fields(stage_run, algorithm_input)
 
     def _record_plan_verification(self, stage_run: dict, output: dict) -> dict:
         """记录计划与实际执行的一致性核验结果。
@@ -842,43 +721,11 @@ class ResearchEngineOrchestrator:
         Returns:
             包含工具、输入和制品覆盖情况的核验结果。
         """
-        plan = stage_run.get("plan") or {}
-        steps = plan.get("steps") or []
-        primary_step = steps[0] if steps else {}
-        planned_tool = primary_step.get("tool_ref")
-        actual_tool = self._stage_algorithm_id(stage_run.get("stage_key", ""))
-        planned_inputs = [
-            item["field"]
-            for item in (primary_step.get("inputs") or [])
-            if item.get("required", True)
-        ]
-        actual_inputs = list((stage_run.get("input_snapshot") or {}).keys())
-        manual_review = planned_tool is None and actual_tool is None
-        missing_inputs = (
-            []
-            if manual_review
-            else [field for field in planned_inputs if field not in actual_inputs]
+        return verify_stage_plan(
+            stage_run,
+            output,
+            actual_tool=self._stage_algorithm_id(stage_run.get("stage_key", "")),
         )
-        expected_artifacts = list(primary_step.get("expected_artifacts") or [])
-        output_keys = set(output or {})
-        tool_matched = planned_tool == actual_tool
-        inputs_matched = not missing_inputs
-        return {
-            "status": "matched" if tool_matched and inputs_matched else "mismatched",
-            "plan_id": plan.get("plan_id"),
-            "planned_tool_ref": planned_tool,
-            "actual_tool_ref": actual_tool,
-            "planned_input_fields": planned_inputs,
-            "actual_input_fields": actual_inputs,
-            "missing_input_fields": missing_inputs,
-            "input_check": "not_applicable_manual_review" if manual_review else "algorithm_input_snapshot",
-            "expected_artifacts": expected_artifacts,
-            "generated_artifacts": [item for item in expected_artifacts if item in output_keys],
-            "artifacts_complete": all(item in output_keys for item in expected_artifacts),
-            "checked_at": utc_now().isoformat()
-            if isinstance(utc_now(), datetime)
-            else str(utc_now()),
-        }
 
     def _run_mock_stage(self, stage_run: dict, problem_spec_id: str) -> dict:
         """为 mock 阶段生成确定性输出。
@@ -1216,23 +1063,11 @@ class ResearchEngineOrchestrator:
         Returns:
             写入 StageGateDecision 的计划审查结果。
         """
-        plan = stage_run.get("plan")
-        if not plan:
-            return {
-                "status": "plan_missing",
-                "decision": decision,
-            }
-        verification = (
-            stage_run.get("checkpoint_data", {}).get("plan_verification")
-            or self._verify_stage_plan(stage_run, stage_run.get("output_summary") or {})
+        return prepare_gate_plan_review(
+            stage_run,
+            decision=decision,
+            actual_tool=self._stage_algorithm_id(stage_run.get("stage_key", "")),
         )
-        plan["review_status"] = decision
-        return {
-            **verification,
-            "decision": decision,
-            "review_status": decision,
-            "status": "rejected" if decision == "rejected" else verification.get("status"),
-        }
 
     def approve_stage(
         self,
@@ -1280,7 +1115,7 @@ class ResearchEngineOrchestrator:
         plan_review = self._prepare_gate_plan_review(sr, decision="approved")
         if (
             plan_review.get("status") == "mismatched"
-            and self._stage_blocks_plan_drift(sr)
+            and stage_blocks_plan_drift(sr)
         ):
             raise HTTPException(
                 status_code=409,
