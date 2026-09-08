@@ -15,6 +15,7 @@ import { formatAppDate } from './utils/datetime'
 import {
   APP_VERSION_FALLBACK,
   buildAppReleaseUrl,
+  fetchLatestAppVersion,
   normalizeAppVersion,
 } from './utils/appVersion.mjs'
 
@@ -26,8 +27,8 @@ const currentDate = ref(formatCurrentDate())
 const isAuthPage = computed(() => route.path === '/login' || route.path === '/register')
 const authBootstrapping = ref(true)
 const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
-const APP_VERSION = normalizeAppVersion(__APP_VERSION__, APP_VERSION_FALLBACK)
-const APP_RELEASE_URL = buildAppReleaseUrl(APP_VERSION)
+const appVersion = ref(normalizeAppVersion(__APP_VERSION__, APP_VERSION_FALLBACK))
+const appReleaseUrl = computed(() => buildAppReleaseUrl(appVersion.value))
 const BRAND_LOGO_SRC = '/brand/JG-logo.png'
 const BRAND_PARTNER_TEXT = '智储大装置｜嘉庚实验室｜厦门大学｜苏州实验室｜浦江实验室'
 let currentDateTimer = null
@@ -110,6 +111,12 @@ function handleLogout() {
 
 function formatCurrentDate() {
   return formatAppDate()
+}
+
+/** 拉取 GitHub 最新 Release 并同步侧边栏版本号，失败时保留构建版本。 */
+async function refreshLatestAppVersion() {
+  const latestVersion = await fetchLatestAppVersion()
+  if (latestVersion) appVersion.value = latestVersion
 }
 
 async function redirectToLogin() {
@@ -203,6 +210,7 @@ onMounted(() => {
   }, 60000)
   acceptPortalToken()
   initializeAuthState()
+  refreshLatestAppVersion()
 
   watch(
     () => authState.initialized,
@@ -290,25 +298,25 @@ onBeforeUnmount(() => {
       <div class="sidebar-version" :class="{ collapsed: sidebarCollapsed }">
         <template v-if="sidebarCollapsed">
           <a
-            :href="APP_RELEASE_URL"
+            :href="appReleaseUrl"
             class="sidebar-version-link sidebar-version-mini"
             target="_blank"
             rel="noopener noreferrer"
-            :aria-label="`查看 Poly Agent v${APP_VERSION} 发布说明`"
-            :title="`查看 v${APP_VERSION} 发布说明`"
-          >v{{ APP_VERSION }}</a>
+            :aria-label="`查看 Poly Agent v${appVersion} 发布说明`"
+            :title="`查看 v${appVersion} 发布说明`"
+          >v{{ appVersion }}</a>
         </template>
         <template v-else>
           <div class="sidebar-version-top">
             <span class="sidebar-version-label">版本</span>
             <a
-              :href="APP_RELEASE_URL"
+              :href="appReleaseUrl"
               class="sidebar-version-link sidebar-version-badge"
               target="_blank"
               rel="noopener noreferrer"
-              :aria-label="`查看 Poly Agent v${APP_VERSION} 发布说明`"
-              :title="`查看 v${APP_VERSION} 发布说明`"
-            >v{{ APP_VERSION }}</a>
+              :aria-label="`查看 Poly Agent v${appVersion} 发布说明`"
+              :title="`查看 v${appVersion} 发布说明`"
+            >v{{ appVersion }}</a>
           </div>
           <div class="sidebar-meta-inline">
             <span class="sidebar-meta-inline-label">合作单位</span>
