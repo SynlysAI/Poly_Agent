@@ -6,6 +6,7 @@ import {
   classifyReadableText,
   formatReadableFormula,
   formatReadableTitle,
+  isCompactCardValue,
   isReadableText,
 } from './verticalPredictionReadable.mjs'
 
@@ -155,5 +156,23 @@ assert.equal(classifyReadableText('result_summary.description', description), 'd
 
 assert.equal(isReadableText('DSC_1', 78.3), false)
 assert.equal(isReadableText('DSC_1', '78.3'), false)
+
+assert.equal(isCompactCardValue(78.3), true)
+assert.equal(isCompactCardValue(0.8208), true)
+assert.equal(isCompactCardValue(true), true)
+assert.equal(isCompactCardValue(false), true)
+assert.equal(isCompactCardValue(null), true)
+assert.equal(isCompactCardValue('Risk_thermal'), true)
+assert.equal(isCompactCardValue('a'.repeat(40)), true)
+assert.equal(isCompactCardValue(`   ${'a'.repeat(40)}   `), true)
+assert.equal(isCompactCardValue('a'.repeat(41)), false)
+assert.equal(isCompactCardValue(''), false)
+assert.equal(isCompactCardValue('   '), false)
+assert.equal(isCompactCardValue('first line\nsecond line'), false)
+assert.equal(isCompactCardValue({ value: 1 }), false)
+assert.equal(isCompactCardValue([1, 2]), false)
+assert.equal(isCompactCardValue(undefined), false)
+assert.equal(isCompactCardValue(thermalFormula), false)
+assert.equal(isCompactCardValue(recipe), false)
 
 console.log('vertical prediction readable tests passed')

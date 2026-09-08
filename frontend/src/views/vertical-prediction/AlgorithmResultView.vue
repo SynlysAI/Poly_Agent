@@ -14,6 +14,7 @@ import {
 import {
   buildReadableSections,
   formatReadableFormula,
+  isCompactCardValue,
   isReadableText,
 } from '../../utils/verticalPredictionReadable.mjs'
 import { downloadArtifact, getApiErrorMessage } from '../../api/polyAgentApi'
@@ -77,12 +78,33 @@ const highlightCards = computed(() => {
   if (!hints) return []
   return Object.entries(hints)
     .filter(([, h]) => h?.display === 'highlight')
+    .filter(([key]) => isCompactCardValue(outputObject.value[key]))
     .map(([key, h]) => ({
       key,
       label: h?.title || formatLabel(key),
       value: formatScalar(outputObject.value[key]),
       caption: '',
     }))
+})
+const prominentReadableKeys = computed(() => {
+  const hints = outputUiHints.value
+  if (!hints) return new Set()
+  const output = outputObject.value
+  return new Set(
+    Object.keys(hints).filter((key) => {
+      const value = output[key]
+      return typeof value === 'string' && !isCompactCardValue(value)
+    }),
+  )
+})
+const prominentReadableSections = computed(() => {
+  const hints = outputUiHints.value
+  if (!hints) return []
+  const output = outputObject.value
+  return [...prominentReadableKeys.value].flatMap((key) => {
+    const hint = hints[key] || {}
+    return buildReadableSections(key, output[key], { kind: hint.display, title: hint.title })
+  })
 })
 const mainPrediction = computed(() => buildMainPrediction(predictionObject.value, outputObject.value))
 const evidence = computed(() => buildEvidence(
@@ -92,8 +114,13 @@ const evidence = computed(() => buildEvidence(
   new Set([
     ...batchResultSections.value.map((section) => section.key),
     ...(isRamanFunctionalGroupModel.value ? ['candidates'] : []),
+    ...prominentReadableKeys.value,
   ]),
 ))
+const displayReadableSections = computed(() => [
+  ...prominentReadableSections.value,
+  ...evidence.value.readableSections,
+])
 const rawPanels = computed(() => {
   const panels = [
     { name: 'input', title: '输入 JSON', data: props.inputSnapshot },
@@ -154,6 +181,7 @@ const artifactRows = computed(() => {
 const hasOutput = computed(() => !isEmptyValue(props.outputSummary))
 const hasStructuredContent = computed(() => Boolean(
   mainPrediction.value.value !== null ||
+  prominentReadableSections.value.length ||
   evidence.value.metricSections.length ||
   evidence.value.listSections.length ||
   evidence.value.tableSections.length ||
@@ -165,12 +193,6 @@ const imageArtifacts = computed(() => artifactRows.value.filter(
   (row) => row.downloadable && (row.contentType.startsWith('image/') || row.type === 'image_png')
 ))
 
-const hasHighlight = computed(() => {
-  const hints = outputUiHints.value
-  if (!hints) return false
-  return Object.values(hints).some((h) => h?.display === 'highlight')
-})
-
 const inputHighlights = computed(() => scalarEntries(inputObject.value).slice(0, 4))
 
 const uiMetricGroups = computed(() => {
@@ -181,12 +203,12 @@ const uiMetricGroups = computed(() => {
   const groups = {}
   for (const [key, hint] of Object.entries(hints)) {
     const groupName = hint?.group
-    if (!groupName || !isScalar(output[key])) continue
+    if (!groupName || !isScalar(output[key]) || !isCompactCardValue(output[key])) continue
     if (!groups[groupName]) groups[groupName] = []
     groups[groupName].push({ key, label: hint?.label || formatLabel(key), value: output[key] })
   }
   const unhandled = Object.entries(output)
-    .filter(([key, value]) => isScalar(value) && !groupedKeys.has(key))
+    .filter(([key, value]) => isScalar(value) && isCompactCardValue(value) && !groupedKeys.has(key))
     .map(([key, value]) => ({ key, label: formatLabel(key), value }))
   if (unhandled.length) groups['其他'] = unhandled
   return Object.entries(groups).map(([title, entries]) => ({ title: formatLabel(title), entries }))
@@ -240,7 +262,8 @@ function buildMainPrediction(prediction, output) {
   if (hints) {
     const primaryField = Object.entries(hints).find(([, h]) => h?.display === 'primary')
     if (!primaryField) return { key: '', title: '', value: null, unit: '', uncertainty: null, modelInfo: [] }
-    if (isScalar(output[primaryField[0]])) {
+    const primaryValue = output[primaryField[0]]
+    if (isScalar(primaryValue) && isCompactCardValue(primaryValue)) {
       const key = primaryField[0]
       const hint = primaryField[1] || {}
       const secondary = Object.entries(hints)
@@ -248,11 +271,12 @@ function buildMainPrediction(prediction, output) {
         .map(([k, h]) => ({
           key: k,
           label: h?.label || formatLabel(k),
-          value: isScalar(output[k]) ? output[k] : null,
+          value: isScalar(output[k]) && isCompactCardValue(output[k]) ? output[k] : null,
         }))
         .filter((entry) => entry.value !== null)
       return { key, title: hint.title || formatLabel(key), value: output[key], unit: hint.unit || '', uncertainty: null, modelInfo: secondary }
     }
+    return { key: '', title: '', value: null, unit: '', uncertainty: null, modelInfo: [] }
   }
   const valueEntry = findMainValue(prediction)
   const uncertainty = findFirstKey(prediction, uncertaintyKeys) || findFirstKey(output, uncertaintyKeys)
@@ -274,10 +298,10 @@ function buildMainPrediction(prediction, output) {
 
 function findMainValue(source) {
   for (const key of priorityValueKeys) {
-    if (isScalar(source[key])) return { key, value: source[key] }
+    if (isScalar(source[key]) && isCompactCardValue(source[key])) return { key, value: source[key] }
   }
   for (const [key, value] of Object.entries(source)) {
-    if (!isScalar(value)) continue
+    if (!isScalar(value) || !isCompactCardValue(value)) continue
     if ([...metaPredictionKeys, ...uncertaintyKeys, ...modelKeys].includes(key)) continue
     return { key, value }
   }
@@ -605,13 +629,13 @@ function stringifyJson(value) {
       </section>
 
       <section
-        v-if="evidence.readableSections.length"
+        v-if="displayReadableSections.length"
         class="result-section readable-result-section"
         aria-label="结构化输出说明"
       >
         <div class="readable-card-grid">
           <article
-            v-for="section in evidence.readableSections"
+            v-for="section in displayReadableSections"
             :key="section.key"
             class="readable-card"
             :class="`readable-card-${section.kind}`"
