@@ -30,6 +30,22 @@ export function isReadableText(key, value) {
 }
 
 /**
+ * 判断字段值是否适合以加粗大字号指标卡片展示。
+ *
+ * Args:
+ *     value: 待展示的字段值。
+ *
+ * Returns:
+ *     数值、布尔、null，或不超过 40 字符的单行非空字符串时返回 true。
+ */
+export function isCompactCardValue(value) {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return true
+  if (typeof value !== 'string') return false
+  const text = value.trim()
+  return Boolean(text) && !text.includes('\n') && text.length <= 40
+}
+
+/**
  * 判断可读文本的展示类型。
  *
  * Args:
