@@ -24,6 +24,7 @@ import CommandPalette from '../components/assistant/CommandPalette.vue'
 import GlobeIcon from '../components/GlobeIcon.vue'
 import LlmModelSelect from '../components/LlmModelSelect.vue'
 import ToolMenuPicker from '../components/ToolMenuPicker.vue'
+import { useI18n } from '../i18n/index.js'
 import {
   loadKnowledgePreference,
   loadWebSearchPreference,
@@ -50,6 +51,7 @@ import {
 } from '../utils/slashCommands'
 
 const router = useRouter()
+const { t } = useI18n()
 const loading = ref(false)
 const activeView = ref('chat')
 const computationRows = ref([])
@@ -93,52 +95,34 @@ const commandCatalogState = reactive({
   catalogVersion: '',
 })
 
-const dashboardViewOptions = [
-  { label: '问答', value: 'chat' },
-  { label: '看板', value: 'board' },
-]
+const dashboardViewOptions = computed(() => [
+  { label: t('dashboard.chat'), value: 'chat' },
+  { label: t('dashboard.board'), value: 'board' },
+])
 
-const chatModeOptions = [
-  { label: '科研问答', value: 'qa' },
-  { label: '深度思考', value: 'deep' },
-]
+const chatModeOptions = computed(() => [
+  { label: t('dashboard.qa'), value: 'qa' },
+  { label: t('dashboard.deep'), value: 'deep' },
+])
 
 const homeGreetings = {
   default: {
-    title: '今天想推进哪条高分子研发路线？',
-    subtitle: '描述材料体系、目标性质或实验约束，Poly Agent 会帮你定位模型、计算和优化入口。',
-    placeholder: '例如：帮我为含氟聚合物设计 Tg 预测和后续验证流程...',
-    suggestions: ['如何为 Tg 预测模型准备输入？', '哪些垂类模型可直接调用？', '帮我规划一个 AI4S 材料发现任务'],
+    title: 'dashboard.greeting.default.title', subtitle: 'dashboard.greeting.default.subtitle', placeholder: 'dashboard.greeting.default.placeholder', suggestions: ['dashboard.suggestion.tg', 'dashboard.suggestion.models', 'dashboard.suggestion.plan'],
   },
   morning: {
-    title: '上午好，先看模型还是实验闭环？',
-    subtitle: '从性质预测、计算验证到贝叶斯优化，把 AI4S 研发动作拆成可追踪任务。',
-    placeholder: '输入你的聚合物结构、物性目标或实验设计问题...',
-    suggestions: ['上传的预测模型现在怎么运行？', '如何把预测结果接到 AutoResearch？', '查看最近失败的计算任务'],
+    title: 'dashboard.greeting.morning.title', subtitle: 'dashboard.greeting.morning.subtitle', placeholder: 'dashboard.greeting.morning.placeholder', suggestions: ['dashboard.suggestion.runModel', 'dashboard.suggestion.autoResearch', 'dashboard.suggestion.failedComputations'],
   },
   noon: {
-    title: '中午好，要先梳理材料数据还是任务队列？',
-    subtitle: '把上午积累的结构、配方和计算结果整理成下一步可执行动作。',
-    placeholder: '例如：根据现有候选材料，安排下午的预测和验证任务...',
-    suggestions: ['帮我整理下一步实验建议', '查看最近失败的计算任务', '哪些算法是真实适配器？'],
+    title: 'dashboard.greeting.noon.title', subtitle: 'dashboard.greeting.noon.subtitle', placeholder: 'dashboard.greeting.noon.placeholder', suggestions: ['dashboard.suggestion.experimentAdvice', 'dashboard.suggestion.failedComputations', 'dashboard.suggestion.adapters'],
   },
   afternoon: {
-    title: '下午好，继续推进材料研发任务吗？',
-    subtitle: '围绕性质预测、计算验证和优化建议，快速进入问答、任务提交或研发编排。',
-    placeholder: '例如：为一批候选聚合物安排预测、xTB 计算和优化建议...',
-    suggestions: ['如何开始一个 ResearchEngine 示例？', '计算智能和垂类预测怎么衔接？', '如何查看待审批任务？'],
+    title: 'dashboard.greeting.afternoon.title', subtitle: 'dashboard.greeting.afternoon.subtitle', placeholder: 'dashboard.greeting.afternoon.placeholder', suggestions: ['dashboard.suggestion.researchExample', 'dashboard.suggestion.computationPrediction', 'dashboard.suggestion.pendingTasks'],
   },
   evening: {
-    title: '晚上好，要复盘今天的材料数据吗？',
-    subtitle: '可以从知识库、垂类模型和计算结果出发，形成明天的实验或算法调用建议。',
-    placeholder: '输入数据来源、目标性质或需要比较的材料系列...',
-    suggestions: ['查询知识库里的高分子体系', '帮我整理下一步实验建议', '查看今天的任务进展'],
+    title: 'dashboard.greeting.evening.title', subtitle: 'dashboard.greeting.evening.subtitle', placeholder: 'dashboard.greeting.evening.placeholder', suggestions: ['dashboard.suggestion.knowledgePolymers', 'dashboard.suggestion.experimentAdvice', 'dashboard.suggestion.taskProgress'],
   },
   night: {
-    title: '需要把材料问题拆成可执行任务吗？',
-    subtitle: '围绕高分子结构、配方、工艺和目标性能，快速进入问答、任务提交或研发编排。',
-    placeholder: '例如：为一批候选聚合物安排预测、xTB 计算和优化建议...',
-    suggestions: ['如何开始一个 ResearchEngine 示例？', '计算智能和垂类预测怎么衔接？', '如何查看待审批任务？'],
+    title: 'dashboard.greeting.night.title', subtitle: 'dashboard.greeting.night.subtitle', placeholder: 'dashboard.greeting.night.placeholder', suggestions: ['dashboard.suggestion.researchExample', 'dashboard.suggestion.computationPrediction', 'dashboard.suggestion.pendingTasks'],
   },
 }
 
@@ -152,7 +136,15 @@ function getTimeGreeting(date = new Date()) {
   return homeGreetings.default
 }
 
-const homeGreeting = ref(getTimeGreeting())
+const homeGreeting = computed(() => {
+  const raw = getTimeGreeting()
+  return {
+    title: t(raw.title),
+    subtitle: t(raw.subtitle),
+    placeholder: t(raw.placeholder),
+    suggestions: raw.suggestions.map((key) => t(key)),
+  }
+})
 
 const currentSuggestions = computed(() => homeGreeting.value.suggestions)
 
@@ -623,7 +615,7 @@ async function loadLlmCatalog() {
 }
 
 function currentModeLabel() {
-  return chatModeOptions.find((item) => item.value === chatMode.value)?.label || '科研问答'
+  return chatModeOptions.value.find((item) => item.value === chatMode.value)?.label || t('dashboard.qa')
 }
 
 function selectChatMode(mode) {

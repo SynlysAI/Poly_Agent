@@ -1,6 +1,9 @@
 <script setup>
+import { useI18n } from '../i18n/index.js'
+
 /* PolyAgent 操作指导文档（飞书知识库） */
 const GUIDE_DOC_URL = 'https://gcnpf55d0gns.feishu.cn/wiki/OdYgwuFCaijJ1wk2e8icmgTVnbO'
+const { t } = useI18n()
 
 /** 新窗口打开平台操作指导文档。 */
 function openGuide() {
@@ -9,8 +12,8 @@ function openGuide() {
 </script>
 
 <template>
-  <el-tooltip content="操作指导" placement="bottom" :show-after="300">
-    <el-button circle text class="guide-entry-btn" aria-label="操作指导" @click="openGuide">
+  <el-tooltip :content="t('app.operationGuide')" placement="bottom" :show-after="300">
+    <el-button circle text class="guide-entry-btn" :aria-label="t('app.operationGuide')" @click="openGuide">
       <el-icon>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round">

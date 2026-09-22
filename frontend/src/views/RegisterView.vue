@@ -1,12 +1,15 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Ticket, OfficeBuilding, Hide, View } from '@element-plus/icons-vue'
 
 import { registerWithInviteCode, getApiErrorMessage } from '../api/polyAgentApi'
+import LanguageSwitcher from '../components/LanguageSwitcher.vue'
+import { useI18n } from '../i18n/index.js'
 
 const router = useRouter()
+const { t } = useI18n()
 const BRAND_LOGO_SRC = '/brand/JG-logo.png'
 const formRef = ref(null)
 const loading = ref(false)
@@ -23,27 +26,27 @@ const form = reactive({
 
 const validateConfirmPassword = (_rule, value, callback) => {
   if (value && value !== form.password) {
-    callback(new Error('两次输入的密码不一致'))
+    callback(new Error(t('auth.passwordMismatch')))
   } else {
     callback()
   }
 }
 
-const rules = {
-  invite_code: [{ required: true, message: '请输入邀请码', trigger: 'blur' }],
+const rules = computed(() => ({
+  invite_code: [{ required: true, message: t('auth.enterInviteCode'), trigger: 'blur' }],
   username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 32, message: '用户名长度在 3 到 32 个字符', trigger: 'blur' },
+    { required: true, message: t('auth.username'), trigger: 'blur' },
+    { min: 3, max: 32, message: t('auth.usernameLength'), trigger: 'blur' },
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度不能少于 6 位', trigger: 'blur' },
+    { required: true, message: t('auth.enterPassword'), trigger: 'blur' },
+    { min: 6, message: t('auth.passwordLength'), trigger: 'blur' },
   ],
   confirm_password: [
-    { required: true, message: '请确认密码', trigger: 'blur' },
+    { required: true, message: t('auth.confirmPassword'), trigger: 'blur' },
     { validator: validateConfirmPassword, trigger: 'blur' },
   ],
-}
+}))
 
 async function handleSubmit() {
   const valid = await formRef.value?.validate().catch(() => false)
@@ -56,7 +59,7 @@ async function handleSubmit() {
       organization: form.organization.trim() || undefined,
       password: form.password,
     })
-    ElMessage.success('注册成功，请登录')
+    ElMessage.success(t('auth.registerSuccess'))
     await router.replace('/login')
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -70,59 +73,60 @@ async function handleSubmit() {
   <div class="login-page">
     <div class="login-background"></div>
     <section class="login-panel" style="width: min(460px, calc(100vw - 32px))">
+      <LanguageSwitcher />
       <div class="login-brand">
         <img :src="BRAND_LOGO_SRC" alt="Poly Agent" class="login-brand-mark" />
         <div>
           <div class="login-brand-title">Poly Agent</div>
-          <div class="login-brand-subtitle">高分子智能分析平台</div>
+          <div class="login-brand-subtitle">{{ t('app.subtitle') }}</div>
         </div>
       </div>
 
       <div class="login-heading">
-        <h1>邀请码注册</h1>
-        <p style="margin:10px 0 0;color:#627697;font-size:14px;line-height:1.7">使用管理员提供的邀请码创建账号</p>
+        <h1>{{ t('auth.register') }}</h1>
+        <p style="margin:10px 0 0;color:#627697;font-size:14px;line-height:1.7">{{ t('auth.createAccountHint') }}</p>
       </div>
 
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="login-form">
-        <el-form-item label="邀请码" prop="invite_code">
-          <input v-model="form.invite_code" class="login-native-input" placeholder="请输入管理员提供的邀请码" autocomplete="off" />
+        <el-form-item :label="t('auth.inviteCode')" prop="invite_code">
+          <input v-model="form.invite_code" class="login-native-input" :placeholder="t('auth.enterInviteCode')" autocomplete="off" />
         </el-form-item>
-        <el-form-item label="单位" prop="organization">
-          <input v-model="form.organization" class="login-native-input" placeholder="请输入所在单位名称" autocomplete="off" />
+        <el-form-item :label="t('auth.organization')" prop="organization">
+          <input v-model="form.organization" class="login-native-input" :placeholder="t('auth.enterOrganization')" autocomplete="off" />
         </el-form-item>
-        <el-form-item label="用户名" prop="username">
-          <input v-model="form.username" class="login-native-input" placeholder="3-32 个字符" autocomplete="off" />
+        <el-form-item :label="t('auth.username')" prop="username">
+          <input v-model="form.username" class="login-native-input" :placeholder="t('auth.usernameLength')" autocomplete="off" />
         </el-form-item>
-        <el-form-item label="密码" prop="password">
+        <el-form-item :label="t('auth.password')" prop="password">
           <div class="login-password-field">
             <input
               v-model="form.password"
               class="login-native-input login-native-input-password"
               :type="passwordVisible ? 'text' : 'password'"
-              placeholder="至少 6 位密码"
+              :placeholder="t('auth.passwordLength')"
               autocomplete="new-password"
             />
             <button
               type="button" class="login-password-toggle"
-              :aria-label="passwordVisible ? '隐藏密码' : '显示密码'"
+              :aria-label="passwordVisible ? t('auth.hidePassword') : t('auth.showPassword')"
               @click="passwordVisible = !passwordVisible"
             >
               <el-icon><View v-if="passwordVisible" /><Hide v-else /></el-icon>
             </button>
           </div>
         </el-form-item>
-        <el-form-item label="确认密码" prop="confirm_password">
+        <el-form-item :label="t('auth.confirmPassword')" prop="confirm_password">
           <div class="login-password-field">
             <input
               v-model="form.confirm_password"
               class="login-native-input login-native-input-password"
               :type="confirmVisible ? 'text' : 'password'"
-              placeholder="再次输入密码"
+              :placeholder="t('auth.enterPasswordAgain')"
               autocomplete="new-password"
             />
             <button
               type="button" class="login-password-toggle"
-              :aria-label="confirmVisible ? '隐藏密码' : '显示密码'"
+              :aria-label="confirmVisible ? t('auth.hidePassword') : t('auth.showPassword')"
               @click="confirmVisible = !confirmVisible"
             >
               <el-icon><View v-if="confirmVisible" /><Hide v-else /></el-icon>
@@ -130,13 +134,13 @@ async function handleSubmit() {
           </div>
         </el-form-item>
         <el-button type="primary" class="login-submit" :loading="loading" @click="handleSubmit">
-          注册
+          {{ t('auth.register') }}
         </el-button>
       </el-form>
 
       <div class="login-footer">
-        <span>已有账号？</span>
-        <router-link class="login-link" to="/login">返回登录</router-link>
+        <span>{{ t('auth.hasAccount') }}</span>
+        <router-link class="login-link" to="/login">{{ t('auth.login') }}</router-link>
       </div>
     </section>
   </div>

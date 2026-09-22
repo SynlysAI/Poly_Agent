@@ -19,6 +19,9 @@ import {
   toolRequiresFile,
 } from '../utils/assistantToolMenu.mjs'
 import { categorizeTool, groupToolsByCategory } from '../utils/toolMenuCategories.mjs'
+import { useI18n } from '../i18n/index.js'
+
+const { t } = useI18n()
 
 const props = defineProps({
   modelValue: {
@@ -35,7 +38,7 @@ const props = defineProps({
   },
   ariaLabel: {
     type: String,
-    default: '选择工具',
+    default: '',
   },
   popperClass: {
     type: String,
@@ -159,9 +162,9 @@ function categoryIcon(name) {
 
       <div v-else class="tool-menu-list">
         <div class="tool-menu-list-head">
-          <button type="button" class="tool-menu-back" aria-label="返回工具分类" @click="backToCategories">
+          <button type="button" class="tool-menu-back" :aria-label="t('tools.backToCategories')" @click="backToCategories">
             <el-icon><ArrowLeft /></el-icon>
-            <span>全部工具</span>
+            <span>{{ t('tools.all') }}</span>
           </button>
           <strong>{{ activeCategory.label }}</strong>
         </div>
@@ -169,7 +172,7 @@ function categoryIcon(name) {
           v-model="queryText"
           size="small"
           clearable
-          placeholder="搜索工具"
+          :placeholder="t('common.searchTools')"
           :prefix-icon="Search"
         />
         <div class="tool-menu-items">
@@ -192,8 +195,8 @@ function categoryIcon(name) {
                 <span :class="`tool-flag ${toolHealthClass(tool.health_status)}`">
                   {{ toolHealthLabel(tool.health_status) }}
                 </span>
-                <span v-if="tool.requires_confirmation" class="tool-flag is-confirmation">需确认</span>
-                <span v-if="toolRequiresFile(tool)" class="tool-flag is-file">需文件</span>
+                <span v-if="tool.requires_confirmation" class="tool-flag is-confirmation">{{ t('tools.confirmationRequired') }}</span>
+                <span v-if="toolRequiresFile(tool)" class="tool-flag is-file">{{ t('tools.fileRequired') }}</span>
                 <span v-if="tool.version" class="tool-flag is-version">v{{ tool.version }}</span>
                 <span :class="`tool-flag ${toolRecentSuccessClass(tool)}`">
                   {{ toolRecentSuccessText(tool) }}
@@ -204,7 +207,7 @@ function categoryIcon(name) {
           <p v-if="!visibleTools.length" class="tool-menu-empty">{{ activeCategory.emptyText }}</p>
         </div>
         <button v-if="hasSelected" type="button" class="tool-menu-clear" @click="clearTools">
-          清除全部
+          {{ t('common.clearAll') }}
         </button>
       </div>
     </div>

@@ -12,6 +12,8 @@ import { acceptPortalToken, authState, clearAuthSession, setAuthEnabled, setAuth
 import FeedbackButton from './components/FeedbackButton.vue'
 import GuideButton from './components/GuideButton.vue'
 import { formatAppDate } from './utils/datetime'
+import { useI18n } from './i18n/index.js'
+import { getElementLocale } from './i18n/elementLocale.js'
 import {
   APP_VERSION_FALLBACK,
   buildAppReleaseUrl,
@@ -21,6 +23,7 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+const { locale, t, setLocale } = useI18n()
 const AUTH_PUBLIC_PATHS = new Set(['/login', '/register'])
 const sidebarCollapsed = ref(false)
 const currentDate = ref(formatCurrentDate())
@@ -34,14 +37,14 @@ const BRAND_PARTNER_TEXT = '智储大装置｜嘉庚实验室｜厦门大学｜�
 let currentDateTimer = null
 
 const currentUserDisplayName = computed(() => {
-  if (!authState.authEnabled) return '管理员'
-  return authState.username || '当前用户'
+  if (!authState.authEnabled) return t('app.admin')
+  return authState.username || t('app.currentUser')
 })
 
 const currentUserRoleLabel = computed(() => {
   if (!authState.authEnabled) return ''
-  if (authState.role === 'admin') return '管理员'
-  if (authState.role === 'user') return '普通用户'
+  if (authState.role === 'admin') return t('app.admin')
+  if (authState.role === 'user') return t('app.user')
   return ''
 })
 
@@ -50,27 +53,25 @@ const isAuthPublicRoute = computed(() => AUTH_PUBLIC_PATHS.has(route.path))
 const canAccessAdmin = computed(() => !authState.authEnabled || authState.role === 'admin')
 
 const HEADER_SECTION_ROUTE_MAP = {
-  '任务提交': '/tasks/submit',
-  '知识库': '/knowledge',
-  '任务中心': '/tasks/center',
-  '计算智能': '/tasks/submit',
-  '数据管理': '/database/data-catalog',
-  '湿实验优化': '/tasks/submit',
-  '研发引擎': '/research-engine',
-  '工具服务': '/tools',
-  '系统管理': '/admin',
+  'nav.taskSubmit': '/tasks/submit',
+  'nav.knowledge': '/knowledge',
+  'nav.taskCenter': '/tasks/center',
+  'nav.data': '/database/data-catalog',
+  'nav.researchEngine': '/research-engine',
+  'nav.tools': '/tools',
+  'nav.admin': '/admin',
 }
 
 const currentBreadcrumbItems = computed(() => {
-  const section = String(route.meta.section || '').trim()
-  const title = String(route.meta.title || '').trim()
+  const section = String(route.meta.sectionKey || '').trim()
+  const title = String(route.meta.titleKey || '').trim()
   if (section && title) {
     return [
-      { label: section, path: HEADER_SECTION_ROUTE_MAP[section] || '', isCurrent: false },
-      { label: title, path: '', isCurrent: true },
+      { label: t(section), path: HEADER_SECTION_ROUTE_MAP[section] || '', isCurrent: false },
+      { label: t(title), path: '', isCurrent: true },
     ]
   }
-  const fallbackLabel = title || section || 'Poly Agent'
+  const fallbackLabel = title ? t(title) : section ? t(section) : 'Poly Agent'
   return [{ label: fallbackLabel, path: '', isCurrent: true }]
 })
 
@@ -109,9 +110,19 @@ function handleLogout() {
   router.replace('/login')
 }
 
-function formatCurrentDate() {
-  return formatAppDate()
+/** 切换界面语言，并保留当前路由和用户输入状态。 */
+function handleLocaleChange(nextLocale) {
+  setLocale(nextLocale)
 }
+
+function formatCurrentDate() {
+  return formatAppDate(undefined, locale.value)
+}
+
+const elementLocale = computed(() => getElementLocale(locale.value))
+watch(locale, () => {
+  currentDate.value = formatCurrentDate()
+})
 
 /** 拉取 GitHub 最新 Release 并同步侧边栏版本号，失败时保留构建版本。 */
 async function refreshLatestAppVersion() {
@@ -229,11 +240,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <el-config-provider :locale="elementLocale">
   <div v-if="authBootstrapping" class="app-loading-shell">
     <div class="app-loading-card">
       <img :src="BRAND_LOGO_SRC" alt="Poly Agent" class="app-loading-logo" />
       <div class="app-loading-title">Poly Agent</div>
-      <div class="app-loading-text">正在初始化...</div>
+      <div class="app-loading-text">{{ t('app.initializing') }}</div>
     </div>
   </div>
   <router-view v-else-if="isAuthPage" />
@@ -243,7 +255,7 @@ onBeforeUnmount(() => {
         <img class="brand-logo" :src="BRAND_LOGO_SRC" alt="Poly Agent" />
         <div v-if="!sidebarCollapsed" class="brand-text">
           <div class="brand-title">Poly Agent</div>
-          <div class="brand-subtitle">高分子智能分析平台</div>
+          <div class="brand-subtitle">{{ t('app.subtitle') }}</div>
         </div>
       </div>
       <div class="sidebar-nav">
@@ -259,39 +271,39 @@ onBeforeUnmount(() => {
         >
           <el-menu-item index="/dashboard">
             <el-icon><Monitor /></el-icon>
-            <span>工作台</span>
+            <span>{{ t('nav.dashboard') }}</span>
           </el-menu-item>
           <el-menu-item index="/research-engine">
             <el-icon><MagicStick /></el-icon>
-            <span>研发引擎</span>
+            <span>{{ t('nav.researchEngine') }}</span>
           </el-menu-item>
           <el-menu-item index="/tasks/submit">
             <el-icon><Aim /></el-icon>
-            <span>任务提交</span>
+            <span>{{ t('nav.taskSubmit') }}</span>
           </el-menu-item>
           <el-menu-item index="/tasks/center">
             <el-icon><Histogram /></el-icon>
-            <span>任务中心</span>
+            <span>{{ t('nav.taskCenter') }}</span>
           </el-menu-item>
           <el-menu-item index="/knowledge">
             <el-icon><Collection /></el-icon>
-            <span>知识库</span>
+            <span>{{ t('nav.knowledge') }}</span>
           </el-menu-item>
           <el-menu-item index="/tools">
             <el-icon><SetUp /></el-icon>
-            <span>工具服务</span>
+            <span>{{ t('nav.tools') }}</span>
           </el-menu-item>
           <el-menu-item index="/database/data-catalog">
             <el-icon><DataAnalysis /></el-icon>
-            <span>数据管理</span>
+            <span>{{ t('nav.data') }}</span>
           </el-menu-item>
           <el-menu-item v-if="canAccessAdmin" index="/admin">
             <el-icon><SetUp /></el-icon>
-            <span>系统管理</span>
+            <span>{{ t('nav.admin') }}</span>
           </el-menu-item>
           <el-menu-item v-if="canAccessAdmin" index="/admin/lui-evaluation">
             <el-icon><DataAnalysis /></el-icon>
-            <span>评测报告</span>
+            <span>{{ t('nav.evaluation') }}</span>
           </el-menu-item>
         </el-menu>
       </div>
@@ -302,24 +314,24 @@ onBeforeUnmount(() => {
             class="sidebar-version-link sidebar-version-mini"
             target="_blank"
             rel="noopener noreferrer"
-            :aria-label="`查看 Poly Agent v${appVersion} 发布说明`"
-            :title="`查看 v${appVersion} 发布说明`"
+            :aria-label="t('app.releaseNotes', { version: appVersion })"
+            :title="t('app.releaseNotes', { version: appVersion })"
           >v{{ appVersion }}</a>
         </template>
         <template v-else>
           <div class="sidebar-version-top">
-            <span class="sidebar-version-label">版本</span>
+            <span class="sidebar-version-label">{{ t('app.version') }}</span>
             <a
               :href="appReleaseUrl"
               class="sidebar-version-link sidebar-version-badge"
               target="_blank"
               rel="noopener noreferrer"
-              :aria-label="`查看 Poly Agent v${appVersion} 发布说明`"
-              :title="`查看 v${appVersion} 发布说明`"
+              :aria-label="t('app.releaseNotes', { version: appVersion })"
+              :title="t('app.releaseNotes', { version: appVersion })"
             >v{{ appVersion }}</a>
           </div>
           <div class="sidebar-meta-inline">
-            <span class="sidebar-meta-inline-label">合作单位</span>
+            <span class="sidebar-meta-inline-label">{{ t('app.partners') }}</span>
             <span class="sidebar-meta-partners">{{ BRAND_PARTNER_TEXT }}</span>
           </div>
         </template>
@@ -341,15 +353,20 @@ onBeforeUnmount(() => {
         </div>
         <div class="header-right">
           <span class="header-date">{{ currentDate }}</span>
-          <el-tag v-if="authState.authEnabled" type="success" effect="plain" size="small">已启用登录保护</el-tag>
+          <el-tag v-if="authState.authEnabled" type="success" effect="plain" size="small">{{ t('app.loginProtection') }}</el-tag>
           <el-tag v-if="currentUserRoleLabel" effect="plain" size="small">{{ currentUserRoleLabel }}</el-tag>
           <GuideButton />
           <FeedbackButton v-if="authState.authEnabled" />
+          <div class="locale-switcher" role="group" :aria-label="t('locale.switchTo', { language: locale === 'zh-CN' ? t('locale.english') : t('locale.chinese') })">
+            <button type="button" :class="{ active: locale === 'zh-CN' }" :aria-pressed="locale === 'zh-CN'" @click="handleLocaleChange('zh-CN')">中</button>
+            <span aria-hidden="true">/</span>
+            <button type="button" :class="{ active: locale === 'en-US' }" :aria-pressed="locale === 'en-US'" @click="handleLocaleChange('en-US')">EN</button>
+          </div>
           <el-avatar size="small">{{ currentUserAvatarText }}</el-avatar>
           <span style="font-weight:500">{{ currentUserDisplayName }}</span>
           <el-button v-if="authState.authEnabled" text class="logout-btn" @click="handleLogout">
             <el-icon><SwitchButton /></el-icon>
-            退出登录
+            {{ t('app.logout') }}
           </el-button>
         </div>
       </el-header>
@@ -358,4 +375,5 @@ onBeforeUnmount(() => {
       </el-main>
     </el-container>
   </el-container>
+  </el-config-provider>
 </template>

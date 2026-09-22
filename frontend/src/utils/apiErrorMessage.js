@@ -1,11 +1,40 @@
-export function getApiErrorMessage(error) {
-  if (!error) return '未知错误'
+import { getCurrentLocale } from '../i18n/index.js'
+
+const STATUS_MESSAGE_KEYS = {
+  400: 'error.invalidParams',
+  401: 'error.unauthorized',
+  403: 'error.forbidden',
+  404: 'error.notFound',
+  409: 'error.conflict',
+  422: 'error.validation',
+  500: 'error.internal',
+  501: 'error.notSupported',
+  502: 'error.upstream',
+  504: 'error.upstreamTimeout',
+}
+
+const ERROR_MESSAGES = {
+  'zh-CN': {
+    unknown: '未知错误', network: '网络连接失败，请检查网络', timeout: '请求超时', canceled: '请求已取消', service: '服务异常',
+    ...Object.fromEntries(Object.entries(STATUS_MESSAGE_KEYS).map(([status, key]) => [key, {
+      'error.invalidParams': '参数有误', 'error.unauthorized': '登录已过期', 'error.forbidden': '无权限', 'error.notFound': '资源未找到', 'error.conflict': '状态冲突', 'error.validation': '参数校验失败', 'error.internal': '服务器内部错误', 'error.notSupported': '功能暂不支持', 'error.upstream': '上游服务异常', 'error.upstreamTimeout': '上游服务超时',
+    }[key]])),
+  },
+  'en-US': {
+    unknown: 'Unknown error', network: 'Network connection failed. Check your connection.', timeout: 'Request timed out', canceled: 'Request canceled', service: 'Service error',
+    'error.invalidParams': 'Invalid parameters', 'error.unauthorized': 'Your session has expired', 'error.forbidden': 'Permission denied', 'error.notFound': 'Resource not found', 'error.conflict': 'State conflict', 'error.validation': 'Validation failed', 'error.internal': 'Internal server error', 'error.notSupported': 'Feature not supported', 'error.upstream': 'Upstream service error', 'error.upstreamTimeout': 'Upstream service timed out',
+  },
+}
+
+export function getApiErrorMessage(error, preferredLocale = null) {
+  const locale = preferredLocale || getCurrentLocale()
+  const copy = ERROR_MESSAGES[locale]
+  if (!error) return copy.unknown
   if (error.isApiError) {
-    if (error.kind === 'network') return '网络连接失败，请检查网络'
-    if (error.kind === 'timeout') return '请求超时'
-    if (error.kind === 'canceled') return '请求已取消'
-    const statusMsgMap = { 400: '参数有误', 401: '登录已过期', 403: '无权限', 404: '资源未找到', 409: '状态冲突', 422: '参数校验失败', 500: '服务器内部错误', 501: '功能暂不支持', 502: '上游服务异常', 504: '上游服务超时' }
-    if (error.status && statusMsgMap[error.status]) {
+    if (error.kind === 'network') return copy.network
+    if (error.kind === 'timeout') return copy.timeout
+    if (error.kind === 'canceled') return copy.canceled
+    if (error.status && STATUS_MESSAGE_KEYS[error.status]) {
       const structuredDetail = error.detail && typeof error.detail === 'object'
         ? (error.detail.message || error.detail.code || JSON.stringify(error.detail))
         : error.detail
@@ -15,9 +44,10 @@ export function getApiErrorMessage(error) {
       } else {
         message = structuredDetail || (error.message && error.message !== '[object Object]' ? error.message : '')
       }
-      return `${statusMsgMap[error.status]}：${message}`
+      const separator = locale === 'en-US' ? ': ' : '：'
+      return `${copy[STATUS_MESSAGE_KEYS[error.status]]}${separator}${message}`
     }
-    return error.message || '服务异常'
+    return error.message || copy.service
   }
-  return error.message || '未知错误'
+  return error.message || copy.unknown
 }
