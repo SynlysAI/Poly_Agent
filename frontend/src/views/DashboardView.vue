@@ -720,7 +720,7 @@ onMounted(() => {
       </div>
 
       <div class="hero-copy">
-        <p class="hero-kicker">Poly Agent 工作台</p>
+        <p class="hero-kicker">{{ t('dashboard.brand') }}</p>
         <h1>{{ homeGreeting.title }}</h1>
         <p>{{ homeGreeting.subtitle }}</p>
       </div>

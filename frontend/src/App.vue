@@ -33,7 +33,6 @@ const AUTH_EXPIRED_EVENT_NAME = 'poly-agent-auth-expired'
 const appVersion = ref(normalizeAppVersion(__APP_VERSION__, APP_VERSION_FALLBACK))
 const appReleaseUrl = computed(() => buildAppReleaseUrl(appVersion.value))
 const BRAND_LOGO_SRC = '/brand/JG-logo.png'
-const BRAND_PARTNER_TEXT = '智储大装置｜嘉庚实验室｜厦门大学｜苏州实验室｜浦江实验室'
 let currentDateTimer = null
 
 const currentUserDisplayName = computed(() => {
@@ -332,7 +331,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="sidebar-meta-inline">
             <span class="sidebar-meta-inline-label">{{ t('app.partners') }}</span>
-            <span class="sidebar-meta-partners">{{ BRAND_PARTNER_TEXT }}</span>
+            <span class="sidebar-meta-partners">{{ t('app.partnersList') }}</span>
           </div>
         </template>
       </div>
