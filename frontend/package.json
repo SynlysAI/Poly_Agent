@@ -1,7 +1,7 @@
 {
   "name": "polyagent-frontend",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -31,7 +31,9 @@
     "test:api-timeout": "node src/utils/apiTimeout.test.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "test:app-version": "node src/utils/appVersion.test.mjs"
+    "test:app-version": "node src/utils/appVersion.test.mjs",
+    "test:i18n": "node src/utils/i18n.test.mjs",
+    "test:datetime": "node src/utils/datetime.test.mjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",

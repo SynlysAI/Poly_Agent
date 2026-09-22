@@ -1,14 +1,17 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Hide, View } from '@element-plus/icons-vue'
 
 import { getApiErrorMessage, loginWithPassword } from '../api/polyAgentApi'
 import { setAuthSession } from '../auth/authState'
+import LanguageSwitcher from '../components/LanguageSwitcher.vue'
+import { useI18n } from '../i18n/index.js'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const BRAND_LOGO_SRC = '/brand/JG-logo.png'
 const submitting = ref(false)
 const passwordVisible = ref(false)
@@ -17,10 +20,10 @@ const form = reactive({
   username: '',
   password: '',
 })
-const rules = {
-  username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-}
+const rules = computed(() => ({
+  username: [{ required: true, message: t('auth.enterAccount'), trigger: 'blur' }],
+  password: [{ required: true, message: t('auth.enterPassword'), trigger: 'blur' }],
+}))
 
 function resolveRedirectPath() {
   const redirect = String(route.query.redirect || '').trim()
@@ -46,7 +49,7 @@ async function handleSubmit() {
       accessToken: data.access_token,
       expiresAt: data.expires_at,
     })
-    ElMessage.success('登录成功')
+    ElMessage.success(t('auth.loginSuccess'))
     router.replace(resolveRedirectPath())
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error))
@@ -60,41 +63,42 @@ async function handleSubmit() {
   <div class="login-page">
     <div class="login-background"></div>
     <section class="login-panel">
+      <LanguageSwitcher />
       <div class="login-brand">
         <img :src="BRAND_LOGO_SRC" alt="Poly Agent" class="login-brand-mark" />
         <div>
           <div class="login-brand-title">Poly Agent</div>
-          <div class="login-brand-subtitle">高分子智能分析平台</div>
+          <div class="login-brand-subtitle">{{ t('app.subtitle') }}</div>
         </div>
       </div>
 
       <div class="login-heading">
-        <h1>账号登录</h1>
+        <h1>{{ t('auth.login') }}</h1>
       </div>
 
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="login-form">
-        <el-form-item label="账号" prop="username">
+        <el-form-item :label="t('auth.account')" prop="username">
           <input
             v-model="form.username"
             class="login-native-input"
-            placeholder="请输入登录账号"
+            :placeholder="t('auth.enterAccount')"
             autocomplete="username"
           />
         </el-form-item>
-        <el-form-item label="密码" prop="password">
+        <el-form-item :label="t('auth.password')" prop="password">
           <div class="login-password-field">
             <input
               v-model="form.password"
               class="login-native-input login-native-input-password"
               :type="passwordVisible ? 'text' : 'password'"
-              placeholder="请输入登录密码"
+              :placeholder="t('auth.enterPassword')"
               autocomplete="current-password"
               @keyup.enter="handleSubmit"
             />
             <button
               type="button"
               class="login-password-toggle"
-              :aria-label="passwordVisible ? '隐藏密码' : '显示密码'"
+              :aria-label="passwordVisible ? t('auth.hidePassword') : t('auth.showPassword')"
               @click="passwordVisible = !passwordVisible"
             >
               <el-icon>
@@ -105,13 +109,13 @@ async function handleSubmit() {
           </div>
         </el-form-item>
         <el-button type="primary" class="login-submit" :loading="submitting" @click="handleSubmit">
-          登录并进入系统
+          {{ t('auth.loginAndEnter') }}
         </el-button>
       </el-form>
 
       <div class="login-footer">
-        <span>没有账号？</span>
-        <router-link class="login-link" to="/register">使用邀请码注册</router-link>
+        <span>{{ t('auth.noAccount') }}</span>
+        <router-link class="login-link" to="/register">{{ t('auth.registerWithInvite') }}</router-link>
       </div>
     </section>
   </div>

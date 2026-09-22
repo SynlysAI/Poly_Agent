@@ -45,10 +45,11 @@ export function buildAppReleaseUrl(version) {
  *   成功时返回去除 v 前缀的最新语义化版本号；请求失败、响应异常
  *   或版本号不合法时返回 null，由调用方保留原有展示版本。
  */
-export async function fetchLatestAppVersion({
-  fetchImpl = globalThis.fetch,
-  timeoutMs = 5000,
-} = {}) {
+export async function fetchLatestAppVersion(options = {}) {
+  const fetchImpl = Object.prototype.hasOwnProperty.call(options, 'fetchImpl')
+    ? options.fetchImpl
+    : globalThis.fetch
+  const timeoutMs = options.timeoutMs ?? 5000
   if (typeof fetchImpl !== 'function') return null
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs)

@@ -325,6 +325,42 @@ body {
   font-size: 14px;
 }
 
+.locale-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border: 1px solid var(--app-border-soft);
+  border-radius: var(--app-radius-pill);
+  background: #f8fbff;
+  color: var(--app-ink-subtle);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.locale-switcher button {
+  min-width: 25px;
+  padding: 4px 5px;
+  border: 0;
+  border-radius: var(--app-radius-pill);
+  background: transparent;
+  color: var(--app-ink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.locale-switcher button:hover,
+.locale-switcher button:focus-visible {
+  color: var(--app-primary-active);
+  outline: none;
+}
+
+.locale-switcher button.active {
+  background: #e5efff;
+  color: var(--app-primary-active);
+  font-weight: 700;
+}
+
 .logout-btn {
   color: #40608f;
 }
@@ -593,6 +629,10 @@ body {
     flex: 0 0 auto;
     gap: 4px;
     font-size: 12px;
+  }
+
+  .locale-switcher {
+    flex: 0 0 auto;
   }
 
   .header-right .header-date,

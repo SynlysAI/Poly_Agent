@@ -1,5 +1,8 @@
 <script setup>
 import { computed } from 'vue'
+import { useI18n } from '../i18n/index.js'
+
+const { t } = useI18n()
 
 
 const props = defineProps({
@@ -7,7 +10,7 @@ const props = defineProps({
   models: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
-  placeholder: { type: String, default: '选择模型' },
+  placeholder: { type: String, default: '' },
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
@@ -25,7 +28,7 @@ function providerLabel(item) {
 }
 
 function selectedLabel(item) {
-  if (!item) return props.placeholder
+  if (!item) return props.placeholder || t('model.select')
   return item.label
 }
 </script>
@@ -37,8 +40,8 @@ function selectedLabel(item) {
     popper-class="llm-model-select-popper"
     :loading="loading"
     :disabled="disabled || loading || !models.length"
-    :placeholder="loading ? '加载模型...' : models.length ? placeholder : '未配置模型'"
-    aria-label="选择 LLM 模型"
+    :placeholder="loading ? t('model.loading') : models.length ? (placeholder || t('model.select')) : t('model.unconfigured')"
+    :aria-label="t('model.selectLlm')"
   >
     <el-option
       v-for="item in models"

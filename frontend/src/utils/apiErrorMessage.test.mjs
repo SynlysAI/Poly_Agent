@@ -61,3 +61,11 @@ assert.equal(getApiErrorMessage({ isApiError: true, kind: 'canceled' }), '请求
 assert.equal(getApiErrorMessage(null), '未知错误')
 assert.equal(getApiErrorMessage(undefined), '未知错误')
 assert.equal(getApiErrorMessage({ message: 'boom' }), 'boom')
+assert.equal(
+  getApiErrorMessage(apiError({ status: 409, detail: 'duplicate' }), 'en-US'),
+  'State conflict: duplicate',
+)
+assert.equal(
+  getApiErrorMessage({ isApiError: true, kind: 'network' }, 'en-US'),
+  'Network connection failed. Check your connection.',
+)
